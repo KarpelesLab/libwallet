@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	networkCache   map[xuid.XUID]*Network
+	networkCache   = make(map[xuid.XUID]*Network)
 	networkCacheLk sync.Mutex
 )
 
@@ -394,7 +394,7 @@ func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		}
 		return wltobj.NewAmountRaw(i, decimals), nil
 	default:
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
 }
 
@@ -446,7 +446,7 @@ func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.As
 
 		return asset, nil
 	default:
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
 }
 
@@ -462,8 +462,8 @@ func (n *Network) Nfts(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, erro
 		}
 		return nfts, nil
 	case "bitcoin":
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	default:
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
 }

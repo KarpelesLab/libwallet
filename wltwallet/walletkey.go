@@ -242,7 +242,10 @@ func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {
 	for _, k := range keys {
 		go func(k string) {
 			pingBuf := make([]byte, 32)
-			io.ReadFull(rand.Reader, pingBuf)
+			if _, err := io.ReadFull(rand.Reader, pingBuf); err != nil {
+				log.Printf("failed to read random: %s", err)
+				return
+			}
 			x, err := spot.Query(ctx, k+"/ping", pingBuf)
 			if err != nil {
 				log.Printf("failed to read from %s: %s", k, err)

@@ -27,7 +27,7 @@ func init() {
 
 func NetworkById(e wltintf.Env, id *xuid.XUID) (*Network, error) {
 	if id.Prefix != "net" {
-		return nil, fmt.Errorf("invalid key for contact: %s", id.Prefix)
+		return nil, fmt.Errorf("invalid key for network: %s", id.Prefix)
 	}
 	if n := networkFromCache(id); n != nil {
 		return n, nil

@@ -140,7 +140,7 @@ func (n *Network) NftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, e
 	switch n.Type {
 	case "bitcoin":
 		// use the public key from Account instead of address
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	case "evm":
 		// get all assets
 		raw, err := n.DoRPC("modchain_assets", acct.GetAddress())
@@ -184,7 +184,7 @@ func (n *Network) NftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, e
 			nftInfos[i] = info
 		}
 
-		var nfts []*wltnft.Nft
+		var nfts []wltnft.Nft
 		for _, info := range nftInfos {
 			if len(info.Tokens) == 0 {
 				continue
@@ -201,13 +201,13 @@ func (n *Network) NftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, e
 					continue
 				}
 				nft.ContractName = contractName
-				nfts = append(nfts, nft)
+				nfts = append(nfts, *nft)
 			}
 		}
 
-		return &[]wltnft.Nft{}, nil
+		return &nfts, nil
 	default:
-		return nil, fmt.Errorf("unsupporte type %s", n.Type)
+		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
 }
 

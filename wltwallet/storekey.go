@@ -87,12 +87,6 @@ func storeKeyReadPublic(public string) (crypto.PublicKey, error) {
 		// this is a private key very likely! (public key is ~44 bytes)
 		defer cryptutil.MemClr(k)
 		return nil, errors.New("the received storeKey looks like a private key, was expecting a public key")
-		pk, err := storeKeyToEd25519(public)
-		if err != nil {
-			return nil, err
-		}
-		defer cryptutil.MemClr(pk)
-		return pk.Public(), nil
 	}
 	return x509.ParsePKIXPublicKey(k)
 }

@@ -177,7 +177,11 @@ func web3Req(ctx context.Context, in struct {
 		}
 		addr := conn[0]
 		if len(in.Query.Params) >= 2 {
-			signAddr := strings.ToLower(in.Query.Params[1].(string))
+			signAddr, ok := in.Query.Params[1].(string)
+			if !ok {
+				return nil, errors.New("invalid address parameter")
+			}
+			signAddr = strings.ToLower(signAddr)
 			// addr in params[1], format is 0x...
 			addr = nil
 			for _, c := range conn {
@@ -188,6 +192,9 @@ func web3Req(ctx context.Context, in struct {
 						break
 					}
 				}
+			}
+			if addr == nil {
+				return nil, errors.New("requested address not connected")
 			}
 		}
 		val, ok := in.Query.Params[0].(string)

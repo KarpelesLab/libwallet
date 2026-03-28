@@ -135,11 +135,12 @@ func (tx *Transaction) encodeTx(n *wltnet.Network, acct *wltacct.Account, csigne
 				GasFeeCap: v,
 				Gas:       tx.Gas,
 				To:        tx.To,
-				Value:     tx.Amount.Value(),
 				ChainId:   info.ChainId,
 			}
 			if tx.Value != nil && tx.Value.Sign() > 0 {
 				res.Value = tx.Value.Value()
+			} else if tx.Amount != nil {
+				res.Value = tx.Amount.Value()
 			}
 			if data := tx.Data; data != "" {
 				if data, ok := strings.CutPrefix(data, "0x"); ok {
@@ -165,9 +166,9 @@ func (tx *Transaction) estimateGas(n *wltnet.Network) error {
 	if tx.Data != "" {
 		v["data"] = tx.Data
 	}
-	if tx.Amount.Sign() > 0 {
+	if tx.Amount != nil && tx.Amount.Sign() > 0 {
 		v["value"] = "0x" + tx.Amount.Value().Text(16)
-	} else if tx.Value.Sign() > 0 {
+	} else if tx.Value != nil && tx.Value.Sign() > 0 {
 		v["value"] = "0x" + tx.Value.Value().Text(16)
 	}
 	if tx.To != "" {
