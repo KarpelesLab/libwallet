@@ -11,18 +11,17 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/EllipX/ellipxobj"
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltasset"
-	"github.com/EllipX/libwallet/wltcontact"
-	"github.com/EllipX/libwallet/wltcrash"
-	"github.com/EllipX/libwallet/wltnet"
-	"github.com/EllipX/libwallet/wltnft"
-	"github.com/EllipX/libwallet/wlttx"
-	"github.com/EllipX/libwallet/wltwallet"
+	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltasset"
+	"github.com/KarpelesLab/libwallet/wltcontact"
+	"github.com/KarpelesLab/libwallet/wltcrash"
+	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltnft"
+	"github.com/KarpelesLab/libwallet/wlttx"
+	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/emitter"
-	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
 	_ "github.com/glebarez/go-sqlite"
 	bolt "go.etcd.io/bbolt"
@@ -101,7 +100,6 @@ func (e *env) init() error {
 	// open or create db
 	var err error
 
-	rest.Host = "app.ellipx.com"
 
 	// make sure dataDir exists and is a directory
 	if st, err := os.Stat(e.dataDir); err != nil {
@@ -142,7 +140,7 @@ func (e *env) init() error {
 
 	if _, err := e.DBSimpleGet([]byte("info"), []byte("first_run")); err != nil {
 		// first run?
-		now := ellipxobj.NewTimeId().Bytes(nil)
+		now := wltobj.NewTimeId().Bytes(nil)
 		e.DBSimpleSet([]byte("info"), []byte("first_run"), now)
 	}
 
@@ -173,7 +171,6 @@ func (e *env) initTemp() error {
 	// open or create db
 	var err error
 
-	rest.Host = "app.ellipx.com"
 
 	// make sure dataDir exists and is a directory
 	if st, err := os.Stat(e.dataDir); err != nil {
@@ -205,7 +202,7 @@ func (e *env) initTemp() error {
 	e.DBSimpleSet([]byte("info"), []byte("version"), currentVersion)
 
 	// Set first run timestamp
-	now := ellipxobj.NewTimeId().Bytes(nil)
+	now := wltobj.NewTimeId().Bytes(nil)
 	e.DBSimpleSet([]byte("info"), []byte("first_run"), now)
 
 	// open in-memory SQLite database

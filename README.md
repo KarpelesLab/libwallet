@@ -95,11 +95,11 @@ Key API endpoints include:
 
 ## License
 
-Copyright © 2025 EllipX Sp. z o.o. - See [LICENCE.md](LICENCE.md) for details.
+Copyright 2025 Karpeles Lab Inc - See [LICENCE.md](LICENCE.md) for details.
 
-This library is provided under the EllipX Non-Commercial License, which allows free use for:
+This library is provided under the Karpeles Lab Non-Commercial License, which allows free use for:
 - Personal projects
 - Educational institutions
 - Small projects with fewer than 10,000 monthly active users
 
-For commercial use or projects exceeding the user limit, contact support@ellipx.com for licensing options.
+For commercial use or projects exceeding the user limit, contact contact@klb.jp for licensing options.

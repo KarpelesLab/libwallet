@@ -3,10 +3,10 @@ package wlttest
 import (
 	"testing"
 
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltbase"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltwallet"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltbase"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltwallet"
 )
 
 // TestWalletAccountLifecycle tests the full lifecycle of wallets and accounts

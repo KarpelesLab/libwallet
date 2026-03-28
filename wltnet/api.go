@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EllipX/libwallet/chains"
-	"github.com/EllipX/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/chains"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/spotlib"
 	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"

@@ -3,9 +3,9 @@ package wlttest
 import (
 	"testing"
 
-	"github.com/EllipX/libwallet/wltbase"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltbase"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 )
 
 // TestNetworkLifecycle tests the network functionality using temporary environment

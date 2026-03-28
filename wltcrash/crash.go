@@ -7,7 +7,7 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/google/uuid"

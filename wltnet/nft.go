@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltnft"
-	"github.com/EllipX/libwallet/wltutil"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnft"
+	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/ModChain/ethrpc"
 )
 

@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltwallet"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/xuid"
 )

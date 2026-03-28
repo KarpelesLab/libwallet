@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/EllipX/libwallet/wltbase"
+	"github.com/KarpelesLab/libwallet/wltbase"
 	"github.com/KarpelesLab/apirouter"
 )
 

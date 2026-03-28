@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/pjson"
 	"github.com/KarpelesLab/rest"
 )

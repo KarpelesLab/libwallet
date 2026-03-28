@@ -55,9 +55,9 @@ libwallet-sources.jar: libwallet.aar
 dist/android/libwallet.aar: $(SOURCES)
 	mkdir -p dist/android
 ifeq ($(GOOS),darwin)
-	PATH="$(GOPATH)/bin:$$PATH" JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' gomobile bind -v -target android -androidapi 21 -javapkg com.ellipx.libwallet -o "$@" $(GOFLAGS)
+	PATH="$(GOPATH)/bin:$$PATH" JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' gomobile bind -v -target android -androidapi 21 -javapkg com.karpeleslabs.libwallet -o "$@" $(GOFLAGS)
 else
-	PATH="$(GOPATH)/bin:$$PATH" gomobile bind -v -target android -androidapi 21 -javapkg com.ellipx.libwallet -o "$@" $(GOFLAGS)
+	PATH="$(GOPATH)/bin:$$PATH" gomobile bind -v -target android -androidapi 21 -javapkg com.karpeleslabs.libwallet -o "$@" $(GOFLAGS)
 endif
 
 clean:

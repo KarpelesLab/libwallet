@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/EllipX/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pjson"
 	"github.com/KarpelesLab/pobj"

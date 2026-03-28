@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltintf"
 )
 
 // https://ws.atonline.com/_special/rest/Crypto/DataCache:ccInfo?key_type=symbol&key=MATIC&pretty

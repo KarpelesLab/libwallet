@@ -13,8 +13,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"

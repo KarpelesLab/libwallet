@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/EllipX/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"

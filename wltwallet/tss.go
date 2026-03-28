@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"log"
 
-	"github.com/EllipX/libwallet/wltcrash"
+	"github.com/KarpelesLab/libwallet/wltcrash"
 	"github.com/KarpelesLab/pobj"
 	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
 	"github.com/ModChain/tss-lib/v2/tss"

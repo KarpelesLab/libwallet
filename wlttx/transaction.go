@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EllipX/ellipxobj"
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltnet"
-	"github.com/EllipX/libwallet/wltquote"
-	"github.com/EllipX/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltquote"
+	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
 	"github.com/ModChain/ethrpc"
@@ -32,19 +32,19 @@ type Transaction struct {
 	To           string                    `json:"to"`
 	Gas          uint64                    `json:"gas"`                // gas amount
 	GasPrice     string                    `json:"gasPrice,omitempty"` // gas price
-	Fee          *ellipxobj.Amount         `json:"fee,omitempty" gorm:"serializer:json"`
+	Fee          *wltobj.Amount         `json:"fee,omitempty" gorm:"serializer:json"`
 	Nonce        uint64                    `json:"nonce"`            // eth only
 	Format       string                    `json:"format,omitempty"` // transaction format, for ethereum: legacy or eip1559
 	Raw          []byte                    `json:"raw,omitempty"`
 	Hash         string                    `json:"hash,omitempty"`
 	URL          string                    `json:"url,omitempty"`
 	Network      *xuid.XUID                `json:"network,omitempty"`
-	Amount       *ellipxobj.Amount         `json:"amount" gorm:"serializer:json"`
-	Value        *ellipxobj.Amount         `json:"value,omitempty" gorm:"serializer:json"`
+	Amount       *wltobj.Amount         `json:"amount" gorm:"serializer:json"`
+	Value        *wltobj.Amount         `json:"value,omitempty" gorm:"serializer:json"`
 	Data         string                    `json:"data,omitempty"`
 	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" gorm:"-:all"`
 	Created      *time.Time                `json:"created,omitempty" gorm:"autoCreateTime"`
-	FiatAmount   *ellipxobj.Amount         `json:"fiat_amount,omitempty" gorm:"-:all"`
+	FiatAmount   *wltobj.Amount         `json:"fiat_amount,omitempty" gorm:"-:all"`
 	FiatCurrency string                    `json:"fiat_currency,omitempty" gorm:"-:all"`
 	FiatQuote    any                       `json:"fiat_quote,omitempty" gorm:"-:all"`
 }
@@ -97,17 +97,17 @@ func (tx *Transaction) convertTo(e wltintf.Env, currency string) error {
 	if !ok {
 		return fs.ErrNotExist
 	}
-	// ok we have a price now in info.Price, it's a float so let's first convert it to a ellipxobj.Amount
-	price, _ := ellipxobj.NewAmountFromFloat64(info.Price, 8) // more decimals always good
+	// ok we have a price now in info.Price, it's a float so let's first convert it to a wltobj.Amount
+	price, _ := wltobj.NewAmountFromFloat64(info.Price, 8) // more decimals always good
 	// multiply
-	var amt *ellipxobj.Amount
+	var amt *wltobj.Amount
 	if tx.Amount != nil && tx.Amount.Sign() > 0 {
 		amt = tx.Amount
 	} else if tx.Value != nil && tx.Value.Sign() > 0 {
 		amt = tx.Value
 	}
 	if amt != nil {
-		tx.FiatAmount = ellipxobj.NewAmount(0, 8).Mul(amt, price)
+		tx.FiatAmount = wltobj.NewAmount(0, 8).Mul(amt, price)
 		tx.FiatCurrency = currency
 		tx.FiatQuote = info
 	}
@@ -269,8 +269,8 @@ func (tx *Transaction) computeFee(n *wltnet.Network) error {
 		return errors.New("invalid gasprice")
 	}
 
-	amt := ellipxobj.NewAmountRaw(gp, info.NativeCurrency.Decimals)
-	gas := ellipxobj.NewAmount(int64(tx.Gas), 0)
+	amt := wltobj.NewAmountRaw(gp, info.NativeCurrency.Decimals)
+	gas := wltobj.NewAmount(int64(tx.Gas), 0)
 	tx.Fee = amt.Dup().Mul(amt, gas)
 	return nil
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/EllipX/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/xuid"
 )
 

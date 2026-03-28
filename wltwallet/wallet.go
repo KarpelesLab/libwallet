@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EllipX/libwallet/wltcrash"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltcrash"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
 	"github.com/ModChain/secp256k1"

@@ -4,10 +4,10 @@ import (
 	"errors"
 	"io/fs"
 
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltasset"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltasset"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 )

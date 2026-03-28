@@ -5,9 +5,9 @@ import (
 	"errors"
 	"os"
 
-	"github.com/EllipX/ellipxobj"
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltwallet"
+	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 )
@@ -70,7 +70,7 @@ func infoFirstRun(ctx context.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	t := &ellipxobj.TimeId{}
+	t := &wltobj.TimeId{}
 	err = t.UnmarshalBinary(v)
 	return t, err
 }

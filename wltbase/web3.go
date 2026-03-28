@@ -9,9 +9,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/EllipX/libwallet/wltacct"
-	"github.com/EllipX/libwallet/wltnet"
-	"github.com/EllipX/libwallet/wlttx"
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/typutil"

@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/EllipX/ellipxobj"
-	"github.com/EllipX/libwallet/chains"
-	"github.com/EllipX/libwallet/wltasset"
-	"github.com/EllipX/libwallet/wltintf"
-	"github.com/EllipX/libwallet/wltnft"
-	"github.com/EllipX/libwallet/wltutil"
+	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/chains"
+	"github.com/KarpelesLab/libwallet/wltasset"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnft"
+	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
 	"github.com/ModChain/ethrpc"
@@ -369,7 +369,7 @@ type AddressProvider interface {
 	GetAddress() string
 }
 
-func (n *Network) nativeBalance(acct AddressProvider) (*ellipxobj.Amount, error) {
+func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 	switch n.Type {
 	case "evm":
 		// fetch from RPC
@@ -392,7 +392,7 @@ func (n *Network) nativeBalance(acct AddressProvider) (*ellipxobj.Amount, error)
 		if decimals == 0 {
 			decimals = info.NativeCurrency.Decimals
 		}
-		return ellipxobj.NewAmountRaw(i, decimals), nil
+		return wltobj.NewAmountRaw(i, decimals), nil
 	default:
 		return nil, fmt.Errorf("unsupporte type %s", n.Type)
 	}

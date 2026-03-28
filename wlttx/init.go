@@ -1,6 +1,6 @@
 package wlttx
 
-import "github.com/EllipX/libwallet/wltintf"
+import "github.com/KarpelesLab/libwallet/wltintf"
 
 func InitEnv(e wltintf.Env) {
 	e.AutoMigrate(&Transaction{})
