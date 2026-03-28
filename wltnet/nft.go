@@ -14,7 +14,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltutil"
-	"github.com/ModChain/ethrpc"
+	"github.com/KarpelesLab/ethrpc"
 )
 
 const (

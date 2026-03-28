@@ -13,14 +13,14 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltobj"
-	"github.com/KarpelesLab/libwallet/chains"
+	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltasset"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/ethrpc"
+	"github.com/KarpelesLab/ethrpc"
 )
 
 var (

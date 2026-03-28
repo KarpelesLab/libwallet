@@ -10,7 +10,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/ModChain/base58"
+	"github.com/KarpelesLab/base58"
 )
 
 // Solana System Program ID (all ones in base58)

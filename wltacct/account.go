@@ -18,10 +18,10 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/base58"
-	"github.com/ModChain/outscript"
-	"github.com/ModChain/secp256k1"
-	"github.com/ModChain/secp256k1/ecckd"
+	"github.com/KarpelesLab/base58"
+	"github.com/KarpelesLab/outscript"
+	"github.com/KarpelesLab/secp256k1"
+	"github.com/KarpelesLab/secp256k1/ecckd"
 )
 
 // standard for derivation path:

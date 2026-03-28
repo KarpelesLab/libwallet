@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/KarpelesLab/libwallet/chains"
+	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/ethrpc"
+	"github.com/KarpelesLab/ethrpc"
 )
 
 func init() {

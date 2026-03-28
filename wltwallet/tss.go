@@ -8,8 +8,8 @@ import (
 
 	"github.com/KarpelesLab/libwallet/wltcrash"
 	"github.com/KarpelesLab/pobj"
-	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
-	"github.com/ModChain/tss-lib/v2/tss"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
+	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
 type tssPartyUpdateOnly interface {

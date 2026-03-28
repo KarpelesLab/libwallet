@@ -19,8 +19,8 @@ import (
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
 	"github.com/KarpelesLab/xuid"
-	ecdsakeygen "github.com/ModChain/tss-lib/v2/ecdsa/keygen"
-	eddsakeygen "github.com/ModChain/tss-lib/v2/eddsa/keygen"
+	ecdsakeygen "github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
+	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
 	"github.com/fxamacker/cbor/v2"
 )
 

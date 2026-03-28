@@ -13,9 +13,9 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/spotlib"
-	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
-	"github.com/ModChain/tss-lib/v2/ecdsa/resharing"
-	"github.com/ModChain/tss-lib/v2/tss"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsa/resharing"
+	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
 // Reshare will produce new keys for the given wallet.

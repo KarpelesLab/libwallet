@@ -6,7 +6,7 @@ import (
 
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/rest"
-	"github.com/ModChain/tss-lib/v2/tss"
+	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
 func init() {

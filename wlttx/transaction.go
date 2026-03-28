@@ -20,8 +20,8 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/ethrpc"
-	"github.com/ModChain/outscript"
+	"github.com/KarpelesLab/ethrpc"
+	"github.com/KarpelesLab/outscript"
 )
 
 type Transaction struct {

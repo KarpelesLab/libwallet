@@ -12,7 +12,7 @@ import (
 
 	"github.com/KarpelesLab/spotlib"
 	"github.com/KarpelesLab/spotproto"
-	"github.com/ModChain/tss-lib/v2/tss"
+	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
 type spotParty struct {

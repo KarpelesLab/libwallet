@@ -4,21 +4,21 @@ go 1.25.0
 
 require (
 	github.com/KarpelesLab/apirouter v0.5.28
+	github.com/KarpelesLab/base58 v1.1.1
 	github.com/KarpelesLab/cryptutil v0.3.0
 	github.com/KarpelesLab/emitter v0.3.1
+	github.com/KarpelesLab/ethrpc v0.2.11
 	github.com/KarpelesLab/feapi v0.2.7
+	github.com/KarpelesLab/outscript v0.3.25
 	github.com/KarpelesLab/pjson v0.2.0
 	github.com/KarpelesLab/pobj v0.2.1
 	github.com/KarpelesLab/rest v0.6.17
+	github.com/KarpelesLab/secp256k1 v0.2.8
 	github.com/KarpelesLab/spotlib v0.3.0
 	github.com/KarpelesLab/spotproto v0.3.0
+	github.com/KarpelesLab/tss-lib/v2 v2.1.6
 	github.com/KarpelesLab/typutil v0.2.34
 	github.com/KarpelesLab/xuid v1.0.0
-	github.com/ModChain/base58 v1.1.0
-	github.com/ModChain/ethrpc v0.2.10
-	github.com/ModChain/outscript v0.3.24
-	github.com/ModChain/secp256k1 v0.2.7
-	github.com/ModChain/tss-lib/v2 v2.1.5
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/google/uuid v1.6.0
@@ -32,15 +32,18 @@ require (
 	github.com/KarpelesLab/contexter v1.0.2 // indirect
 	github.com/KarpelesLab/countrydb v0.1.3 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
+	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
 	github.com/KarpelesLab/lngdb v1.0.1 // indirect
 	github.com/KarpelesLab/mldsa v0.2.0 // indirect
 	github.com/KarpelesLab/putil v1.0.0 // indirect
 	github.com/KarpelesLab/ringslice v0.1.1 // indirect
 	github.com/KarpelesLab/slhdsa v0.1.0 // indirect
 	github.com/KarpelesLab/webutil v0.2.7 // indirect
+	github.com/ModChain/base58 v1.1.0 // indirect
 	github.com/ModChain/bech32m v0.1.4 // indirect
 	github.com/ModChain/edwards25519 v1.1.5 // indirect
 	github.com/ModChain/rlp v0.1.3 // indirect
+	github.com/ModChain/secp256k1 v0.2.7 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

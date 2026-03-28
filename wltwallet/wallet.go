@@ -18,13 +18,13 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/secp256k1"
-	"github.com/ModChain/tss-lib/v2/common"
-	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
-	ecdsasigning "github.com/ModChain/tss-lib/v2/ecdsa/signing"
-	eddsakeygen "github.com/ModChain/tss-lib/v2/eddsa/keygen"
-	eddsasigning "github.com/ModChain/tss-lib/v2/eddsa/signing"
-	"github.com/ModChain/tss-lib/v2/tss"
+	"github.com/KarpelesLab/secp256k1"
+	"github.com/KarpelesLab/tss-lib/v2/common"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
+	ecdsasigning "github.com/KarpelesLab/tss-lib/v2/ecdsa/signing"
+	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
+	eddsasigning "github.com/KarpelesLab/tss-lib/v2/eddsa/signing"
+	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
 // Wallet represents a multi-signature wallet with threshold signature scheme (TSS) support

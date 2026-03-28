@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/ModChain/secp256k1"
+	"github.com/KarpelesLab/secp256k1"
 )
 
 // testPhone is a known invalid phone number but just valid enough so it can be input in a phone number input field

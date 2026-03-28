@@ -9,8 +9,8 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/base58"
-	"github.com/ModChain/outscript"
+	"github.com/KarpelesLab/base58"
+	"github.com/KarpelesLab/outscript"
 )
 
 type contact struct {
