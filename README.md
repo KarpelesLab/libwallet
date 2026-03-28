@@ -10,39 +10,42 @@ libwallet offers a complete set of tools for managing cryptocurrency wallets, su
 
 A number of features are still under development and this library is expected to evolve further.
 
+## Supported Networks
+
+| Network | Type | Curve | Features |
+|---------|------|-------|----------|
+| Ethereum & EVM chains | evm | secp256k1 (ECDSA) | Balance, transfers, NFTs, Web3 |
+| Bitcoin, Litecoin, Dogecoin, etc. | bitcoin | secp256k1 (ECDSA) | Balance, address derivation |
+| Solana | solana | ed25519 (EdDSA) | Balance, SOL transfers, SPL tokens, NFTs |
+
+EVM chains include Ethereum, Polygon, BNB Chain, and any EVM-compatible network. Bitcoin-type chains include Bitcoin, Bitcoin Cash, Litecoin, Dogecoin, Monacoin, Namecoin, and Electra Protocol.
+
 ## Features
 
-- **Multi-chain Support**: Compatible with both EVM chains (Ethereum, Polygon, etc.) and Bitcoin-based chains
-- **Secure Key Management**: Implements threshold signature schemes (TSS) for wallet security
+- **Multi-chain Support**: EVM chains, Bitcoin-family chains, and Solana
+- **Secure Key Management**: TSS (Threshold Signature Scheme) with support for both ECDSA (secp256k1) and EdDSA (ed25519) curves
 - **Transaction Handling**: Create, sign and broadcast transactions across supported networks
-- **Asset Management**: Track cryptocurrency balances and NFTs
-- **Account Management**: Create and manage accounts with hierarchical deterministic addresses
-- **Web3 Integration**: Support for decentralized applications through a Web3 API
+- **Asset Management**: Track native balances, ERC-20/SPL tokens, and NFTs
+- **Account Management**: HD address derivation for ECDSA chains, direct pubkey addressing for Ed25519 chains
+- **Web3 Integration**: Ethereum JSON-RPC provider for decentralized applications
 - **Price Quotes**: Currency conversion for displaying asset values in fiat
 - **Backup & Recovery**: Secure wallet backup and restore functionality
 
 ## Requirements
 
-- Go 1.23.1 or later
+- Go 1.23 or later
 - Access to blockchain RPC endpoints
-- Mobile platform build tools for iOS/Android compilation
+- Mobile platform build tools for iOS/Android compilation (optional)
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-
-# Install dependencies
-make deps
-
-# Build the library
-make
+go get github.com/KarpelesLab/libwallet
 ```
 
 ## Mobile Platform Support
 
-libwallet supports both iOS and Android platforms:
+libwallet supports both iOS and Android platforms via gomobile:
 
 ```bash
 # Build for iOS (macOS only)
@@ -55,43 +58,35 @@ make android
 ## Testing
 
 ```bash
-# Run all tests
-make test
+go test ./...
 ```
 
 ## Package Structure
 
-libwallet is organized into modular packages:
+| Package | Description |
+|---------|-------------|
+| **wltbase** | Core infrastructure, database handling, and environment management |
+| **wltwallet** | Wallet creation, TSS key generation (ECDSA & EdDSA), signing |
+| **wltnet** | Network connections, RPC calls, chain-specific balance/asset queries |
+| **wltacct** | Account management and address derivation |
+| **wltasset** | Asset and balance tracking |
+| **wlttx** | Transaction creation, signing, and broadcasting |
+| **wltnft** | Non-fungible token operations |
+| **wltobj** | Core value types (Amount, TimeId) |
+| **wltcontact** | Contact management for frequently used addresses |
+| **wltquote** | Price quote services for currency conversion |
+| **wltsign** | Signature handling and key descriptions |
+| **wltcrash** | Crash reporting and error tracking |
+| **chains** | EVM chain metadata (from chainlist.org) |
 
-- **wltbase**: Core infrastructure, database handling, and environment management
-- **wltwallet**: Wallet creation, management, and key operations
-- **wltnet**: Network connections and blockchain interactions
-- **wltacct**: Account management and address generation
-- **wltasset**: Asset and balance tracking
-- **wlttx**: Transaction creation, signing, and broadcasting
-- **wltnft**: Non-fungible token operations
-- **wltcontact**: Contact management for frequently used addresses
-- **wltquote**: Price quote services for currency conversion
-- **wltsign**: Signature handling and key management
-- **wltcrash**: Crash reporting and error tracking
-- **chains**: Chain configuration and information
+## Database
 
-## Database System
-
-- BoltDB in `data.db` (mostly for cache data, scheduled to be phased out)
-- SQLite with GORM in `sql.db`
+- **SQLite** with GORM in `sql.db` (primary storage)
+- **BoltDB** in `data.db` (key-value cache, scheduled to be phased out)
 
 ## API
 
 libwallet provides a comprehensive API for integration. See [api.md](api.md) for detailed endpoint documentation.
-
-Key API endpoints include:
-- Wallet creation and management
-- Account operations
-- Transaction handling
-- Network configuration
-- Asset tracking
-- Web3 integration
 
 ## License
 
