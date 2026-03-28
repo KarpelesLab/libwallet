@@ -18,7 +18,7 @@ require (
 	github.com/KarpelesLab/spotproto v0.3.0
 	github.com/KarpelesLab/tss-lib/v2 v2.1.6
 	github.com/KarpelesLab/typutil v0.2.34
-	github.com/KarpelesLab/xuid v1.0.1
+	github.com/KarpelesLab/xuid v1.0.10
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/google/uuid v1.6.0
 	github.com/portablesql/psql v0.5.8

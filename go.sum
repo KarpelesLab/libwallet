@@ -53,8 +53,8 @@ github.com/KarpelesLab/typutil v0.2.34 h1:9ZI5uwcZxQlb6klwn5JlNK95fnkEk001ii6+jB
 github.com/KarpelesLab/typutil v0.2.34/go.mod h1:8QWuhh8zAkTt+AszMeENIYZJC4JQtk+Ib0yLlSqLLyY=
 github.com/KarpelesLab/webutil v0.2.7 h1:gqR5967ExUN6w5Pb4Fi6aMkkWtsbkFlnDWE6i496Exk=
 github.com/KarpelesLab/webutil v0.2.7/go.mod h1:i+QTcI3mIqlntMcoXk3bgKOOGVJ96a5pCdAl3cZdkOk=
-github.com/KarpelesLab/xuid v1.0.1 h1:Badt9mG0P7mYh93HxHpjeWefCyeECa3zLokoU3SWe2M=
-github.com/KarpelesLab/xuid v1.0.1/go.mod h1:rkjxIJ8AwyRab6ywM2LIaqwt1eSrAG0nieb0VF8mFjE=
+github.com/KarpelesLab/xuid v1.0.10 h1:8xr3mye4zQoT308E4pxWWHJTR1tbtpechA65ySP9Pyk=
+github.com/KarpelesLab/xuid v1.0.10/go.mod h1:rkjxIJ8AwyRab6ywM2LIaqwt1eSrAG0nieb0VF8mFjE=
 github.com/ModChain/base58 v1.1.0 h1:oatOQDbV2lrP14TtXDQ0D+VqFl+T8d0VsI1RrQ/UO0k=
 github.com/ModChain/base58 v1.1.0/go.mod h1:/FvdI5MHtcByk2Hn/3F1TuaqLjZ3R9MvDS1Z7fd6Qyc=
 github.com/ModChain/bech32m v0.1.4 h1:M7P8xZ+iTLP8bl3BYXPkOWsto/kIAiVrdPmXd4ymQNU=
