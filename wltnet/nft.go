@@ -139,8 +139,9 @@ func getContractName(n *Network, contractAddress string) (string, error) {
 func (n *Network) NftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, error) {
 	switch n.Type {
 	case "bitcoin":
-		// use the public key from Account instead of address
 		return nil, fmt.Errorf("unsupported type %s", n.Type)
+	case "solana":
+		return n.solanaNftList(e, acct)
 	case "evm":
 		// get all assets
 		raw, err := n.DoRPC("modchain_assets", acct.GetAddress())

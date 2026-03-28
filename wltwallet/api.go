@@ -102,8 +102,9 @@ func FirstWallet(e wltintf.Env) (w *Wallet, err error) {
 }
 
 func apiCreateWallet(ctx *apirouter.Context, in struct {
-	Name string
-	Keys []*wltsign.KeyDescription
+	Name  string
+	Curve string
+	Keys  []*wltsign.KeyDescription
 }) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
@@ -122,7 +123,12 @@ func apiCreateWallet(ctx *apirouter.Context, in struct {
 		Modified: time.Now(),
 	}
 
-	err := wallet.initializeWallet(ctx, in.Keys)
+	var err error
+	if in.Curve == "ed25519" {
+		err = wallet.initializeEdDSAWallet(ctx, in.Keys)
+	} else {
+		err = wallet.initializeWallet(ctx, in.Keys)
+	}
 	if err != nil {
 		return nil, err
 	}

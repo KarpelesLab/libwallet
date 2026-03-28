@@ -164,6 +164,36 @@ func (n *Network) check() error {
 		default:
 			return fmt.Errorf("invalid network type %s/%s", n.Type, n.ChainId)
 		}
+	case "solana":
+		switch n.ChainId {
+		case "mainnet":
+			if n.Name == "" {
+				n.Name = "Solana"
+			}
+			if n.CurrencySymbol == "" {
+				n.CurrencySymbol = "SOL"
+			}
+		case "devnet":
+			if n.Name == "" {
+				n.Name = "Solana Devnet"
+			}
+			if n.CurrencySymbol == "" {
+				n.CurrencySymbol = "SOL"
+			}
+			n.TestNet = true
+		default:
+			return fmt.Errorf("invalid network type %s/%s", n.Type, n.ChainId)
+		}
+		if n.CurrencyDecimals == 0 {
+			n.CurrencyDecimals = 9
+		}
+		if n.RPC == "" {
+			n.RPC = "auto"
+		}
+		if n.BlockExplorer == "" {
+			n.BlockExplorer = "auto"
+		}
+		return nil
 	default:
 		return fmt.Errorf("invalid network type %s", n.Type)
 	}
@@ -288,12 +318,20 @@ func (n *Network) NativeSymbol() (string, error) {
 		default:
 			return "", fmt.Errorf("unsupported bitcoin chain type %s", n.ChainId)
 		}
+	case "solana":
+		return "SOL", nil
 	default:
 		return "", errors.New("symbol not available (not supported type)")
 	}
 }
 
 func (n *Network) TransactionUrl(txHash string) string {
+	if n.Type == "solana" {
+		if e := n.BlockExplorer; e != "" && e != "auto" {
+			return fmt.Sprintf("%s/tx/%s", e, txHash)
+		}
+		return fmt.Sprintf("https://explorer.solana.com/tx/%s", txHash)
+	}
 	if e := n.BlockExplorer; e != "" && e != "auto" {
 		return fmt.Sprintf("%s/tx/%s", e, txHash)
 	}
@@ -305,6 +343,17 @@ func (n *Network) TransactionUrl(txHash string) string {
 }
 
 func (n *Network) getRPC() (ethrpc.Handler, error) {
+	if n.Type == "solana" {
+		if n.validRPC != nil {
+			return n.validRPC, nil
+		}
+		if n.RPC != "" && n.RPC != "auto" {
+			n.validRPC = ethrpc.New(n.RPC)
+			return n.validRPC, nil
+		}
+		n.validRPC = ethrpc.New("https://kristi-cykm4t-fast-mainnet.helius-rpc.com")
+		return n.validRPC, nil
+	}
 	if n.Type == "bitcoin" {
 		if n.validRPC != nil {
 			return n.validRPC, nil
@@ -393,6 +442,18 @@ func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 			decimals = info.NativeCurrency.Decimals
 		}
 		return wltobj.NewAmountRaw(i, decimals), nil
+	case "solana":
+		result, err := n.DoRPC("getBalance", acct.GetAddress())
+		if err != nil {
+			return nil, err
+		}
+		var balResult struct {
+			Value uint64 `json:"value"`
+		}
+		if err := json.Unmarshal(result, &balResult); err != nil {
+			return nil, err
+		}
+		return wltobj.NewAmountRaw(new(big.Int).SetUint64(balResult.Value), 9), nil
 	default:
 		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
@@ -425,7 +486,7 @@ func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.As
 		}
 
 		return asset, nil
-	case "bitcoin":
+	case "bitcoin", "solana":
 		amt, err := n.nativeBalance(acct)
 		if err != nil {
 			return nil, err
@@ -461,8 +522,8 @@ func (n *Network) Nfts(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, erro
 			return nil, err
 		}
 		return nfts, nil
-	case "bitcoin":
-		return nil, fmt.Errorf("unsupported type %s", n.Type)
+	case "solana":
+		return n.NftList(e, acct)
 	default:
 		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}

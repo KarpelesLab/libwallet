@@ -18,6 +18,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/ModChain/base58"
 	"github.com/ModChain/outscript"
 	"github.com/ModChain/secp256k1"
 	"github.com/ModChain/secp256k1/ecckd"
@@ -73,7 +74,11 @@ func (a *Account) check(e wltintf.Env) error {
 	switch net.Type {
 	case "evm":
 		// Format Ethereum address
-		addr, err := outscript.New(a.PublicKey()).Out("eth").Address()
+		out, err := outscript.New(a.PublicKey()).Out("eth")
+		if err != nil {
+			return err
+		}
+		addr, err := out.Address()
 		if err != nil {
 			return err
 		}
@@ -92,7 +97,11 @@ func (a *Account) check(e wltintf.Env) error {
 		switch net.ChainId {
 		case "bitcoin":
 			// Bitcoin uses SegWit (p2wpkh)
-			addr, err := s.Out("p2wpkh").Address("bitcoin")
+			out, err := s.Out("p2wpkh")
+			if err != nil {
+				return err
+			}
+			addr, err := out.Address("bitcoin")
 			if err != nil {
 				return err
 			}
@@ -101,7 +110,11 @@ func (a *Account) check(e wltintf.Env) error {
 			return nil
 		case "bitcoin-cash":
 			// Bitcoin Cash uses legacy format (p2pkh)
-			addr, err := s.Out("p2pkh").Address("bitcoincash")
+			out, err := s.Out("p2pkh")
+			if err != nil {
+				return err
+			}
+			addr, err := out.Address("bitcoincash")
 			if err != nil {
 				return err
 			}
@@ -110,7 +123,11 @@ func (a *Account) check(e wltintf.Env) error {
 			return nil
 		case "dogecoin":
 			// Dogecoin uses legacy format (p2pkh)
-			addr, err := s.Out("p2pkh").Address("dogecoin")
+			out, err := s.Out("p2pkh")
+			if err != nil {
+				return err
+			}
+			addr, err := out.Address("dogecoin")
 			if err != nil {
 				return err
 			}
@@ -119,7 +136,11 @@ func (a *Account) check(e wltintf.Env) error {
 			return nil
 		case "litecoin":
 			// Litecoin uses SegWit (p2wpkh)
-			addr, err := s.Out("p2wpkh").Address("litecoin")
+			out, err := s.Out("p2wpkh")
+			if err != nil {
+				return err
+			}
+			addr, err := out.Address("litecoin")
 			if err != nil {
 				return err
 			}
@@ -128,6 +149,14 @@ func (a *Account) check(e wltintf.Env) error {
 			return nil
 		}
 		fallthrough
+	case "solana":
+		pubBytes, err := base64.RawURLEncoding.DecodeString(a.Pubkey)
+		if err != nil {
+			return err
+		}
+		a.Address = base58.Bitcoin.Encode(pubBytes)
+		a.URI = "solana:" + a.Address
+		return nil
 	default:
 		// Default case for unsupported networks
 		a.Address = "N/A"
@@ -147,9 +176,25 @@ func (a *Account) setCurrent(e wltintf.Env) error {
 // Uses the BIP44 path format: m/44/60/0/{index} (Ethereum-like for now)
 // Returns any error encountered during the initialization
 func (a *Account) init(wallet *wltwallet.Wallet) error {
+	a.Chaincode = wallet.Chaincode
+
+	if wallet.Curve == "ed25519" {
+		// For Ed25519 wallets (Solana), use the master public key directly
+		a.Path = "m/44/501/0/" + strconv.Itoa(a.Index)
+		a.Pubkey = wallet.Pubkey
+		a.IL = nil
+
+		pubBytes, err := base64.RawURLEncoding.DecodeString(wallet.Pubkey)
+		if err != nil {
+			return err
+		}
+		a.Address = base58.Bitcoin.Encode(pubBytes)
+		a.URI = "solana:" + a.Address
+		return nil
+	}
+
 	// Set up derivation path for Ethereum (hardcoded for now)
 	a.Path = "m/44/60/0/" + strconv.Itoa(a.Index)
-	a.Chaincode = wallet.Chaincode
 
 	// Get the wallet's master public key
 	wpubkey, err := wallet.GetPubkey()
@@ -175,7 +220,11 @@ func (a *Account) init(wallet *wltwallet.Wallet) error {
 
 	// Default to Ethereum address format
 	s := outscript.New(pubkey)
-	addr, err := s.Out("eth").Address()
+	out, err := s.Out("eth")
+	if err != nil {
+		return err
+	}
+	addr, err := out.Address()
 	if err != nil {
 		return err
 	}

@@ -59,11 +59,24 @@ func bitcoinNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Net
 	// search in db
 	var n *Network
 	err := e.FirstWhere(&n, map[string]any{"Type": "bitcoin", "ChainId": chainId})
-	//res := e.sql.Where(map[string]any{"Type": "evm", "ChainId": chainId}).First(&n)
 	if err == nil {
 		return n, nil
 	}
 	n = &Network{Type: "bitcoin", ChainId: chainId, Priority: prio, TestNet: testNet}
+	err = n.check()
+	if err != nil {
+		return nil, err
+	}
+	return n, n.Save(e)
+}
+
+func solanaNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Network, error) {
+	var n *Network
+	err := e.FirstWhere(&n, map[string]any{"Type": "solana", "ChainId": chainId})
+	if err == nil {
+		return n, nil
+	}
+	n = &Network{Type: "solana", ChainId: chainId, Priority: prio, TestNet: testNet}
 	err = n.check()
 	if err != nil {
 		return nil, err
@@ -179,6 +192,9 @@ func MakeDefaultNetworks(e wltintf.Env) error {
 	for _, s := range netList {
 		bitcoinNetwork(e, s.chainId, s.priority, s.testNet)
 	}
+
+	solanaNetwork(e, "mainnet", 97, false)
+
 	return nil
 }
 

@@ -197,6 +197,10 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 		if tx.Asset == "" {
 			return errors.New("asset is required")
 		}
+	case "solana_transfer", "solana_spl_transfer":
+		if tx.Amount.Sign() <= 0 {
+			return errors.New("invalid amount")
+		}
 	case "evm": // evm raw transaction (for example as sent via eth_sendTransaction)
 		// OK
 	default:
@@ -226,6 +230,13 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 	tx.Network = n.Id
 
+	if n.Type == "solana" {
+		// Solana has fixed fees (~5000 lamports)
+		tx.Fee = wltobj.NewAmountRaw(big.NewInt(5000), 9)
+		return nil
+	}
+
+	// EVM-specific validation
 	if tx.Nonce == 0 {
 		txc, err := ethrpc.ReadUint64(n.DoRPC("eth_getTransactionCount", acct.Address, "pending"))
 		if err != nil {
@@ -317,6 +328,14 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		return errors.New("keys are missing")
 	}
 	tx.Keys = nil // always set to nil
+
+	if n.Type == "solana" {
+		err = tx.signAndSendSolana(ctx, n, acct, keys)
+		if err != nil {
+			return err
+		}
+		return tx.save(e)
+	}
 
 	signOpt := &wltsign.Opts{
 		Context: ctx,

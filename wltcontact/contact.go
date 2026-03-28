@@ -9,6 +9,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/ModChain/base58"
 	"github.com/ModChain/outscript"
 )
 
@@ -62,6 +63,16 @@ func (c *contact) validate() error {
 			return fmt.Errorf("failed to reformat address: %s", err)
 		}
 		c.Flags = addr.Flags
+		return nil
+	case "solana":
+		decoded, err := base58.Bitcoin.Decode(c.Address)
+		if err != nil {
+			return fmt.Errorf("invalid solana address: %w", err)
+		}
+		if len(decoded) != 32 {
+			return errors.New("invalid solana address: must be 32 bytes")
+		}
+		c.Address = base58.Bitcoin.Encode(decoded) // normalize
 		return nil
 	default:
 		return fmt.Errorf("unsupported contact type %s", c.Type)

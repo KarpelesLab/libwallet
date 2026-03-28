@@ -19,7 +19,8 @@ import (
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
 	"github.com/KarpelesLab/xuid"
-	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
+	ecdsakeygen "github.com/ModChain/tss-lib/v2/ecdsa/keygen"
+	eddsakeygen "github.com/ModChain/tss-lib/v2/eddsa/keygen"
 	"github.com/fxamacker/cbor/v2"
 )
 
@@ -30,8 +31,9 @@ type WalletKey struct {
 	Key    string `json:"Key,omitempty"` // (public) key used for encryption
 	Data   []byte `json:",protect"`
 	Gen    uint64 `gorm:"not null;default:0"` // key generation
-	pre    *keygen.LocalPreParams
-	sdata  *keygen.LocalPartySaveData
+	pre    *ecdsakeygen.LocalPreParams
+	sdata  *ecdsakeygen.LocalPartySaveData
+	eddata *eddsakeygen.LocalPartySaveData
 }
 
 func (wk *WalletKey) save(e wltintf.Env) error {
@@ -39,24 +41,34 @@ func (wk *WalletKey) save(e wltintf.Env) error {
 }
 
 func (w *Wallet) createWalletKey(ctx context.Context, typ string) (*WalletKey, error) {
-	// generate key
-	preParams, err := keygen.GeneratePreParamsWithContext(ctx)
-	if err != nil {
-		return nil, err
-	}
 	final := &WalletKey{
 		Id:     xuid.New("wkey"),
 		Wallet: w.Id,
 		Type:   typ,
 		Gen:    w.Gen + 1, // always use base gen +1, wallet gen will be updated on save
-		pre:    preParams,
 	}
+	if w.Curve == "ed25519" {
+		// EdDSA does not need Paillier pre-params
+		return final, nil
+	}
+	// ECDSA needs pre-params
+	preParams, err := ecdsakeygen.GeneratePreParamsWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	final.pre = preParams
 	return final, nil
 }
 
-// encrypt stores wk.sdata into wk.Data
+// encrypt stores wk.sdata or wk.eddata into wk.Data
 func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
-	res, err := cryptutil.MarshalJson(wk.sdata)
+	var dataToEncrypt any
+	if wk.eddata != nil {
+		dataToEncrypt = wk.eddata
+	} else {
+		dataToEncrypt = wk.sdata
+	}
+	res, err := cryptutil.MarshalJson(dataToEncrypt)
 	if err != nil {
 		return err
 	}
@@ -147,11 +159,7 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	return nil
 }
 
-func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*keygen.LocalPartySaveData, error) {
-	bottle := cryptutil.AsCborBottle(wk.Data)
-
-	op := cryptutil.EmptyOpener
-
+func (wk *WalletKey) opener(kd *wltsign.KeyDescription) (*cryptutil.Opener, error) {
 	switch wk.Type {
 	case "StoreKey":
 		k, err := storeKeyToEd25519(kd.Key)
@@ -169,10 +177,7 @@ func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose
 		if !bytes.Equal(pkBin, curPkBin) {
 			return nil, ErrBadStoreKey
 		}
-		op, err = cryptutil.NewOpener(k)
-		if err != nil {
-			return nil, err
-		}
+		return cryptutil.NewOpener(k)
 	case "Password":
 		pk, err := passwordToEd25519(kd.Key, wk.Id.UUID[:])
 		if err != nil {
@@ -189,20 +194,38 @@ func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose
 		if !bytes.Equal(pkBin, curPkBin) {
 			return nil, ErrBadPassword
 		}
-		op, err = cryptutil.NewOpener(pk)
-		if err != nil {
-			return nil, err
-		}
+		return cryptutil.NewOpener(pk)
 	case "Plain":
-		// do nothing
+		return cryptutil.EmptyOpener, nil
 	default:
 		return nil, fmt.Errorf("cannot open keys of type %s", wk.Type)
 	}
+}
 
-	var final *keygen.LocalPartySaveData
-	_, err := op.Unmarshal(bottle, &final)
+func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*ecdsakeygen.LocalPartySaveData, error) {
+	bottle := cryptutil.AsCborBottle(wk.Data)
+	op, err := wk.opener(kd)
+	if err != nil {
+		return nil, err
+	}
+	var final *ecdsakeygen.LocalPartySaveData
+	_, err = op.Unmarshal(bottle, &final)
 	if err != nil {
 		return nil, fmt.Errorf("while decrypting key %s: %w", wk.Id, err)
+	}
+	return final, err
+}
+
+func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*eddsakeygen.LocalPartySaveData, error) {
+	bottle := cryptutil.AsCborBottle(wk.Data)
+	op, err := wk.opener(kd)
+	if err != nil {
+		return nil, err
+	}
+	var final *eddsakeygen.LocalPartySaveData
+	_, err = op.Unmarshal(bottle, &final)
+	if err != nil {
+		return nil, fmt.Errorf("while decrypting eddsa key %s: %w", wk.Id, err)
 	}
 	return final, err
 }

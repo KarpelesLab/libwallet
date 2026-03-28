@@ -59,6 +59,14 @@ func apiListAsset(ctx *apirouter.Context) (any, error) {
 	}
 	assets = append(assets, nat)
 
+	// Fetch SPL tokens for Solana networks
+	if n.Type == "solana" {
+		tokens, err := n.SolanaTokenBalances(e, acct)
+		if err == nil {
+			assets = append(assets, tokens...)
+		}
+	}
+
 	if convert, okconv := apirouter.GetParam[string](ctx, "_convert"); okconv {
 		for _, a := range assets {
 			a.ConvertTo(e, convert)

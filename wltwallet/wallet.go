@@ -21,7 +21,9 @@ import (
 	"github.com/ModChain/secp256k1"
 	"github.com/ModChain/tss-lib/v2/common"
 	"github.com/ModChain/tss-lib/v2/ecdsa/keygen"
-	"github.com/ModChain/tss-lib/v2/ecdsa/signing"
+	ecdsasigning "github.com/ModChain/tss-lib/v2/ecdsa/signing"
+	eddsakeygen "github.com/ModChain/tss-lib/v2/eddsa/keygen"
+	eddsasigning "github.com/ModChain/tss-lib/v2/eddsa/signing"
 	"github.com/ModChain/tss-lib/v2/tss"
 )
 
@@ -230,6 +232,111 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 	return nil
 }
 
+// initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS
+func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
+	w.Curve = "ed25519"
+	if w.Threshold == 0 {
+		w.Threshold = 1
+	}
+	nk := len(kDesc)
+	w.Keys = make([]*WalletKey, nk)
+
+	if nk == 0 {
+		return errors.New("at least one key is required")
+	}
+	if w.Threshold >= nk {
+		return errors.New("threshold too high")
+	}
+	if w.Threshold < 0 {
+		return errors.New("threshold too low")
+	}
+
+	for i, kInfo := range kDesc {
+		switch kInfo.Type {
+		case "StoreKey", "Plain", "RemoteKey", "Password":
+			// OK
+		default:
+			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
+		}
+		log.Printf("generating eddsa key %d/%d", i, nk)
+		apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": i + 1})
+
+		k, err := w.createWalletKey(ctx, kInfo.Type)
+		if err != nil {
+			return fmt.Errorf("failed to create eddsa wallet key of type %s (key %d/%d): %w", kInfo.Type, i+1, nk, err)
+		}
+		w.Keys[i] = k
+	}
+
+	log.Printf("producing eddsa final")
+	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
+
+	var ids tss.UnSortedPartyIDs
+	m := make(map[string]tssPartyUpdateOnly)
+	idmap := make(map[int]*tss.PartyID)
+	for n, p := range w.Keys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		ids = append(ids, id)
+		idmap[n] = id
+	}
+	sids := tss.SortPartyIDs(ids)
+
+	curve := tss.Edwards()
+	tssctx := tss.NewPeerContext(sids)
+
+	outCh := make(chan tss.Message)
+	defer close(outCh)
+	var wg sync.WaitGroup
+	wg.Add(len(w.Keys))
+
+	for n, p := range w.Keys {
+		endCh := make(chan *eddsakeygen.LocalPartySaveData)
+		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
+		party := eddsakeygen.NewLocalParty(params, outCh, endCh)
+		m[p.Id.String()] = party
+		go func(p *WalletKey) {
+			defer wg.Done()
+			err := party.Start()
+			if err != nil {
+				log.Printf("eddsa keygen err = %s", err)
+				p.eddata = nil
+				return
+			}
+			p.eddata = <-endCh
+		}(p)
+	}
+	go tssRouter(ctx, m, outCh)
+
+	chaincode := make([]byte, 32)
+	_, err := io.ReadFull(rand.Reader, chaincode)
+	if err != nil {
+		return fmt.Errorf("failed to generate secure chaincode for wallet: %w", err)
+	}
+
+	wg.Wait()
+
+	if w.Keys[0].eddata == nil {
+		return errors.New("eddsa key generation failed")
+	}
+
+	// Extract Ed25519 public key
+	edPub := w.Keys[0].eddata.EDDSAPub
+	pubBytes := make([]byte, 32)
+	edPub.X().FillBytes(pubBytes)
+	w.Pubkey = base64.RawURLEncoding.EncodeToString(pubBytes)
+	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
+
+	for i, kInfo := range kDesc {
+		err = w.Keys[i].encrypt(kInfo)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt eddsa wallet key %d/%d of type %s: %w", i+1, len(w.Keys), kInfo.Type, err)
+		}
+	}
+
+	return nil
+}
+
 // getKey retrieves a WalletKey by its ID string
 // Returns the key if found, or nil if not found
 func (w *Wallet) getKey(id string) *WalletKey {
@@ -312,33 +419,65 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 	defer close(outCh)
 	res := make(chan any, len(keys))
 
-	// Start TSS signing parties
-	for n, kd := range keys {
-		p := w.getKey(kd.Id)
-		if p == nil {
-			return nil, fmt.Errorf("could not find key id=%s", kd.Id)
-		}
-		endCh := make(chan *common.SignatureData)
-		params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
-		sdata, err := p.decrypt(kd, keySignPurpose)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt key %s for signing: %w", kd.Id, err)
-		}
-		party := signing.NewLocalPartyWithAutoKDD(msg, params, *sdata, aopt.IL, outCh, endCh, len(digest))
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
-			defer func() {
-				wltcrash.Log(aopt.Context, recover(), "signing party thread")
-			}()
-			err := party.Start()
-			if err != nil {
-				log.Printf("err = %s", err)
-				res <- err
-				return // Return early to prevent blocking on endCh
+	if w.Curve == "ed25519" {
+		// EdDSA signing path
+		for n, kd := range keys {
+			p := w.getKey(kd.Id)
+			if p == nil {
+				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
 			}
-			sig := <-endCh
-			res <- sig.GetSignatureObject().Serialize()
-		}(p)
+			endCh := make(chan *common.SignatureData)
+			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			eddata, err := p.decryptEdDSA(kd, keySignPurpose)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt eddsa key %s for signing: %w", kd.Id, err)
+			}
+			party := eddsasigning.NewLocalParty(msg, params, *eddata, outCh, endCh, len(digest))
+			m[p.Id.String()] = party
+			go func(p *WalletKey) {
+				defer func() {
+					wltcrash.Log(aopt.Context, recover(), "eddsa signing party thread")
+				}()
+				err := party.Start()
+				if err != nil {
+					log.Printf("err = %s", err)
+					res <- err
+					return
+				}
+				sig := <-endCh
+				// Ed25519 signature is R (32 bytes) || S (32 bytes)
+				res <- sig.GetSignature()
+			}(p)
+		}
+	} else {
+		// ECDSA signing path
+		for n, kd := range keys {
+			p := w.getKey(kd.Id)
+			if p == nil {
+				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
+			}
+			endCh := make(chan *common.SignatureData)
+			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			sdata, err := p.decrypt(kd, keySignPurpose)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt key %s for signing: %w", kd.Id, err)
+			}
+			party := ecdsasigning.NewLocalPartyWithAutoKDD(msg, params, *sdata, aopt.IL, outCh, endCh, len(digest))
+			m[p.Id.String()] = party
+			go func(p *WalletKey) {
+				defer func() {
+					wltcrash.Log(aopt.Context, recover(), "signing party thread")
+				}()
+				err := party.Start()
+				if err != nil {
+					log.Printf("err = %s", err)
+					res <- err
+					return
+				}
+				sig := <-endCh
+				res <- sig.GetSignatureObject().Serialize()
+			}(p)
+		}
 	}
 	go tssRouter(aopt.Context, m, outCh)
 

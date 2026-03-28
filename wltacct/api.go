@@ -27,7 +27,7 @@ func init() {
 }
 
 func CreateAccount(e wltintf.Env, wallet *wltwallet.Wallet, name, typ string, index int) (*Account, error) {
-	if typ != "ethereum" && typ != "bitcoin" {
+	if typ != "ethereum" && typ != "bitcoin" && typ != "solana" {
 		return nil, fmt.Errorf("unsupported account type %s", typ)
 	}
 
