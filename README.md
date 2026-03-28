@@ -1,5 +1,8 @@
 # libwallet
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/KarpelesLab/libwallet)](https://goreportcard.com/report/github.com/KarpelesLab/libwallet)
+[![Coverage Status](https://coveralls.io/repos/github/KarpelesLab/libwallet/badge.svg?branch=master)](https://coveralls.io/github/KarpelesLab/libwallet?branch=master)
+
 A comprehensive cryptocurrency wallet library written in Go, providing a modular framework for building secure cryptocurrency wallets with multi-chain support.
 
 The core concept is to use TSS (Threshold Signature Scheme) for crypto signatures in order to store keys in multiple locations and enable recovery without compromise on security.
