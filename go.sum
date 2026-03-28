@@ -117,6 +117,8 @@ github.com/opentracing/opentracing-go v1.2.0/go.mod h1:GxEUsuufX4nBwe+T+Wl9TAgYr
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/portablesql/psql v0.5.8 h1:/y6mY5TLpm4wKGg2jdgXfCAhInMMT5gLMYR6uXLi+wA=
+github.com/portablesql/psql v0.5.8/go.mod h1:E66N5+asL6D6RL0xbNoBQWGrfuRiVrGBPAQvOkeQV6k=
 github.com/portablesql/psql-sqlite v0.5.0 h1:Hl3ANUYLPe4vcWSaM/o64EJxb01z6If+cD3dSIj4WmQ=
 github.com/portablesql/psql-sqlite v0.5.0/go.mod h1:7tDno5Zz+6ma9fNEfXQ/psRMBoECADmVIEjqyKU+IeM=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=

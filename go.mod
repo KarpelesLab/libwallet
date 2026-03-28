@@ -2,8 +2,6 @@ module github.com/KarpelesLab/libwallet
 
 go 1.25.0
 
-replace github.com/portablesql/psql => /home/magicaltux/projects/portablesql/psql
-
 require (
 	github.com/KarpelesLab/apirouter v0.5.28
 	github.com/KarpelesLab/base58 v1.1.1
