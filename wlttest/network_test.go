@@ -36,7 +36,12 @@ func (m *MockAddressProvider) GetAddress() string {
 }
 
 func TestNftMetadata(t *testing.T) {
-	v, err := wltbase.InitEnv("test")
+	if testing.Short() {
+		t.Skip("skipping NFT metadata test in short mode (requires live Ethereum RPC)")
+	}
+
+	dir := t.TempDir()
+	v, err := wltbase.InitEnv(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
