@@ -3,6 +3,6 @@ package wltnet
 import "github.com/KarpelesLab/libwallet/wltintf"
 
 func InitEnv(e wltintf.Env) {
-	e.AutoMigrate(&Network{})
+	// psql auto-creates tables, no migration needed
 	MakeDefaultNetworks(e)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -22,19 +23,19 @@ func init() {
 }
 
 type connectedSite struct {
-	Id          *xuid.XUID       `gorm:"primaryKey"`
-	Host        string           `gorm:"index:Host_Account,unique"`
-	Account     *xuid.XUID       `gorm:"index:Host_Account,unique"`
-	Created     time.Time        `gorm:"autoCreateTime"`
-	Updated     time.Time        `gorm:"autoUpdateTime"`
-	AccountInfo *wltacct.Account `gorm:"-:all"`
+	psql.Name   `sql:"ConnectedSite"`
+	Id          *xuid.XUID       `sql:",key=PRIMARY"`
+	Host        string           `sql:",type=VARCHAR,size=255,key=UNIQUE:Host_Account"`
+	Account     *xuid.XUID       `sql:",type=VARCHAR,size=255,key=UNIQUE:Host_Account"`
+	Created     time.Time        `sql:",type=DATETIME"`
+	Updated     time.Time        `sql:",type=DATETIME"`
+	AccountInfo *wltacct.Account `sql:"-"`
 }
 
 func (e *env) connectedAccounts(key string) ([]*connectedSite, error) {
-	var conn []*connectedSite
-	res := e.sql.Where(map[string]any{"Host": key}).Find(&conn)
-	if res.Error != nil {
-		return nil, res.Error
+	conn, err := psql.Fetch[connectedSite](e.sqlCtx, map[string]any{"Host": key})
+	if err != nil {
+		return nil, err
 	}
 	if len(conn) <= 1 {
 		// no point changing the order if only 1 account
@@ -62,7 +63,12 @@ func (c *connectedSite) save(e *env) error {
 	if c.Id == nil {
 		c.Id = xuid.Must(xuid.NewRandom("cnx"))
 	}
-	return e.Save(c)
+	now := time.Now()
+	if c.Created.IsZero() {
+		c.Created = now
+	}
+	c.Updated = now
+	return psql.Replace(e.sqlCtx, c)
 }
 
 func apiFetchWeb3Connection(ctx *apirouter.Context, in struct{ Id string }) (any, error) {
@@ -96,18 +102,19 @@ func apiListWeb3Connection(ctx *apirouter.Context) (any, error) {
 		return nil, errors.New("failed to get env")
 	}
 
-	var res []*connectedSite
-
-	tx := e.sql
-	tx = tx.Scopes(ctx.Paginate(50))
-	tx = tx.Order("Created ASC")
+	where := make(map[string]any)
 	if host, ok := apirouter.GetParam[string](ctx, "Host"); ok {
-		tx = tx.Where(map[string]any{"Host": host})
+		where["Host"] = host
 	}
 
-	tx = tx.Find(&res)
-	if tx.Error != nil {
-		return nil, tx.Error
+	var whereArg any
+	if len(where) > 0 {
+		whereArg = where
+	}
+
+	res, err := psql.Fetch[connectedSite](e.sqlCtx, whereArg, psql.Sort(psql.S("Created", "ASC")), psql.Limit(50))
+	if err != nil {
+		return nil, err
 	}
 
 	for _, c := range res {
@@ -126,8 +133,8 @@ func (c *connectedSite) ApiDelete(ctx *apirouter.Context) error {
 		return errors.New("failed to get env")
 	}
 
-	tx := e.sql.Delete(c)
-	return tx.Error
+	_, err := psql.ForceDelete[connectedSite](e.sqlCtx, map[string]any{"Id": c.Id})
+	return err
 }
 
 func apiCreateWeb3Connection(ctx *apirouter.Context, ct *connectedSite) (any, error) {

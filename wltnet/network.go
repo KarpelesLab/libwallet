@@ -21,6 +21,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
 	"github.com/KarpelesLab/ethrpc"
+	"github.com/portablesql/psql"
 )
 
 var (
@@ -31,19 +32,20 @@ var (
 const ModChainApiKey = "crapi-nx4p6j-ifez-cjli-p5wj-uml43cte"
 
 type Network struct {
-	Id               *xuid.XUID     `gorm:"primaryKey"`
-	Type             string         `gorm:"index:typeChain,unique"` // evm | bitcoin
-	ChainId          string         `gorm:"index:typeChain,unique"` // for Type=evm, the chain id from chainlist. For Type=bitcoin, chain key is included here
-	Name             string         // name, automatic if empty
-	RPC              string         // rpc url, automatic if empty
-	validRPC         ethrpc.Handler // valid RPC servers
-	CurrencySymbol   string         // currency symbol, automatic if empty
-	CurrencyDecimals int            // decimals, automatic if zero
-	BlockExplorer    string         // explorer, automatic if empty
-	TestNet          bool           // is this a testnet?
-	Priority         int            // display priority
-	Created          time.Time      `gorm:"autoCreateTime"`
-	Updated          time.Time      `gorm:"autoUpdateTime"`
+	TableName        psql.Name      `sql:"Network"`
+	Id               *xuid.XUID     `sql:",key=PRIMARY"`
+	Type             string         `sql:",type=VARCHAR,size=255,key=UNIQUE:typeChain"` // evm | bitcoin
+	ChainId          string         `sql:",type=VARCHAR,size=255,key=UNIQUE:typeChain"` // for Type=evm, the chain id from chainlist. For Type=bitcoin, chain key is included here
+	Name             string         `sql:",type=VARCHAR,size=255"`         // name, automatic if empty
+	RPC              string         `sql:",type=TEXT"`                     // rpc url, automatic if empty
+	validRPC         ethrpc.Handler `sql:"-"`                              // valid RPC servers
+	CurrencySymbol   string         `sql:",type=VARCHAR,size=255"`        // currency symbol, automatic if empty
+	CurrencyDecimals int            `sql:",type=INT"`                     // decimals, automatic if zero
+	BlockExplorer    string         `sql:",type=TEXT"`                    // explorer, automatic if empty
+	TestNet          bool           `sql:",type=TINYINT,size=1"`          // is this a testnet?
+	Priority         int            `sql:",type=INT"`                     // display priority
+	Created          time.Time      `sql:",type=DATETIME"`                // Creation timestamp
+	Updated          time.Time      `sql:",type=DATETIME"`                // Last update timestamp
 }
 
 type NativeCurrencyObject struct {
@@ -225,7 +227,12 @@ func (n *Network) Save(e wltintf.Env) error {
 		// compute id
 		n.Id = xuid.Must(xuid.FromKeyPrefix(n.Type+"."+n.ChainId, "net"))
 	}
-	return e.Save(n)
+	now := time.Now()
+	if n.Created.IsZero() {
+		n.Created = now
+	}
+	n.Updated = now
+	return psql.Replace(e, n)
 }
 
 func NetworkIdForTypeAndChainId(typ, chainId string) *xuid.XUID {

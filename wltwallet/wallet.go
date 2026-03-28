@@ -25,21 +25,23 @@ import (
 	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
 	eddsasigning "github.com/KarpelesLab/tss-lib/v2/eddsa/signing"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
+	"github.com/portablesql/psql"
 )
 
 // Wallet represents a multi-signature wallet with threshold signature scheme (TSS) support
 // It can contain multiple keys with a configurable threshold for signatures
 type Wallet struct {
-	Id        *xuid.XUID   `gorm:"primaryKey"` // Unique identifier for the wallet
-	Name      string       // User-friendly name
-	Curve     string       // Elliptic curve used (e.g., "secp256k1")
-	Threshold int          // Minimum number of keys required for signing
-	Keys      []*WalletKey `gorm:"-:all"`              // Associated keys (not stored in database)
-	Gen       uint64       `gorm:"not null;default:0"` // incremented on reshare
-	Pubkey    string       // Base64 encoded public key
-	Chaincode string       // Base64 encoded chaincode for HD wallet derivation
-	Created   time.Time    `gorm:"autoCreateTime"` // Creation timestamp
-	Modified  time.Time    `gorm:"autoUpdateTime"` // Last modification timestamp
+	TableName psql.Name    `sql:"Wallet"`
+	Id        *xuid.XUID   `sql:",key=PRIMARY"`                  // Unique identifier for the wallet
+	Name      string        `sql:",type=VARCHAR,size=255"`        // User-friendly name
+	Curve     string        `sql:",type=VARCHAR,size=255"`        // Elliptic curve used (e.g., "secp256k1")
+	Threshold int           `sql:",type=INT"`                     // Minimum number of keys required for signing
+	Keys      []*WalletKey  `sql:"-"`                             // Associated keys (not stored in database)
+	Gen       uint64        `sql:",type=BIGINT,null=0,default=0"` // incremented on reshare
+	Pubkey    string        `sql:",type=TEXT"`                     // Base64 encoded public key
+	Chaincode string        `sql:",type=TEXT"`                     // Base64 encoded chaincode for HD wallet derivation
+	Created   time.Time     `sql:",type=DATETIME"`                // Creation timestamp
+	Modified  time.Time     `sql:",type=DATETIME"`                // Last modification timestamp
 }
 
 // save persists the wallet and all its keys to the database
@@ -64,7 +66,7 @@ func (w *Wallet) save(e wltintf.Env) error {
 			return fmt.Errorf("failed to save wallet key %d: %w", i, err)
 		}
 	}
-	if err := e.Save(w); err != nil {
+	if err := psql.Replace(e, w); err != nil {
 		return fmt.Errorf("failed to save wallet %s: %w", w.Id, err)
 	}
 	return nil
@@ -107,11 +109,11 @@ func (w *Wallet) ApiDelete(ctx *apirouter.Context) error {
 	e.Emitter().Emit(ctx, "wallet:deleted", w.Id.String())
 
 	// delete Wallet/Key entries
-	if err := e.DeleteWhere(&WalletKey{}, map[string]any{"Wallet": w.Id.String()}); err != nil {
+	if _, err := psql.ForceDelete[WalletKey](e, map[string]any{"Wallet": w.Id.String()}); err != nil {
 		return fmt.Errorf("failed to delete wallet keys for wallet %s: %w", w.Id, err)
 	}
 
-	if err := e.Delete(w); err != nil {
+	if _, err := psql.ForceDelete[Wallet](e, map[string]any{"Id": w.Id}); err != nil {
 		return fmt.Errorf("failed to delete wallet %s: %w", w.Id, err)
 	}
 	return nil

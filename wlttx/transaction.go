@@ -22,31 +22,33 @@ import (
 	"github.com/KarpelesLab/xuid"
 	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/outscript"
+	"github.com/portablesql/psql"
 )
 
 type Transaction struct {
-	Id           *xuid.XUID                `json:"id,omitempty" gorm:"primaryKey"`
-	Type         string                    `json:"type"`           // transfer, etc
-	Asset        string                    `json:"asset"`          // asset id (network id + "@" + NATIVE if native, or token id)
-	From         string                    `json:"from,omitempty"` // from (account)
-	To           string                    `json:"to"`
-	Gas          uint64                    `json:"gas"`                // gas amount
-	GasPrice     string                    `json:"gasPrice,omitempty"` // gas price
-	Fee          *wltobj.Amount         `json:"fee,omitempty" gorm:"serializer:json"`
-	Nonce        uint64                    `json:"nonce"`            // eth only
-	Format       string                    `json:"format,omitempty"` // transaction format, for ethereum: legacy or eip1559
-	Raw          []byte                    `json:"raw,omitempty"`
-	Hash         string                    `json:"hash,omitempty"`
-	URL          string                    `json:"url,omitempty"`
-	Network      *xuid.XUID                `json:"network,omitempty"`
-	Amount       *wltobj.Amount         `json:"amount" gorm:"serializer:json"`
-	Value        *wltobj.Amount         `json:"value,omitempty" gorm:"serializer:json"`
-	Data         string                    `json:"data,omitempty"`
-	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" gorm:"-:all"`
-	Created      *time.Time                `json:"created,omitempty" gorm:"autoCreateTime"`
-	FiatAmount   *wltobj.Amount         `json:"fiat_amount,omitempty" gorm:"-:all"`
-	FiatCurrency string                    `json:"fiat_currency,omitempty" gorm:"-:all"`
-	FiatQuote    any                       `json:"fiat_quote,omitempty" gorm:"-:all"`
+	psql.Name    `sql:"Transaction"`
+	Id           *xuid.XUID                `json:"id,omitempty" sql:",key=PRIMARY"`
+	Type         string                    `json:"type" sql:",type=VARCHAR,size=255"`           // transfer, etc
+	Asset        string                    `json:"asset" sql:",type=VARCHAR,size=255"`          // asset id (network id + "@" + NATIVE if native, or token id)
+	From         string                    `json:"from,omitempty" sql:",type=VARCHAR,size=255"` // from (account)
+	To           string                    `json:"to" sql:",type=VARCHAR,size=255"`
+	Gas          uint64                    `json:"gas" sql:",type=BIGINT"`                // gas amount
+	GasPrice     string                    `json:"gasPrice,omitempty" sql:",type=VARCHAR,size=255"` // gas price
+	Fee          *wltobj.Amount            `json:"fee,omitempty" sql:",type=JSON,format=json"`
+	Nonce        uint64                    `json:"nonce" sql:",type=BIGINT"`            // eth only
+	Format       string                    `json:"format,omitempty" sql:",type=VARCHAR,size=255"` // transaction format, for ethereum: legacy or eip1559
+	Raw          []byte                    `json:"raw,omitempty" sql:",type=BLOB"`
+	Hash         string                    `json:"hash,omitempty" sql:",type=VARCHAR,size=255"`
+	URL          string                    `json:"url,omitempty" sql:",type=TEXT"`
+	Network      *xuid.XUID                `json:"network,omitempty" sql:",type=VARCHAR,size=255"`
+	Amount       *wltobj.Amount            `json:"amount" sql:",type=JSON,format=json"`
+	Value        *wltobj.Amount            `json:"value,omitempty" sql:",type=JSON,format=json"`
+	Data         string                    `json:"data,omitempty" sql:",type=TEXT"`
+	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
+	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
+	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
+	FiatCurrency string                    `json:"fiat_currency,omitempty" sql:"-"`
+	FiatQuote    any                       `json:"fiat_quote,omitempty" sql:"-"`
 }
 
 func (tx *Transaction) save(e wltintf.Env) error {
@@ -58,7 +60,7 @@ func (tx *Transaction) save(e wltintf.Env) error {
 		}
 	}
 
-	return e.Save(tx)
+	return psql.Replace(e, tx)
 }
 
 func (tx *Transaction) getNetwork(e wltintf.Env) (*wltnet.Network, error) {
@@ -293,7 +295,8 @@ func (tx *Transaction) ApiDelete(ctx *apirouter.Context) error {
 		return errors.New("failed to get env")
 	}
 
-	return e.Delete(tx)
+	_, err := psql.ForceDelete[Transaction](e, map[string]any{"Id": tx.Id})
+	return err
 }
 
 func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescription) error {

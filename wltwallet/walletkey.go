@@ -22,22 +22,24 @@ import (
 	ecdsakeygen "github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
 	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
 	"github.com/fxamacker/cbor/v2"
+	"github.com/portablesql/psql"
 )
 
 type WalletKey struct {
-	Id     *xuid.XUID `gorm:"primaryKey"`
-	Wallet *xuid.XUID
-	Type   string
-	Key    string `json:"Key,omitempty"` // (public) key used for encryption
-	Data   []byte `json:",protect"`
-	Gen    uint64 `gorm:"not null;default:0"` // key generation
-	pre    *ecdsakeygen.LocalPreParams
-	sdata  *ecdsakeygen.LocalPartySaveData
-	eddata *eddsakeygen.LocalPartySaveData
+	psql.Name `sql:"WalletKey"`
+	Id        *xuid.XUID `sql:",key=PRIMARY"`
+	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"`
+	Type      string     `sql:",type=VARCHAR,size=255"`
+	Key       string     `json:"Key,omitempty" sql:",type=TEXT"` // (public) key used for encryption
+	Data      []byte     `json:",protect" sql:",type=BLOB"`
+	Gen       uint64     `sql:",type=BIGINT,null=0,default=0"` // key generation
+	pre       *ecdsakeygen.LocalPreParams
+	sdata     *ecdsakeygen.LocalPartySaveData
+	eddata    *eddsakeygen.LocalPartySaveData
 }
 
 func (wk *WalletKey) save(e wltintf.Env) error {
-	return e.Save(wk)
+	return psql.Replace(e, wk)
 }
 
 func (w *Wallet) createWalletKey(ctx context.Context, typ string) (*WalletKey, error) {

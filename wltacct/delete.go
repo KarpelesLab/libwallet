@@ -8,6 +8,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 func Init(e wltintf.Env) {
@@ -48,8 +49,11 @@ func handleWalletRestore(e wltintf.Env, ch <-chan *emitter.Event) {
 func handleWalletDelete(e wltintf.Env, ch <-chan *emitter.Event) {
 	for ev := range ch {
 		// delete each account
-		var accts []*Account
-		e.Find(&accts, map[string]any{"Wallet": ev.Args[0]})
+		accts, err := psql.Fetch[Account](e, map[string]any{"Wallet": ev.Args[0]})
+		if err != nil {
+			log.Printf("failed to fetch accounts for wallet delete: %s", err)
+			continue
+		}
 
 		for _, acct := range accts {
 			err := acct.accountDelete(e)

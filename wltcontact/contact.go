@@ -7,21 +7,23 @@ import (
 
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/xuid"
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/outscript"
+	"github.com/KarpelesLab/pobj"
+	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 type contact struct {
-	Id      *xuid.XUID `gorm:"primaryKey"`
-	Name    string
-	Address string
-	Type    string   // ethereum | bitcoin
-	Flags   []string `gorm:"serializer:json"` // bitcoin | bitcoin-cash | litecoin | etc...
-	Memo    string
-	Created time.Time `gorm:"autoCreateTime"`
-	Updated time.Time `gorm:"autoUpdateTime"`
+	TableName psql.Name `sql:"Contact"`
+	Id        *xuid.XUID `sql:",key=PRIMARY"`
+	Name      string     `sql:",type=VARCHAR,size=255"`
+	Address   string     `sql:",type=VARCHAR,size=255"`
+	Type      string     `sql:",type=VARCHAR,size=255"` // ethereum | bitcoin
+	Flags     []string   `sql:",type=JSON,format=json"`             // bitcoin | bitcoin-cash | litecoin | etc...
+	Memo      string     `sql:",type=TEXT"`
+	Created   time.Time  `sql:",type=DATETIME"`
+	Updated   time.Time  `sql:",type=DATETIME"`
 }
 
 func init() {
@@ -35,7 +37,7 @@ func init() {
 }
 
 func InitEnv(e wltintf.Env) {
-	e.AutoMigrate(&contact{})
+	// psql auto-creates tables, no migration needed
 }
 
 func (c *contact) validate() error {
@@ -80,7 +82,12 @@ func (c *contact) validate() error {
 }
 
 func (c *contact) save(e wltintf.Env) error {
-	return e.Save(c)
+	now := time.Now()
+	if c.Created.IsZero() {
+		c.Created = now
+	}
+	c.Updated = now
+	return psql.Replace(e, c)
 }
 
 func ContactById(e wltintf.Env, id *xuid.XUID) (*contact, error) {
@@ -96,7 +103,8 @@ func (c *contact) ApiDelete(ctx *apirouter.Context) error {
 		return errors.New("failed to get env")
 	}
 
-	return e.Delete(c)
+	_, err := psql.ForceDelete[contact](e, map[string]any{"Id": c.Id})
+	return err
 }
 
 func (c *contact) ApiUpdate(ctx *apirouter.Context) error {
@@ -166,7 +174,7 @@ func apiCreateContact(ctx *apirouter.Context, ct *contact) (any, error) {
 		return nil, err
 	}
 
-	err = e.Save(ct)
+	err = psql.Replace(e, ct)
 	if err != nil {
 		return nil, err
 	}

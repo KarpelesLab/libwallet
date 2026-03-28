@@ -11,6 +11,7 @@ import (
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 	"github.com/KarpelesLab/ethrpc"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -41,9 +42,7 @@ func CurrentNetworkId(e wltintf.Env) (string, error) {
 
 func evmNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Network, error) {
 	// search in db
-	var n *Network
-	err := e.FirstWhere(&n, map[string]any{"Type": "evm", "ChainId": chainId})
-	//res := e.sql.Where(map[string]any{"Type": "evm", "ChainId": chainId}).First(&n)
+	n, err := psql.Get[Network](e, map[string]any{"Type": "evm", "ChainId": chainId})
 	if err == nil {
 		return n, nil
 	}
@@ -57,8 +56,7 @@ func evmNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Network
 
 func bitcoinNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Network, error) {
 	// search in db
-	var n *Network
-	err := e.FirstWhere(&n, map[string]any{"Type": "bitcoin", "ChainId": chainId})
+	n, err := psql.Get[Network](e, map[string]any{"Type": "bitcoin", "ChainId": chainId})
 	if err == nil {
 		return n, nil
 	}
@@ -71,8 +69,7 @@ func bitcoinNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Net
 }
 
 func solanaNetwork(e wltintf.Env, chainId string, prio int, testNet bool) (*Network, error) {
-	var n *Network
-	err := e.FirstWhere(&n, map[string]any{"Type": "solana", "ChainId": chainId})
+	n, err := psql.Get[Network](e, map[string]any{"Type": "solana", "ChainId": chainId})
 	if err == nil {
 		return n, nil
 	}
@@ -126,7 +123,8 @@ func (n *Network) ApiDelete(ctx *apirouter.Context) error {
 		return errors.New("failed to get env")
 	}
 
-	return e.Delete(n)
+	_, err := psql.ForceDelete[Network](e, map[string]any{"Id": n.Id})
+	return err
 }
 
 func (n *Network) ApiUpdate(ctx *apirouter.Context) error {

@@ -18,6 +18,7 @@ import (
 	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -40,16 +41,17 @@ var (
 )
 
 type request struct {
-	Id          *xuid.XUID         `gorm:"primaryKey"`
-	Type        string             // connect | sign | add_network | change_network | test
-	Host        string             // URL of requesting site
-	Status      string             // pending | accepted | rejected | timedout
-	Account     *string            // account used for signature, if specified
-	Transaction *wlttx.Transaction `json:",omitempty" gorm:"serializer:json"` // if Type=sign, contains the transaction to be signed
-	Value       any                `json:",omitempty" gorm:"serializer:json"` // generic value
-	Result      any                `json:",omitempty" gorm:"serializer:json"` // generic response
-	Created     time.Time          `gorm:"autoCreateTime"`
-	Updated     time.Time          `gorm:"autoUpdateTime"`
+	psql.Name   `sql:"Request"`
+	Id          *xuid.XUID         `sql:",key=PRIMARY"`
+	Type        string             `sql:",type=VARCHAR,size=255"`              // connect | sign | add_network | change_network | test
+	Host        string             `sql:",type=VARCHAR,size=255"`             // URL of requesting site
+	Status      string             `sql:",type=VARCHAR,size=255"`             // pending | accepted | rejected | timedout
+	Account     *string            `sql:",type=VARCHAR,size=255"`             // account used for signature, if specified
+	Transaction *wlttx.Transaction `json:",omitempty" sql:",type=JSON,format=json"` // if Type=sign, contains the transaction to be signed
+	Value       any                `json:",omitempty" sql:",type=JSON,format=json"` // generic value
+	Result      any                `json:",omitempty" sql:",type=JSON,format=json"` // generic response
+	Created     time.Time          `sql:",type=DATETIME"`
+	Updated     time.Time          `sql:",type=DATETIME"`
 }
 
 func (r *request) save(e *env) error {
@@ -57,7 +59,12 @@ func (r *request) save(e *env) error {
 		// compute id
 		r.Id = xuid.Must(xuid.NewRandom("req"))
 	}
-	return e.Save(r)
+	now := time.Now()
+	if r.Created.IsZero() {
+		r.Created = now
+	}
+	r.Updated = now
+	return psql.Replace(e.sqlCtx, r)
 }
 
 func makePendingRequestChan(id string) chan string {
@@ -100,7 +107,10 @@ func (r *request) run(e *env) error {
 		return &apirouter.Error{Code: 4001, Message: "User rejected the request."}
 	}
 	// reload req
-	e.sql.First(r)    // will cause a re-fetch of the request
+	reloaded, err := psql.Get[request](e.sqlCtx, map[string]any{"Id": r.Id})
+	if err == nil {
+		*r = *reloaded
+	}
 	r.Status = result // just in case
 	return nil
 }
@@ -165,14 +175,11 @@ func apiListRequest(ctx *apirouter.Context) (any, error) {
 		return nil, errors.New("failed to get env")
 	}
 
-	var res []*request
-
-	tx := e.sql
-	tx = tx.Scopes(ctx.Paginate(50))
-	tx = tx.Order("Created ASC")
-
-	tx = tx.Find(&res)
-	return res, tx.Error
+	res, err := psql.Fetch[request](e.sqlCtx, nil, psql.Sort(psql.S("Created", "ASC")), psql.Limit(50))
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func requestDoApprove(ctx *apirouter.Context, in struct {

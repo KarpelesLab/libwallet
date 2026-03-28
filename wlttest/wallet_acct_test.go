@@ -7,6 +7,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltbase"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltwallet"
+	"github.com/portablesql/psql"
 )
 
 // TestWalletAccountLifecycle tests the full lifecycle of wallets and accounts
@@ -39,14 +40,14 @@ func TestWalletAccountLifecycle(t *testing.T) {
 
 	// Save the wallet keys first
 	for _, key := range wallet.Keys {
-		err = env.Save(key)
+		err = psql.Replace(env, key)
 		if err != nil {
 			t.Fatalf("Failed to save wallet key: %v", err)
 		}
 	}
 
 	// Then save the wallet
-	err = env.Save(wallet)
+	err = psql.Replace(env, wallet)
 	if err != nil {
 		t.Fatalf("Failed to save wallet: %v", err)
 	}
@@ -57,8 +58,7 @@ func TestWalletAccountLifecycle(t *testing.T) {
 	}
 
 	// Step 4: Retrieve the wallet
-	var retrievedWallets []*wltwallet.Wallet
-	err = env.Find(&retrievedWallets, nil)
+	retrievedWallets, err := psql.Fetch[wltwallet.Wallet](env, nil)
 	if err != nil {
 		t.Fatalf("Failed to get wallets: %v", err)
 	}
@@ -71,8 +71,7 @@ func TestWalletAccountLifecycle(t *testing.T) {
 	if len(retrievedWallet.Keys) == 0 {
 		t.Log("Loading wallet keys from database")
 
-		var keys []*wltwallet.WalletKey
-		err = env.Find(&keys, map[string]any{"Wallet": retrievedWallet.Id.String()})
+		keys, err := psql.Fetch[wltwallet.WalletKey](env, map[string]any{"Wallet": retrievedWallet.Id.String()})
 		if err != nil {
 			t.Fatalf("Failed to load wallet keys: %v", err)
 		}
@@ -131,14 +130,13 @@ func TestWalletAccountLifecycle(t *testing.T) {
 	originalName := account.Name
 	account.Name = updatedName
 
-	err = env.Save(account)
+	err = psql.Replace(env, account)
 	if err != nil {
 		t.Fatalf("Failed to update account: %v", err)
 	}
 
 	// Retrieve the account again to verify update
-	var updatedAccount *wltacct.Account
-	err = env.FirstWhere(&updatedAccount, map[string]any{"Id": account.Id.String()})
+	updatedAccount, err := psql.Get[wltacct.Account](env, map[string]any{"Id": account.Id.String()})
 	if err != nil {
 		t.Fatalf("Failed to find updated account: %v", err)
 	}
@@ -150,14 +148,13 @@ func TestWalletAccountLifecycle(t *testing.T) {
 	}
 
 	// Test account deletion
-	err = env.Delete(account2)
+	_, err = psql.ForceDelete[wltacct.Account](env, map[string]any{"Id": account2.Id})
 	if err != nil {
 		t.Fatalf("Failed to delete account: %v", err)
 	}
 
 	// Verify account was deleted
-	var deletedAccount *wltacct.Account
-	err = env.FirstWhere(&deletedAccount, map[string]any{"Id": account2.Id.String()})
+	_, err = psql.Get[wltacct.Account](env, map[string]any{"Id": account2.Id.String()})
 	if err == nil {
 		t.Errorf("Account should have been deleted but was still found")
 	} else {

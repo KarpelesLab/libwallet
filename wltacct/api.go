@@ -12,7 +12,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
-	"gorm.io/gorm"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -58,10 +58,8 @@ func CreateAccount(e wltintf.Env, wallet *wltwallet.Wallet, name, typ string, in
 }
 
 func HasAccount(e wltintf.Env) bool {
-	// Use CountWithError to properly handle database errors
-	count, err := e.CountWithError(&Account{})
+	count, err := psql.Count[Account](e, nil)
 	if err != nil {
-		// Log the error but return false as if no accounts exist
 		log.Printf("Error counting accounts: %v", err)
 		return false
 	}
@@ -69,11 +67,15 @@ func HasAccount(e wltintf.Env) bool {
 }
 
 func FirstAccount(e wltintf.Env) (a *Account, err error) {
-	err = e.First(&a)
-
-	if err == nil {
-		err = a.check(e)
+	accounts, err := psql.Fetch[Account](e, nil, psql.Limit(1))
+	if err != nil {
+		return nil, err
 	}
+	if len(accounts) == 0 {
+		return nil, fs.ErrNotExist
+	}
+	a = accounts[0]
+	err = a.check(e)
 	return
 }
 
@@ -88,7 +90,7 @@ func CurrentAccount(e wltintf.Env) (*Account, error) {
 	// get first
 	if acct, err := FirstAccount(e); err == nil {
 		return acct, nil
-	} else if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, gorm.ErrRecordNotFound) {
+	} else if !errors.Is(err, fs.ErrNotExist) {
 		// if not a not found error, return it
 		return nil, err
 	}
@@ -130,12 +132,11 @@ func FindAccount(e wltintf.Env, id string) (*Account, error) {
 		}
 	}
 
-	var acct *Account
-	e.FirstWhere(&acct, map[string]any{"Address": id})
-	if acct != nil {
-		return acct, nil
+	acct, err := psql.Get[Account](e, map[string]any{"Address": id})
+	if err != nil {
+		return nil, fs.ErrNotExist
 	}
-	return nil, fs.ErrNotExist // res.Error
+	return acct, nil
 }
 
 func AccountById(e wltintf.Env, id *xuid.XUID) (*Account, error) {

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 type NftAttribute struct {
@@ -13,22 +14,23 @@ type NftAttribute struct {
 }
 
 type Nft struct {
-	Id              *xuid.XUID      `json:"id,omitempty" gorm:"primaryKey"`
-	Key             string          `json:"key" gorm:"index:Key,unique"`
-	ContractAddress string          `json:"contract_address"`
-	ContractName    string          `json:"contract_name"`
-	TokenId         string          `json:"token_id"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description,omitempty"`
-	Image           string          `json:"image,omitempty"`
-	ImageUrl        string          `json:"image_url,omitempty"`
-	AnimationUrl    string          `json:"animation_url,omitempty"`
-	BackgroundColor string          `json:"background_color,omitempty"`
-	YoutubeUrl      string          `json:"youtube_url,omitempty"`
-	ExternalUrl     string          `json:"external_url,omitempty"`
-	Decimals        string          `json:"decimals,omitempty"`
-	Attributes      []*NftAttribute `json:"attributes" gorm:"serializer:json"`
-	Network         *xuid.XUID      `json:"network,omitempty"`
-	Created         time.Time       `gorm:"autoCreateTime"`
-	Updated         time.Time       `gorm:"autoUpdateTime"`
+	TableName       psql.Name       `sql:"Nft"`
+	Id              *xuid.XUID      `json:"id,omitempty" sql:",key=PRIMARY"`
+	Key             string          `json:"key" sql:",type=VARCHAR,size=255,key=UNIQUE:Key"`
+	ContractAddress string          `json:"contract_address" sql:",type=VARCHAR,size=255"`
+	ContractName    string          `json:"contract_name" sql:",type=VARCHAR,size=255"`
+	TokenId         string          `json:"token_id" sql:",type=VARCHAR,size=255"`
+	Name            string          `json:"name" sql:",type=VARCHAR,size=255"`
+	Description     string          `json:"description,omitempty" sql:",type=TEXT"`
+	Image           string          `json:"image,omitempty" sql:",type=TEXT"`
+	ImageUrl        string          `json:"image_url,omitempty" sql:",type=TEXT"`
+	AnimationUrl    string          `json:"animation_url,omitempty" sql:",type=TEXT"`
+	BackgroundColor string          `json:"background_color,omitempty" sql:",type=VARCHAR,size=255"`
+	YoutubeUrl      string          `json:"youtube_url,omitempty" sql:",type=TEXT"`
+	ExternalUrl     string          `json:"external_url,omitempty" sql:",type=TEXT"`
+	Decimals        string          `json:"decimals,omitempty" sql:",type=VARCHAR,size=255"`
+	Attributes      []*NftAttribute `json:"attributes" sql:",type=JSON,format=json"`
+	Network         *xuid.XUID      `json:"network,omitempty" sql:",type=VARCHAR,size=255"`
+	Created         time.Time       `sql:",type=DATETIME"`
+	Updated         time.Time       `sql:",type=DATETIME"`
 }

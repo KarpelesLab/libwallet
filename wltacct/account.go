@@ -22,6 +22,7 @@ import (
 	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/secp256k1/ecckd"
+	"github.com/portablesql/psql"
 )
 
 // standard for derivation path:
@@ -30,25 +31,31 @@ import (
 // Account represents a blockchain account derived from a wallet's public key
 // Using hierarchical deterministic (HD) derivation to generate addresses for different chains
 type Account struct {
-	Id        *xuid.XUID `gorm:"primaryKey"` // Unique identifier for the account
-	Wallet    *xuid.XUID // Parent wallet ID
-	Name      string     // User-friendly name
-	Index     int        // Account index, starts at zero
-	Type      string     // "ethereum", "bitcoin", etc *deprecated* we don't care about the account type, only the wallet curve
-	Path      string     // Derivation path, e.g. m/44/60/0/0 (note: no hardened keys since we only have public keys)
-	Address   string     // Blockchain address in the appropriate format
-	URI       string     // URI for sending to this account (e.g. ethereum:0x...)
-	Pubkey    string     // Base64 encoded public key
-	Chaincode string     // Base64 encoded chaincode for HD derivation
-	IL        *big.Int   `json:"IL,string" gorm:"serializer:json"` // Intermediate value used in derivation
-	Created   time.Time  `gorm:"autoCreateTime"`                   // Creation timestamp
-	Updated   time.Time  `gorm:"autoUpdateTime"`                   // Last update timestamp
+	TableName psql.Name  `sql:"Account"`
+	Id        *xuid.XUID `sql:",key=PRIMARY"`           // Unique identifier for the account
+	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"` // Parent wallet ID
+	Name      string     `sql:",type=VARCHAR,size=255"` // User-friendly name
+	Index     int        `sql:",type=INT"`              // Account index, starts at zero
+	Type      string     `sql:",type=VARCHAR,size=255"` // "ethereum", "bitcoin", etc *deprecated* we don't care about the account type, only the wallet curve
+	Path      string     `sql:",type=VARCHAR,size=255"` // Derivation path, e.g. m/44/60/0/0 (note: no hardened keys since we only have public keys)
+	Address   string     `sql:",type=VARCHAR,size=255"` // Blockchain address in the appropriate format
+	URI       string     `sql:",type=TEXT"`              // URI for sending to this account (e.g. ethereum:0x...)
+	Pubkey    string     `sql:",type=TEXT"`              // Base64 encoded public key
+	Chaincode string     `sql:",type=TEXT"`              // Base64 encoded chaincode for HD derivation
+	IL        *big.Int   `json:"IL,string" sql:",type=JSON,format=json"` // Intermediate value used in derivation
+	Created   time.Time  `sql:",type=DATETIME"`               // Creation timestamp
+	Updated   time.Time  `sql:",type=DATETIME"`               // Last update timestamp
 }
 
 // save persists the account to the database
 // Returns any error encountered during the operation
 func (a *Account) save(e wltintf.Env) error {
-	return e.Save(a)
+	now := time.Now()
+	if a.Created.IsZero() {
+		a.Created = now
+	}
+	a.Updated = now
+	return psql.Replace(e, a)
 }
 
 // check ensures the account has proper chaincode and updates address/URI based on the current network
@@ -378,7 +385,8 @@ func (a *Account) accountDelete(e wltintf.Env) error {
 	//TODO e.sql.Where(map[string]any{"From": a.Id.String()}).Delete(&Transaction{})
 	//TODO e.sql.Where(map[string]any{"Account": a.Id.String()}).Delete(&connectedSite{})
 
-	return e.Delete(a)
+	_, err := psql.ForceDelete[Account](e, map[string]any{"Id": a.Id})
+	return err
 }
 
 // Sign signs a digest using the account's parent wallet

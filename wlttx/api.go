@@ -9,6 +9,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -65,9 +66,7 @@ func apiListTransaction(ctx *apirouter.Context) (any, error) {
 		return nil, errors.New("failed to get env")
 	}
 
-	var res []*Transaction
-
-	err := e.ListHelper(ctx, &res, "Created DESC", "From", "Network")
+	res, err := psql.Fetch[Transaction](e, nil, psql.Sort(psql.S("Created", "DESC")), psql.Limit(50))
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +95,11 @@ func apiClearTransaction(ctx *apirouter.Context) (any, error) {
 		where["Network"] = net
 	}
 
-	if len(where) == 0 {
-		return nil, e.DeleteAll(&Transaction{})
+	var whereArg any
+	if len(where) > 0 {
+		whereArg = where
 	}
 
-	return nil, e.DeleteWhere(&Transaction{}, where)
+	_, err := psql.ForceDelete[Transaction](e, whereArg)
+	return nil, err
 }

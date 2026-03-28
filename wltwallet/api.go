@@ -11,6 +11,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -35,10 +36,11 @@ func WalletById(e wltintf.Env, id *xuid.XUID) (*Wallet, error) {
 	}
 
 	// load res.Keys
-	err = e.Find(&res.Keys, map[string]any{"Wallet": res.Id.String(), "Gen": res.Gen})
+	keys, err := psql.Fetch[WalletKey](e, map[string]any{"Wallet": res.Id.String(), "Gen": res.Gen})
 	if err != nil {
 		return nil, err
 	}
+	res.Keys = keys
 	return res, nil
 }
 
@@ -66,18 +68,18 @@ func apiListWallet(ctx *apirouter.Context) (any, error) {
 }
 
 func GetAllWallets(e wltintf.Env, ctx *apirouter.Context) ([]*Wallet, error) {
-	var res []*Wallet
-	err := e.ListHelper(ctx, &res, "Name ASC")
+	res, err := psql.Fetch[Wallet](e, nil, psql.Sort(psql.S("Name", "ASC")))
 	if err != nil {
 		return nil, err
 	}
 
 	for _, v := range res {
 		// load keys
-		err = e.Find(&v.Keys, map[string]any{"Wallet": v.Id, "Gen": v.Gen})
+		keys, err := psql.Fetch[WalletKey](e, map[string]any{"Wallet": v.Id, "Gen": v.Gen})
 		if err != nil {
 			return nil, err
 		}
+		v.Keys = keys
 		if len(v.Keys) == 0 {
 			return nil, fmt.Errorf("failed to load keys for wallet %s (gen %d)", v.Id, v.Gen)
 		}
@@ -86,19 +88,23 @@ func GetAllWallets(e wltintf.Env, ctx *apirouter.Context) ([]*Wallet, error) {
 }
 
 func HasWallet(e wltintf.Env) bool {
-	// Use CountWithError to properly handle database errors
-	count, err := e.CountWithError(&Wallet{})
+	count, err := psql.Count[Wallet](e, nil)
 	if err != nil {
-		// Log the error but return false as if no wallets exist
 		log.Printf("Error counting wallets: %v", err)
 		return false
 	}
 	return count > 0
 }
 
-func FirstWallet(e wltintf.Env) (w *Wallet, err error) {
-	err = e.First(&w)
-	return
+func FirstWallet(e wltintf.Env) (*Wallet, error) {
+	wallets, err := psql.Fetch[Wallet](e, nil, psql.Limit(1))
+	if err != nil {
+		return nil, err
+	}
+	if len(wallets) == 0 {
+		return nil, fmt.Errorf("no wallets found")
+	}
+	return wallets[0], nil
 }
 
 func apiCreateWallet(ctx *apirouter.Context, in struct {

@@ -6,6 +6,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltbase"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/portablesql/psql"
 )
 
 // TestNetworkLifecycle tests the network functionality using temporary environment
@@ -65,8 +66,7 @@ func TestNetworkLifecycle(t *testing.T) {
 		network.Id = wltnet.NetworkIdForTypeAndChainId(network.Type, network.ChainId)
 
 		// First check if it exists
-		existing := new(wltnet.Network)
-		err = env.FirstWhere(&existing, map[string]any{"Type": network.Type, "ChainId": network.ChainId})
+		existing, err := psql.Get[wltnet.Network](env, map[string]any{"Type": network.Type, "ChainId": network.ChainId})
 		if err == nil {
 			// Network already exists, skip
 			networks[i] = existing
@@ -81,32 +81,31 @@ func TestNetworkLifecycle(t *testing.T) {
 	}
 
 	// Step 3: Get all networks
-	var allNetworks []*wltnet.Network
-	err = env.ListHelper(nil, &allNetworks, "Priority DESC")
+	allNetworks, err := psql.Fetch[wltnet.Network](env, nil, psql.Sort(psql.S("Priority", "DESC")))
 	if err != nil {
 		t.Fatalf("Failed to get networks: %v", err)
 	}
+	_ = allNetworks
 
 	// Step 4: Get networks by type
-	var evmNetworks []*wltnet.Network
-	err = env.Find(&evmNetworks, map[string]any{"Type": "evm"})
+	evmNetworks, err := psql.Fetch[wltnet.Network](env, map[string]any{"Type": "evm"})
 	if err != nil {
 		t.Fatalf("Failed to get EVM networks: %v", err)
 	}
+	_ = evmNetworks
 
 	// Don't check exact count as there may be default networks
 
-	var bitcoinNetworks []*wltnet.Network
-	err = env.Find(&bitcoinNetworks, map[string]any{"Type": "bitcoin"})
+	bitcoinNetworks, err := psql.Fetch[wltnet.Network](env, map[string]any{"Type": "bitcoin"})
 	if err != nil {
 		t.Fatalf("Failed to get Bitcoin networks: %v", err)
 	}
+	_ = bitcoinNetworks
 
 	// Don't check exact count as there may be default networks
 
 	// Step 5: Test network by ID
-	var eth *wltnet.Network
-	err = env.FirstWhere(&eth, map[string]any{"Type": "evm", "ChainId": "1"})
+	eth, err := psql.Get[wltnet.Network](env, map[string]any{"Type": "evm", "ChainId": "1"})
 	if err != nil {
 		t.Fatalf("Failed to get Ethereum network: %v", err)
 	}
@@ -140,8 +139,7 @@ func TestNetworkLifecycle(t *testing.T) {
 	}
 
 	// Verify the update
-	var updatedEth *wltnet.Network
-	err = env.FirstWhere(&updatedEth, map[string]any{"Type": "evm", "ChainId": "1"})
+	updatedEth, err := psql.Get[wltnet.Network](env, map[string]any{"Type": "evm", "ChainId": "1"})
 	if err != nil {
 		t.Fatalf("Failed to get updated Ethereum network: %v", err)
 	}
@@ -151,8 +149,7 @@ func TestNetworkLifecycle(t *testing.T) {
 	}
 
 	// Step 9: Test switching networks
-	var sepolia *wltnet.Network
-	err = env.FirstWhere(&sepolia, map[string]any{"Type": "evm", "ChainId": "11155111"})
+	sepolia, err := psql.Get[wltnet.Network](env, map[string]any{"Type": "evm", "ChainId": "11155111"})
 	if err != nil {
 		t.Fatalf("Failed to get Sepolia network: %v", err)
 	}

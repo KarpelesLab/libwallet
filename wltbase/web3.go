@@ -94,8 +94,7 @@ func web3Req(ctx context.Context, in struct {
 			return nil, err
 		}
 		// approved
-		conn = nil
-		e.sql.Where(map[string]any{"Host": key}).Find(&conn)
+		conn, _ = e.connectedAccounts(key)
 
 		if len(conn) == 0 {
 			return nil, nil
@@ -140,8 +139,7 @@ func web3Req(ctx context.Context, in struct {
 				return nil, err
 			}
 			// approved
-			conn = nil
-			e.sql.Where(map[string]any{"Host": key}).Find(&conn)
+			conn, _ = e.connectedAccounts(key)
 
 			if len(conn) == 0 {
 				return nil, nil

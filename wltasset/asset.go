@@ -8,23 +8,25 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltquote"
 	"github.com/KarpelesLab/xuid"
+	"github.com/portablesql/psql"
 )
 
 type Asset struct {
-	Id           *xuid.XUID        `json:"id,omitempty" gorm:"primaryKey"`
-	Key          string            `json:"key" gorm:"index:Key,unique"`
-	Name         string            `json:"name"`
-	Symbol       string            `json:"symbol"`
-	Amount       *wltobj.Amount `json:"amount" gorm:"serializer:json"`
-	Info         *CoinInfo         `json:"info" gorm:"-:all"`
-	Type         string            `json:"type"`
-	Network      *xuid.XUID        `json:"network,omitempty"`
-	FiatAmount   *wltobj.Amount `json:"fiat_amount,omitempty" gorm:"-:all"`
-	FiatCurrency string            `json:"fiat_currency,omitempty" gorm:"-:all"`
-	FiatQuote    any               `json:"fiat_quote,omitempty" gorm:"-:all"`
-	TestNet      bool              `json;"testnet,omitempty" gorm:"-:all"`
-	Created      time.Time         `gorm:"autoCreateTime"`
-	Updated      time.Time         `gorm:"autoUpdateTime"`
+	TableName    psql.Name      `sql:"Asset"`
+	Id           *xuid.XUID     `json:"id,omitempty" sql:",key=PRIMARY"`
+	Key          string         `json:"key" sql:",type=VARCHAR,size=255,key=UNIQUE:Key"`
+	Name         string         `json:"name" sql:",type=VARCHAR,size=255"`
+	Symbol       string         `json:"symbol" sql:",type=VARCHAR,size=255"`
+	Amount       *wltobj.Amount `json:"amount" sql:",type=JSON,format=json"`
+	Info         *CoinInfo      `json:"info" sql:"-"`
+	Type         string         `json:"type" sql:",type=VARCHAR,size=255"`
+	Network      *xuid.XUID     `json:"network,omitempty" sql:",type=VARCHAR,size=255"`
+	FiatAmount   *wltobj.Amount `json:"fiat_amount,omitempty" sql:"-"`
+	FiatCurrency string         `json:"fiat_currency,omitempty" sql:"-"`
+	FiatQuote    any            `json:"fiat_quote,omitempty" sql:"-"`
+	TestNet      bool           `json:"testnet,omitempty" sql:"-"`
+	Created      time.Time      `sql:",type=DATETIME"`
+	Updated      time.Time      `sql:",type=DATETIME"`
 }
 
 func (a *Asset) ConvertTo(e wltintf.Env, currency string) error {

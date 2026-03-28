@@ -1,53 +1,41 @@
 package wltbase
 
 import (
-	"errors"
 	"io/fs"
+	"os"
 	"time"
 
-	"gorm.io/gorm"
+	"github.com/portablesql/psql"
 )
 
 type currentItem struct {
-	Key     string `gorm:"primaryKey"`
-	Value   string
-	Created time.Time `gorm:"autoCreateTime"`
-	Updated time.Time `gorm:"autoUpdateTime"`
+	psql.Name `sql:"CurrentItem"`
+	Key       string    `sql:",key=PRIMARY,type=VARCHAR,size=255"`
+	Value     string    `sql:",type=TEXT"`
+	Created   time.Time `sql:",type=DATETIME"`
+	Updated   time.Time `sql:",type=DATETIME"`
+}
+
+func (ci *currentItem) BeforeSave(ctx interface{}) error {
+	now := time.Now()
+	if ci.Created.IsZero() {
+		ci.Created = now
+	}
+	ci.Updated = now
+	return nil
 }
 
 func (e *env) SetCurrent(k, v string) error {
-	ci := &currentItem{Key: k}
-	tx := e.sql.First(ci)
-	if tx.Error != nil {
-		if !errors.Is(tx.Error, gorm.ErrRecordNotFound) {
-			return tx.Error
-		}
-		// not found
-		ci.Value = v
-		tx = e.sql.Create(ci)
-		return tx.Error
-	}
-	// found
-	ci.Value = v
-	return e.Save(ci)
+	return psql.Replace(e.sqlCtx, &currentItem{Key: k, Value: v})
 }
 
 func (e *env) GetCurrent(k string) (string, error) {
-	v, err := e.getCurrentItem(k)
+	ci, err := psql.Get[currentItem](e.sqlCtx, map[string]any{"Key": k})
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fs.ErrNotExist
+		}
 		return "", err
 	}
-	return v.Value, nil
-}
-
-func (e *env) getCurrentItem(k string) (*currentItem, error) {
-	ci := &currentItem{Key: k}
-	tx := e.sql.First(ci)
-	if tx.Error != nil {
-		if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
-			return nil, fs.ErrNotExist
-		}
-		return nil, tx.Error
-	}
-	return ci, nil
+	return ci.Value, nil
 }

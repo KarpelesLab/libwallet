@@ -103,57 +103,6 @@ func TestCacheStoreLoad(t *testing.T) {
 	}
 }
 
-// TestCountWithError tests the CountWithError method using an in-memory SQLite database
-func TestCountWithError(t *testing.T) {
-	type TestModel struct {
-		ID   uint `gorm:"primarykey"`
-		Name string
-	}
-
-	tempEnv, err := InitTempEnv()
-	if err != nil {
-		t.Fatalf("Failed to initialize temporary environment: %v", err)
-	}
-	defer CleanupTempEnv(tempEnv)
-
-	e, ok := tempEnv.(*env)
-	if !ok {
-		t.Fatalf("Returned environment is not a valid *env")
-	}
-
-	err = e.sql.AutoMigrate(&TestModel{})
-	if err != nil {
-		t.Fatalf("Failed to create test table: %v", err)
-	}
-
-	count, err := e.CountWithError(&TestModel{})
-	if err != nil {
-		t.Errorf("CountWithError returned error for empty table: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Expected count 0 for empty table, got %d", count)
-	}
-
-	testRecords := []TestModel{
-		{Name: "Test1"},
-		{Name: "Test2"},
-		{Name: "Test3"},
-	}
-	for _, record := range testRecords {
-		if err := e.sql.Create(&record).Error; err != nil {
-			t.Fatalf("Failed to create test record: %v", err)
-		}
-	}
-
-	count, err = e.CountWithError(&TestModel{})
-	if err != nil {
-		t.Errorf("CountWithError returned error for populated table: %v", err)
-	}
-	if count != 3 {
-		t.Errorf("Expected count 3 for populated table, got %d", count)
-	}
-}
-
 // TestInitTempEnv tests the initialization and cleanup of a temporary environment
 func TestInitTempEnv(t *testing.T) {
 	tempEnv, err := InitTempEnv()
@@ -166,16 +115,8 @@ func TestInitTempEnv(t *testing.T) {
 		t.Fatalf("Returned environment is not a valid *env")
 	}
 
-	if e.sql == nil {
-		t.Errorf("SQLite was not initialized")
-	}
-
-	count, err := e.CountWithError(&currentItem{})
-	if err != nil {
-		t.Errorf("Failed to query database: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("Expected empty table, got count %d", count)
+	if e.sqlCtx == nil {
+		t.Errorf("SQLite context was not initialized")
 	}
 
 	if _, err := os.Stat(e.dataDir); os.IsNotExist(err) {

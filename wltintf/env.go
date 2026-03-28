@@ -3,24 +3,23 @@ package wltintf
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/spotlib"
+	"github.com/portablesql/psql"
 )
 
 type Env interface {
-	Save(obj any) error
-	Delete(obj any) error
-	DeleteWhere(obj any, where map[string]any) error
-	DeleteAll(obj any) error
+	context.Context // psql backend is plugged into this context
+
 	SetCurrent(k, v string) error
 	GetCurrent(k string) (string, error)
 	Emitter() *emitter.Hub
 	Spot() *spotlib.Client
 	CacheGet(ctx context.Context, u string, timeout, refresh time.Duration) ([]byte, error)
-	AutoMigrate(obj any)
 
 	// config key-value store
 	ConfigGet(key string) ([]byte, error)
@@ -30,15 +29,6 @@ type Env interface {
 	CacheStore(key string, value []byte, ttl time.Duration) error
 	CacheLoad(key string) ([]byte, error)
 	CacheDelete(keys ...string) error
-
-	// db stuff
-	First(res any) error
-	FirstId(res, id any) error
-	FirstWhere(res any, where map[string]any) error
-	Find(res any, where map[string]any) error
-	ListHelper(ctx context.Context, target any, sort string, searchKey ...string) error
-	Count(obj any) int64
-	CountWithError(obj any) (int64, error)
 }
 
 func GetEnv(ctx context.Context) Env {
@@ -55,17 +45,23 @@ func GetEnv(ctx context.Context) Env {
 }
 
 func ByPrimaryKey[T any](e Env, id any) (*T, error) {
-	var res *T
-	err := e.FirstId(&res, id)
-	return res, err
+	return psql.Get[T](e, map[string]any{"Id": id})
 }
 
 func ListHelper[T any](ctx context.Context, sort string, searchKey ...string) (any, error) {
-	var res []*T
 	e := GetEnv(ctx)
 	if e == nil {
 		return nil, errors.New("failed to get env")
 	}
-	err := e.ListHelper(ctx, &res, sort, searchKey...)
-	return res, err
+	var opts []*psql.FetchOptions
+	if sort != "" {
+		// parse "Field ASC" or "Field DESC"
+		parts := strings.SplitN(sort, " ", 2)
+		dir := "ASC"
+		if len(parts) == 2 {
+			dir = parts[1]
+		}
+		opts = append(opts, psql.Sort(psql.S(parts[0], dir)))
+	}
+	return psql.Fetch[T](e, nil, opts...)
 }

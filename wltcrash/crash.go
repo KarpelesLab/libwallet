@@ -11,6 +11,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/google/uuid"
+	"github.com/portablesql/psql"
 )
 
 func init() {
@@ -24,11 +25,12 @@ func init() {
 
 // Crash represents a crash event in the database
 type Crash struct {
-	Id      uuid.UUID `gorm:"primaryKey;type:uuid"`
-	Where   string
-	Message string
-	Stack   string
-	Created time.Time `gorm:"autoCreateTime"`
+	psql.Name `sql:"Crash"`
+	Id        uuid.UUID `sql:",key=PRIMARY,type=CHAR,size=36"`
+	Where     string    `sql:",type=TEXT"`
+	Message   string    `sql:",type=TEXT"`
+	Stack     string    `sql:",type=TEXT"`
+	Created   time.Time `sql:",type=DATETIME"`
 }
 
 // Log is called within a catch of a panic
@@ -55,14 +57,13 @@ func Log(ctx context.Context, e any, where string) uuid.UUID {
 		Stack:   stack,
 		Created: time.Now(),
 	}
-	env.Save(crash)
+	psql.Replace(env, crash)
 
 	return id
 }
 
 func InitEnv(env wltintf.Env) {
-	// Create the crash table
-	env.AutoMigrate(&Crash{})
+	// psql auto-creates tables, no migration needed
 }
 
 func apiFetchCrash(ctx *apirouter.Context, in struct{ Id string }) (any, error) {
@@ -71,13 +72,12 @@ func apiFetchCrash(ctx *apirouter.Context, in struct{ Id string }) (any, error) 
 		return nil, errors.New("failed to get env")
 	}
 
-	var crash Crash
-	err := e.FirstId(&crash, in.Id)
+	crash, err := psql.Get[Crash](e, map[string]any{"Id": in.Id})
 	if err != nil {
 		return nil, err
 	}
 
-	return &crash, nil
+	return crash, nil
 }
 
 func apiListCrash(ctx *apirouter.Context) (any, error) {
@@ -90,5 +90,6 @@ func (crash *Crash) ApiDelete(ctx *apirouter.Context) error {
 		return errors.New("failed to get env")
 	}
 
-	return e.Delete(crash)
+	_, err := psql.ForceDelete[Crash](e, map[string]any{"Id": crash.Id})
+	return err
 }
