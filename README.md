@@ -77,12 +77,10 @@ go test ./...
 | **wltquote** | Price quote services for currency conversion |
 | **wltsign** | Signature handling and key descriptions |
 | **wltcrash** | Crash reporting and error tracking |
-| **chains** | EVM chain metadata (from chainlist.org) |
 
 ## Database
 
-- **SQLite** with GORM in `sql.db` (primary storage)
-- **BoltDB** in `data.db` (key-value cache, scheduled to be phased out)
+All data is stored in a single **SQLite** database (`sql.db`) using GORM, including configuration, cached data with automatic expiration, and all wallet/account/transaction state.
 
 ## API
 
