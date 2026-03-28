@@ -2,7 +2,6 @@ package wltquote
 
 import (
 	"context"
-	"encoding/binary"
 	"io/fs"
 	"sync"
 	"time"
@@ -66,37 +65,24 @@ func getQuotesData(e wltintf.Env) ([]*CMCQuoteData, error) {
 	return quoteData, nil
 }
 
+const quoteCacheKey = "rest:Crypto/DataCache:quotes"
+
 func getQuotesRawDataCache(e wltintf.Env) (pjson.RawMessage, error) {
-	// grab from cache
-	dat, err := e.DBSimpleGet([]byte("rest_cache"), []byte("Crypto/DataCache:quotes"))
+	// try loading from cache
+	dat, err := e.CacheLoad(quoteCacheKey)
+	if err == nil && dat != nil {
+		return dat, nil
+	}
+
+	// cache miss or expired, fetch fresh data
+	freshData, err := getQuotesRawData(e)
 	if err != nil {
-		dat, err = getQuotesRawData(e)
-		if err != nil {
-			return nil, err
-		}
-		ts := make([]byte, 8)
-		binary.BigEndian.PutUint64(ts, uint64(time.Now().Unix()))
-		dat = append(ts, dat...)
-		e.DBSimpleSet([]byte("rest_cache"), []byte("Crypto/DataCache:quotes"), dat)
+		return nil, err
 	}
 
-	cacheTime := time.Unix(int64(binary.BigEndian.Uint64(dat[:8])), 0)
-	if time.Since(cacheTime) <= 5*time.Minute {
-		return dat[8:], nil
-	}
-
-	// attempt to refresh cache
-	newdat, err := getQuotesRawData(e)
-	if err != nil {
-		// failed, return old stale data
-		return dat[8:], nil
-	}
-	ts := make([]byte, 8)
-	binary.BigEndian.PutUint64(ts, uint64(time.Now().Unix()))
-	dat = append(ts, newdat...)
-	e.DBSimpleSet([]byte("rest_cache"), []byte("Crypto/DataCache:quotes"), dat)
-
-	return dat[8:], nil
+	// store with 5 minute TTL
+	e.CacheStore(quoteCacheKey, freshData, 5*time.Minute)
+	return freshData, nil
 }
 
 func getQuotesRawData(e wltintf.Env) (pjson.RawMessage, error) {

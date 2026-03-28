@@ -22,10 +22,16 @@ type Env interface {
 	CacheGet(ctx context.Context, u string, timeout, refresh time.Duration) ([]byte, error)
 	AutoMigrate(obj any)
 
+	// config key-value store
+	ConfigGet(key string) ([]byte, error)
+	ConfigSet(key string, value []byte) error
+
+	// cache with expiration
+	CacheStore(key string, value []byte, ttl time.Duration) error
+	CacheLoad(key string) ([]byte, error)
+	CacheDelete(keys ...string) error
+
 	// db stuff
-	DBSimpleGet(bucket, key []byte) (r []byte, err error)
-	DBSimpleDel(bucket []byte, keys ...[]byte) error
-	DBSimpleSet(bucket, key, val []byte) error
 	First(res any) error
 	FirstId(res, id any) error
 	FirstWhere(res any, where map[string]any) error

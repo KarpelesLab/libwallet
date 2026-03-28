@@ -66,7 +66,7 @@ func infoFirstRun(ctx context.Context) (any, error) {
 		return nil, errors.New("failed to get env")
 	}
 
-	v, err := e.DBSimpleGet([]byte("info"), []byte("first_run"))
+	v, err := e.ConfigGet("first_run")
 	if err != nil {
 		return nil, err
 	}

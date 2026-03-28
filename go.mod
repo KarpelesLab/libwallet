@@ -22,7 +22,6 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/google/uuid v1.6.0
-	go.etcd.io/bbolt v1.4.3
 	golang.org/x/crypto v0.49.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1

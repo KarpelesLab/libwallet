@@ -5,109 +5,93 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"time"
 
-	bolt "go.etcd.io/bbolt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-// DBSimpleGet retrieves a value from the BoltDB key-value store
-// Returns the value associated with the given key in the specified bucket
-// If the bucket or key doesn't exist, returns fs.ErrNotExist
-// Returns error with context if the operation fails for other reasons
-func (e *env) DBSimpleGet(bucket, key []byte) (r []byte, err error) {
-	err = e.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucket)
-		if b == nil {
-			return fs.ErrNotExist
-		}
-		v := b.Get(key)
-		if v == nil {
-			return fs.ErrNotExist
-		}
-		r = make([]byte, len(v))
-		copy(r, v)
-		return nil
-	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("failed to get key %x from bucket %x: %w", key, bucket, err)
-	}
-	return
+// kvConfig stores simple key-value configuration data (replaces BoltDB "info" bucket)
+type kvConfig struct {
+	Key   string `gorm:"primaryKey"`
+	Value []byte
 }
 
-// DBSimpleDel deletes one or more keys from a bucket in the BoltDB key-value store
-// If the bucket doesn't exist, the operation is considered successful
-// Returns error with context if deletion fails
-func (e *env) DBSimpleDel(bucket []byte, keys ...[]byte) error {
-	err := e.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucket)
-		if b == nil {
-			return nil
+// cacheEntry stores cached data with automatic expiration (replaces BoltDB "http_cache" and "rest_cache")
+type cacheEntry struct {
+	Key       string    `gorm:"primaryKey"`
+	Value     []byte
+	ExpiresAt time.Time `gorm:"index"`
+}
+
+// ConfigGet retrieves a config value by key
+func (e *env) ConfigGet(key string) ([]byte, error) {
+	var kv kvConfig
+	tx := e.sql.First(&kv, "\"Key\" = ?", key)
+	if tx.Error != nil {
+		if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
+			return nil, fs.ErrNotExist
 		}
-		for _, key := range keys {
-			if err := b.Delete(key); err != nil {
-				return fmt.Errorf("failed to delete key %x: %w", key, err)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete keys from bucket %x: %w", bucket, err)
+		return nil, fmt.Errorf("failed to get config key %s: %w", key, tx.Error)
+	}
+	return kv.Value, nil
+}
+
+// ConfigSet stores a config key-value pair
+func (e *env) ConfigSet(key string, value []byte) error {
+	kv := kvConfig{Key: key, Value: value}
+	tx := e.sql.Clauses(clause.OnConflict{UpdateAll: true}).Create(&kv)
+	if tx.Error != nil {
+		return fmt.Errorf("failed to set config key %s: %w", key, tx.Error)
 	}
 	return nil
 }
 
-// DBSimpleSet stores a key-value pair in the BoltDB key-value store
-// Creates the bucket if it doesn't exist
-// Returns error with context if the operation fails
-func (e *env) DBSimpleSet(bucket, key, val []byte) error {
-	err := e.db.Update(func(tx *bolt.Tx) error {
-		b, err := tx.CreateBucketIfNotExists(bucket)
-		if err != nil {
-			return fmt.Errorf("failed to create bucket %x: %w", bucket, err)
-		}
-		return b.Put(key, val)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to set key %x in bucket %x: %w", key, bucket, err)
+// CacheStore saves a value in the cache with a time-to-live duration
+func (e *env) CacheStore(key string, value []byte, ttl time.Duration) error {
+	entry := cacheEntry{
+		Key:       key,
+		Value:     value,
+		ExpiresAt: time.Now().Add(ttl),
+	}
+	tx := e.sql.Clauses(clause.OnConflict{UpdateAll: true}).Create(&entry)
+	if tx.Error != nil {
+		return fmt.Errorf("failed to store cache key %s: %w", key, tx.Error)
 	}
 	return nil
 }
 
-// dbDeleteBucket removes a bucket from the BoltDB key-value store
-// Returns error with context if the deletion fails
-func (e *env) dbDeleteBucket(bucket []byte) error {
-	err := e.db.Update(func(tx *bolt.Tx) error {
-		return tx.DeleteBucket(bucket)
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete bucket %x: %w", bucket, err)
+// CacheLoad retrieves a non-expired value from the cache
+func (e *env) CacheLoad(key string) ([]byte, error) {
+	var entry cacheEntry
+	tx := e.sql.Where("\"Key\" = ? AND \"ExpiresAt\" > ?", key, time.Now()).First(&entry)
+	if tx.Error != nil {
+		if errors.Is(tx.Error, gorm.ErrRecordNotFound) {
+			return nil, fs.ErrNotExist
+		}
+		return nil, fmt.Errorf("failed to load cache key %s: %w", key, tx.Error)
 	}
-	return nil
+	return entry.Value, nil
 }
 
-// dbSimpleIsBucketEmpty checks if a bucket in BoltDB is empty
-// Returns true if the bucket doesn't exist or has no keys
-// Returns false if the bucket contains at least one key
-// Returns error if the database operation fails
-func (e *env) dbSimpleIsBucketEmpty(bucket []byte) (bool, error) {
-	res := true
-	err := e.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucket)
-		if b == nil {
-			return nil
-		}
-		k, _ := b.Cursor().First()
-		if k != nil {
-			// got a key → bucket is not empty
-			res = false
-		}
+// CacheDelete removes one or more keys from the cache
+func (e *env) CacheDelete(keys ...string) error {
+	if len(keys) == 0 {
 		return nil
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to check if bucket %x is empty: %w", bucket, err)
 	}
-	return res, nil
+	tx := e.sql.Where("\"Key\" IN ?", keys).Delete(&cacheEntry{})
+	if tx.Error != nil {
+		return fmt.Errorf("failed to delete cache keys: %w", tx.Error)
+	}
+	return nil
+}
+
+// cacheCleanup removes all expired cache entries
+func (e *env) cacheCleanup() {
+	tx := e.sql.Where("\"ExpiresAt\" < ?", time.Now()).Delete(&cacheEntry{})
+	if tx.Error != nil {
+		log.Printf("cache cleanup error: %v", tx.Error)
+	}
 }
 
 // FirstId retrieves the first record with the given ID and populates the result

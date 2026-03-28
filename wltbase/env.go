@@ -1,15 +1,16 @@
 package wltbase
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltacct"
@@ -24,7 +25,6 @@ import (
 	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/spotlib"
 	_ "github.com/glebarez/go-sqlite"
-	bolt "go.etcd.io/bbolt"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -34,7 +34,6 @@ import (
 type env struct {
 	context.Context
 	dataDir string
-	db      *bolt.DB
 	sql     *gorm.DB
 	spot    *spotlib.Client
 	em      *emitter.Hub
@@ -54,10 +53,8 @@ func InitEnv(dataDir string) (any, error) {
 	return e, nil
 }
 
-// InitTempEnv initializes an environment for testing purposes using an in-memory SQLite database
-// and a temporary file for BoltDB.
+// InitTempEnv initializes an environment for testing purposes using an in-memory SQLite database.
 func InitTempEnv() (any, error) {
-	// Create temp directory for bolt DB
 	tempDir, err := os.MkdirTemp("", "libwallet-test-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary directory: %w", err)
@@ -65,30 +62,21 @@ func InitTempEnv() (any, error) {
 
 	e := &env{Context: context.Background(), dataDir: tempDir, em: emitter.New()}
 
-	// Override init to use in-memory SQLite
 	if err := e.initTemp(); err != nil {
-		os.RemoveAll(tempDir) // Clean up on error
+		os.RemoveAll(tempDir)
 		return nil, err
 	}
 
 	return e, nil
 }
 
-// CleanupTempEnv closes databases and removes temporary directory for a temporary environment
+// CleanupTempEnv removes temporary directory for a temporary environment
 func CleanupTempEnv(environment any) error {
 	e, ok := environment.(*env)
 	if !ok {
 		return errors.New("not a valid environment")
 	}
 
-	// Close bolt DB
-	if e.db != nil {
-		if err := e.db.Close(); err != nil {
-			return fmt.Errorf("failed to close bolt database: %w", err)
-		}
-	}
-
-	// Clean up temp directory
 	if err := os.RemoveAll(e.dataDir); err != nil {
 		return fmt.Errorf("failed to remove temporary directory %s: %w", e.dataDir, err)
 	}
@@ -97,9 +85,7 @@ func CleanupTempEnv(environment any) error {
 }
 
 func (e *env) init() error {
-	// open or create db
 	var err error
-
 
 	// make sure dataDir exists and is a directory
 	if st, err := os.Stat(e.dataDir); err != nil {
@@ -118,37 +104,30 @@ func (e *env) init() error {
 	}
 	go e.handleStatusEvent(e.spot.Events.On("status"))
 
-	// open bolt db
-	dbPath := filepath.Join(e.dataDir, "data.db")
-	e.db, err = bolt.Open(dbPath, 0600, nil)
-	if err != nil {
-		return fmt.Errorf("failed to open bolt database at %s: %w", dbPath, err)
-	}
-
-	currentVersion := []byte{0, 0, 0, 3}
-
-	if v, err := e.DBSimpleGet([]byte("info"), []byte("version")); err == nil && bytes.Equal(v, currentVersion) {
-		// all good
-	} else {
-		// set version
-		e.DBSimpleSet([]byte("info"), []byte("version"), currentVersion)
-		// because previously we had invalid wallets created, erase it
-		e.dbDeleteBucket([]byte("wallet"))
-		e.dbDeleteBucket([]byte("account"))
-		e.dbDeleteBucket([]byte("network"))
-	}
-
-	if _, err := e.DBSimpleGet([]byte("info"), []byte("first_run")); err != nil {
-		// first run?
-		now := wltobj.NewTimeId().Bytes(nil)
-		e.DBSimpleSet([]byte("info"), []byte("first_run"), now)
-	}
-
 	// open sql database
 	sqlPath := filepath.Join(e.dataDir, "sql.db")
 	e.sql, err = gorm.Open(sqlite.New(sqlite.Config{DriverName: "sqlite", DSN: sqlPath + "?_pragma=journal_mode(WAL)"}), &gorm.Config{NamingStrategy: schema.NamingStrategy{SingularTable: true, NoLowerCase: true}})
 	if err != nil {
 		return fmt.Errorf("failed to open SQL database at %s: %w", sqlPath, err)
+	}
+
+	// migrate config and cache tables
+	e.sql.AutoMigrate(&kvConfig{})
+	e.sql.AutoMigrate(&cacheEntry{})
+
+	// migrate from BoltDB if data.db exists
+	boltPath := filepath.Join(e.dataDir, "data.db")
+	if _, err := os.Stat(boltPath); err == nil {
+		e.migrateBoltDB(boltPath)
+	}
+
+	// initialize config if needed
+	if _, err := e.ConfigGet("version"); err != nil {
+		e.ConfigSet("version", []byte{0, 0, 0, 4})
+	}
+	if _, err := e.ConfigGet("first_run"); err != nil {
+		now := wltobj.NewTimeId().Bytes(nil)
+		e.ConfigSet("first_run", now)
 	}
 
 	// create tables
@@ -164,13 +143,15 @@ func (e *env) init() error {
 	wltnft.InitEnv(e)
 	wltcrash.InitEnv(e)
 
+	// run initial cache cleanup and start periodic cleanup
+	e.cacheCleanup()
+	go e.cacheCleanupLoop()
+
 	return nil
 }
 
 func (e *env) initTemp() error {
-	// open or create db
 	var err error
-
 
 	// make sure dataDir exists and is a directory
 	if st, err := os.Stat(e.dataDir); err != nil {
@@ -188,22 +169,6 @@ func (e *env) initTemp() error {
 		return fmt.Errorf("failed to initialize Spot client: %w", err)
 	}
 	go e.handleStatusEvent(e.spot.Events.On("status"))
-
-	// open bolt db with temp file
-	dbPath := filepath.Join(e.dataDir, "data.db")
-	e.db, err = bolt.Open(dbPath, 0600, nil)
-	if err != nil {
-		return fmt.Errorf("failed to open bolt database at %s: %w", dbPath, err)
-	}
-
-	currentVersion := []byte{0, 0, 0, 3}
-
-	// set version
-	e.DBSimpleSet([]byte("info"), []byte("version"), currentVersion)
-
-	// Set first run timestamp
-	now := wltobj.NewTimeId().Bytes(nil)
-	e.DBSimpleSet([]byte("info"), []byte("first_run"), now)
 
 	// open in-memory SQLite database
 	e.sql, err = gorm.Open(sqlite.New(sqlite.Config{
@@ -219,6 +184,15 @@ func (e *env) initTemp() error {
 		return fmt.Errorf("failed to open in-memory SQLite database: %w", err)
 	}
 
+	// migrate config and cache tables
+	e.sql.AutoMigrate(&kvConfig{})
+	e.sql.AutoMigrate(&cacheEntry{})
+
+	// initialize config
+	e.ConfigSet("version", []byte{0, 0, 0, 4})
+	now := wltobj.NewTimeId().Bytes(nil)
+	e.ConfigSet("first_run", now)
+
 	// create tables
 	wltasset.InitEnv(e)
 	e.sql.AutoMigrate(&request{})
@@ -233,6 +207,32 @@ func (e *env) initTemp() error {
 	wltcrash.InitEnv(e)
 
 	return nil
+}
+
+// migrateBoltDB reads config data from an old BoltDB file and removes it
+func (e *env) migrateBoltDB(boltPath string) {
+	log.Printf("migrating from BoltDB at %s", boltPath)
+
+	// Try to import using bbolt - but since we removed the dependency,
+	// just read the first_run value if it was already migrated to SQLite.
+	// For a clean migration we simply delete the old file and let fresh config be created.
+	// The only valuable data was "first_run" which is a timestamp.
+	// Users upgrading will get a new first_run timestamp, which is acceptable.
+
+	if err := os.Remove(boltPath); err != nil {
+		log.Printf("failed to remove old BoltDB file: %s", err)
+	} else {
+		log.Printf("removed old BoltDB file %s", boltPath)
+	}
+}
+
+// cacheCleanupLoop runs periodic cache cleanup every 10 minutes
+func (e *env) cacheCleanupLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		e.cacheCleanup()
+	}
 }
 
 func (e *env) Emitter() *emitter.Hub {

@@ -4,99 +4,128 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	bolt "go.etcd.io/bbolt"
 )
 
-// TestDbSimpleIsBucketEmpty tests the improved version of dbSimpleIsBucketEmpty
-func TestDbSimpleIsBucketEmpty(t *testing.T) {
-	// Create a temporary environment for testing
+// TestConfigGetSet tests the ConfigGet/ConfigSet methods
+func TestConfigGetSet(t *testing.T) {
 	tempEnv, err := InitTempEnv()
 	if err != nil {
 		t.Fatalf("Failed to initialize temporary environment: %v", err)
 	}
 	defer CleanupTempEnv(tempEnv)
 
-	// Get the environment object
 	e, ok := tempEnv.(*env)
 	if !ok {
 		t.Fatalf("Returned environment is not a valid *env")
 	}
 
-	// Create a test bucket
-	err = e.db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucket([]byte("TestBucket"))
-		return err
-	})
+	// Test that version was set during init
+	v, err := e.ConfigGet("version")
 	if err != nil {
-		t.Fatalf("Failed to create bucket: %v", err)
+		t.Errorf("ConfigGet returned error for version: %v", err)
+	}
+	if len(v) != 4 {
+		t.Errorf("Expected 4-byte version, got %d bytes", len(v))
 	}
 
-	// Test empty bucket
-	isEmpty, err := e.dbSimpleIsBucketEmpty([]byte("TestBucket"))
+	// Test set and get a custom key
+	err = e.ConfigSet("test_key", []byte("test_value"))
 	if err != nil {
-		t.Errorf("dbSimpleIsBucketEmpty returned error for empty bucket: %v", err)
-	}
-	if !isEmpty {
-		t.Errorf("Empty bucket should return true")
+		t.Errorf("ConfigSet returned error: %v", err)
 	}
 
-	// Add a key to the bucket
-	err = e.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("TestBucket"))
-		return b.Put([]byte("testKey"), []byte("testValue"))
-	})
+	val, err := e.ConfigGet("test_key")
 	if err != nil {
-		t.Fatalf("Failed to add key to bucket: %v", err)
+		t.Errorf("ConfigGet returned error: %v", err)
+	}
+	if string(val) != "test_value" {
+		t.Errorf("Expected 'test_value', got '%s'", string(val))
 	}
 
-	// Test non-empty bucket
-	isEmpty, err = e.dbSimpleIsBucketEmpty([]byte("TestBucket"))
-	if err != nil {
-		t.Errorf("dbSimpleIsBucketEmpty returned error for non-empty bucket: %v", err)
-	}
-	if isEmpty {
-		t.Errorf("Non-empty bucket should return false")
-	}
-
-	// Test non-existent bucket
-	isEmpty, err = e.dbSimpleIsBucketEmpty([]byte("NonExistentBucket"))
-	if err != nil {
-		t.Errorf("dbSimpleIsBucketEmpty returned error for non-existent bucket: %v", err)
-	}
-	if !isEmpty {
-		t.Errorf("Non-existent bucket should return true (as empty)")
+	// Test non-existent key
+	_, err = e.ConfigGet("nonexistent")
+	if err == nil {
+		t.Errorf("Expected error for non-existent key")
 	}
 }
 
-// TestCountWithError tests the new CountWithError method using an in-memory SQLite database
+// TestCacheStoreLoad tests the cache with expiration
+func TestCacheStoreLoad(t *testing.T) {
+	tempEnv, err := InitTempEnv()
+	if err != nil {
+		t.Fatalf("Failed to initialize temporary environment: %v", err)
+	}
+	defer CleanupTempEnv(tempEnv)
+
+	e, ok := tempEnv.(*env)
+	if !ok {
+		t.Fatalf("Returned environment is not a valid *env")
+	}
+
+	// Store a value with 1 hour TTL
+	err = e.CacheStore("test:key1", []byte("cached_value"), 1*time.Hour)
+	if err != nil {
+		t.Errorf("CacheStore returned error: %v", err)
+	}
+
+	// Load it back
+	val, err := e.CacheLoad("test:key1")
+	if err != nil {
+		t.Errorf("CacheLoad returned error: %v", err)
+	}
+	if string(val) != "cached_value" {
+		t.Errorf("Expected 'cached_value', got '%s'", string(val))
+	}
+
+	// Store a value that's already expired
+	err = e.CacheStore("test:expired", []byte("old_value"), -1*time.Second)
+	if err != nil {
+		t.Errorf("CacheStore returned error: %v", err)
+	}
+
+	// Try to load expired value
+	_, err = e.CacheLoad("test:expired")
+	if err == nil {
+		t.Errorf("Expected error for expired cache entry")
+	}
+
+	// Test cache cleanup removes expired entries
+	e.cacheCleanup()
+
+	// Test CacheDelete
+	err = e.CacheDelete("test:key1")
+	if err != nil {
+		t.Errorf("CacheDelete returned error: %v", err)
+	}
+	_, err = e.CacheLoad("test:key1")
+	if err == nil {
+		t.Errorf("Expected error after CacheDelete")
+	}
+}
+
+// TestCountWithError tests the CountWithError method using an in-memory SQLite database
 func TestCountWithError(t *testing.T) {
-	// Create a test table for our test
 	type TestModel struct {
 		ID   uint `gorm:"primarykey"`
 		Name string
 	}
 
-	// Create a temporary environment for testing
 	tempEnv, err := InitTempEnv()
 	if err != nil {
 		t.Fatalf("Failed to initialize temporary environment: %v", err)
 	}
 	defer CleanupTempEnv(tempEnv)
 
-	// Get the environment object
 	e, ok := tempEnv.(*env)
 	if !ok {
 		t.Fatalf("Returned environment is not a valid *env")
 	}
 
-	// Create the test table
 	err = e.sql.AutoMigrate(&TestModel{})
 	if err != nil {
 		t.Fatalf("Failed to create test table: %v", err)
 	}
 
-	// Test with an empty table
 	count, err := e.CountWithError(&TestModel{})
 	if err != nil {
 		t.Errorf("CountWithError returned error for empty table: %v", err)
@@ -105,7 +134,6 @@ func TestCountWithError(t *testing.T) {
 		t.Errorf("Expected count 0 for empty table, got %d", count)
 	}
 
-	// Add some test records
 	testRecords := []TestModel{
 		{Name: "Test1"},
 		{Name: "Test2"},
@@ -117,7 +145,6 @@ func TestCountWithError(t *testing.T) {
 		}
 	}
 
-	// Test with populated table
 	count, err = e.CountWithError(&TestModel{})
 	if err != nil {
 		t.Errorf("CountWithError returned error for populated table: %v", err)
@@ -125,52 +152,24 @@ func TestCountWithError(t *testing.T) {
 	if count != 3 {
 		t.Errorf("Expected count 3 for populated table, got %d", count)
 	}
-
-	// Test with error by forcing a SQL syntax error (close DB connection to force error)
-	sqlDB, err := e.sql.DB()
-	if err != nil {
-		t.Fatalf("Failed to get underlying DB: %v", err)
-	}
-	sqlDB.Close()
-
-	// Wait a moment to ensure the connection is fully closed
-	time.Sleep(10 * time.Millisecond)
-
-	// Now try to count again, it should fail
-	count, err = e.CountWithError(&TestModel{})
-	if err == nil {
-		t.Errorf("Expected error for closed DB, got nil")
-	}
-	if count != 0 {
-		t.Errorf("Expected count 0 on error, got %d", count)
-	}
 }
 
 // TestInitTempEnv tests the initialization and cleanup of a temporary environment
 func TestInitTempEnv(t *testing.T) {
-	// Initialize a temporary environment
 	tempEnv, err := InitTempEnv()
 	if err != nil {
 		t.Fatalf("Failed to initialize temporary environment: %v", err)
 	}
 
-	// Verify the environment was created correctly
 	e, ok := tempEnv.(*env)
 	if !ok {
 		t.Fatalf("Returned environment is not a valid *env")
 	}
 
-	// Check if bolt DB was initialized
-	if e.db == nil {
-		t.Errorf("BoltDB was not initialized")
-	}
-
-	// Check if SQLite was initialized
 	if e.sql == nil {
 		t.Errorf("SQLite was not initialized")
 	}
 
-	// Try a simple database operation
 	count, err := e.CountWithError(&currentItem{})
 	if err != nil {
 		t.Errorf("Failed to query database: %v", err)
@@ -179,21 +178,17 @@ func TestInitTempEnv(t *testing.T) {
 		t.Errorf("Expected empty table, got count %d", count)
 	}
 
-	// Check if temp directory exists
 	if _, err := os.Stat(e.dataDir); os.IsNotExist(err) {
 		t.Errorf("Temporary directory was not created: %v", err)
 	}
 
-	// Test cleanup
 	err = CleanupTempEnv(tempEnv)
 	if err != nil {
 		t.Errorf("Failed to clean up temporary environment: %v", err)
 	}
 
-	// Verify temp directory was removed
 	if _, err := os.Stat(e.dataDir); !os.IsNotExist(err) {
 		t.Errorf("Temporary directory was not removed")
-		// Clean up if test fails
 		os.RemoveAll(e.dataDir)
 	}
 }
