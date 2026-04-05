@@ -100,12 +100,26 @@ func (r *request) run(e *env) error {
 	// send event
 	go wltutil.BroadcastMsg("request", map[string]any{"request_id": r.Id.String()})
 
-	result, ok := <-ch
-	if !ok {
-		r.Status = "rejected"
+	timeout := time.NewTimer(2 * time.Minute)
+	defer timeout.Stop()
+
+	var result string
+	var ok bool
+
+	select {
+	case result, ok = <-ch:
+		if !ok {
+			r.Status = "rejected"
+			r.save(e)
+			return &apirouter.Error{Code: 4001, Message: "User rejected the request."}
+		}
+	case <-timeout.C:
+		takePendingRequestChan(r.Id.String())
+		r.Status = "timedout"
 		r.save(e)
-		return &apirouter.Error{Code: 4001, Message: "User rejected the request."}
+		return &apirouter.Error{Code: 4001, Message: "Request timed out."}
 	}
+
 	// reload req
 	reloaded, err := psql.Get[request](e.sqlCtx, map[string]any{"Id": r.Id})
 	if err == nil {
@@ -274,6 +288,41 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		}
 		str := "0x" + hex.EncodeToString(sig)
 		req.Result = &str
+	case "sign_typed_data":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign typed data")
+		}
+		typedDataStr, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid typed data in request")
+		}
+		td, err := ParseEIP712TypedData(typedDataStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse EIP-712 data: %w", err)
+		}
+		digest, err := td.HashEIP712()
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute EIP-712 hash: %w", err)
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account for signature: %w", err)
+		}
+		signOpt := &wltsign.Opts{
+			Context: ctx,
+			IL:      a.IL,
+			Keys:    in.Keys,
+		}
+		sig, err := a.Sign(rand.Reader, digest, signOpt)
+		if err != nil {
+			return nil, fmt.Errorf("EIP-712 signature failed: %w", err)
+		}
+		str := "0x" + hex.EncodeToString(sig)
+		req.Result = &str
+	case "add_network", "change_network":
+		// Approval acknowledged; the actual network save/switch is done by the caller in web3.go.
+	case "watch_asset":
+		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
 	}
 
 	return req, req.respond(e, "accepted")

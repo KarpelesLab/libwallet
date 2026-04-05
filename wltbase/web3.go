@@ -3,6 +3,7 @@ package wltbase
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -70,6 +71,12 @@ func web3Req(ctx context.Context, in struct {
 	// See: https://docs.metamask.io/wallet/reference/wallet_addethereumchain/
 
 	switch in.Query.Method {
+	case "eth_chainId":
+		bigV := new(big.Int)
+		bigV.SetString(n.ChainId, 10)
+		return "0x" + bigV.Text(16), nil
+	case "net_version":
+		return n.ChainId, nil
 	case "web3_clientVersion":
 		return "libwallet/" + dateTag + "-" + gitTag, nil
 	case "web3_sha3":
@@ -223,6 +230,69 @@ func web3Req(ctx context.Context, in struct {
 		}
 		// approved
 		return req.Result, nil
+	case "eth_signTypedData_v4", "eth_signTypedData_v3", "eth_signTypedData":
+		if len(in.Query.Params) < 2 {
+			return nil, errors.New("eth_signTypedData_v4 requires [address, typedData]")
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no addr available")
+		}
+		signAddr, ok := in.Query.Params[0].(string)
+		if !ok {
+			return nil, errors.New("invalid address parameter")
+		}
+		signAddr = strings.ToLower(signAddr)
+		var addr *connectedSite
+		for _, c := range conn {
+			a, err := wltacct.FindAccount(e, c.Account.String())
+			if err == nil {
+				if strings.ToLower(a.Address) == signAddr {
+					addr = c
+					break
+				}
+			}
+		}
+		if addr == nil {
+			return nil, errors.New("requested address not connected")
+		}
+		typedDataStr, ok := in.Query.Params[1].(string)
+		if !ok {
+			// might be passed as object, marshal it back
+			raw, err := json.Marshal(in.Query.Params[1])
+			if err != nil {
+				return nil, errors.New("invalid typedData parameter")
+			}
+			typedDataStr = string(raw)
+		}
+		a, err := wltacct.FindAccount(e, addr.Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		req := &request{
+			Type:    "sign_typed_data",
+			Host:    key,
+			Account: &a.Address,
+			Value:   typedDataStr,
+		}
+		err = req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		return req.Result, nil
+	case "wallet_watchAsset":
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("wallet_watchAsset requires 1 parameter")
+		}
+		req := &request{
+			Type:  "watch_asset",
+			Host:  key,
+			Value: in.Query.Params[0],
+		}
+		err := req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		return true, nil
 	case "eth_sendTransaction":
 		if len(in.Query.Params) < 1 {
 			return nil, errors.New("eth_sendTransaction requires a transaction to sign")

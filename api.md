@@ -161,8 +161,23 @@ returns an object with the state of the user's onboarding, useful to check if we
 ## Web3
 
 * `POST Web3:request`
-  * `url` URL making the web3 requrest
+  * `url` URL making the web3 request
   * `query` Content of the query, an object with `method` and optionally `params`
+  * Supported methods:
+    * `eth_chainId` — returns current chain ID as 0x-prefixed hex
+    * `net_version` — returns current chain ID as decimal string
+    * `web3_clientVersion` — returns library version
+    * `web3_sha3` — keccak256 hash
+    * `eth_requestAccounts` — prompts user to connect accounts
+    * `eth_accounts` — returns connected accounts
+    * `personal_sign` — EIP-191 personal message signing
+    * `eth_signTypedData_v4` / `eth_signTypedData_v3` / `eth_signTypedData` — EIP-712 typed data signing
+    * `eth_sendTransaction` — sign and broadcast a transaction
+    * `wallet_addEthereumChain` — EIP-3085 add a new chain
+    * `wallet_switchEthereumChain` — EIP-3326 switch chains
+    * `wallet_requestPermissions` / `wallet_getPermissions` — EIP-2255 permissions
+    * `wallet_watchAsset` — EIP-747 request to watch a token
+    * All other methods are relayed to the current network's RPC
 
 ## Web3/Connection
 
@@ -181,7 +196,7 @@ Web3/Connection manages which sites have access to which accounts
 * EVENT: `{"result":"event","event":"request","data":{"request_id":"..."}}` A new request is PENDING
 * `GET Request:test` to run a test on the event
 * `GET Request/<id>` to fetch a given request including its details (request, etc)
-  * Type can be one of: connect, sign, personal_sign, add_network, change_network, test
+  * Type can be one of: connect, sign, personal_sign, sign_typed_data, add_network, change_network, watch_asset, test
   * Status can be one of: pending, accepted, rejected, timedout
   * Transaction can be optionally included if request is for sign
   * Value can be optionally included, is context of the request (will replace Transaction)
