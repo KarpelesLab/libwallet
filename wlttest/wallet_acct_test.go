@@ -31,7 +31,7 @@ func TestWalletAccountLifecycle(t *testing.T) {
 	}
 
 	// Step 2: Create a wallet with 3 plain keys using NewWalletForTesting
-	wallet, err := wltwallet.NewWalletForTesting("Test Wallet")
+	wallet, err := wltwallet.NewWalletForTesting("Test Wallet", "")
 	if err != nil {
 		t.Fatalf("Failed to create test wallet: %v", err)
 	}

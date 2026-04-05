@@ -8,17 +8,16 @@ import (
 	"github.com/KarpelesLab/xuid"
 )
 
-// NewWalletForTesting creates a properly initialized wallet with three Plain keys
-// This should ONLY be used in tests
-func NewWalletForTesting(name string) (*Wallet, error) {
-	// Create key descriptions
+// NewWalletForTesting creates a properly initialized wallet with three Plain keys.
+// Curve can be "secp256k1" (default if empty) or "ed25519".
+// This should ONLY be used in tests.
+func NewWalletForTesting(name string, curve string) (*Wallet, error) {
 	keyDesc := []*wltsign.KeyDescription{
 		{Type: "Plain"},
 		{Type: "Plain"},
 		{Type: "Plain"},
 	}
 
-	// Create basic wallet structure
 	wallet := &Wallet{
 		Id:        xuid.New("wlt"),
 		Name:      name,
@@ -27,9 +26,12 @@ func NewWalletForTesting(name string) (*Wallet, error) {
 		Modified:  time.Now(),
 	}
 
-	// Initialize the wallet with proper key generation
-	// This will create the WalletKey objects and set up the wallet properly
-	err := wallet.initializeWallet(context.Background(), keyDesc)
+	var err error
+	if curve == "ed25519" {
+		err = wallet.initializeEdDSAWallet(context.Background(), keyDesc)
+	} else {
+		err = wallet.initializeWallet(context.Background(), keyDesc)
+	}
 	if err != nil {
 		return nil, err
 	}
