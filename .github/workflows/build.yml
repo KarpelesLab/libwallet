@@ -32,7 +32,7 @@ jobs:
           DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
           gomobile bind -v -target android -androidapi 21 \
             -javapkg com.karpeleslabs.libwallet \
-            -ldflags="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
             -o libwallet.aar .
 
       - name: Upload Android artifacts
@@ -63,7 +63,7 @@ jobs:
           GIT_TAG=$(git rev-parse --short HEAD)
           DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
           gomobile bind -v --target ios,iossimulator \
-            -ldflags="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
             -o libwallet.xcframework .
 
       - name: Upload iOS artifact
