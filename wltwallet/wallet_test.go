@@ -143,6 +143,53 @@ func TestWalletCreate(t *testing.T) {
 	// all good
 }
 
+func TestEdDSAWalletCreate(t *testing.T) {
+	w := &Wallet{}
+
+	kd := []*wltsign.KeyDescription{
+		{Type: "Plain"},
+		{Type: "Plain"},
+		{Type: "Plain"},
+	}
+
+	err := w.initializeEdDSAWallet(context.Background(), kd)
+	if err != nil {
+		t.Fatalf("failed to init eddsa wallet: %s", err)
+	}
+
+	if w.Curve != "ed25519" {
+		t.Errorf("expected curve ed25519, got %s", w.Curve)
+	}
+	if w.Pubkey == "" {
+		t.Fatal("expected non-empty pubkey")
+	}
+	if w.Chaincode == "" {
+		t.Fatal("expected non-empty chaincode")
+	}
+
+	log.Printf("eddsa wallet ready, pubkey=%s", w.Pubkey)
+
+	// test signing
+	opts := &wltsign.Opts{
+		Context: context.Background(),
+	}
+	for _, k := range w.Keys[:2] {
+		opts.Keys = append(opts.Keys, &wltsign.KeyDescription{Id: k.Id.String()})
+	}
+
+	msg := []byte("hello ed25519 world")
+	sig, err := w.Sign(nil, msg, opts)
+	if err != nil {
+		t.Fatalf("failed to sign: %s", err)
+	}
+
+	log.Printf("eddsa signature (len %d) = %x", len(sig), sig)
+
+	if len(sig) != 64 {
+		t.Errorf("expected 64-byte ed25519 signature, got %d bytes", len(sig))
+	}
+}
+
 func must[T any](a T, err error) T {
 	if err != nil {
 		panic(err)
