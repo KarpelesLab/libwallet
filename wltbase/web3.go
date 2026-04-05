@@ -16,6 +16,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/typutil"
+	"github.com/portablesql/psql"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -386,6 +387,149 @@ func web3Req(ctx context.Context, in struct {
 			return nil, err
 		}
 		return nil, nil
+	// Solana Wallet Standard methods
+	case "solana_connect", "solana_requestAccounts":
+		req := &request{
+			Type: "connect",
+			Host: key,
+		}
+		err := req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		conn, _ = e.connectedAccounts(key)
+		res := make([]string, 0, len(conn))
+		for _, c := range conn {
+			a, err := wltacct.FindAccount(e, c.Account.String())
+			if err == nil {
+				res = append(res, a.Address)
+			}
+		}
+		return map[string]any{"publicKey": res}, nil
+	case "solana_accounts":
+		res := make([]string, 0, len(conn))
+		for _, c := range conn {
+			a, err := wltacct.FindAccount(e, c.Account.String())
+			if err == nil {
+				res = append(res, a.Address)
+			}
+		}
+		return res, nil
+	case "solana_disconnect":
+		// remove all connections for this host
+		for _, c := range conn {
+			psql.ForceDelete[connectedSite](e.sqlCtx, map[string]any{"Id": c.Id})
+		}
+		return nil, nil
+	case "solana_signMessage":
+		// params: { message: base64-encoded message, pubkey: base58 public key }
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("solana_signMessage requires 1 parameter")
+		}
+		pmap, ok := in.Query.Params[0].(map[string]any)
+		if !ok {
+			return nil, errors.New("solana_signMessage param must be an object")
+		}
+		msgB64, _ := pmap["message"].(string)
+		if msgB64 == "" {
+			return nil, errors.New("solana_signMessage: message is required")
+		}
+		pubkey, _ := pmap["pubkey"].(string)
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected")
+		}
+		var addr *connectedSite
+		if pubkey != "" {
+			for _, c := range conn {
+				a, err := wltacct.FindAccount(e, c.Account.String())
+				if err == nil && a.Address == pubkey {
+					addr = c
+					break
+				}
+			}
+			if addr == nil {
+				return nil, errors.New("requested pubkey not connected")
+			}
+		} else {
+			addr = conn[0]
+		}
+		a, err := wltacct.FindAccount(e, addr.Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		req := &request{
+			Type:    "solana_sign_message",
+			Host:    key,
+			Account: &a.Address,
+			Value:   msgB64,
+		}
+		err = req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		return req.Result, nil
+	case "solana_signTransaction":
+		// params: { transaction: base64-encoded serialized transaction }
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("solana_signTransaction requires 1 parameter")
+		}
+		pmap, ok := in.Query.Params[0].(map[string]any)
+		if !ok {
+			return nil, errors.New("solana_signTransaction param must be an object")
+		}
+		txB64, _ := pmap["transaction"].(string)
+		if txB64 == "" {
+			return nil, errors.New("solana_signTransaction: transaction is required")
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected")
+		}
+		a, err := wltacct.FindAccount(e, conn[0].Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		req := &request{
+			Type:    "solana_sign_transaction",
+			Host:    key,
+			Account: &a.Address,
+			Value:   txB64,
+		}
+		err = req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		return req.Result, nil
+	case "solana_signAndSendTransaction":
+		// params: { transaction: base64-encoded serialized transaction }
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("solana_signAndSendTransaction requires 1 parameter")
+		}
+		pmap, ok := in.Query.Params[0].(map[string]any)
+		if !ok {
+			return nil, errors.New("solana_signAndSendTransaction param must be an object")
+		}
+		txB64, _ := pmap["transaction"].(string)
+		if txB64 == "" {
+			return nil, errors.New("solana_signAndSendTransaction: transaction is required")
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected")
+		}
+		a, err := wltacct.FindAccount(e, conn[0].Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		req := &request{
+			Type:    "solana_sign_send_transaction",
+			Host:    key,
+			Account: &a.Address,
+			Value:   txB64,
+		}
+		err = req.run(e)
+		if err != nil {
+			return nil, err
+		}
+		return req.Result, nil
 	case "wallet_registerOnboarding":
 		return false, nil
 	default:

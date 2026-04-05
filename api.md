@@ -177,6 +177,12 @@ returns an object with the state of the user's onboarding, useful to check if we
     * `wallet_switchEthereumChain` — EIP-3326 switch chains
     * `wallet_requestPermissions` / `wallet_getPermissions` — EIP-2255 permissions
     * `wallet_watchAsset` — EIP-747 request to watch a token
+    * `solana_connect` / `solana_requestAccounts` — connect and return public keys
+    * `solana_accounts` — return connected Solana accounts
+    * `solana_disconnect` — disconnect all accounts for the requesting site
+    * `solana_signMessage` — sign an arbitrary message (params: `{ message, pubkey }`)
+    * `solana_signTransaction` — sign a transaction (params: `{ transaction }`, base64-encoded)
+    * `solana_signAndSendTransaction` — sign and broadcast (params: `{ transaction }`, base64-encoded)
     * All other methods are relayed to the current network's RPC
 
 ## Web3/Connection
@@ -196,7 +202,7 @@ Web3/Connection manages which sites have access to which accounts
 * EVENT: `{"result":"event","event":"request","data":{"request_id":"..."}}` A new request is PENDING
 * `GET Request:test` to run a test on the event
 * `GET Request/<id>` to fetch a given request including its details (request, etc)
-  * Type can be one of: connect, sign, personal_sign, sign_typed_data, add_network, change_network, watch_asset, test
+  * Type can be one of: connect, sign, personal_sign, sign_typed_data, add_network, change_network, watch_asset, solana_sign_message, solana_sign_transaction, solana_sign_send_transaction, test
   * Status can be one of: pending, accepted, rejected, timedout
   * Transaction can be optionally included if request is for sign
   * Value can be optionally included, is context of the request (will replace Transaction)

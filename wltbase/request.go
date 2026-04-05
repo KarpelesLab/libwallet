@@ -3,7 +3,9 @@ package wltbase
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,10 +13,13 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
@@ -323,6 +328,121 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		// Approval acknowledged; the actual network save/switch is done by the caller in web3.go.
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
+	case "solana_sign_message":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign")
+		}
+		msgB64, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid message in request")
+		}
+		msgBytes, err := base64.StdEncoding.DecodeString(msgB64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode message: %w", err)
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account: %w", err)
+		}
+		signOpt := &wltsign.Opts{
+			Context: ctx,
+			Keys:    in.Keys,
+		}
+		sig, err := a.Sign(nil, msgBytes, signOpt)
+		if err != nil {
+			return nil, fmt.Errorf("solana sign failed: %w", err)
+		}
+		req.Result = map[string]any{
+			"signature": base58.Bitcoin.Encode(sig),
+			"publicKey": a.Address,
+		}
+	case "solana_sign_transaction":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign")
+		}
+		txB64, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid transaction in request")
+		}
+		txBytes, err := base64.StdEncoding.DecodeString(txB64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode transaction: %w", err)
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account: %w", err)
+		}
+		// Solana transactions: the message to sign starts after the signature slots.
+		// For a single-signer tx: compact-u16(1) + 64 bytes signature placeholder = 65 bytes header.
+		// The message is everything after the signatures section.
+		msgBytes, err := solanaExtractMessage(txBytes)
+		if err != nil {
+			return nil, err
+		}
+		signOpt := &wltsign.Opts{
+			Context: ctx,
+			Keys:    in.Keys,
+		}
+		sig, err := a.Sign(nil, msgBytes, signOpt)
+		if err != nil {
+			return nil, fmt.Errorf("solana sign failed: %w", err)
+		}
+		// Replace the first 64-byte signature slot with our signature
+		signedTx := solanaInsertSignature(txBytes, sig)
+		req.Result = map[string]any{
+			"transaction": base64.StdEncoding.EncodeToString(signedTx),
+		}
+	case "solana_sign_send_transaction":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign")
+		}
+		txB64, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid transaction in request")
+		}
+		txBytes, err := base64.StdEncoding.DecodeString(txB64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode transaction: %w", err)
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account: %w", err)
+		}
+		msgBytes, err := solanaExtractMessage(txBytes)
+		if err != nil {
+			return nil, err
+		}
+		signOpt := &wltsign.Opts{
+			Context: ctx,
+			Keys:    in.Keys,
+		}
+		sig, err := a.Sign(nil, msgBytes, signOpt)
+		if err != nil {
+			return nil, fmt.Errorf("solana sign failed: %w", err)
+		}
+		signedTx := solanaInsertSignature(txBytes, sig)
+
+		// Broadcast via Solana RPC
+		env := wltintf.GetEnv(ctx)
+		if env == nil {
+			return nil, errors.New("failed to get env")
+		}
+		net, err := wltnet.CurrentNetwork(env)
+		if err != nil {
+			return nil, err
+		}
+		txBase58 := base58.Bitcoin.Encode(signedTx)
+		result, err := net.DoRPC("sendTransaction", txBase58, map[string]any{"encoding": "base58"})
+		if err != nil {
+			return nil, fmt.Errorf("failed to send transaction: %w", err)
+		}
+		var txHash string
+		if err := json.Unmarshal(result, &txHash); err != nil {
+			return nil, fmt.Errorf("failed to parse transaction hash: %w", err)
+		}
+		req.Result = map[string]any{
+			"signature": txHash,
+		}
 	}
 
 	return req, req.respond(e, "accepted")
