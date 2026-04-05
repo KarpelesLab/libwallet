@@ -166,28 +166,138 @@ func TestEdDSAWalletCreate(t *testing.T) {
 	if w.Chaincode == "" {
 		t.Fatal("expected non-empty chaincode")
 	}
+	if len(w.Keys) != 3 {
+		t.Fatalf("expected 3 keys, got %d", len(w.Keys))
+	}
+	for i, k := range w.Keys {
+		if k.Id == nil {
+			t.Errorf("key %d has nil Id", i)
+		}
+		if k.Type != "Plain" {
+			t.Errorf("key %d type = %s, want Plain", i, k.Type)
+		}
+	}
 
 	log.Printf("eddsa wallet ready, pubkey=%s", w.Pubkey)
+	origPubkey := w.Pubkey
 
-	// test signing
-	opts := &wltsign.Opts{
-		Context: context.Background(),
-	}
+	// sign with keys 0+1
+	opts := &wltsign.Opts{Context: context.Background()}
 	for _, k := range w.Keys[:2] {
 		opts.Keys = append(opts.Keys, &wltsign.KeyDescription{Id: k.Id.String()})
 	}
 
-	msg := []byte("hello ed25519 world")
-	sig, err := w.Sign(nil, msg, opts)
+	msg1 := []byte("hello ed25519 world")
+	sig1, err := w.Sign(nil, msg1, opts)
 	if err != nil {
-		t.Fatalf("failed to sign: %s", err)
+		t.Fatalf("failed to sign msg1: %s", err)
+	}
+	if len(sig1) != 64 {
+		t.Errorf("expected 64-byte signature, got %d bytes", len(sig1))
+	}
+	log.Printf("eddsa sig1 (len %d) = %x", len(sig1), sig1)
+
+	// sign a different message with same keys
+	msg2 := []byte("second message")
+	sig2, err := w.Sign(nil, msg2, opts)
+	if err != nil {
+		t.Fatalf("failed to sign msg2: %s", err)
+	}
+	if len(sig2) != 64 {
+		t.Errorf("expected 64-byte signature, got %d bytes", len(sig2))
 	}
 
-	log.Printf("eddsa signature (len %d) = %x", len(sig), sig)
-
-	if len(sig) != 64 {
-		t.Errorf("expected 64-byte ed25519 signature, got %d bytes", len(sig))
+	// signatures for different messages should differ
+	if string(sig1) == string(sig2) {
+		t.Error("signatures for different messages should not be identical")
 	}
+
+	// sign with keys 0+2 (different threshold subset)
+	opts2 := &wltsign.Opts{Context: context.Background()}
+	opts2.Keys = []*wltsign.KeyDescription{
+		{Id: w.Keys[0].Id.String()},
+		{Id: w.Keys[2].Id.String()},
+	}
+
+	sig3, err := w.Sign(nil, msg1, opts2)
+	if err != nil {
+		t.Fatalf("failed to sign with keys 0+2: %s", err)
+	}
+	if len(sig3) != 64 {
+		t.Errorf("expected 64-byte signature, got %d bytes", len(sig3))
+	}
+	log.Printf("eddsa sig3 (keys 0+2, len %d) = %x", len(sig3), sig3)
+
+	// sign with keys 1+2
+	opts3 := &wltsign.Opts{Context: context.Background()}
+	opts3.Keys = []*wltsign.KeyDescription{
+		{Id: w.Keys[1].Id.String()},
+		{Id: w.Keys[2].Id.String()},
+	}
+
+	sig4, err := w.Sign(nil, msg1, opts3)
+	if err != nil {
+		t.Fatalf("failed to sign with keys 1+2: %s", err)
+	}
+	if len(sig4) != 64 {
+		t.Errorf("expected 64-byte signature, got %d bytes", len(sig4))
+	}
+	log.Printf("eddsa sig4 (keys 1+2, len %d) = %x", len(sig4), sig4)
+
+	// pubkey should not have changed
+	if w.Pubkey != origPubkey {
+		t.Errorf("pubkey changed after signing: %s -> %s", origPubkey, w.Pubkey)
+	}
+
+	// decode and verify pubkey is valid 32-byte ed25519 key
+	pubBytes, err := base64.RawURLEncoding.DecodeString(w.Pubkey)
+	if err != nil {
+		t.Fatalf("failed to decode pubkey: %s", err)
+	}
+	if len(pubBytes) != 32 {
+		t.Errorf("expected 32-byte ed25519 pubkey, got %d bytes", len(pubBytes))
+	}
+
+	// reshare to new keys
+	log.Printf("starting eddsa reshare")
+	newKd := []*wltsign.KeyDescription{
+		{Type: "Plain"},
+		{Type: "Plain"},
+		{Type: "Plain"},
+	}
+
+	// use keys 0+1 as old keys for reshare
+	oldKeyDescs := []*wltsign.KeyDescription{
+		{Id: w.Keys[0].Id.String()},
+		{Id: w.Keys[1].Id.String()},
+		{Id: w.Keys[2].Id.String()},
+	}
+
+	err = w.Reshare(context.Background(), oldKeyDescs, newKd)
+	if err != nil {
+		t.Fatalf("failed to reshare eddsa wallet: %s", err)
+	}
+	log.Printf("eddsa reshare complete, new keys: %d", len(w.Keys))
+
+	if len(w.Keys) != 3 {
+		t.Fatalf("expected 3 new keys after reshare, got %d", len(w.Keys))
+	}
+
+	// sign with new keys after reshare
+	opts4 := &wltsign.Opts{Context: context.Background()}
+	for _, k := range w.Keys[:2] {
+		opts4.Keys = append(opts4.Keys, &wltsign.KeyDescription{Id: k.Id.String()})
+	}
+
+	msg5 := []byte("message after reshare")
+	sig5, err := w.Sign(nil, msg5, opts4)
+	if err != nil {
+		t.Fatalf("failed to sign after reshare: %s", err)
+	}
+	if len(sig5) != 64 {
+		t.Errorf("expected 64-byte signature after reshare, got %d bytes", len(sig5))
+	}
+	log.Printf("eddsa post-reshare signature (len %d) = %x", len(sig5), sig5)
 }
 
 func must[T any](a T, err error) T {
