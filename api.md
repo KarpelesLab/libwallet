@@ -10,6 +10,10 @@ Ping the lib to check if everything is doing fine.
 
 Returns the lib's version
 
+### `Info:paths`
+
+Returns system paths information (UserCacheDir, UserConfigDir, UserHomeDir, TempDir, DataDir, Environ)
+
 ### `Info:first_run`
 
 Return the date/time of the first run based on the storage endpoint
@@ -47,6 +51,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `GET`
 * `POST Wallet` to create a new Wallet
   * `Name`
+  * `Curve` (optional): `secp256k1` (default, for EVM/Bitcoin) or `ed25519` (for Solana)
   * `Keys`: [ {"Type": "StoreKey", "Key": storeKey}, {"Type": "RemoteKey", "Key": remoteKey}, {"Type": "Password", "Key": password} ]
 * `PATCH Wallet/<id>`
   * `Name`
@@ -80,7 +85,7 @@ returns an object with the state of the user's onboarding, useful to check if we
   * TestNet=false (optional): if set to false, exclude testnets
 * `GET Network/<id>`
 * `POST Network`
-  * Type == evm
+  * Type: `evm`, `bitcoin`, or `solana`
   * ChainId
   * Name
   * RPC (=auto)
@@ -102,7 +107,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `POST Account`
   * `Name`
   * `Wallet` Id of attached wallet
-  * `Type` ethereum or bitcoin
+  * `Type` ethereum, bitcoin, or solana
   * `Index` Index of the account (starts at zero, two accounts of the same wallet / type / index will have the same address)
 * `PATCH Account/<id>`
   * `Name`
@@ -114,6 +119,14 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `GET` (list only)
   * _convert=USD (add FiatAmount and FiatCurrency to each asset with converted amount, can accept USD/EUR/GBP/JPY)
 
+## Nft
+
+* `GET Nft` List NFTs for the current (or specified) account and network
+  * Network (optional): limit to a specific network, defaults to current network
+  * Account (optional): limit to a specific account, defaults to current account
+  * Returns: `{ network, account, nfts }` where nfts is an array of NFT metadata
+* `GET Nft/<id>` Fetch a specific NFT by id
+
 ## Transaction
 
 * `GET Transaction`
@@ -122,9 +135,11 @@ returns an object with the state of the user's onboarding, useful to check if we
   * _convert=USD (add FiatAmount and FiatCurrency to each asset with converted amount, can accept USD/EUR/GBP/JPY)
 * `GET Transaction/<id>`
 * `Transaction:validate` Validates if a transaction is OK, returns errors if anything seems wrong
+  * Supported transaction types: `transfer`, `evm`, `solana_transfer`, `solana_spl_transfer`
 * `Transaction:signAndSend`
   * Same params as `Transaction:validate` plus:
   * Keys: [ {"Id": "wkey-xxx", "Key": privateKey, {"Id": "wkey-yyy", "Key": password} ]
+  * For Solana transactions, signing uses EdDSA TSS and broadcasts via `sendTransaction`
 * `DELETE Transaction`
   * From: limit transaction deletion to a given account
   * Network: delete transactions on a given network
@@ -138,7 +153,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `POST Contact`
   * Name
   * Address
-  * Type
+  * Type: `ethereum`, `bitcoin`, or `solana`
   * Memo
 * `PATCH Contact/id`
 * `DELETE Contact/id`
