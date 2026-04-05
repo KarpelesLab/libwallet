@@ -1,0 +1,125 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Build Android AAR
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          gomobile bind -v -target android -androidapi 21 \
+            -javapkg com.karpeleslabs.libwallet \
+            -ldflags="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -o libwallet.aar .
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: |
+            libwallet.aar
+            libwallet-sources.aar
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Build iOS xcframework
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          gomobile bind -v --target ios,iossimulator \
+            -ldflags="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -o libwallet.xcframework .
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: libwallet.xcframework
+
+  package:
+    runs-on: ubuntu-latest
+    needs: [build-android, build-ios]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: api.md
+          sparse-checkout-cone-mode: false
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android
+          path: android
+
+      - name: Download iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ios
+          path: ios/libwallet.xcframework
+
+      - name: Create tarball
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="$(git rev-parse --short HEAD)"
+          fi
+          tar czf "libwallet-${VERSION}.tar.gz" api.md ios android
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-tarball
+          path: libwallet-*.tar.gz
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [package]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: release-tarball
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes libwallet-*.tar.gz
