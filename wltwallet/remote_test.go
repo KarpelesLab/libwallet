@@ -59,7 +59,7 @@ func TestRemoteWallet(t *testing.T) {
 	// wallet is *ready*
 
 	// now let's try a reshare
-	remote, err = remoteReshare(context.Background(), remoteV.RemoteKey)
+	remote, err = remoteReshare(context.Background(), remoteV.RemoteKey, "secp256k1")
 	if err != nil {
 		t.Errorf("failed to initialize reshare: %s", err)
 	}

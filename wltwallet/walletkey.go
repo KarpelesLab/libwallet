@@ -151,7 +151,11 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	}
 	if kd.Type == "RemoteKey" {
 		// upload bottle
-		_, err = rest.Do(context.Background(), "EllipX/WalletSign:setGeneratedKey", "POST", rest.Param{"data": base64.RawURLEncoding.EncodeToString(buf), "key": kd.Key})
+		curveParam := "secp256k1"
+		if wk.eddata != nil {
+			curveParam = "ed25519"
+		}
+		_, err = rest.Do(context.Background(), "EllipX/WalletSign:setGeneratedKey", "POST", rest.Param{"data": base64.RawURLEncoding.EncodeToString(buf), "key": kd.Key, "curve": curveParam})
 		if err != nil {
 			return err
 		}

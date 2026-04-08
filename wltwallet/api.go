@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltintf"
@@ -22,6 +23,7 @@ func init() {
 			Create: pobj.Static(apiCreateWallet),
 		},
 	)
+	pobj.RegisterStatic("Wallet:multiCreate", apiMultiCreateWallet)
 	pobj.RegisterStatic("Wallet:reshare", apiWalletReshare)
 }
 
@@ -172,6 +174,68 @@ func apiWalletReshare(ctx *apirouter.Context, in struct {
 	}
 
 	return w, nil
+}
+
+func apiMultiCreateWallet(ctx *apirouter.Context, in struct {
+	Name string
+	Keys []*wltsign.KeyDescription
+}) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+
+	keyCnt := len(in.Keys)
+	if keyCnt < 3 {
+		return nil, fmt.Errorf("need at least 3 keys, got %d", keyCnt)
+	}
+
+	now := time.Now()
+	wSecp := &Wallet{
+		Id:       xuid.New("wlt"),
+		Name:     in.Name,
+		Created:  now,
+		Modified: now,
+	}
+	wEd := &Wallet{
+		Id:       xuid.New("wlt"),
+		Name:     in.Name,
+		Created:  now,
+		Modified: now,
+	}
+
+	var errSecp, errEd error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		errSecp = wSecp.initializeWallet(ctx, in.Keys)
+	}()
+	go func() {
+		defer wg.Done()
+		errEd = wEd.initializeEdDSAWallet(ctx, in.Keys)
+	}()
+	wg.Wait()
+
+	if errSecp != nil {
+		return nil, fmt.Errorf("secp256k1 wallet creation failed: %w", errSecp)
+	}
+	if errEd != nil {
+		return nil, fmt.Errorf("ed25519 wallet creation failed: %w", errEd)
+	}
+
+	if err := wSecp.save(e); err != nil {
+		return nil, fmt.Errorf("failed to save secp256k1 wallet: %w", err)
+	}
+	if err := wEd.save(e); err != nil {
+		return nil, fmt.Errorf("failed to save ed25519 wallet: %w", err)
+	}
+
+	return map[string]*Wallet{
+		"secp256k1": wSecp,
+		"ed25519":   wEd,
+	}, nil
 }
 
 func newWallet(name string) *Wallet {

@@ -26,6 +26,7 @@ type walletSignReshareInit struct {
 	NewPartycount int                `json:"new_partycount"`
 	OldThreshold  int                `json:"old_threshold"`
 	NewThreshold  int                `json:"new_threshold"`
+	Curve         string             `json:"curve"` // "secp256k1" or "ed25519"
 }
 
 type remoteKeyNewResult struct {
@@ -49,20 +50,21 @@ func remotekeyNew(ctx context.Context, in struct {
 	return res.Data, nil
 }
 
-func remoteSign(ctx context.Context, key string, hash []byte, il []byte) (*remoteKeyNewResult, error) {
+func remoteSign(ctx context.Context, key string, hash []byte, il []byte, curve string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:sign", "POST", rest.Param{"key": key, "hash": hex.EncodeToString(hash), "il": hex.EncodeToString(il)}, &res)
+	return res, rest.Apply(ctx, "EllipX/WalletSign:sign", "POST", rest.Param{"key": key, "hash": hex.EncodeToString(hash), "il": hex.EncodeToString(il), "curve": curve}, &res)
 }
 
-func remoteReshare(ctx context.Context, key string) (*remoteKeyNewResult, error) {
+func remoteReshare(ctx context.Context, key string, curve string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3}, &res)
+	return res, rest.Apply(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3, "curve": curve}, &res)
 }
 
 func remotekeyReshare(ctx context.Context, in struct {
-	Key string `json:"key"`
+	Key   string `json:"key"`
+	Curve string `json:"curve"`
 }) (any, error) {
-	res, err := rest.Do(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3})
+	res, err := rest.Do(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3, "curve": in.Curve})
 	if err != nil {
 		return nil, err
 	}

@@ -135,6 +135,7 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 				NewPartycount: len(newKeys),
 				OldThreshold:  w.Threshold,
 				NewThreshold:  w.Threshold,
+				Curve:         w.Curve,
 			}
 			var spot *spotlib.Client
 			if env := wltintf.GetEnv(ctx); env != nil {
@@ -332,6 +333,7 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 				NewPartycount: len(newKeys),
 				OldThreshold:  w.Threshold,
 				NewThreshold:  w.Threshold,
+				Curve:         w.Curve,
 			}
 			var spot *spotlib.Client
 			if env := wltintf.GetEnv(ctx); env != nil {
