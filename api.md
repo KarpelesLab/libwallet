@@ -43,7 +43,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 ## RemoteKey
 
 * `RemoteKey:new` takes: `number` (intl format), return `session`
-* `RemoteKey:reshare` takes: `key`, return `session` to initialize a key reshare
+* `RemoteKey:reshare` takes: `key`, `curve` (`secp256k1` or `ed25519`), return `session` to initialize a key reshare
 * `RemoteKey:validate` takes: `session` (returned by new or reshare), `code`, returns `RemoteKey`
 
 ## Wallet
@@ -68,6 +68,10 @@ returns an object with the state of the user's onboarding, useful to check if we
     * `update_count` number of items updated from this restore operation
     * `existing_count` number of items that already existed and do not need to be updated
     * `missing_count` number of items missing from the backup
+* `POST Wallet:multiCreate` Create both secp256k1 and ed25519 wallets in one call
+  * `Name`
+  * `Keys`: same format as POST Wallet
+  * Returns: `{ "secp256k1": Wallet, "ed25519": Wallet }`
 * `POST Wallet/<id>:reshare` Reshare wallet keys among a new set of key holders
   * `Old` Array of key descriptions to be replaced `[]*wltsign.KeyDescription`
   * `New` Array of new key descriptions `[]*wltsign.KeyDescription`
@@ -145,6 +149,28 @@ returns an object with the state of the user's onboarding, useful to check if we
   * Network: delete transactions on a given network
   * If no parameter is passed, ALL of the transaction history will be cleared
 * `DELETE Transaction/id`
+
+## Token
+
+* `GET Token` List all registered tokens (searchable by Name, Symbol, Address, Type)
+* `GET Token/<id>` Fetch a specific token
+* `POST Token` Register a custom token
+  * `Name` Display name
+  * `Symbol` Token symbol (e.g. "USDC")
+  * `Address` Contract address (EVM) or mint address (Solana)
+  * `Decimals` Token decimal places
+  * `Type` (optional): `erc20`, `nft`, `spl-token`, `spl-token-2022` (auto-detected from network if omitted)
+  * `Network` Network XUID the token belongs to
+  * `Logo` (optional): Logo URL
+  * `Memo` (optional): User notes
+* `PATCH Token/<id>` Update Name, Symbol, Decimals, Type, Logo, Memo
+* `DELETE Token/<id>`
+* `Token:discoverToken` Auto-detect token metadata from on-chain data
+  * `Network` Network XUID
+  * `Address` Contract/mint address
+  * Returns: `{ name, symbol, decimals, total_supply, address, type }`
+  * EVM: queries name(), symbol(), decimals(), totalSupply() via eth_call
+  * Solana: queries mint account info via getAccountInfo
 
 ## Contact
 
