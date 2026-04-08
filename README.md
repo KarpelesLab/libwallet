@@ -98,4 +98,4 @@ This library is provided under the Karpeles Lab Non-Commercial License, which al
 - Educational institutions
 - Small projects with fewer than 10,000 monthly active users
 
-For commercial use or projects exceeding the user limit, contact contact@klb.jp for licensing options.
+For commercial use or projects exceeding the user limit, contact mark@klb.jp for licensing options.

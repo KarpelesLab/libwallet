@@ -80,4 +80,4 @@ Karpeles Lab Inc may terminate this License at any time if you fail to comply wi
 
 5. **Contact**
    For questions, comments, or inquiries regarding other use cases not covered under this License, please contact:
-   **contact@klb.jp**
+   **mark@klb.jp**
