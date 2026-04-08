@@ -36,7 +36,7 @@ jobs:
             -o libwallet.aar .
 
       - name: Upload Android artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: android
           path: |
@@ -67,7 +67,7 @@ jobs:
             -o libwallet.xcframework .
 
       - name: Upload iOS artifact
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ios
           path: libwallet.xcframework
@@ -103,7 +103,7 @@ jobs:
           tar czf "libwallet-${VERSION}.tar.gz" api.md ios android
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: release-tarball
           path: libwallet-*.tar.gz
