@@ -19,6 +19,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltcrash"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltnft"
+	"github.com/KarpelesLab/libwallet/wlttoken"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/emitter"
@@ -133,6 +134,7 @@ func (e *env) init() error {
 	wltwallet.InitEnv(e)
 	wltcontact.InitEnv(e)
 	wltnft.InitEnv(e)
+	wlttoken.InitEnv(e)
 	wltcrash.InitEnv(e)
 
 	// run initial cache cleanup and start periodic cleanup
@@ -183,6 +185,7 @@ func (e *env) initTemp() error {
 	wltwallet.InitEnv(e)
 	wltcontact.InitEnv(e)
 	wltnft.InitEnv(e)
+	wlttoken.InitEnv(e)
 	wltcrash.InitEnv(e)
 
 	return nil
