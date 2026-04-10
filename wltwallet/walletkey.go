@@ -18,8 +18,8 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
-	ecdsakeygen "github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
-	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/portablesql/psql"
@@ -33,9 +33,9 @@ type WalletKey struct {
 	Key       string     `json:"Key,omitempty" sql:",type=TEXT"` // (public) key used for encryption
 	Data      []byte     `json:",protect" sql:",type=BLOB"`
 	Gen       uint64     `sql:",type=BIGINT,null=0,default=0"` // key generation
-	pre       *ecdsakeygen.LocalPreParams
-	sdata     *ecdsakeygen.LocalPartySaveData
-	eddata    *eddsakeygen.LocalPartySaveData
+	pre       *ecdsatss.LocalPreParams
+	sdata     *ecdsatss.Key
+	eddata    *eddsatss.Key
 }
 
 func (wk *WalletKey) save(e wltintf.Env) error {
@@ -54,7 +54,7 @@ func (w *Wallet) createWalletKey(ctx context.Context, typ string) (*WalletKey, e
 		return final, nil
 	}
 	// ECDSA needs pre-params
-	preParams, err := ecdsakeygen.GeneratePreParamsWithContext(ctx)
+	preParams, err := (&ecdsatss.LocalPreGenerator{Context: ctx}).Generate()
 	if err != nil {
 		return nil, err
 	}
@@ -208,13 +208,13 @@ func (wk *WalletKey) opener(kd *wltsign.KeyDescription) (*cryptutil.Opener, erro
 	}
 }
 
-func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*ecdsakeygen.LocalPartySaveData, error) {
+func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*ecdsatss.Key, error) {
 	bottle := cryptutil.AsCborBottle(wk.Data)
 	op, err := wk.opener(kd)
 	if err != nil {
 		return nil, err
 	}
-	var final *ecdsakeygen.LocalPartySaveData
+	var final *ecdsatss.Key
 	_, err = op.Unmarshal(bottle, &final)
 	if err != nil {
 		return nil, fmt.Errorf("while decrypting key %s: %w", wk.Id, err)
@@ -222,13 +222,13 @@ func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose
 	return final, err
 }
 
-func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*eddsakeygen.LocalPartySaveData, error) {
+func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*eddsatss.Key, error) {
 	bottle := cryptutil.AsCborBottle(wk.Data)
 	op, err := wk.opener(kd)
 	if err != nil {
 		return nil, err
 	}
-	var final *eddsakeygen.LocalPartySaveData
+	var final *eddsatss.Key
 	_, err = op.Unmarshal(bottle, &final)
 	if err != nil {
 		return nil, fmt.Errorf("while decrypting eddsa key %s: %w", wk.Id, err)

@@ -49,6 +49,10 @@ github.com/KarpelesLab/spotproto v0.3.0 h1:e823Zlr9fZsjyqXiNhOgp02bJ6WA/GOEECOm5
 github.com/KarpelesLab/spotproto v0.3.0/go.mod h1:gVj35/deJ2huOTmXNUl57VNWuOPAdoJ3w5rofxjSqHY=
 github.com/KarpelesLab/tss-lib/v2 v2.1.6 h1:Mf6apHzLfGq6HK/cNhj8F4fnH4rD3aSU0LZoXKz9+H8=
 github.com/KarpelesLab/tss-lib/v2 v2.1.6/go.mod h1:xo4EnrX2l4DWjhL1sf11+9DTkhWl+cap4jSkJxtR2CQ=
+github.com/KarpelesLab/tss-lib/v2 v2.2.2 h1:rwSQE9mJov+oWFzPLufYteGavvLWxNi6NgpK662uSQY=
+github.com/KarpelesLab/tss-lib/v2 v2.2.2/go.mod h1:xo4EnrX2l4DWjhL1sf11+9DTkhWl+cap4jSkJxtR2CQ=
+github.com/KarpelesLab/tss-lib/v2 v2.2.3 h1:UMRyIIKlskZDy6Lz+ma/10EPpCxqB7cCr12rYP1Kh8A=
+github.com/KarpelesLab/tss-lib/v2 v2.2.3/go.mod h1:xo4EnrX2l4DWjhL1sf11+9DTkhWl+cap4jSkJxtR2CQ=
 github.com/KarpelesLab/typutil v0.2.34 h1:9ZI5uwcZxQlb6klwn5JlNK95fnkEk001ii6+jBm0M3Y=
 github.com/KarpelesLab/typutil v0.2.34/go.mod h1:8QWuhh8zAkTt+AszMeENIYZJC4JQtk+Ib0yLlSqLLyY=
 github.com/KarpelesLab/webutil v0.2.7 h1:gqR5967ExUN6w5Pb4Fi6aMkkWtsbkFlnDWE6i496Exk=

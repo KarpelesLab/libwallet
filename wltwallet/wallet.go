@@ -18,11 +18,8 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
-	"github.com/KarpelesLab/tss-lib/v2/common"
-	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
-	ecdsasigning "github.com/KarpelesLab/tss-lib/v2/ecdsa/signing"
-	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
-	eddsasigning "github.com/KarpelesLab/tss-lib/v2/eddsa/signing"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
@@ -168,7 +165,6 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 
 	// Set up TSS parties for distributed key generation
 	var ids tss.UnSortedPartyIDs
-	m := make(map[string]tssPartyUpdateOnly)
 	idmap := make(map[int]*tss.PartyID)
 	for n, p := range w.Keys {
 		key := new(big.Int).SetBytes(p.Id.UUID[:])
@@ -181,31 +177,36 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 	curve := tss.EC()
 	tssctx := tss.NewPeerContext(sids)
 
-	// Create channels for TSS communication
-	outCh := make(chan tss.Message)
-	defer close(outCh)
+	// Register every local broker in the hub before any party starts so
+	// round1 messages from an early party can queue on later parties.
+	hub := newTssHub()
+	for n := range w.Keys {
+		hub.addLocal(idmap[n])
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(len(w.Keys))
 
-	// Start TSS key generation for each party
 	for n, p := range w.Keys {
-		endCh := make(chan *keygen.LocalPartySaveData)
 		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
-		party := keygen.NewLocalParty(params, outCh, endCh, *p.pre)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
+		params.SetBroker(hub.local[idmap[n].Id])
+		kg, err := ecdsatss.NewKeygen(ctx, params, *p.pre)
+		if err != nil {
+			return fmt.Errorf("failed to start keygen for party %d: %w", n, err)
+		}
+		go func(p *WalletKey, kg *ecdsatss.Keygen) {
 			defer wg.Done()
-			err := party.Start()
-			if err != nil {
-				log.Printf("err = %s", err)
-				// Ensure we don't block on channel read if party failed to start
+			select {
+			case key := <-kg.Done:
+				p.sdata = key
+			case err := <-kg.Err:
+				log.Printf("keygen err = %s", err)
 				p.sdata = nil
-				return
+			case <-ctx.Done():
+				p.sdata = nil
 			}
-			p.sdata = <-endCh
-		}(p)
+		}(p, kg)
 	}
-	go tssRouter(ctx, m, outCh)
 
 	// Generate random chaincode for HD wallet derivation
 	chaincode := make([]byte, 32)
@@ -216,6 +217,10 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 
 	// Wait for all key generation to complete
 	wg.Wait()
+
+	if w.Keys[0].sdata == nil {
+		return errors.New("ecdsa key generation failed")
+	}
 
 	// Set wallet properties from generated keys
 	pk := w.Keys[0].sdata.ECDSAPub.ToSecp256k1PubKey()
@@ -274,7 +279,6 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
 
 	var ids tss.UnSortedPartyIDs
-	m := make(map[string]tssPartyUpdateOnly)
 	idmap := make(map[int]*tss.PartyID)
 	for n, p := range w.Keys {
 		key := new(big.Int).SetBytes(p.Id.UUID[:])
@@ -287,28 +291,34 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 	curve := tss.Edwards()
 	tssctx := tss.NewPeerContext(sids)
 
-	outCh := make(chan tss.Message)
-	defer close(outCh)
+	hub := newTssHub()
+	for n := range w.Keys {
+		hub.addLocal(idmap[n])
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(len(w.Keys))
 
 	for n, p := range w.Keys {
-		endCh := make(chan *eddsakeygen.LocalPartySaveData)
 		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
-		party := eddsakeygen.NewLocalParty(params, outCh, endCh)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
+		params.SetBroker(hub.local[idmap[n].Id])
+		kg, err := eddsatss.NewKeygen(ctx, params)
+		if err != nil {
+			return fmt.Errorf("failed to start eddsa keygen for party %d: %w", n, err)
+		}
+		go func(p *WalletKey, kg *eddsatss.Keygen) {
 			defer wg.Done()
-			err := party.Start()
-			if err != nil {
+			select {
+			case key := <-kg.Done:
+				p.eddata = key
+			case err := <-kg.Err:
 				log.Printf("eddsa keygen err = %s", err)
 				p.eddata = nil
-				return
+			case <-ctx.Done():
+				p.eddata = nil
 			}
-			p.eddata = <-endCh
-		}(p)
+		}(p, kg)
 	}
-	go tssRouter(ctx, m, outCh)
 
 	chaincode := make([]byte, 32)
 	_, err := io.ReadFull(rand.Reader, chaincode)
@@ -393,9 +403,13 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 	msg := new(big.Int).SetBytes(digest)
 	keys := aopt.Keys
 
+	signCtx := aopt.Context
+	if signCtx == nil {
+		signCtx = context.Background()
+	}
+
 	// Prepare party IDs for TSS signing
 	var ids tss.UnSortedPartyIDs
-	m := make(map[string]tssPartyUpdateOnly)
 	idmap := make(map[int]*tss.PartyID)
 	for n, kd := range keys {
 		p := w.getKey(kd.Id)
@@ -416,72 +430,74 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 	}
 	tssctx := tss.NewPeerContext(sids)
 
-	// Create channels for TSS communication
-	outCh := make(chan tss.Message)
-	defer close(outCh)
+	hub := newTssHub()
+	for n := range keys {
+		hub.addLocal(idmap[n])
+	}
+
 	res := make(chan any, len(keys))
 
 	if w.Curve == "ed25519" {
-		// EdDSA signing path
 		for n, kd := range keys {
 			p := w.getKey(kd.Id)
 			if p == nil {
 				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
 			}
-			endCh := make(chan *common.SignatureData)
 			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			params.SetBroker(hub.local[idmap[n].Id])
 			eddata, err := p.decryptEdDSA(kd, keySignPurpose)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decrypt eddsa key %s for signing: %w", kd.Id, err)
 			}
-			party := eddsasigning.NewLocalParty(msg, params, *eddata, outCh, endCh, len(digest))
-			m[p.Id.String()] = party
-			go func(p *WalletKey) {
+			sg, err := eddata.NewSigning(signCtx, msg, params)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start eddsa signing for key %s: %w", kd.Id, err)
+			}
+			go func() {
 				defer func() {
-					wltcrash.Log(aopt.Context, recover(), "eddsa signing party thread")
+					wltcrash.Log(signCtx, recover(), "eddsa signing party thread")
 				}()
-				err := party.Start()
-				if err != nil {
-					log.Printf("err = %s", err)
+				select {
+				case sig := <-sg.Done:
+					res <- sig.Signature
+				case err := <-sg.Err:
 					res <- err
-					return
+				case <-signCtx.Done():
+					res <- signCtx.Err()
 				}
-				sig := <-endCh
-				// Ed25519 signature is R (32 bytes) || S (32 bytes)
-				res <- sig.GetSignature()
-			}(p)
+			}()
 		}
 	} else {
-		// ECDSA signing path
 		for n, kd := range keys {
 			p := w.getKey(kd.Id)
 			if p == nil {
 				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
 			}
-			endCh := make(chan *common.SignatureData)
 			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			params.SetBroker(hub.local[idmap[n].Id])
 			sdata, err := p.decrypt(kd, keySignPurpose)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decrypt key %s for signing: %w", kd.Id, err)
 			}
-			party := ecdsasigning.NewLocalPartyWithAutoKDD(msg, params, *sdata, aopt.IL, outCh, endCh, len(digest))
-			m[p.Id.String()] = party
-			go func(p *WalletKey) {
+			sg, err := sdata.NewSigningWithKDD(signCtx, msg, params, aopt.IL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start ecdsa signing for key %s: %w", kd.Id, err)
+			}
+			go func() {
 				defer func() {
-					wltcrash.Log(aopt.Context, recover(), "signing party thread")
+					wltcrash.Log(signCtx, recover(), "signing party thread")
 				}()
-				err := party.Start()
-				if err != nil {
-					log.Printf("err = %s", err)
+				select {
+				case sig := <-sg.Done:
+					res <- ecdsaDERFromSigData(sig)
+				case err := <-sg.Err:
 					res <- err
-					return
+				case <-signCtx.Done():
+					res <- signCtx.Err()
 				}
-				sig := <-endCh
-				res <- sig.GetSignatureObject().Serialize()
-			}(p)
+			}()
 		}
 	}
-	go tssRouter(aopt.Context, m, outCh)
 
 	// Set a timeout for the signing operation
 	timer := time.NewTimer(15 * time.Second)
@@ -512,4 +528,14 @@ func (w *Wallet) GetPubkey() (*secp256k1.PublicKey, error) {
 		return nil, err
 	}
 	return secp256k1.ParsePubKey(dat)
+}
+
+// ecdsaDERFromSigData builds a DER-encoded ECDSA signature from the new
+// ecdsatss.SignatureData shape. Matches the output of the old
+// common.SignatureData.GetSignatureObject().Serialize() path.
+func ecdsaDERFromSigData(sd *ecdsatss.SignatureData) []byte {
+	var r, s secp256k1.ModNScalar
+	r.SetByteSlice(sd.R)
+	s.SetByteSlice(sd.S)
+	return secp256k1.NewSignatureWithRecoveryCode(&r, &s, sd.Recovery&1).Serialize()
 }

@@ -16,7 +16,7 @@ require (
 	github.com/KarpelesLab/secp256k1 v0.2.8
 	github.com/KarpelesLab/spotlib v0.3.0
 	github.com/KarpelesLab/spotproto v0.3.0
-	github.com/KarpelesLab/tss-lib/v2 v2.1.6
+	github.com/KarpelesLab/tss-lib/v2 v2.2.3
 	github.com/KarpelesLab/typutil v0.2.34
 	github.com/KarpelesLab/xuid v1.0.10
 	github.com/fxamacker/cbor/v2 v2.9.0

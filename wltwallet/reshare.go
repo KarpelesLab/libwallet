@@ -13,10 +13,8 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/spotlib"
-	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
-	"github.com/KarpelesLab/tss-lib/v2/ecdsa/resharing"
-	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
-	eddsaresharing "github.com/KarpelesLab/tss-lib/v2/eddsa/resharing"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 )
 
@@ -43,7 +41,6 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 
 	// prepare old ids
 	var oldids tss.UnSortedPartyIDs
-	m := make(map[string]tssPartyUpdateOnly)
 	oldidmap := make(map[int]*tss.PartyID)
 	for n, kd := range oldKeys {
 		p := w.getKey(kd.Id)
@@ -63,7 +60,7 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 	}
 	oldtssctx := tss.NewPeerContext(oldsids)
 
-	// new keys
+	// Allocate new wallet keys (local only; remote peers carry no local key).
 	newWKeys := make([]*WalletKey, nk)
 
 	for i, kInfo := range newKeys {
@@ -80,13 +77,9 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 		if err != nil {
 			return err
 		}
-		sdata := keygen.NewLocalPartySaveData(len(newWKeys))
-		sdata.LocalPreParams = *k.pre
-		k.sdata = &sdata
 		newWKeys[i] = k
 	}
 
-	// perform final operation (actual key generation)
 	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
 
 	var newids tss.UnSortedPartyIDs
@@ -103,120 +96,138 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 
 	log.Printf("producing final; oldids = %v newids = %v", oldsids, newsids)
 
-	outCh := make(chan tss.Message, len(newWKeys)+len(oldKeys))
-	defer close(outCh)
-	var wg sync.WaitGroup
-	wg.Add(len(newWKeys))
+	hub := newTssHub()
 
-	for n, p := range newWKeys {
-		endCh := make(chan *keygen.LocalPartySaveData)
-		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, newidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
-		party := resharing.NewLocalParty(params, *p.sdata, outCh, endCh)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
-			defer wg.Done()
-			p.sdata = <-endCh
-		}(p)
+	// Register brokers for every local participant (old + new) up-front so
+	// pre-handler inbound messages can queue safely.
+	for n := range newWKeys {
+		hub.addLocal(newidmap[n])
 	}
-
-	wg.Add(len(oldKeys))
-
 	for n, kd := range oldKeys {
 		p := w.getKey(kd.Id)
 		if p.Type == "RemoteKey" {
-			wg.Done() // this one is remote, do not wait for it
-			// perform remote initialization and connect outCh to receive remote messages
-			// info is used to construct tss.NewReSharingParameters on the remote side
-			info := &walletSignReshareInit{
-				OldPeers:      oldsids,
-				NewPeers:      newsids,
-				Name:          oldidmap[n],
-				OldPartycount: len(oldKeys),
-				NewPartycount: len(newKeys),
-				OldThreshold:  w.Threshold,
-				NewThreshold:  w.Threshold,
-				Curve:         w.Curve,
-			}
-			var spot *spotlib.Client
-			if env := wltintf.GetEnv(ctx); env != nil {
-				spot = env.Spot()
-			}
-			if spot == nil {
-				var err error
-				// establish new spot connection (this will only happen in test mode, typically)
-				spot, err = spotlib.New()
-				if err != nil {
-					return err
-				}
-			}
-			if err := waitOnlineSpot(spot); err != nil {
-				return err
-			}
-			log.Printf("initializing remote peer %s with info=%+v", p.Id.String(), info)
-			log.Printf("remote sid = %s", kd.Key)
-			m[p.Id.String()] = &spotParty{info: info, spot: spot, sid: kd.Key, parties: m}
-			// setup is done, skip the normal decrypt
 			continue
 		}
-		endCh := make(chan *keygen.LocalPartySaveData)
+		hub.addLocal(oldidmap[n])
+	}
+
+	// Initialize any remote peers (spot handshake) before any TSS round runs.
+	var remotes []*spotPeer
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type != "RemoteKey" {
+			continue
+		}
+		info := &walletSignReshareInit{
+			OldPeers:      oldsids,
+			NewPeers:      newsids,
+			Name:          oldidmap[n],
+			OldPartycount: len(oldKeys),
+			NewPartycount: len(newKeys),
+			OldThreshold:  w.Threshold,
+			NewThreshold:  w.Threshold,
+			Curve:         w.Curve,
+		}
+		spot, err := envSpot(ctx)
+		if err != nil {
+			return err
+		}
+		if err := waitOnlineSpot(spot); err != nil {
+			return err
+		}
+		log.Printf("initializing remote peer %s with info=%+v", p.Id.String(), info)
+		log.Printf("remote sid = %s", kd.Key)
+		rp := &spotPeer{
+			hub:     hub,
+			partyId: oldidmap[n],
+			info:    info,
+			spot:    spot,
+			sid:     kd.Key,
+		}
+		hub.addRemote(rp)
+		remotes = append(remotes, rp)
+	}
+
+	for _, rp := range remotes {
+		if err := rp.Start(); err != nil {
+			return fmt.Errorf("failed to start remote peer %s: %w", rp.partyId.Id, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	var reshareErr error
+	var reshareErrOnce sync.Once
+
+	// New committee members
+	for n, p := range newWKeys {
+		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, newidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[newidmap[n].Id])
+		rs, err := ecdsatss.NewResharing(ctx, params, nil, *p.pre)
+		if err != nil {
+			return fmt.Errorf("failed to start reshare for new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rs *ecdsatss.Resharing) {
+			defer wg.Done()
+			select {
+			case key := <-rs.Done:
+				p.sdata = key
+			case err := <-rs.Err:
+				log.Printf("reshare new-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rs)
+	}
+
+	// Old committee members (local only; remote peers are already running on
+	// the other side of Spot).
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
 		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, oldidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[oldidmap[n].Id])
 		sdata, err := p.decrypt(kd, keyResharePurpose)
 		if err != nil {
 			return err
 		}
-		party := resharing.NewLocalParty(params, *sdata, outCh, endCh)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
+		rs, err := ecdsatss.NewResharing(ctx, params, sdata)
+		if err != nil {
+			return fmt.Errorf("failed to start reshare for old party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(rs *ecdsatss.Resharing) {
 			defer wg.Done()
-			p.sdata = <-endCh
-		}(p)
-	}
-
-	errCh := make(chan error, 2)
-	var wgStart sync.WaitGroup
-	wgStart.Add(len(m))
-
-	// start all
-	for _, p := range m {
-		go func(party tssPartyUpdateOnly) {
-			defer wgStart.Done()
-
-			err := party.Start()
-			if err != nil {
-				log.Printf("failed to start tss party: %s", err)
-				select {
-				case errCh <- err:
-				default:
-				}
+			select {
+			case <-rs.Done:
+				// old committee members produce a key with Xi zeroed; discard
+			case err := <-rs.Err:
+				log.Printf("reshare old-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
 			}
-		}(p)
+		}(rs)
 	}
 
-	wgStart.Wait()
-
-	select {
-	case err := <-errCh:
-		return err
-	default:
-	}
-
-	// only route messages after everyone has started
-	go tssRouter(ctx, m, outCh)
-
-	// wait for all save data to fill
 	wg.Wait()
+
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for _, p := range newWKeys {
+		if p.sdata == nil {
+			return errors.New("reshare failed: missing new committee key data")
+		}
+	}
 
 	w.Keys = newWKeys
 
-	// params shouldn't have changed
-	//pk := w.Keys[0].sdata.ECDSAPub.ToSecp256k1PubKey()
-	//w.Pubkey = base64.RawURLEncoding.EncodeToString(pk.SerializeCompressed())
-
-	// encrypt new keys
-
 	for i, kInfo := range newKeys {
-		err := w.Keys[i].encrypt(kInfo)
-		if err != nil {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
 			return err
 		}
 	}
@@ -245,9 +256,7 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 		return errors.New("threshold too low")
 	}
 
-	// prepare old ids
 	var oldids tss.UnSortedPartyIDs
-	m := make(map[string]tssPartyUpdateOnly)
 	oldidmap := make(map[int]*tss.PartyID)
 	for n, kd := range oldKeys {
 		p := w.getKey(kd.Id)
@@ -264,7 +273,6 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 	curve := tss.Edwards()
 	oldtssctx := tss.NewPeerContext(oldsids)
 
-	// new keys
 	newWKeys := make([]*WalletKey, nk)
 
 	for i, kInfo := range newKeys {
@@ -281,12 +289,9 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 		if err != nil {
 			return err
 		}
-		eddata := eddsakeygen.NewLocalPartySaveData(len(newWKeys))
-		k.eddata = &eddata
 		newWKeys[i] = k
 	}
 
-	// perform final operation (actual key resharing)
 	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
 
 	var newids tss.UnSortedPartyIDs
@@ -303,115 +308,148 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 
 	log.Printf("producing eddsa reshare final; oldids = %v newids = %v", oldsids, newsids)
 
-	outCh := make(chan tss.Message, len(newWKeys)+len(oldKeys))
-	defer close(outCh)
-	var wg sync.WaitGroup
-	wg.Add(len(newWKeys))
+	hub := newTssHub()
 
-	for n, p := range newWKeys {
-		endCh := make(chan *eddsakeygen.LocalPartySaveData)
-		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, newidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
-		party := eddsaresharing.NewLocalParty(params, *p.eddata, outCh, endCh)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
-			defer wg.Done()
-			p.eddata = <-endCh
-		}(p)
+	for n := range newWKeys {
+		hub.addLocal(newidmap[n])
+	}
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
+		hub.addLocal(oldidmap[n])
 	}
 
-	wg.Add(len(oldKeys))
+	var remotes []*spotPeer
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type != "RemoteKey" {
+			continue
+		}
+		info := &walletSignReshareInit{
+			OldPeers:      oldsids,
+			NewPeers:      newsids,
+			Name:          oldidmap[n],
+			OldPartycount: len(oldKeys),
+			NewPartycount: len(newKeys),
+			OldThreshold:  w.Threshold,
+			NewThreshold:  w.Threshold,
+			Curve:         w.Curve,
+		}
+		spot, err := envSpot(ctx)
+		if err != nil {
+			return err
+		}
+		if err := waitOnlineSpot(spot); err != nil {
+			return err
+		}
+		log.Printf("initializing eddsa remote peer %s with info=%+v", p.Id.String(), info)
+		rp := &spotPeer{
+			hub:     hub,
+			partyId: oldidmap[n],
+			info:    info,
+			spot:    spot,
+			sid:     kd.Key,
+		}
+		hub.addRemote(rp)
+		remotes = append(remotes, rp)
+	}
+
+	for _, rp := range remotes {
+		if err := rp.Start(); err != nil {
+			return fmt.Errorf("failed to start remote peer %s: %w", rp.partyId.Id, err)
+		}
+	}
+
+	var wg sync.WaitGroup
+	var reshareErr error
+	var reshareErrOnce sync.Once
+
+	for n, p := range newWKeys {
+		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, newidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[newidmap[n].Id])
+		rs, err := eddsatss.NewResharing(ctx, params, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start eddsa reshare for new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rs *eddsatss.Resharing) {
+			defer wg.Done()
+			select {
+			case key := <-rs.Done:
+				p.eddata = key
+			case err := <-rs.Err:
+				log.Printf("eddsa reshare new-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rs)
+	}
 
 	for n, kd := range oldKeys {
 		p := w.getKey(kd.Id)
 		if p.Type == "RemoteKey" {
-			wg.Done()
-			info := &walletSignReshareInit{
-				OldPeers:      oldsids,
-				NewPeers:      newsids,
-				Name:          oldidmap[n],
-				OldPartycount: len(oldKeys),
-				NewPartycount: len(newKeys),
-				OldThreshold:  w.Threshold,
-				NewThreshold:  w.Threshold,
-				Curve:         w.Curve,
-			}
-			var spot *spotlib.Client
-			if env := wltintf.GetEnv(ctx); env != nil {
-				spot = env.Spot()
-			}
-			if spot == nil {
-				var err error
-				spot, err = spotlib.New()
-				if err != nil {
-					return err
-				}
-			}
-			if err := waitOnlineSpot(spot); err != nil {
-				return err
-			}
-			log.Printf("initializing eddsa remote peer %s with info=%+v", p.Id.String(), info)
-			m[p.Id.String()] = &spotParty{info: info, spot: spot, sid: kd.Key, parties: m}
 			continue
 		}
-		endCh := make(chan *eddsakeygen.LocalPartySaveData)
 		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, oldidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[oldidmap[n].Id])
 		eddata, err := p.decryptEdDSA(kd, keyResharePurpose)
 		if err != nil {
 			return err
 		}
-		party := eddsaresharing.NewLocalParty(params, *eddata, outCh, endCh)
-		m[p.Id.String()] = party
-		go func(p *WalletKey) {
+		rs, err := eddsatss.NewResharing(ctx, params, eddata)
+		if err != nil {
+			return fmt.Errorf("failed to start eddsa reshare for old party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(rs *eddsatss.Resharing) {
 			defer wg.Done()
-			p.eddata = <-endCh
-		}(p)
-	}
-
-	errCh := make(chan error, 2)
-	var wgStart sync.WaitGroup
-	wgStart.Add(len(m))
-
-	// start all
-	for _, p := range m {
-		go func(party tssPartyUpdateOnly) {
-			defer wgStart.Done()
-
-			err := party.Start()
-			if err != nil {
-				log.Printf("failed to start eddsa reshare party: %s", err)
-				select {
-				case errCh <- err:
-				default:
-				}
+			select {
+			case <-rs.Done:
+				// old committee: key is discarded
+			case err := <-rs.Err:
+				log.Printf("eddsa reshare old-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
 			}
-		}(p)
+		}(rs)
 	}
 
-	wgStart.Wait()
-
-	select {
-	case err := <-errCh:
-		return err
-	default:
-	}
-
-	// only route messages after everyone has started
-	go tssRouter(ctx, m, outCh)
-
-	// wait for all save data to fill
 	wg.Wait()
+
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for _, p := range newWKeys {
+		if p.eddata == nil {
+			return errors.New("eddsa reshare failed: missing new committee key data")
+		}
+	}
 
 	w.Keys = newWKeys
 
-	// encrypt new keys
 	for i, kInfo := range newKeys {
-		err := w.Keys[i].encrypt(kInfo)
-		if err != nil {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// envSpot returns the environment's Spot client, creating a fresh one if none
+// is available. Used for the reshare path where remote parties are reached
+// over Spot.
+func envSpot(ctx context.Context) (*spotlib.Client, error) {
+	if env := wltintf.GetEnv(ctx); env != nil {
+		if spot := env.Spot(); spot != nil {
+			return spot, nil
+		}
+	}
+	return spotlib.New()
 }
 
 func waitOnlineSpot(spot *spotlib.Client) error {
