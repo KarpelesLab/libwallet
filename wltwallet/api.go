@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"

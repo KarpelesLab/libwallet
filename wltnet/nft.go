@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltutil"
-	"github.com/KarpelesLab/ethrpc"
 )
 
 const (

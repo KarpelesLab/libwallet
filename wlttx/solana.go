@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/base58"
 )
 
 // Solana System Program ID (all ones in base58)
@@ -75,8 +75,8 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 
 	// Account indexes: [0 (from, writable+signer), 1 (to, writable)]
 	msg = append(msg, compactU16(2)...) // 2 accounts
-	msg = append(msg, 0)               // from
-	msg = append(msg, 1)               // to
+	msg = append(msg, 0)                // from
+	msg = append(msg, 1)                // to
 
 	// Instruction data
 	instrData := solanaTransferInstruction(lamports)

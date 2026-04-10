@@ -19,7 +19,7 @@ type solanaRPCContext struct {
 
 type solanaBalanceResult struct {
 	Context solanaRPCContext `json:"context"`
-	Value   uint64          `json:"value"`
+	Value   uint64           `json:"value"`
 }
 
 type solanaBlockhashResult struct {
@@ -54,7 +54,7 @@ type solanaTokenAccount struct {
 }
 
 type solanaTokenAccountsResult struct {
-	Context solanaRPCContext      `json:"context"`
+	Context solanaRPCContext     `json:"context"`
 	Value   []solanaTokenAccount `json:"value"`
 }
 

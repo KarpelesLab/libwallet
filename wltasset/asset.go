@@ -4,8 +4,8 @@ import (
 	"io/fs"
 	"time"
 
-	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltquote"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"

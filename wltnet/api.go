@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltintf"
-	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
-	"github.com/KarpelesLab/ethrpc"
 	"github.com/portablesql/psql"
 )
 

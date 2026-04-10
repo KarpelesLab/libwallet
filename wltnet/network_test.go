@@ -157,10 +157,10 @@ func TestAddEthereumChainParameterValidate(t *testing.T) {
 
 func TestAddEthereumChainParameterAsNetwork(t *testing.T) {
 	p := &AddEthereumChainParameter{
-		ChainId:        "0x89",
-		ChainName:      "Polygon",
-		NativeCurrency: NativeCurrencyObject{Symbol: "POL", Decimals: 18},
-		RPCUrls:        []string{"https://polygon-rpc.com"},
+		ChainId:           "0x89",
+		ChainName:         "Polygon",
+		NativeCurrency:    NativeCurrencyObject{Symbol: "POL", Decimals: 18},
+		RPCUrls:           []string{"https://polygon-rpc.com"},
 		BlockExplorerUrls: []string{"https://polygonscan.com"},
 	}
 	n := p.AsNetwork()

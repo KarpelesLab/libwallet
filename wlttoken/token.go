@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/KarpelesLab/libwallet/wltintf"
-	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/base58"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"

@@ -13,14 +13,14 @@ import (
 	"log"
 	"time"
 
+	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
-	"github.com/KarpelesLab/xuid"
 	ecdsakeygen "github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
 	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
+	"github.com/KarpelesLab/xuid"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/portablesql/psql"
 )

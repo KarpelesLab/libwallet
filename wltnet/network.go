@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltasset"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
+	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltutil"
-	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/xuid"
-	"github.com/KarpelesLab/ethrpc"
 	"github.com/portablesql/psql"
 )
 
@@ -36,16 +36,16 @@ type Network struct {
 	Id               *xuid.XUID     `sql:",key=PRIMARY"`
 	Type             string         `sql:",type=VARCHAR,size=255,key=UNIQUE:typeChain"` // evm | bitcoin
 	ChainId          string         `sql:",type=VARCHAR,size=255,key=UNIQUE:typeChain"` // for Type=evm, the chain id from chainlist. For Type=bitcoin, chain key is included here
-	Name             string         `sql:",type=VARCHAR,size=255"`         // name, automatic if empty
-	RPC              string         `sql:",type=TEXT"`                     // rpc url, automatic if empty
-	validRPC         ethrpc.Handler `sql:"-"`                              // valid RPC servers
-	CurrencySymbol   string         `sql:",type=VARCHAR,size=255"`        // currency symbol, automatic if empty
-	CurrencyDecimals int            `sql:",type=INT"`                     // decimals, automatic if zero
-	BlockExplorer    string         `sql:",type=TEXT"`                    // explorer, automatic if empty
-	TestNet          bool           `sql:",type=TINYINT,size=1"`          // is this a testnet?
-	Priority         int            `sql:",type=INT"`                     // display priority
-	Created          time.Time      `sql:",type=DATETIME"`                // Creation timestamp
-	Updated          time.Time      `sql:",type=DATETIME"`                // Last update timestamp
+	Name             string         `sql:",type=VARCHAR,size=255"`                      // name, automatic if empty
+	RPC              string         `sql:",type=TEXT"`                                  // rpc url, automatic if empty
+	validRPC         ethrpc.Handler `sql:"-"`                                           // valid RPC servers
+	CurrencySymbol   string         `sql:",type=VARCHAR,size=255"`                      // currency symbol, automatic if empty
+	CurrencyDecimals int            `sql:",type=INT"`                                   // decimals, automatic if zero
+	BlockExplorer    string         `sql:",type=TEXT"`                                  // explorer, automatic if empty
+	TestNet          bool           `sql:",type=TINYINT,size=1"`                        // is this a testnet?
+	Priority         int            `sql:",type=INT"`                                   // display priority
+	Created          time.Time      `sql:",type=DATETIME"`                              // Creation timestamp
+	Updated          time.Time      `sql:",type=DATETIME"`                              // Last update timestamp
 }
 
 type NativeCurrencyObject struct {

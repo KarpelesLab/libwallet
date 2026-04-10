@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/base58"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
@@ -15,12 +15,12 @@ import (
 )
 
 type contact struct {
-	TableName psql.Name `sql:"Contact"`
+	TableName psql.Name  `sql:"Contact"`
 	Id        *xuid.XUID `sql:",key=PRIMARY"`
 	Name      string     `sql:",type=VARCHAR,size=255"`
 	Address   string     `sql:",type=VARCHAR,size=255"`
 	Type      string     `sql:",type=VARCHAR,size=255"` // ethereum | bitcoin
-	Flags     []string   `sql:",type=JSON,format=json"`             // bitcoin | bitcoin-cash | litecoin | etc...
+	Flags     []string   `sql:",type=JSON,format=json"` // bitcoin | bitcoin-cash | litecoin | etc...
 	Memo      string     `sql:",type=TEXT"`
 	Created   time.Time  `sql:",type=DATETIME"`
 	Updated   time.Time  `sql:",type=DATETIME"`

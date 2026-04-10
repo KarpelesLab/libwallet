@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/base58"
+	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/libwallet/wltutil"
-	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/base58"
-	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
@@ -48,10 +48,10 @@ var (
 type request struct {
 	psql.Name   `sql:"Request"`
 	Id          *xuid.XUID         `sql:",key=PRIMARY"`
-	Type        string             `sql:",type=VARCHAR,size=255"`              // connect | sign | add_network | change_network | test
-	Host        string             `sql:",type=VARCHAR,size=255"`             // URL of requesting site
-	Status      string             `sql:",type=VARCHAR,size=255"`             // pending | accepted | rejected | timedout
-	Account     *string            `sql:",type=VARCHAR,size=255"`             // account used for signature, if specified
+	Type        string             `sql:",type=VARCHAR,size=255"`                   // connect | sign | add_network | change_network | test
+	Host        string             `sql:",type=VARCHAR,size=255"`                   // URL of requesting site
+	Status      string             `sql:",type=VARCHAR,size=255"`                   // pending | accepted | rejected | timedout
+	Account     *string            `sql:",type=VARCHAR,size=255"`                   // account used for signature, if specified
 	Transaction *wlttx.Transaction `json:",omitempty" sql:",type=JSON,format=json"` // if Type=sign, contains the transaction to be signed
 	Value       any                `json:",omitempty" sql:",type=JSON,format=json"` // generic value
 	Result      any                `json:",omitempty" sql:",type=JSON,format=json"` // generic response

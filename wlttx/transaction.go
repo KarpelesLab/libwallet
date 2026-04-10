@@ -12,16 +12,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltquote"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/xuid"
-	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/outscript"
+	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
 
@@ -32,10 +32,10 @@ type Transaction struct {
 	Asset        string                    `json:"asset" sql:",type=VARCHAR,size=255"`          // asset id (network id + "@" + NATIVE if native, or token id)
 	From         string                    `json:"from,omitempty" sql:",type=VARCHAR,size=255"` // from (account)
 	To           string                    `json:"to" sql:",type=VARCHAR,size=255"`
-	Gas          uint64                    `json:"gas" sql:",type=BIGINT"`                // gas amount
+	Gas          uint64                    `json:"gas" sql:",type=BIGINT"`                          // gas amount
 	GasPrice     string                    `json:"gasPrice,omitempty" sql:",type=VARCHAR,size=255"` // gas price
 	Fee          *wltobj.Amount            `json:"fee,omitempty" sql:",type=JSON,format=json"`
-	Nonce        uint64                    `json:"nonce" sql:",type=BIGINT"`            // eth only
+	Nonce        uint64                    `json:"nonce" sql:",type=BIGINT"`                      // eth only
 	Format       string                    `json:"format,omitempty" sql:",type=VARCHAR,size=255"` // transaction format, for ethereum: legacy or eip1559
 	Raw          []byte                    `json:"raw,omitempty" sql:",type=BLOB"`
 	Hash         string                    `json:"hash,omitempty" sql:",type=VARCHAR,size=255"`

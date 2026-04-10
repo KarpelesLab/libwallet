@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/spotlib"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsa/resharing"

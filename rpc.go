@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/KarpelesLab/libwallet/wltbase"
 	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/libwallet/wltbase"
 )
 
 // Methods exposed to the application to setup an environment

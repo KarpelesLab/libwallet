@@ -8,10 +8,10 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/KarpelesLab/libwallet/wltintf"
-	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/ethrpc"
+	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 )
@@ -116,8 +116,8 @@ func discoverSPLToken(net *wltnet.Network, address string) (*discoverResult, err
 			Data struct {
 				Parsed struct {
 					Info struct {
-						Decimals    int    `json:"decimals"`
-						Supply      string `json:"supply"`
+						Decimals      int    `json:"decimals"`
+						Supply        string `json:"supply"`
 						MintAuthority string `json:"mintAuthority"`
 					} `json:"info"`
 					Type string `json:"type"` // "mint"

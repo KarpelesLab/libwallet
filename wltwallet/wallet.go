@@ -13,11 +13,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltcrash"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/xuid"
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/tss-lib/v2/common"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsa/keygen"
@@ -25,6 +24,7 @@ import (
 	eddsakeygen "github.com/KarpelesLab/tss-lib/v2/eddsa/keygen"
 	eddsasigning "github.com/KarpelesLab/tss-lib/v2/eddsa/signing"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
+	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
 
@@ -33,15 +33,15 @@ import (
 type Wallet struct {
 	TableName psql.Name    `sql:"Wallet"`
 	Id        *xuid.XUID   `sql:",key=PRIMARY"`                  // Unique identifier for the wallet
-	Name      string        `sql:",type=VARCHAR,size=255"`        // User-friendly name
-	Curve     string        `sql:",type=VARCHAR,size=255"`        // Elliptic curve used (e.g., "secp256k1")
-	Threshold int           `sql:",type=INT"`                     // Minimum number of keys required for signing
-	Keys      []*WalletKey  `sql:"-"`                             // Associated keys (not stored in database)
-	Gen       uint64        `sql:",type=BIGINT,null=0,default=0"` // incremented on reshare
-	Pubkey    string        `sql:",type=TEXT"`                     // Base64 encoded public key
-	Chaincode string        `sql:",type=TEXT"`                     // Base64 encoded chaincode for HD wallet derivation
-	Created   time.Time     `sql:",type=DATETIME"`                // Creation timestamp
-	Modified  time.Time     `sql:",type=DATETIME"`                // Last modification timestamp
+	Name      string       `sql:",type=VARCHAR,size=255"`        // User-friendly name
+	Curve     string       `sql:",type=VARCHAR,size=255"`        // Elliptic curve used (e.g., "secp256k1")
+	Threshold int          `sql:",type=INT"`                     // Minimum number of keys required for signing
+	Keys      []*WalletKey `sql:"-"`                             // Associated keys (not stored in database)
+	Gen       uint64       `sql:",type=BIGINT,null=0,default=0"` // incremented on reshare
+	Pubkey    string       `sql:",type=TEXT"`                    // Base64 encoded public key
+	Chaincode string       `sql:",type=TEXT"`                    // Base64 encoded chaincode for HD wallet derivation
+	Created   time.Time    `sql:",type=DATETIME"`                // Creation timestamp
+	Modified  time.Time    `sql:",type=DATETIME"`                // Last modification timestamp
 }
 
 // save persists the wallet and all its keys to the database

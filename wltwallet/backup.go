@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/pjson"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/rest"

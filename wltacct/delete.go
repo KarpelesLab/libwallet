@@ -4,9 +4,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltwallet"
-	"github.com/KarpelesLab/emitter"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
