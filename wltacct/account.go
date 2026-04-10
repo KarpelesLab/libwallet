@@ -11,17 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/libwallet/wltwallet"
-	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/xuid"
-	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/outscript"
+	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/secp256k1/ecckd"
+	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
 
@@ -32,19 +32,20 @@ import (
 // Using hierarchical deterministic (HD) derivation to generate addresses for different chains
 type Account struct {
 	TableName psql.Name  `sql:"Account"`
-	Id        *xuid.XUID `sql:",key=PRIMARY"`           // Unique identifier for the account
-	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"` // Parent wallet ID
-	Name      string     `sql:",type=VARCHAR,size=255"` // User-friendly name
-	Index     int        `sql:",type=INT"`              // Account index, starts at zero
-	Type      string     `sql:",type=VARCHAR,size=255"` // "ethereum", "bitcoin", etc *deprecated* we don't care about the account type, only the wallet curve
-	Path      string     `sql:",type=VARCHAR,size=255"` // Derivation path, e.g. m/44/60/0/0 (note: no hardened keys since we only have public keys)
-	Address   string     `sql:",type=VARCHAR,size=255"` // Blockchain address in the appropriate format
-	URI       string     `sql:",type=TEXT"`              // URI for sending to this account (e.g. ethereum:0x...)
-	Pubkey    string     `sql:",type=TEXT"`              // Base64 encoded public key
-	Chaincode string     `sql:",type=TEXT"`              // Base64 encoded chaincode for HD derivation
+	Id        *xuid.XUID `sql:",key=PRIMARY"`                            // Unique identifier for the account
+	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"`                  // Parent wallet ID
+	Name      string     `sql:",type=VARCHAR,size=255"`                  // User-friendly name
+	Index     int        `sql:",type=INT"`                               // Account index, starts at zero
+	Type      string     `sql:",type=VARCHAR,size=255"`                  // "ethereum", "bitcoin", etc *deprecated* we don't care about the account type, only the wallet curve
+	Curve     string     `sql:",type=VARCHAR,size=255"`                  // "secp256k1" or "ed25519"
+	Path      string     `sql:",type=VARCHAR,size=255"`                  // Derivation path, e.g. m/44/60/0/0 (note: no hardened keys since we only have public keys)
+	Address   string     `sql:",type=VARCHAR,size=255"`                  // Blockchain address in the appropriate format
+	URI       string     `sql:",type=TEXT"`                              // URI for sending to this account (e.g. ethereum:0x...)
+	Pubkey    string     `sql:",type=TEXT"`                              // Base64 encoded public key
+	Chaincode string     `sql:",type=TEXT"`                              // Base64 encoded chaincode for HD derivation
 	IL        *big.Int   `json:"IL,string" sql:",type=JSON,format=json"` // Intermediate value used in derivation
-	Created   time.Time  `sql:",type=DATETIME"`               // Creation timestamp
-	Updated   time.Time  `sql:",type=DATETIME"`               // Last update timestamp
+	Created   time.Time  `sql:",type=DATETIME"`                          // Creation timestamp
+	Updated   time.Time  `sql:",type=DATETIME"`                          // Last update timestamp
 }
 
 // save persists the account to the database
@@ -62,13 +63,21 @@ func (a *Account) save(e wltintf.Env) error {
 // Handles different network types (evm, bitcoin) and formats addresses accordingly
 // Returns any error encountered during the operation
 func (a *Account) check(e wltintf.Env) error {
-	// Ensure chaincode is present, get from wallet if missing
-	if a.Chaincode == "" {
+	// Ensure chaincode and curve are present, get from wallet if missing
+	if a.Chaincode == "" || a.Curve == "" {
 		wlt, err := a.getWallet(e)
 		if err != nil {
 			return err
 		}
-		a.Chaincode = wlt.Chaincode
+		if a.Chaincode == "" {
+			a.Chaincode = wlt.Chaincode
+		}
+		if a.Curve == "" {
+			a.Curve = wlt.Curve
+			if a.Curve == "" {
+				a.Curve = "secp256k1"
+			}
+		}
 		a.save(e)
 	}
 
@@ -80,6 +89,11 @@ func (a *Account) check(e wltintf.Env) error {
 
 	switch net.Type {
 	case "evm":
+		if a.Curve == "ed25519" {
+			a.Address = "N/A"
+			a.URI = ""
+			return nil
+		}
 		// Format Ethereum address
 		out, err := outscript.New(a.PublicKey()).Out("eth")
 		if err != nil {
@@ -93,6 +107,11 @@ func (a *Account) check(e wltintf.Env) error {
 		a.URI = "ethereum:" + a.Address
 		return nil
 	case "bitcoin":
+		if a.Curve == "ed25519" {
+			a.Address = "N/A"
+			a.URI = ""
+			return nil
+		}
 		// For Bitcoin-based chains, derive a child key at m/0
 		pub, err := a.DerivePublic("m/0")
 		if err != nil {
@@ -187,6 +206,7 @@ func (a *Account) init(wallet *wltwallet.Wallet) error {
 
 	if wallet.Curve == "ed25519" {
 		// For Ed25519 wallets (Solana), use the master public key directly
+		a.Curve = "ed25519"
 		a.Path = "m/44/501/0/" + strconv.Itoa(a.Index)
 		a.Pubkey = wallet.Pubkey
 		a.IL = nil
@@ -201,6 +221,10 @@ func (a *Account) init(wallet *wltwallet.Wallet) error {
 	}
 
 	// Set up derivation path for Ethereum (hardcoded for now)
+	a.Curve = wallet.Curve
+	if a.Curve == "" {
+		a.Curve = "secp256k1"
+	}
 	a.Path = "m/44/60/0/" + strconv.Itoa(a.Index)
 
 	// Get the wallet's master public key
