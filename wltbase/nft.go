@@ -50,9 +50,21 @@ func apiListNft(ctx *apirouter.Context) (any, error) {
 		}
 	}
 
-	nfts, err := n.Nfts(e, acct)
-	if err != nil {
+	// Account fetch formats the address for whatever was CurrentNetwork at
+	// load time; re-format it for the network the caller actually asked for.
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
 		return nil, err
+	}
+
+	var nfts *[]wltnft.Nft
+	// Skip NFT lookup when the account has no valid address on this network
+	// (e.g. an ed25519 wallet on EVM): there is nothing to query.
+	if acct.GetAddress() != "N/A" {
+		var err error
+		nfts, err = n.Nfts(e, acct)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	res := map[string]any{

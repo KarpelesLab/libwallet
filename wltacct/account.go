@@ -87,6 +87,15 @@ func (a *Account) check(e wltintf.Env) error {
 		return err
 	}
 
+	return a.UpdateAddressForNetwork(net)
+}
+
+// UpdateAddressForNetwork updates a.Address and a.URI to match the format
+// expected by the given network. For account/network combinations that have
+// no valid address (e.g. an ed25519 wallet on an EVM network) the address is
+// set to "N/A". The account's chaincode and curve must already be populated;
+// callers that load via check() are guaranteed to satisfy this.
+func (a *Account) UpdateAddressForNetwork(net *wltnet.Network) error {
 	switch net.Type {
 	case "evm":
 		if a.Curve == "ed25519" {

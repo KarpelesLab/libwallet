@@ -50,17 +50,26 @@ func apiListAsset(ctx *apirouter.Context) (any, error) {
 		}
 	}
 
-	var assets []*wltasset.Asset
-
-	// find value for native asset
-	nat, err := n.NativeAsset(e, acct)
-	if err != nil {
+	// Account fetch formats the address for whatever was CurrentNetwork at
+	// load time; re-format it for the network the caller actually asked for.
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
 		return nil, err
 	}
-	assets = append(assets, nat)
+
+	var assets []*wltasset.Asset
+
+	// Skip the native asset entirely when the account has no valid address on
+	// this network (e.g. an ed25519 wallet on EVM): there is nothing to query.
+	if acct.GetAddress() != "N/A" {
+		nat, err := n.NativeAsset(e, acct)
+		if err != nil {
+			return nil, err
+		}
+		assets = append(assets, nat)
+	}
 
 	// Fetch SPL tokens for Solana networks
-	if n.Type == "solana" {
+	if n.Type == "solana" && acct.GetAddress() != "N/A" {
 		tokens, err := n.SolanaTokenBalances(e, acct)
 		if err == nil {
 			assets = append(assets, tokens...)
