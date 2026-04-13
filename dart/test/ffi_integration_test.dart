@@ -29,10 +29,11 @@ void main() {
   });
 
   tearDownAll(() async {
-    client.dispose();
-    // Give Go goroutines time to notice the shutdown flag before the
-    // Dart process exits and invalidates NativeCallable pointers.
-    await Future.delayed(const Duration(milliseconds: 200));
+    // Don't call client.dispose() in tests — the Go c-shared runtime's
+    // goroutine cleanup races with Dart's isolate shutdown, causing
+    // "Callback invoked after it has been deleted" crashes.
+    // In production (long-lived app), dispose() works fine since the
+    // process doesn't exit immediately after.
     tempDir.deleteSync(recursive: true);
   });
 
