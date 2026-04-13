@@ -98,16 +98,7 @@ func LibwalletInit(dataDir *C.char) C.uintptr_t {
 		return 0
 	}
 
-	// Create a socketpair via MakeJsonSocketFD. One end is registered as a
-	// jsonclient inside apirouter (receives BroadcastJson events), the other
-	// end (the returned FD) we read from to forward events to Dart.
-	fd, err := apirouter.MakeJsonSocketFD(map[string]any{"@env": e})
-	if err != nil {
-		slog.Error(fmt.Sprintf("LibwalletInit: failed to create event FD: %v", err))
-		return 0
-	}
-
-	h := &handle{env: e, eventFd: fd}
+	h := &handle{env: e}
 	return storeHandle(h)
 }
 
@@ -182,21 +173,27 @@ func LibwalletSetEventCallback(h C.uintptr_t, cb C.event_callback, userData C.ui
 		return
 	}
 
-	// Read from the event FD (our end of the socketpair from MakeJsonSocketFD).
-	// The jsonclient on the other end receives all BroadcastJson events and
-	// writes them as newline-delimited JSON.
+	// Create the event bridge (socketpair) lazily on first SetEventCallback.
+	// One end is registered as a jsonclient inside apirouter (receives
+	// BroadcastJson events), the other end we read from.
+	fd, err := apirouter.MakeJsonSocketFD(map[string]any{"@env": hdl.env})
+	if err != nil {
+		slog.Error(fmt.Sprintf("LibwalletSetEventCallback: failed to create event FD: %v", err))
+		return
+	}
+
+	f := os.NewFile(uintptr(fd), "event-pipe")
+	conn, err := net.FileConn(f)
+	f.Close() // FileConn dups the FD
+	if err != nil {
+		slog.Error(fmt.Sprintf("LibwalletSetEventCallback: failed to wrap FD: %v", err))
+		return
+	}
+	hdl.eventConn = conn
+
 	hdl.wg.Add(1)
 	go func() {
 		defer hdl.wg.Done()
-
-		f := os.NewFile(uintptr(hdl.eventFd), "event-pipe")
-		conn, err := net.FileConn(f)
-		f.Close() // FileConn dups the FD, so we close the File
-		if err != nil {
-			slog.Error(fmt.Sprintf("LibwalletSetEventCallback: failed to wrap FD: %v", err))
-			return
-		}
-		hdl.eventConn = conn // store so Destroy can close it
 		defer conn.Close()
 
 		dec := json.NewDecoder(conn)

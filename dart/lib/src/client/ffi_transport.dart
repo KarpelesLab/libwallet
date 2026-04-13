@@ -71,6 +71,9 @@ class FfiTransport implements Transport {
 
   bool _disposed = false;
 
+  late final _LibwalletSetEventCallbackDart _setEventCallbackFn;
+  bool _eventsInitialized = false;
+
   FfiTransport._({
     required int handle,
     required _LibwalletRequestDart requestFn,
@@ -80,7 +83,8 @@ class FfiTransport implements Transport {
   })  : _handle = handle,
         _requestFn = requestFn,
         _freeFn = freeFn,
-        _destroyFn = destroyFn {
+        _destroyFn = destroyFn,
+        _setEventCallbackFn = setEventCallbackFn {
     // Create NativeCallable.listener for response callback.
     // This is safe to call from any Go goroutine.
     _responseCallable =
@@ -88,9 +92,13 @@ class FfiTransport implements Transport {
 
     // Create NativeCallable.listener for event callback.
     _eventCallable = NativeCallable<_EventCallbackC>.listener(_onEvent);
+  }
 
-    // Register the event callback with the Go library
-    setEventCallbackFn(
+  /// Initialize the event bridge. Called lazily on first access to [events].
+  void _initEvents() {
+    if (_eventsInitialized || _disposed) return;
+    _eventsInitialized = true;
+    _setEventCallbackFn(
         _handle, _eventCallable.nativeFunction, 0);
   }
 
@@ -133,7 +141,10 @@ class FfiTransport implements Transport {
   }
 
   @override
-  Stream<LibwalletEvent> get events => _eventController.stream;
+  Stream<LibwalletEvent> get events {
+    _initEvents();
+    return _eventController.stream;
+  }
 
   @override
   Stream<LibwalletResponse> send(String path, String verb,
