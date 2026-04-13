@@ -1,6 +1,11 @@
 name: libwallet
-description: Pure Dart client for the libwallet cryptocurrency wallet library
+description: >-
+  Dart client for libwallet — a multi-chain cryptocurrency wallet library
+  with TSS (Threshold Signature Scheme) key management. Supports EVM chains,
+  Bitcoin, and Solana via direct FFI to the Go library.
 version: 0.1.0
+repository: https://github.com/KarpelesLab/libwallet
+issue_tracker: https://github.com/KarpelesLab/libwallet/issues
 
 environment:
   sdk: '>=3.1.0 <4.0.0'
