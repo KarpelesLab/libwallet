@@ -33,9 +33,17 @@ jobs:
         working-directory: dart
         run: dart analyze lib test hook
 
-      - name: Run Dart tests
+      - name: Run Dart unit tests
         working-directory: dart
-        run: dart test
+        run: dart test test/amount_test.dart test/models_test.dart test/request_test.dart test/response_test.dart
+
+      - name: Run socket integration tests
+        working-directory: dart
+        run: dart test test/integration_test.dart
+
+      - name: Run FFI integration tests
+        working-directory: dart
+        run: dart test test/ffi_integration_test.dart
 
   # iOS simulator integration tests (FFI via c-archive)
   test-ios:
