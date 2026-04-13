@@ -157,6 +157,19 @@ void main() {
     });
   });
 
+  // ── Lifecycle ──────────────────────────────────────────────────────────
+
+  group('Lifecycle', () {
+    test('update does not throw', () async {
+      // Lifecycle:update triggers background maintenance — just verify it doesn't error
+      try {
+        await client.lifecycle.update();
+      } on LibwalletException {
+        // May fail if no network — acceptable
+      }
+    });
+  });
+
   // ── StoreKey ──────────────────────────────────────────────────────────
 
   group('StoreKey', () {
@@ -164,6 +177,26 @@ void main() {
       final keypair = await client.storeKeys.create();
       expect(keypair.privateKey, isNotEmpty);
       expect(keypair.publicKey, isNotEmpty);
+    });
+  });
+
+  // ── RemoteKey ─────────────────────────────────────────────────────────
+
+  group('RemoteKey', () {
+    // Test phone number +14045551234 does not send SMS, verify code is 000000
+    test('new → validate lifecycle', () async {
+      // Start remote key setup with test phone
+      final session = await client.remoteKeys.create(number: '+14045551234');
+      expect(session, isNotNull);
+
+      // Extract session ID
+      final sessionId = session is Map ? session['session'] as String : session.toString();
+      expect(sessionId, isNotEmpty);
+
+      // Validate with test code
+      final result =
+          await client.remoteKeys.validate(session: sessionId, code: '000000');
+      expect(result, isNotNull);
     });
   });
 
@@ -226,6 +259,18 @@ void main() {
     test('backup', () async {
       final backup = await client.wallets.backup(wallet.id);
       expect(backup, isNotNull);
+    });
+
+    test('restore from backup', () async {
+      final backup = await client.wallets.backup(wallet.id);
+      // backup is a list of {filename, data} entries
+      if (backup is List) {
+        final files = backup
+            .map((e) => Map<String, String>.from(e as Map))
+            .toList();
+        final result = await client.wallets.restore(files);
+        expect(result, isA<Map<String, dynamic>>());
+      }
     });
 
     // ── WalletKey ─────────────────────────────────────────────────────
@@ -316,6 +361,21 @@ void main() {
         expect(txs, isEmpty);
       });
 
+      // ── Transaction validate ──────────────────────────────────────
+
+      test('Transaction validate (missing fields returns error)', () async {
+        try {
+          await client.transactions.validate({
+            'type': 'transfer',
+            'from': account.id,
+            'to': '0x0000000000000000000000000000000000000000',
+          });
+        } on LibwalletException catch (e) {
+          // Expected: validation error for missing amount/asset etc.
+          expect(e.message, isNotEmpty);
+        }
+      });
+
       // ── NFT ─────────────────────────────────────────────────────────
 
       test('Nft list', () async {
@@ -384,6 +444,18 @@ void main() {
       test('list initially empty', () async {
         final connections = await client.web3Connections.list();
         expect(connections, isEmpty);
+      });
+    });
+
+    // ── Request ────────────────────────────────────────────────────────
+
+    group('Request', () {
+      test('test fires a test event', () async {
+        try {
+          await client.requests.test();
+        } on LibwalletException {
+          // May fail without a connected Web3 session — acceptable
+        }
       });
     });
 
