@@ -1,6 +1,5 @@
 platform :ios, '13.0'
 
-# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
@@ -31,10 +30,8 @@ target 'Runner' do
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-  # Link the gomobile-built Libwallet framework.
-  # CI builds it to ios/Libwallet.xcframework before running tests.
-  xcframework_path = File.join(__dir__, 'Libwallet.xcframework')
-  if File.exist?(xcframework_path)
+  # Link the c-archive static library (built by CI before running tests)
+  if File.exist?(File.join(__dir__, 'liblibwallet.a'))
     pod 'Libwallet', :path => __dir__
   end
 

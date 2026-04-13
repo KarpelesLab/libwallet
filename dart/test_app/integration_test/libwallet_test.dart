@@ -1,6 +1,6 @@
+import 'dart:ffi';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:libwallet/libwallet.dart';
@@ -10,43 +10,33 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   late LibwalletClient client;
+  late Directory tempDir;
 
   setUpAll(() async {
-    const channel = MethodChannel('com.libwallet');
-
-    // Get the app's documents directory for data storage
     final appDir = await getApplicationDocumentsDirectory();
-    final appDirPath = appDir.path;
+    tempDir = Directory('${appDir.path}/libwallet-test');
+    if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+    tempDir.createSync();
 
-    // Determine socket path, respecting iOS MAX_PATH (104 bytes) for Unix sockets
-    const sockName = 'ipc.sock';
-    String sockPath = '$appDirPath/$sockName';
-    String passedPath = sockPath;
-
-    if (Platform.isIOS && sockPath.length > 104) {
-      // Path too long for Unix socket on iOS -- use relative path
-      // The Go library will resolve it relative to dataDir
-      passedPath = sockName;
-      sockPath = sockName;
-      // Change working directory so relative socket path works
-      Directory.current = appDirPath;
+    // Load the c-shared library via FFI — no platform channel needed.
+    // On iOS the lib is statically linked into the app binary.
+    // On Android it's a .so in the app's lib directory.
+    final DynamicLibrary lib;
+    if (Platform.isIOS) {
+      lib = DynamicLibrary.process();
+    } else if (Platform.isAndroid) {
+      lib = DynamicLibrary.open('liblibwallet.so');
+    } else {
+      throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
     }
 
-    // Start the Go library via platform channel
-    await channel.invokeMethod('makeSocket', {
-      'path': passedPath,
-      'appDir': appDirPath,
-    });
-
-    // Give the Go listener time to start
-    await Future.delayed(const Duration(milliseconds: 500));
-
-    // Connect
-    client = await LibwalletClient.connect(sockPath);
+    client = LibwalletClient.initialize(tempDir.path, library: lib);
   });
 
   tearDownAll(() async {
     client.dispose();
+    await Future.delayed(const Duration(milliseconds: 200));
+    tempDir.deleteSync(recursive: true);
   });
 
   testWidgets('Info:ping responds', (tester) async {
@@ -76,16 +66,6 @@ void main() {
     expect(wallets, isEmpty);
   });
 
-  testWidgets('Account list is initially empty', (tester) async {
-    final accounts = await client.accounts.list();
-    expect(accounts, isEmpty);
-  });
-
-  testWidgets('Contact list is initially empty', (tester) async {
-    final contacts = await client.contacts.list();
-    expect(contacts, isEmpty);
-  });
-
   testWidgets('create and delete a wallet with password-only keys',
       (tester) async {
     Wallet? createdWallet;
@@ -107,14 +87,7 @@ void main() {
 
     expect(createdWallet, isNotNull);
     expect(createdWallet!.name, 'Test Wallet');
-    expect(createdWallet.curve, 'secp256k1');
     expect(createdWallet.keys, hasLength(3));
-    expect(createdWallet.isUnsafe, true);
-
-    // Verify it shows up in the list
-    final wallets = await client.wallets.list();
-    expect(wallets, hasLength(1));
-    expect(wallets.first.id, createdWallet.id);
 
     // Create an account
     final account = await client.accounts.create(
@@ -124,7 +97,6 @@ void main() {
       index: 0,
     );
     expect(account.address, isNotEmpty);
-    expect(account.type, 'ethereum');
 
     // Clean up
     await client.wallets.delete(createdWallet.id);

@@ -37,7 +37,7 @@ jobs:
         working-directory: dart
         run: dart test
 
-  # iOS simulator integration tests
+  # iOS simulator integration tests (FFI via c-archive)
   test-ios:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -48,19 +48,14 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Install gomobile
+      - name: Build c-archive for iOS simulator
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go get golang.org/x/mobile/bind
-          gomobile init
-
-      - name: Build xcframework for iOS simulator
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          gomobile bind -v --target iossimulator \
-            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
-            -o dart/test_app/ios/Libwallet.xcframework .
+          # Build static library for iOS simulator (arm64 for Apple Silicon runners)
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+            SDK=iphonesimulator \
+            CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
+            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
+            go build -buildmode=c-archive -o dart/test_app/ios/liblibwallet.a ./cshared/
 
       - uses: subosito/flutter-action@v2
         with:
@@ -68,7 +63,6 @@ jobs:
 
       - name: Boot iOS simulator
         run: |
-          # List available simulators and pick an iPhone
           DEVICE_ID=$(xcrun simctl list devices available -j | \
             python3 -c "
           import json, sys
@@ -90,9 +84,9 @@ jobs:
 
       - name: Run iOS integration tests
         working-directory: dart/test_app
-        run: flutter drive --driver=test_driver/integration_test.dart --target=integration_test/libwallet_test.dart -d "$DEVICE_ID"
+        run: flutter test integration_test/libwallet_test.dart -d "$DEVICE_ID"
 
-  # Android emulator integration tests
+  # Android emulator integration tests (FFI via c-shared)
   test-android:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -103,25 +97,21 @@ jobs:
         with:
           go-version: "1.26"
 
-      - name: Install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go get golang.org/x/mobile/bind
-          gomobile init
-
       - name: Install Android NDK
         run: |
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Build Android AAR
+      - name: Build c-shared library for Android x86_64
         run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          gomobile bind -v -target android -androidapi 21 \
-            -javapkg com.karpeleslabs.libwallet \
-            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
-            -o dart/test_app/android/app/libs/libwallet.aar .
+          # The emulator is x86_64, so we only need that ABI
+          NDK=$ANDROID_HOME/ndk/27.2.12479018
+          export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
+          export CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
+          CGO_ENABLED=1 GOOS=android GOARCH=amd64 \
+            go build -buildmode=c-shared \
+            -o dart/test_app/android/app/src/main/jniLibs/x86_64/liblibwallet.so \
+            ./cshared/
 
       - uses: actions/setup-java@v4
         with:
@@ -151,4 +141,4 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: cd dart/test_app && flutter drive --driver=test_driver/integration_test.dart --target=integration_test/libwallet_test.dart -d emulator-5554
+          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart -d emulator-5554

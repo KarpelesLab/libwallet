@@ -45,5 +45,6 @@ app.*.map.json
 /android/app/release
 
 # Built native libraries (CI builds these before tests)
-ios/Libwallet.xcframework/
-android/app/libs/*.aar
+ios/liblibwallet.a
+ios/liblibwallet.h
+android/app/src/main/jniLibs/
