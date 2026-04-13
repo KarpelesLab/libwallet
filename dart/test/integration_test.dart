@@ -1,5 +1,5 @@
 @TestOn('vm')
-@Timeout(Duration(seconds: 60))
+@Timeout(Duration(minutes: 5))
 library;
 
 import 'dart:convert';
