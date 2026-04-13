@@ -151,4 +151,4 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart --timeout 120s
+          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart -d emulator-5554

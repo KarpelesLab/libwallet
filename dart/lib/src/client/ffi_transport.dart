@@ -182,18 +182,25 @@ class FfiTransport implements Transport {
     _pending.clear();
     _eventController.close();
 
-    // Destroy the Go handle (closes event bridge)
+    // Destroy the Go handle (closes event bridge FD, which will cause
+    // the event reader goroutine to exit and potentially fire one last
+    // callback). We must keep NativeCallable alive until Go is done.
     _destroyFn(_handle);
 
-    // Close the NativeCallable instances
-    _responseCallable.close();
-    _eventCallable.close();
+    // Defer closing NativeCallable instances to give Go goroutines time
+    // to finish any in-flight callbacks before we invalidate the pointers.
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _responseCallable.close();
+      _eventCallable.close();
+    });
   }
 
   /// Response callback — called from Go goroutine via NativeCallable.listener
   void _onResponse(Pointer<Utf8> jsonPtr, int userData) {
     final jsonStr = jsonPtr.toDartString();
     _freeFn(jsonPtr); // Free the C string allocated by Go
+
+    if (_disposed) return; // Ignore callbacks after dispose
 
     final json = jsonDecode(jsonStr) as Map<String, dynamic>;
     final resp = LibwalletResponse.fromJson(json);
@@ -214,6 +221,8 @@ class FfiTransport implements Transport {
   void _onEvent(Pointer<Utf8> jsonPtr, int userData) {
     final jsonStr = jsonPtr.toDartString();
     _freeFn(jsonPtr);
+
+    if (_disposed) return; // Ignore callbacks after dispose
 
     final json = jsonDecode(jsonStr) as Map<String, dynamic>;
 
