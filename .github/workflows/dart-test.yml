@@ -22,6 +22,9 @@ jobs:
       - name: Build test server
         run: go build -o dart/testserver/testserver ./dart/testserver/
 
+      - name: Build c-shared library for FFI tests
+        run: CGO_ENABLED=1 go build -buildmode=c-shared -o dart/testserver/liblibwallet.dylib ./cshared/
+
       - name: Install Dart dependencies
         working-directory: dart
         run: dart pub get
