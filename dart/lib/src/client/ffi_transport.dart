@@ -182,17 +182,17 @@ class FfiTransport implements Transport {
     _pending.clear();
     _eventController.close();
 
-    // Destroy the Go handle (closes event bridge FD, which will cause
-    // the event reader goroutine to exit and potentially fire one last
-    // callback). We must keep NativeCallable alive until Go is done.
+    // Destroy the Go handle (closes event bridge FD, which causes the
+    // event reader goroutine to exit). It may fire one last callback,
+    // which is safely ignored by the _disposed guard above.
     _destroyFn(_handle);
 
-    // Defer closing NativeCallable instances to give Go goroutines time
-    // to finish any in-flight callbacks before we invalidate the pointers.
-    Future.delayed(const Duration(milliseconds: 500), () {
-      _responseCallable.close();
-      _eventCallable.close();
-    });
+    // Do NOT close NativeCallable instances here. Go goroutines may still
+    // be delivering in-flight callbacks on native threads. Closing the
+    // NativeCallable while a native thread is invoking it causes a VM crash
+    // ("Callback invoked after it has been deleted"). Instead, we rely on
+    // the _disposed guard to ignore late callbacks, and let the Dart VM
+    // clean up the NativeCallable instances on isolate shutdown.
   }
 
   /// Response callback — called from Go goroutine via NativeCallable.listener
