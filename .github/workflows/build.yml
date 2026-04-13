@@ -35,6 +35,16 @@ jobs:
             -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
             -o libwallet.aar .
 
+      - name: Build c-shared libraries for Android (Dart FFI)
+        run: |
+          NDK=$ANDROID_HOME/ndk/27.2.12479018
+          for arch_go_abi in "arm64:aarch64-linux-android21:android-arm64" "amd64:x86_64-linux-android21:android-x64" "arm:armv7a-linux-androideabi21:android-arm"; do
+            IFS=: read -r GOARCH CC_PREFIX NAME <<< "$arch_go_abi"
+            CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${CC_PREFIX}-clang"
+            CGO_ENABLED=1 GOOS=android GOARCH=$GOARCH CC=$CC \
+              go build -buildmode=c-shared -o "liblibwallet-${NAME}.so" ./cshared/
+          done
+
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -42,6 +52,12 @@ jobs:
           path: |
             libwallet.aar
             libwallet-sources.aar
+
+      - name: Upload Dart FFI artifacts (Android)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-android
+          path: liblibwallet-android-*.so
 
   build-ios:
     runs-on: macos-latest
@@ -66,11 +82,51 @@ jobs:
             -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
             -o libwallet.xcframework .
 
+      - name: Build c-archive for iOS (Dart FFI)
+        run: |
+          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
+            CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
+            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
+            go build -buildmode=c-archive -o liblibwallet-ios-arm64.a ./cshared/
+
+      - name: Build c-shared for macOS (Dart FFI)
+        run: |
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            go build -buildmode=c-shared -o liblibwallet-macos-arm64.dylib ./cshared/
+          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+            go build -buildmode=c-shared -o liblibwallet-macos-x64.dylib ./cshared/
+
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v7
         with:
           name: ios
           path: libwallet.xcframework
+
+      - name: Upload Dart FFI artifacts (iOS + macOS)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-apple
+          path: liblibwallet-*
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Build c-shared for Linux (Dart FFI)
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
+            go build -buildmode=c-shared -o liblibwallet-linux-x64.so ./cshared/
+
+      - name: Upload Dart FFI artifacts (Linux)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-linux
+          path: liblibwallet-linux-*.so
 
   package:
     runs-on: ubuntu-latest
@@ -110,7 +166,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [package]
+    needs: [package, build-linux]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
@@ -120,8 +176,14 @@ jobs:
         with:
           name: release-tarball
 
+      - name: Download Dart FFI artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: dart-*
+          merge-multiple: true
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes libwallet-*.tar.gz
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes libwallet-*.tar.gz liblibwallet-*
