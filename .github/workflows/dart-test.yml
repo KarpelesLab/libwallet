@@ -1,0 +1,149 @@
+name: Dart Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  # Unit tests + host integration tests (Go test server + dart test)
+  test-host:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Build test server
+        run: go build -o dart/testserver/testserver ./dart/testserver/
+
+      - name: Install Dart dependencies
+        working-directory: dart
+        run: dart pub get
+
+      - name: Run Dart analysis
+        working-directory: dart
+        run: dart analyze
+
+      - name: Run Dart tests
+        working-directory: dart
+        run: dart test
+
+  # iOS simulator integration tests
+  test-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go get golang.org/x/mobile/bind
+          gomobile init
+
+      - name: Build xcframework for iOS simulator
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          gomobile bind -v --target iossimulator \
+            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -o dart/test_app/ios/Libwallet.xcframework .
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Boot iOS simulator
+        run: |
+          # List available simulators and pick an iPhone
+          DEVICE_ID=$(xcrun simctl list devices available -j | \
+            python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          for runtime, devices in data['devices'].items():
+              if 'iOS' in runtime:
+                  for d in devices:
+                      if 'iPhone' in d['name'] and d['isAvailable']:
+                          print(d['udid'])
+                          sys.exit(0)
+          sys.exit(1)
+          ")
+          echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$DEVICE_ID"
+
+      - name: Install Flutter dependencies
+        working-directory: dart/test_app
+        run: flutter pub get
+
+      - name: Run iOS integration tests
+        working-directory: dart/test_app
+        run: flutter test integration_test/libwallet_test.dart -d "$DEVICE_ID" --timeout 120s
+
+  # Android emulator integration tests
+  test-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go get golang.org/x/mobile/bind
+          gomobile init
+
+      - name: Install Android NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Build Android AAR
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          gomobile bind -v -target android -androidapi 21 \
+            -javapkg com.karpeleslabs.libwallet \
+            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -o dart/test_app/android/app/libs/libwallet.aar .
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Install Flutter dependencies
+        working-directory: dart/test_app
+        run: flutter pub get
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android integration tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart --timeout 120s

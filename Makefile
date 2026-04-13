@@ -17,7 +17,7 @@ endif
 
 GOFLAGS=-ldflags=all="-X main.dateTag=$(DATE_TAG) -X main.gitTag=$(GIT_TAG)"
 
-.PHONY: ios android dist test deps
+.PHONY: ios android dist test deps dart-native dart-native-macos dart-native-linux
 
 all:
 	$(GOPATH)/bin/goimports -w -l .
@@ -60,6 +60,23 @@ else
 	PATH="$(GOPATH)/bin:$$PATH" gomobile bind -v -target android -androidapi 21 -javapkg com.karpeleslabs.libwallet -o "$@" $(GOFLAGS)
 endif
 
+# Build c-shared library for Dart FFI (current platform)
+dart-native:
+	CGO_ENABLED=1 $(GOROOT)/bin/go build -buildmode=c-shared $(GOFLAGS) -o dart/testserver/liblibwallet.dylib ./cshared/
+
+# Build c-shared libraries for all macOS architectures
+dart-native-macos:
+	mkdir -p dart/native/macos-arm64 dart/native/macos-x64
+	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 $(GOROOT)/bin/go build -buildmode=c-shared $(GOFLAGS) -o dart/native/macos-arm64/liblibwallet.dylib ./cshared/
+	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 $(GOROOT)/bin/go build -buildmode=c-shared $(GOFLAGS) -o dart/native/macos-x64/liblibwallet.dylib ./cshared/
+
+# Build c-shared libraries for all Linux architectures
+dart-native-linux:
+	mkdir -p dart/native/linux-arm64 dart/native/linux-x64
+	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 $(GOROOT)/bin/go build -buildmode=c-shared $(GOFLAGS) -o dart/native/linux-arm64/liblibwallet.so ./cshared/
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 $(GOROOT)/bin/go build -buildmode=c-shared $(GOFLAGS) -o dart/native/linux-x64/liblibwallet.so ./cshared/
+
 clean:
 	PATH="$(GOPATH)/bin:$$PATH" gomobile clean
 	$(RM) -r dist libwallet.xcframework libwallet.aar libwallet-sources.jar libwallet-*.tar.gz
+	$(RM) -r dart/native dart/testserver/liblibwallet.* dart/testserver/testserver
