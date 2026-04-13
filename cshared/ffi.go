@@ -36,9 +36,11 @@ import (
 
 // handle stores the environment and event bridge for one LibwalletInit session.
 type handle struct {
-	env      any // the wltbase environment
-	eventFd  int // FD from MakeJsonSocketFD for receiving broadcasts
-	shutdown atomic.Bool
+	env       any // the wltbase environment
+	eventFd   int // FD from MakeJsonSocketFD for receiving broadcasts
+	eventConn net.Conn // the event reader connection (closed on destroy)
+	shutdown  atomic.Bool
+	wg        sync.WaitGroup // tracks active goroutines that may call back into Dart
 }
 
 var (
@@ -126,7 +128,9 @@ func LibwalletRequest(h C.uintptr_t, requestJson *C.char, cb C.response_callback
 
 	reqStr := C.GoString(requestJson)
 
+	hdl.wg.Add(1)
 	go func() {
+		defer hdl.wg.Done()
 		var req struct {
 			Path   string         `json:"path"`
 			Verb   string         `json:"verb"`
@@ -181,7 +185,10 @@ func LibwalletSetEventCallback(h C.uintptr_t, cb C.event_callback, userData C.ui
 	// Read from the event FD (our end of the socketpair from MakeJsonSocketFD).
 	// The jsonclient on the other end receives all BroadcastJson events and
 	// writes them as newline-delimited JSON.
+	hdl.wg.Add(1)
 	go func() {
+		defer hdl.wg.Done()
+
 		f := os.NewFile(uintptr(hdl.eventFd), "event-pipe")
 		conn, err := net.FileConn(f)
 		f.Close() // FileConn dups the FD, so we close the File
@@ -189,13 +196,17 @@ func LibwalletSetEventCallback(h C.uintptr_t, cb C.event_callback, userData C.ui
 			slog.Error(fmt.Sprintf("LibwalletSetEventCallback: failed to wrap FD: %v", err))
 			return
 		}
+		hdl.eventConn = conn // store so Destroy can close it
 		defer conn.Close()
 
 		dec := json.NewDecoder(conn)
 		for {
 			var msg json.RawMessage
 			if err := dec.Decode(&msg); err != nil {
-				return // connection closed
+				return // connection closed — shutdown
+			}
+			if hdl.shutdown.Load() {
+				return
 			}
 			cstr := C.CString(string(msg))
 			C.call_event_cb(cb, cstr, userData)
@@ -219,11 +230,16 @@ func LibwalletDestroy(h C.uintptr_t) {
 		// Set shutdown flag BEFORE closing FD to prevent Go goroutines
 		// from calling back into Dart after the isolate shuts down.
 		hdl.shutdown.Store(true)
-		if hdl.eventFd > 0 {
-			// Closing the FD terminates the event reader goroutine
+		// Close the event connection to unblock the reader goroutine
+		if hdl.eventConn != nil {
+			hdl.eventConn.Close()
+		} else if hdl.eventFd > 0 {
 			f := os.NewFile(uintptr(hdl.eventFd), "event-pipe-close")
 			f.Close()
 		}
+		// Wait for all goroutines to finish so no callback fires after
+		// this function returns and Dart tears down the isolate.
+		hdl.wg.Wait()
 	}
 	deleteHandle(h)
 }
