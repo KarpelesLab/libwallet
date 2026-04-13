@@ -5,7 +5,10 @@
 /// - `e`: exponent (number of decimal places)
 /// - `f`: float approximation
 class Amount {
+  /// Significand of the decimal value as a big integer.
   final BigInt value;
+
+  /// Number of decimal places (exponent).
   final int exp;
 
   Amount(this.value, this.exp);

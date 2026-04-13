@@ -1,9 +1,18 @@
 /// A crash event record.
 class Crash {
+  /// Unique identifier for this crash report.
   final String id;
+
+  /// Location in code where the crash occurred.
   final String where;
+
+  /// Error message describing the crash.
   final String message;
+
+  /// Full stack trace at the time of the crash.
   final String stack;
+
+  /// Timestamp when the crash was recorded.
   final DateTime created;
 
   const Crash({

@@ -20,17 +20,40 @@ enum NetworkType {
 
 /// A blockchain network configuration.
 class Network {
+  /// Unique identifier for this network.
   final String id;
+
+  /// Network family: [NetworkType.evm], [NetworkType.bitcoin], or [NetworkType.solana].
   final NetworkType type;
+
+  /// Chain ID (e.g. `"1"` for Ethereum mainnet).
   final String chainId;
+
+  /// Human-readable network name (e.g. `"Ethereum"`).
   final String name;
+
+  /// JSON-RPC endpoint URL for this network.
   final String rpc;
+
+  /// Ticker symbol of the native currency (e.g. `ETH`).
   final String currencySymbol;
+
+  /// Number of decimal places for the native currency.
   final int currencyDecimals;
+
+  /// Base URL of the block explorer for this network.
   final String blockExplorer;
+
+  /// Whether this is a test network.
   final bool testNet;
+
+  /// Display priority; higher values are shown first.
   final int priority;
+
+  /// Timestamp when the network was created.
   final DateTime created;
+
+  /// Timestamp when the network was last updated.
   final DateTime updated;
 
   const Network({

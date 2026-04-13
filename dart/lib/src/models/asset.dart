@@ -2,19 +2,46 @@ import 'amount.dart';
 
 /// An asset (native currency or token) with balance information.
 class Asset {
+  /// Server-assigned identifier.
   final String id;
+
+  /// Unique key identifying this asset (e.g. `ethereum:ETH`).
   final String key;
+
+  /// Human-readable asset name (e.g. `"Ethereum"`).
   final String name;
+
+  /// Ticker symbol (e.g. `ETH`, `BTC`).
   final String symbol;
+
+  /// Current balance of this asset.
   final Amount amount;
+
+  /// Asset type (e.g. `native`, `erc20`, `spl-token`).
   final String type;
+
+  /// Network ID this asset belongs to.
   final String network;
+
+  /// Whether this asset is on a test network.
   final bool testNet;
+
+  /// Balance converted to fiat currency.
   final Amount? fiatAmount;
+
+  /// ISO 4217 fiat currency code for [fiatAmount].
   final String? fiatCurrency;
+
+  /// Market price quote data for this asset.
   final FiatQuote? fiatQuote;
+
+  /// Additional metadata about the asset.
   final Map<String, dynamic>? info;
+
+  /// Timestamp when the asset was first seen.
   final DateTime created;
+
+  /// Timestamp when the asset was last updated.
   final DateTime updated;
 
   const Asset({
@@ -67,12 +94,25 @@ class Asset {
 
 /// Price quote data from CoinMarketCap or similar.
 class FiatQuote {
+  /// Current price per unit in the quote currency.
   final double price;
+
+  /// 24-hour trading volume.
   final double volume24h;
+
+  /// 24-hour change in trading volume (percentage).
   final double volumeChange24h;
+
+  /// 24-hour price change (percentage).
   final double percentChange24h;
+
+  /// 1-hour price change (percentage).
   final double percentChange1h;
+
+  /// Total market capitalization.
   final double marketCap;
+
+  /// Timestamp of the last price update.
   final DateTime lastUpdate;
 
   const FiatQuote({

@@ -1,8 +1,15 @@
 /// A Web3 site connection to a wallet account.
 class Web3Connection {
+  /// Unique identifier for this connection.
   final String id;
+
+  /// Hostname of the connected website.
   final String host;
+
+  /// ID of the wallet account connected to this site.
   final String account;
+
+  /// Timestamp when the connection was established.
   final DateTime created;
 
   const Web3Connection({

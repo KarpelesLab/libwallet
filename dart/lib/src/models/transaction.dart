@@ -2,25 +2,64 @@ import 'amount.dart';
 
 /// A blockchain transaction.
 class Transaction {
+  /// Unique identifier for this transaction.
   final String id;
+
+  /// Transaction type: `transfer`, `evm`, `solana_transfer`, etc.
   final String type;
+
+  /// Asset key this transaction operates on.
   final String asset;
+
+  /// Sender address.
   final String from;
+
+  /// Recipient address.
   final String to;
+
+  /// Gas limit for EVM transactions.
   final int gas;
+
+  /// Gas price as a decimal string (for legacy EVM transactions).
   final String? gasPrice;
+
+  /// Transaction fee amount.
   final Amount? fee;
+
+  /// Sender nonce (sequence number).
   final int nonce;
+
+  /// Transaction format: `legacy` or `eip1559`.
   final String? format;
+
+  /// Raw signed transaction bytes (hex-encoded).
   final String? raw;
+
+  /// On-chain transaction hash.
   final String? hash;
+
+  /// Block explorer URL for this transaction.
   final String? url;
+
+  /// Network ID this transaction was broadcast on.
   final String? network;
+
+  /// Token/asset transfer amount.
   final Amount? amount;
+
+  /// Native currency value attached to the transaction.
   final Amount? value;
+
+  /// Hex-encoded calldata (for smart contract calls).
   final String? data;
+
+  /// Timestamp when the transaction was created.
   final DateTime? created;
+
+  /// Transaction amount converted to fiat currency.
   final Amount? fiatAmount;
+
+  /// ISO 4217 fiat currency code for [fiatAmount].
   final String? fiatCurrency;
 
   const Transaction({

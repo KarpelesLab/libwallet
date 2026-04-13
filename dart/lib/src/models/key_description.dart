@@ -2,8 +2,13 @@
 ///
 /// Matches Go's wltsign.KeyDescription.
 class KeyDescription {
+  /// Key type: `StoreKey`, `RemoteKey`, `Password`, or `Plain`.
   final String type;
+
+  /// Key material (encrypted blob, password, or raw key).
   final String key;
+
+  /// Optional server-assigned key identifier.
   final String? id;
 
   const KeyDescription({
@@ -41,8 +46,13 @@ class KeyDescription {
 
 /// Key description with ID for transaction signing.
 class SigningKey {
+  /// Server-assigned key share identifier.
   final String id;
+
+  /// Key material used for signing.
   final String key;
+
+  /// Key type: `StoreKey`, `RemoteKey`, `Password`, or `Plain`.
   final String? type;
 
   const SigningKey({

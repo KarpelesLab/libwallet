@@ -1,10 +1,21 @@
 /// A Web3 request pending user approval.
 class PendingRequest {
+  /// Unique request identifier.
   final String id;
+
+  /// Request type: `connect`, `sign`, `personal_sign`, `eth_signTypedData`, etc.
   final String type;
+
+  /// Current status: `pending`, `accepted`, `rejected`, or `timedout`.
   final String status;
+
+  /// Hostname of the dApp that initiated the request.
   final String? host;
+
+  /// Transaction payload to be signed, if applicable.
   final dynamic transaction;
+
+  /// Arbitrary value associated with the request (e.g. message to sign).
   final dynamic value;
 
   const PendingRequest({

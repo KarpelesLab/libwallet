@@ -1,15 +1,36 @@
 /// A registered token (ERC-20, SPL, etc.).
 class Token {
+  /// Unique identifier for this token.
   final String id;
+
+  /// Human-readable token name (e.g. `"USD Coin"`).
   final String name;
+
+  /// Ticker symbol (e.g. `USDC`).
   final String symbol;
+
+  /// Contract address (ERC-20) or mint address (SPL token).
   final String address;
+
+  /// Number of decimal places for this token.
   final int decimals;
+
+  /// Token standard: `erc20`, `spl-token`, etc.
   final String type;
+
+  /// Network ID this token is deployed on.
   final String network;
+
+  /// URL to the token logo image.
   final String? logo;
+
+  /// Optional memo or tag required for transfers.
   final String? memo;
+
+  /// Timestamp when the token was registered.
   final DateTime created;
+
+  /// Timestamp when the token was last updated.
   final DateTime updated;
 
   const Token({
@@ -59,11 +80,22 @@ class Token {
 
 /// Result of Token:discoverToken.
 class DiscoveredToken {
+  /// Token name read from the on-chain contract.
   final String name;
+
+  /// Ticker symbol read from the on-chain contract.
   final String symbol;
+
+  /// Number of decimal places for this token.
   final int decimals;
+
+  /// Total supply as a decimal string, if available.
   final String? totalSupply;
+
+  /// Contract or mint address of the discovered token.
   final String address;
+
+  /// Token standard: `erc20`, `spl-token`, etc.
   final String type;
 
   const DiscoveredToken({

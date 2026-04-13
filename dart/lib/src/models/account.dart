@@ -1,16 +1,39 @@
 /// A blockchain account derived from a wallet.
 class Account {
+  /// Unique identifier for this account.
   final String id;
+
+  /// ID of the parent wallet this account was derived from.
   final String wallet;
+
+  /// Human-readable account name.
   final String name;
+
+  /// Account index used in key derivation.
   final int index;
+
+  /// Blockchain type: `ethereum`, `bitcoin`, or `solana`.
   final String type;
+
+  /// BIP-44 derivation path (e.g. `m/44'/60'/0'/0/0`).
   final String path;
+
+  /// On-chain address for this account.
   final String address;
+
+  /// URI representation of the address (e.g. `ethereum:0x...`).
   final String uri;
+
+  /// Hex-encoded public key for this account.
   final String pubkey;
+
+  /// Hex-encoded BIP-32 chain code for child key derivation.
   final String chaincode;
+
+  /// Timestamp when the account was created.
   final DateTime created;
+
+  /// Timestamp when the account was last updated.
   final DateTime updated;
 
   const Account({

@@ -1,12 +1,27 @@
 /// A saved contact address.
 class Contact {
+  /// Unique identifier for this contact.
   final String id;
+
+  /// Display name of the contact.
   final String name;
+
+  /// Blockchain address of the contact.
   final String address;
+
+  /// Address type: `ethereum`, `bitcoin`, or `solana`.
   final String type;
+
+  /// Contact flags (e.g. `verified`, `favorite`).
   final List<String> flags;
+
+  /// Optional note or memo for this contact.
   final String memo;
+
+  /// Timestamp when the contact was created.
   final DateTime created;
+
+  /// Timestamp when the contact was last updated.
   final DateTime updated;
 
   const Contact({

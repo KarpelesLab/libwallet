@@ -1,14 +1,33 @@
 /// A TSS wallet with distributed key management.
 class Wallet {
+  /// Unique identifier for this wallet.
   final String id;
+
+  /// Human-readable wallet name.
   final String name;
+
+  /// Elliptic curve used by this wallet (`secp256k1` or `ed25519`).
   final String curve;
+
+  /// Minimum number of key shares required to sign a transaction.
   final int threshold;
+
+  /// Key generation number, incremented on each key rotation.
   final int gen;
+
+  /// Hex-encoded master public key of the wallet.
   final String pubkey;
+
+  /// Hex-encoded BIP-32 chain code for key derivation.
   final String chaincode;
+
+  /// Timestamp when the wallet was created.
   final DateTime created;
+
+  /// Timestamp when the wallet was last modified.
   final DateTime modified;
+
+  /// Key shares that belong to this wallet.
   final List<WalletKey> keys;
 
   const Wallet({
@@ -60,10 +79,19 @@ class Wallet {
 
 /// An individual key share in a TSS wallet.
 class WalletKey {
+  /// Unique identifier for this key share.
   final String id;
+
+  /// ID of the parent wallet this key belongs to.
   final String wallet;
+
+  /// Key type: `StoreKey`, `RemoteKey`, `Password`, or `Plain`.
   final String type;
+
+  /// Key material (encrypted or plaintext depending on [type]).
   final String key;
+
+  /// Generation number this key share was created in.
   final int gen;
 
   const WalletKey({

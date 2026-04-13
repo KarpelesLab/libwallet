@@ -1,7 +1,12 @@
 /// Onboarding state returned by Info:onboarding.
 class OnboardingState {
+  /// Whether the user has created at least one wallet.
   final bool hasWallet;
+
+  /// Whether the user has created at least one account.
   final bool hasAccount;
+
+  /// Raw JSON response for accessing additional fields.
   final Map<String, dynamic> raw;
 
   const OnboardingState({
