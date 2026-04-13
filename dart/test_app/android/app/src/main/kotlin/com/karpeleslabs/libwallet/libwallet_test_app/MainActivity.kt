@@ -3,7 +3,7 @@ package com.karpeleslabs.libwallet.libwallet_test_app
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
-import com.karpeleslabs.libwallet.Libwallet
+import com.karpeleslabs.libwallet.libwallet.Libwallet
 
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
