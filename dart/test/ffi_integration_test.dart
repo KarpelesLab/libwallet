@@ -28,8 +28,11 @@ void main() {
     client = LibwalletClient.initialize(tempDir.path, library: lib);
   });
 
-  tearDownAll(() {
+  tearDownAll(() async {
     client.dispose();
+    // Give Go goroutines time to notice the shutdown flag before the
+    // Dart process exits and invalidates NativeCallable pointers.
+    await Future.delayed(const Duration(milliseconds: 200));
     tempDir.deleteSync(recursive: true);
   });
 
