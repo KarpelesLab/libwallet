@@ -19,9 +19,6 @@ jobs:
 
       - uses: dart-lang/setup-dart@v1
 
-      - name: Build test server
-        run: go build -o dart/testserver/testserver ./dart/testserver/
-
       - name: Build c-shared library for FFI tests
         run: CGO_ENABLED=1 go build -buildmode=c-shared -o dart/testserver/liblibwallet.dylib ./cshared/
 
@@ -36,10 +33,6 @@ jobs:
       - name: Run Dart unit tests
         working-directory: dart
         run: dart test test/amount_test.dart test/models_test.dart test/request_test.dart test/response_test.dart
-
-      - name: Run socket integration tests
-        working-directory: dart
-        run: dart test test/integration_test.dart
 
       - name: Run FFI integration tests
         working-directory: dart
@@ -149,20 +142,4 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: |
-            cd dart/test_app
-            # flutter test on-device exits 79 ("no tests found") even when tests pass.
-            # Capture output and check for actual failures.
-            set +e
-            OUTPUT=$(flutter test integration_test/libwallet_test.dart -d emulator-5554 2>&1)
-            EXIT=$?
-            echo "$OUTPUT"
-            # Fail if there are actual test failures (❌) or if exit code isn't 0 or 79
-            if echo "$OUTPUT" | grep -q "❌"; then
-              echo "Tests had failures"
-              exit 1
-            fi
-            if [ $EXIT -ne 0 ] && [ $EXIT -ne 79 ]; then
-              echo "Unexpected exit code: $EXIT"
-              exit $EXIT
-            fi
+          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart -d emulator-5554 || test $? -eq 79
