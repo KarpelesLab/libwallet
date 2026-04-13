@@ -36,8 +36,9 @@ import (
 
 // handle stores the environment and event bridge for one LibwalletInit session.
 type handle struct {
-	env     any // the wltbase environment
-	eventFd int // FD from MakeJsonSocketFD for receiving broadcasts
+	env      any // the wltbase environment
+	eventFd  int // FD from MakeJsonSocketFD for receiving broadcasts
+	shutdown atomic.Bool
 }
 
 var (
@@ -67,9 +68,13 @@ func deleteHandle(h C.uintptr_t) {
 type ffiSink struct {
 	cb       C.response_callback
 	userData C.uintptr_t
+	hdl      *handle
 }
 
 func (f *ffiSink) SendResponse(r *apirouter.Response) error {
+	if f.hdl.shutdown.Load() {
+		return nil // don't call back after shutdown
+	}
 	data, err := r.MarshalJSON()
 	if err != nil {
 		return err
@@ -128,6 +133,7 @@ func LibwalletRequest(h C.uintptr_t, requestJson *C.char, cb C.response_callback
 			Params map[string]any `json:"params"`
 		}
 		if err := json.Unmarshal([]byte(reqStr), &req); err != nil {
+			if hdl.shutdown.Load() { return }
 			cstr := C.CString(fmt.Sprintf(`{"result":"error","error":%q,"code":400}`, err.Error()))
 			C.call_response_cb(cb, cstr, userData)
 			return
@@ -141,13 +147,16 @@ func LibwalletRequest(h C.uintptr_t, requestJson *C.char, cb C.response_callback
 		ctx.SetObject("@env", hdl.env)
 
 		// Set response sink so progress updates go through the callback
-		sink := &ffiSink{cb: cb, userData: userData}
+		sink := &ffiSink{cb: cb, userData: userData, hdl: hdl}
 		ctx.SetResponseSink(sink)
 
 		resp, _ := ctx.Response()
 
+		if hdl.shutdown.Load() { return } // don't call back after shutdown
+
 		data, err := resp.MarshalJSON()
 		if err != nil {
+			if hdl.shutdown.Load() { return }
 			cstr := C.CString(fmt.Sprintf(`{"result":"error","error":%q,"code":500}`, err.Error()))
 			C.call_response_cb(cb, cstr, userData)
 			return
@@ -206,10 +215,15 @@ func LibwalletShowDebug() {
 //export LibwalletDestroy
 func LibwalletDestroy(h C.uintptr_t) {
 	hdl := loadHandle(h)
-	if hdl != nil && hdl.eventFd > 0 {
-		// Closing the FD terminates the event reader goroutine
-		f := os.NewFile(uintptr(hdl.eventFd), "event-pipe-close")
-		f.Close()
+	if hdl != nil {
+		// Set shutdown flag BEFORE closing FD to prevent Go goroutines
+		// from calling back into Dart after the isolate shuts down.
+		hdl.shutdown.Store(true)
+		if hdl.eventFd > 0 {
+			// Closing the FD terminates the event reader goroutine
+			f := os.NewFile(uintptr(hdl.eventFd), "event-pipe-close")
+			f.Close()
+		}
 	}
 	deleteHandle(h)
 }
