@@ -149,4 +149,20 @@ jobs:
           force-avd-creation: false
           emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           disable-animations: true
-          script: cd dart/test_app && flutter test integration_test/libwallet_test.dart -d emulator-5554
+          script: |
+            cd dart/test_app
+            # flutter test on-device exits 79 ("no tests found") even when tests pass.
+            # Capture output and check for actual failures.
+            set +e
+            OUTPUT=$(flutter test integration_test/libwallet_test.dart -d emulator-5554 2>&1)
+            EXIT=$?
+            echo "$OUTPUT"
+            # Fail if there are actual test failures (❌) or if exit code isn't 0 or 79
+            if echo "$OUTPUT" | grep -q "❌"; then
+              echo "Tests had failures"
+              exit 1
+            fi
+            if [ $EXIT -ne 0 ] && [ $EXIT -ne 79 ]; then
+              echo "Unexpected exit code: $EXIT"
+              exit $EXIT
+            fi

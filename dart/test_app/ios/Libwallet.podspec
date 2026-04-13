@@ -9,6 +9,11 @@ Pod::Spec.new do |s|
   s.ios.deployment_target = '13.0'
   # CI places liblibwallet.a here before building
   s.vendored_libraries = 'liblibwallet.a'
-  # CoreFoundation and Security needed by Go runtime
+  # Force-load the static library so the linker doesn't strip FFI symbols
+  s.pod_target_xcconfig = {
+    'OTHER_LDFLAGS' => '-force_load $(PODS_TARGET_SRCROOT)/liblibwallet.a'
+  }
+  # CoreFoundation, Security, and resolv needed by Go runtime
   s.frameworks = 'CoreFoundation', 'Security'
+  s.libraries = 'resolv'
 end
