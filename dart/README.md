@@ -94,23 +94,51 @@ client.dispose();
 
 ## Native Library
 
-This package requires the libwallet Go shared library. Build it from the [libwallet repository](https://github.com/KarpelesLab/libwallet):
+**No Go toolchain required.** This package ships with a Dart build hook
+(`hook/build.dart`) that automatically downloads the matching pre-built
+native binary from the [libwallet GitHub Release](https://github.com/KarpelesLab/libwallet/releases)
+for your target platform at build time.
+
+Supported targets:
+
+| Platform | Binary |
+|----------|--------|
+| macOS arm64 / x64 | `.dylib` |
+| Linux x64 | `.so` |
+| Android arm64 / arm / x64 | `.so` |
+| iOS arm64 | static `.a` (linked into the app) |
+
+The downloaded binary is cached per-version in the Dart build cache, so
+subsequent builds are instant. The Dart package version and native library
+version are locked together — `libwallet 0.3.1` always downloads the
+`v0.3.1` GitHub Release binaries.
+
+### Building from source (advanced / local development)
+
+If you need to build the native library yourself (for example, to develop
+libwallet locally or to use an unreleased version), clone the repo and run:
 
 ```bash
-# macOS
-CGO_ENABLED=1 go build -buildmode=c-shared -o liblibwallet.dylib ./cshared/
+# macOS (host platform)
+CGO_ENABLED=1 CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
+  go build -buildmode=c-shared -o dart/testserver/liblibwallet.dylib ./cshared/
 
 # Linux
-CGO_ENABLED=1 go build -buildmode=c-shared -o liblibwallet.so ./cshared/
+CGO_ENABLED=1 go build -buildmode=c-shared \
+  -o dart/testserver/liblibwallet.so ./cshared/
 
 # Android (with NDK)
-CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC=$NDK/.../aarch64-linux-android21-clang \
+CGO_ENABLED=1 GOOS=android GOARCH=arm64 \
+  CC=$NDK/.../aarch64-linux-android21-clang \
   go build -buildmode=c-shared -o liblibwallet.so ./cshared/
 
 # iOS (static archive)
 CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
   go build -buildmode=c-archive -o liblibwallet.a ./cshared/
 ```
+
+When a local `dart/testserver/liblibwallet.<ext>` exists, the build hook
+uses it instead of downloading — useful during development.
 
 ## License
 
