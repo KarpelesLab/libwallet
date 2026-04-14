@@ -427,6 +427,21 @@ func (n *Network) DoRPC(method string, args ...any) (json.RawMessage, error) {
 	return e.DoCtx(context.Background(), method, args...)
 }
 
+// DoRPCNamed sends a JSON-RPC request with named (object) parameters.
+// Required for APIs like Helius DAS (`getAssetsByOwner`) that expect the
+// params field to be a JSON object rather than an array.
+func (n *Network) DoRPCNamed(method string, args map[string]any) (json.RawMessage, error) {
+	e, err := n.getRPC()
+	if err != nil {
+		return nil, err
+	}
+	if r, ok := e.(*ethrpc.RPC); ok {
+		return r.DoNamedCtx(context.Background(), method, args)
+	}
+	// Fallback (shouldn't happen with current ethrpc.New): use positional.
+	return e.DoCtx(context.Background(), method, args)
+}
+
 type AddressProvider interface {
 	GetAddress() string
 }

@@ -102,7 +102,7 @@ func (n *Network) SolanaTokenBalances(e wltintf.Env, acct AddressProvider) ([]*w
 
 // solanaNftList fetches NFTs using the Helius DAS API (getAssetsByOwner).
 func (n *Network) solanaNftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, error) {
-	result, err := n.DoRPC("getAssetsByOwner", map[string]any{
+	result, err := n.DoRPCNamed("getAssetsByOwner", map[string]any{
 		"ownerAddress":   acct.GetAddress(),
 		"page":           1,
 		"limit":          100,
