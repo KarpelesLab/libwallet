@@ -1,3 +1,57 @@
+## 0.3.6
+
+- **WalletConnect v2**: full wallet-side implementation. `client.walletConnect`
+  covers pair / sessions / approveSession / rejectSession / respond /
+  respondError / emitEvent / disconnect. Two sugar streams
+  (`walletConnectProposals`, `walletConnectRequests`) deliver typed
+  `WcSessionProposal` / `WcSessionRequest` objects. Sessions persist
+  across restarts (SQL-backed); relay reconnects with backoff.
+  Protocol pieces implemented: X25519 + HKDF + ChaCha20-Poly1305
+  envelopes, Ed25519 relay JWT auth, CAIP-10/-2 namespace handling,
+  `wc_sessionPropose` / `Settle` / `Request` / `Event` / `Delete`. See
+  `doc/walletconnect_integration.md`.
+- **Transaction simulation + decoding**: new `client.transactions.simulate`.
+  On EVM (erigon v3 backend), uses `debug_traceCall` with the `callTracer`
+  to walk the full call frame tree and return every ERC-20 Transfer +
+  Approval and every value-carrying CALL at any depth as
+  `TransactionSimulation.effects`. Second pass with `prestateTracer`
+  (diff mode) returns per-address native-balance deltas as
+  `balanceChanges`. Top-level calldata decoded into `decodedMethod` +
+  `decodedArgs` (`native_transfer` / `erc20_transfer` / `erc20_approve` /
+  `unknown`). Revert reasons decoded from standard `Error(string)` ABI.
+  Solana wraps `simulateTransaction` (logs + unitsConsumed + err).
+  Bitcoin parses via `outscript.BtcTx` (inputs + outputs + fee).
+- **WebView injection**: new `client.web3.injectionScript(...)` generates
+  a JS blob exposing libwallet as `window.ethereum` (EIP-1193 + EIP-6963),
+  `window.solana` (Wallet Standard), and `window.mpurse` (Monacoin —
+  github.com/tadajam/mpurse). Full wiring walkthrough in
+  `doc/webview_integration.md`.
+- **Bitcoin-family message signing (via mpurse)**: `mpurse_signMessage`
+  signs with the TSS key over the standard "\x18Bitcoin Signed Message:\n"
+  / "\x19Monacoin Signed Message:\n" / etc. prefix, returning the
+  65-byte compact signature (base64, Bitcoin Core `signmessage` format).
+  `mpurse_signRawTransaction` parses the hex, matches inputs to the
+  user's xpub via `modchain_lookupTxoBIP32`, signs each input, and
+  returns the signed hex. `mpurse_sendRawTransaction` is a direct
+  passthrough to `sendrawtransaction`. `mpurse_sendAsset` still errors
+  (Counterparty server interaction is out of scope).
+- **Monacoin network support**: `bitcoinAddress` recognizes `monacoin`
+  chain id and emits the bech32 `mona1...` address via
+  `outscript.Out.Address("monacoin")`.
+- **Typed pending-request flow**: `PendingRequest` is now sealed with
+  one subtype per Web3 request kind (ConnectRequest, PersonalSignRequest,
+  SignTypedDataRequest, SolanaSign* / Mpurse* / …, UnknownPendingRequest).
+  The `request` event now carries the full request object so consumers
+  can render the prompt on first paint without a follow-up
+  `Request/<id>` fetch. New `client.pendingRequests` stream yields
+  fully-parsed requests ready for pattern matching.
+- **Example package layout**: new `example/libwallet_example.dart` CLI
+  sample covering init / wallet create with live progress / account /
+  balance / pendingRequests subscription. Satisfies pub.dev's example
+  requirement.
+- **pubspec**: description trimmed to 129 chars (was 212) to satisfy
+  pub.dev's metadata scan.
+
 ## 0.3.5
 
 - **Direct account signing**: new `Account.signMessage`, `signTransaction`,
