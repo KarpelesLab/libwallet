@@ -3,8 +3,8 @@ import '../client/transport.dart';
 /// RemoteKey management for 2FA recovery keys.
 ///
 /// Supports both phone numbers (SMS verification) and email addresses
-/// (email verification). The EllipX backend routes based on whether the
-/// identifier contains an `@`.
+/// (email verification). The Crypto/WalletSign backend routes based on
+/// whether the identifier contains an `@`.
 class RemoteKeyApi {
   final Transport _conn;
 

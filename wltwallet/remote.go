@@ -38,12 +38,12 @@ type remoteKeyNewResult struct {
 
 func remoteNew(ctx context.Context, number string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:new", "POST", rest.Param{"number": number}, &res)
+	return res, rest.Apply(ctx, "Crypto/WalletSign:new", "POST", rest.Param{"number": number}, &res)
 }
 
 // remotekeyNew starts a 2FA session for a phone number or email address.
-// The `number` param accepts either format — the EllipX backend routes SMS
-// vs email based on whether the value contains an "@".
+// The `number` param accepts either format — the Crypto/WalletSign backend
+// routes SMS vs email based on whether the value contains an "@".
 func remotekeyNew(ctx context.Context, in struct {
 	Number string `json:"number"` // phone (international format) or email address
 	Email  string `json:"email"`  // alias for Number when using email
@@ -55,7 +55,7 @@ func remotekeyNew(ctx context.Context, in struct {
 	if target == "" {
 		return nil, errors.New("number or email is required")
 	}
-	res, err := rest.Do(ctx, "EllipX/WalletSign:new", "POST", rest.Param{"number": target})
+	res, err := rest.Do(ctx, "Crypto/WalletSign:new", "POST", rest.Param{"number": target})
 	if err != nil {
 		return nil, err
 	}
@@ -64,19 +64,19 @@ func remotekeyNew(ctx context.Context, in struct {
 
 func remoteSign(ctx context.Context, key string, hash []byte, il []byte, curve string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:sign", "POST", rest.Param{"key": key, "hash": hex.EncodeToString(hash), "il": hex.EncodeToString(il), "curve": curve}, &res)
+	return res, rest.Apply(ctx, "Crypto/WalletSign:sign", "POST", rest.Param{"key": key, "hash": hex.EncodeToString(hash), "il": hex.EncodeToString(il), "curve": curve}, &res)
 }
 
 func remoteReshare(ctx context.Context, key string, curve string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3, "curve": curve}, &res)
+	return res, rest.Apply(ctx, "Crypto/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3, "curve": curve}, &res)
 }
 
 func remotekeyReshare(ctx context.Context, in struct {
 	Key   string `json:"key"`
 	Curve string `json:"curve"`
 }) (any, error) {
-	res, err := rest.Do(ctx, "EllipX/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3, "curve": in.Curve})
+	res, err := rest.Do(ctx, "Crypto/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3, "curve": in.Curve})
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ type remoteKeyVerifyResult struct {
 
 func remoteVerify(ctx context.Context, session, code string) (*remoteKeyVerifyResult, error) {
 	var res *remoteKeyVerifyResult
-	return res, rest.Apply(ctx, "EllipX/WalletSign:verify", "POST", rest.Param{"session": session, "code": code}, &res)
+	return res, rest.Apply(ctx, "Crypto/WalletSign:verify", "POST", rest.Param{"session": session, "code": code}, &res)
 }
 
 // Will return a map[string]any{"RemoteKey": "key"}
@@ -97,7 +97,7 @@ func remotekeyValidate(ctx context.Context, in struct {
 	Session string `json:"session"`
 	Code    string `json:"code"`
 }) (any, error) {
-	res, err := rest.Do(ctx, "EllipX/WalletSign:verify", "POST", rest.Param{"session": in.Session, "code": in.Code})
+	res, err := rest.Do(ctx, "Crypto/WalletSign:verify", "POST", rest.Param{"session": in.Session, "code": in.Code})
 	if err != nil {
 		return nil, err
 	}
