@@ -1,3 +1,31 @@
+## 0.3.5
+
+- **Direct account signing**: new `Account.signMessage`, `signTransaction`,
+  `signAndSendTransaction` endpoints let wallet-host apps sign directly
+  without routing through the Web3 pending-request/approve flow. Removes
+  ~80 lines of async listener code from the typical Dart integration.
+- **View accounts** (read-only): `accounts.createView(type:, address:, xpub:)`
+  creates accounts with no backing wallet — suitable for watching a
+  counterparty address or an HD tree (xpub, bitcoin-family). Balance and
+  NFT queries work; signing is rejected. New `Account.isViewOnly` getter.
+- **Progress redesign**: progress events are now a single 0..1 `fraction`
+  instead of `{count, running}`. ECDSA wallet creation now emits fine-
+  grained ticks during Paillier / NTilde safe-prime generation (one per
+  prime found out of 4, per key) — previously the UI was blind for 20+
+  seconds per key share. Requires tss-lib v2.2.4+.
+- **Typed-API cleanup**: removed `dynamic` returns and raw `Map<String,
+  dynamic>` param inputs across the API surface. New typed models:
+  `SignedMessage`, `RemoteKeySession`, `RemoteKeyValidation`, `NftListing`,
+  `WalletBackupEntry`, `RpcTestResult`, `UnsignedTransaction`. Methods
+  like `transactions.signAndSend(UnsignedTransaction)`, `wallets.backup()`,
+  `remoteKeys.validate()` now return proper model instances. Raw param
+  maps on `contacts.update`, `networks.update`, `tokens.update` replaced
+  with named parameters.
+- **Validation**: reject wallet `Curve` values outside `{secp256k1,
+  ed25519}`; reject account type/curve mismatches (e.g. `solana` on
+  secp256k1, `ethereum` on ed25519). Bitcoin accounts now derive on
+  BIP-44 coin_type 0 (`m/44/0/0/i`) instead of Ethereum's coin_type 60.
+
 ## 0.3.4
 
 - **Email 2FA**: `RemoteKey:new` (and `remoteKeys.create`) now accept
