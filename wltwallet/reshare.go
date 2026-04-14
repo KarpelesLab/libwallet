@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/spotlib"
@@ -63,6 +62,9 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 	// Allocate new wallet keys (local only; remote peers carry no local key).
 	newWKeys := make([]*WalletKey, nk)
 
+	root := newProgressScope(ctx)
+	root.report(0)
+
 	for i, kInfo := range newKeys {
 		switch kInfo.Type {
 		case "StoreKey", "Plain", "RemoteKey", "Password":
@@ -71,16 +73,16 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
 		}
 		log.Printf("generating key %d/%d", i, nk)
-		apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": i + 1})
 
-		k, err := w.createWalletKey(ctx, kInfo.Type)
+		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
 		if err != nil {
 			return err
 		}
 		newWKeys[i] = k
 	}
 
-	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
+	reshareFinalScope := root.sub(nk, nk+1)
+	reshareFinalScope.report(0)
 
 	var newids tss.UnSortedPartyIDs
 	newidmap := make(map[int]*tss.PartyID)
@@ -232,6 +234,7 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 		}
 	}
 
+	reshareFinalScope.report(1)
 	return nil
 }
 
@@ -275,6 +278,9 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 
 	newWKeys := make([]*WalletKey, nk)
 
+	rootEd := newProgressScope(ctx)
+	rootEd.report(0)
+
 	for i, kInfo := range newKeys {
 		switch kInfo.Type {
 		case "StoreKey", "Plain", "RemoteKey", "Password":
@@ -283,16 +289,16 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
 		}
 		log.Printf("generating eddsa reshare key %d/%d", i, nk)
-		apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": i + 1})
 
-		k, err := w.createWalletKey(ctx, kInfo.Type)
+		k, err := w.createWalletKey(ctx, kInfo.Type, rootEd.sub(i, nk+1))
 		if err != nil {
 			return err
 		}
 		newWKeys[i] = k
 	}
 
-	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
+	edReshareFinalScope := rootEd.sub(nk, nk+1)
+	edReshareFinalScope.report(0)
 
 	var newids tss.UnSortedPartyIDs
 	newidmap := make(map[int]*tss.PartyID)
@@ -437,6 +443,7 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 		}
 	}
 
+	edReshareFinalScope.report(1)
 	return nil
 }
 

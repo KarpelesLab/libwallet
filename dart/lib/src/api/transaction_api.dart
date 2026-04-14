@@ -50,7 +50,7 @@ class TransactionApi {
       if (resp.isError) throw LibwalletException.fromResponse(resp);
       if (resp.isProgress) {
         final d = resp.data as Map<String, dynamic>;
-        yield Progress(d['count'] as int? ?? 0, d['running'] as int? ?? 0);
+        yield Progress((d['progress'] as num?)?.toDouble() ?? 0.0);
       } else {
         yield Complete(Transaction.fromJson(resp.data as Map<String, dynamic>));
       }

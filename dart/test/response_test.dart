@@ -68,11 +68,9 @@ void main() {
   });
 
   group('ProgressOr', () {
-    test('Progress holds count and running', () {
-      const p = Progress<String>(6, 3);
-      expect(p.count, 6);
-      expect(p.running, 3);
-      expect(p.fraction, closeTo(3 / 7, 0.001));
+    test('Progress holds a fraction', () {
+      const p = Progress<String>(0.42);
+      expect(p.fraction, closeTo(0.42, 0.001));
     });
 
     test('Complete holds value', () {
@@ -89,9 +87,8 @@ void main() {
           expect(value, 42);
       }
 
-      final event2 = const Progress<int>(10, 5);
-      expect(event2.count, 10);
-      expect(event2.running, 5);
+      const event2 = Progress<int>(0.5);
+      expect(event2.fraction, closeTo(0.5, 0.001));
     });
   });
 }

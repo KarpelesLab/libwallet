@@ -68,15 +68,16 @@ sealed class ProgressOr<T> {
   const ProgressOr();
 }
 
-/// A progress update during a long-running operation.
+/// A progress update during a long-running operation — a single fraction
+/// between 0.0 (just started) and 1.0 (complete). The Go side reports
+/// fine-grained progress (e.g. one tick per safe prime found during ECDSA
+/// pre-param generation) mapped into a smooth 0..1 range so consumers can
+/// bind it directly to a progress bar without worrying about phases.
 class Progress<T> extends ProgressOr<T> {
-  final int count;
-  final int running;
+  /// Progress fraction in the range `[0.0, 1.0]`.
+  final double fraction;
 
-  const Progress(this.count, this.running);
-
-  /// Progress as a fraction between 0.0 and 1.0.
-  double get fraction => count > 0 ? running / (count + 1) : 0.0;
+  const Progress(this.fraction);
 }
 
 /// The completed result of a long-running operation.

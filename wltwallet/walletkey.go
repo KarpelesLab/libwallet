@@ -42,7 +42,11 @@ func (wk *WalletKey) save(e wltintf.Env) error {
 	return psql.Replace(e, wk)
 }
 
-func (w *Wallet) createWalletKey(ctx context.Context, typ string) (*WalletKey, error) {
+// createWalletKey generates a single wallet key share. For ECDSA wallets this
+// includes slow Paillier + NTilde safe-prime generation; scope receives fine-
+// grained progress (one tick per accepted safe prime out of 4). EdDSA keys
+// are effectively instant and just mark the scope complete.
+func (w *Wallet) createWalletKey(ctx context.Context, typ string, scope progressScope) (*WalletKey, error) {
 	final := &WalletKey{
 		Id:     xuid.New("wkey"),
 		Wallet: w.Id,
@@ -50,15 +54,23 @@ func (w *Wallet) createWalletKey(ctx context.Context, typ string) (*WalletKey, e
 		Gen:    w.Gen + 1, // always use base gen +1, wallet gen will be updated on save
 	}
 	if w.Curve == "ed25519" {
-		// EdDSA does not need Paillier pre-params
+		scope.report(1)
 		return final, nil
 	}
-	// ECDSA needs pre-params
-	preParams, err := (&ecdsatss.LocalPreGenerator{Context: ctx}).Generate()
+	gen := &ecdsatss.LocalPreGenerator{
+		Context: ctx,
+		Progress: func(p ecdsatss.PreParamsProgress) {
+			if p.SafePrimesTotal > 0 {
+				scope.report(float64(p.SafePrimesFound) / float64(p.SafePrimesTotal))
+			}
+		},
+	}
+	preParams, err := gen.Generate()
 	if err != nil {
 		return nil, err
 	}
 	final.pre = preParams
+	scope.report(1)
 	return final, nil
 }
 

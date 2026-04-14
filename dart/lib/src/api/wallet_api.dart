@@ -40,7 +40,7 @@ class WalletApi {
       if (resp.isError) throw LibwalletException.fromResponse(resp);
       if (resp.isProgress) {
         final d = resp.data as Map<String, dynamic>;
-        yield Progress(d['count'] as int, d['running'] as int);
+        yield Progress((d['progress'] as num?)?.toDouble() ?? 0.0);
       } else {
         yield Complete(Wallet.fromJson(resp.data as Map<String, dynamic>));
       }
@@ -60,7 +60,7 @@ class WalletApi {
       if (resp.isError) throw LibwalletException.fromResponse(resp);
       if (resp.isProgress) {
         final d = resp.data as Map<String, dynamic>;
-        yield Progress(d['count'] as int, d['running'] as int);
+        yield Progress((d['progress'] as num?)?.toDouble() ?? 0.0);
       } else {
         final d = resp.data as Map<String, dynamic>;
         yield Complete({
@@ -118,7 +118,7 @@ class WalletApi {
       if (resp.isError) throw LibwalletException.fromResponse(resp);
       if (resp.isProgress) {
         final d = resp.data as Map<String, dynamic>;
-        yield Progress(d['count'] as int, d['running'] as int);
+        yield Progress((d['progress'] as num?)?.toDouble() ?? 0.0);
       } else {
         yield Complete(Wallet.fromJson(resp.data as Map<String, dynamic>));
       }

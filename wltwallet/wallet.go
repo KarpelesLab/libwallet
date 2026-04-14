@@ -140,6 +140,10 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 		return errors.New("threshold too low")
 	}
 
+	// Progress tree: [0, nk/(nk+1)) = per-key pre-params, [nk/(nk+1), 1] = final keygen.
+	root := newProgressScope(ctx)
+	root.report(0)
+
 	// Create wallet keys for each key description
 	for i, kInfo := range kDesc {
 		switch kInfo.Type {
@@ -149,9 +153,8 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
 		}
 		log.Printf("generating key %d/%d", i, nk)
-		apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": i + 1})
 
-		k, err := w.createWalletKey(ctx, kInfo.Type)
+		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
 		if err != nil {
 			return fmt.Errorf("failed to create wallet key of type %s (key %d/%d): %w", kInfo.Type, i+1, nk, err)
 		}
@@ -160,8 +163,9 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 
 	log.Printf("producing final")
 
-	// Perform final operation (actual key generation)
-	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
+	// Final keygen phase: its own slice of the progress range.
+	finalScope := root.sub(nk, nk+1)
+	finalScope.report(0)
 
 	// Set up TSS parties for distributed key generation
 	var ids tss.UnSortedPartyIDs
@@ -236,6 +240,7 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 		}
 	}
 
+	finalScope.report(1)
 	return nil
 }
 
@@ -258,6 +263,9 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 		return errors.New("threshold too low")
 	}
 
+	root := newProgressScope(ctx)
+	root.report(0)
+
 	for i, kInfo := range kDesc {
 		switch kInfo.Type {
 		case "StoreKey", "Plain", "RemoteKey", "Password":
@@ -266,9 +274,8 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
 		}
 		log.Printf("generating eddsa key %d/%d", i, nk)
-		apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": i + 1})
 
-		k, err := w.createWalletKey(ctx, kInfo.Type)
+		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
 		if err != nil {
 			return fmt.Errorf("failed to create eddsa wallet key of type %s (key %d/%d): %w", kInfo.Type, i+1, nk, err)
 		}
@@ -276,7 +283,8 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 	}
 
 	log.Printf("producing eddsa final")
-	apirouter.Progress(ctx, map[string]any{"count": nk + 1, "running": nk + 1})
+	edFinalScope := root.sub(nk, nk+1)
+	edFinalScope.report(0)
 
 	var ids tss.UnSortedPartyIDs
 	idmap := make(map[int]*tss.PartyID)
@@ -346,6 +354,7 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 		}
 	}
 
+	edFinalScope.report(1)
 	return nil
 }
 
