@@ -16,6 +16,7 @@ import (
 	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltasset"
+	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"
@@ -520,21 +521,21 @@ func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		return nil, err
 	}
 
-	// modchain_assets serializes `balance` as a decimal-formatted number
-	// (BtcAmount.MarshalJSON emits "0.00000000" form). Use json.Number to
-	// accept either an integer or decimal representation, then convert
-	// to satoshi via the Decimals field.
+	// modchain_assets serializes `balance` via outscript.BtcAmount, which
+	// always marshals as a decimal-formatted number (e.g. "0.00000000").
+	// Use BtcAmount directly — its UnmarshalJSON handles both decimal and
+	// integer forms.
 	var resp struct {
 		Assets []struct {
-			Asset    string      `json:"asset"`
-			Decimals int         `json:"decimals"`
-			Balance  json.Number `json:"balance"`
+			Asset    string              `json:"asset"`
+			Decimals int                 `json:"decimals"`
+			Balance  outscript.BtcAmount `json:"balance"`
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("modchain_assets decode: %w", err)
 	}
-	total := big.NewInt(0)
+	var total uint64
 	decimals := 8
 	for _, a := range resp.Assets {
 		if a.Asset != "NATIVE" {
@@ -543,22 +544,9 @@ func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		if a.Decimals > 0 {
 			decimals = a.Decimals
 		}
-		// Try integer first
-		if i, err := a.Balance.Int64(); err == nil {
-			total.Add(total, big.NewInt(i))
-			continue
-		}
-		// Fallback: decimal string like "0.00000000" → multiply by 10^decimals
-		f, _, err := big.ParseFloat(a.Balance.String(), 10, 256, big.ToNearestEven)
-		if err != nil {
-			return nil, fmt.Errorf("balance %q: %w", a.Balance, err)
-		}
-		mul := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
-		f.Mul(f, mul)
-		i, _ := f.Int(nil)
-		total.Add(total, i)
+		total += uint64(a.Balance)
 	}
-	return wltobj.NewAmountRaw(total, decimals), nil
+	return wltobj.NewAmountRaw(new(big.Int).SetUint64(total), decimals), nil
 }
 
 func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.Asset, error) {

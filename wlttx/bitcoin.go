@@ -28,18 +28,22 @@ func walletByAccount(e wltintf.Env, a *wltacct.Account) (*wltwallet.Wallet, erro
 }
 
 // bitcoinTxo is one entry in the modchain_lookupTxoBIP32 response.
+//
+// modchain serializes Bitcoin amounts via outscript.BtcAmount, which
+// marshals to a decimal string (e.g. "0.00000001"). The BtcAmount
+// type's UnmarshalJSON handles both decimal and integer forms.
 type bitcoinTxo struct {
-	Txo    string `json:"txo"` // "<txid>:<vout>"
-	Height int64  `json:"height"`
-	Amt    int64  `json:"amt"`
-	I      int    `json:"i"`      // child index under the scan path
-	Script string `json:"script"` // flavor: p2pkh, p2wpkh, etc
+	Txo    string             `json:"txo"` // "<txid>:<vout>"
+	Height int64              `json:"height"`
+	Amt    outscript.BtcAmount `json:"amt"` // satoshi, decoded from "0.00000001" form
+	I      int                `json:"i"`      // child index under the scan path
+	Script string             `json:"script"` // flavor: p2pkh, p2wpkh, etc
 }
 
 type bitcoinTxoResp struct {
-	Txo     []bitcoinTxo `json:"txo"`
-	Balance int64        `json:"balance"`
-	LastI   int          `json:"lastI"`
+	Txo     []bitcoinTxo        `json:"txo"`
+	Balance outscript.BtcAmount `json:"balance"`
+	LastI   int                 `json:"lastI"`
 }
 
 // buildBitcoinTx assembles and signs a Bitcoin-family transaction for
@@ -159,7 +163,7 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 		signers[i] = &outscript.BtcTxSign{
 			Key:     signer,
 			Scheme:  scheme,
-			Amount:  outscript.BtcAmount(u.Amt),
+			Amount:  u.Amt,
 			SigHash: sighash,
 		}
 	}
@@ -254,7 +258,7 @@ func selectUTXOs(all []bitcoinTxo, wantSats, feeRatePerVB int64) ([]bitcoinTxo, 
 	var out []bitcoinTxo
 	for _, u := range utxos {
 		out = append(out, u)
-		total += u.Amt
+		total += int64(u.Amt)
 		estFee := int64(estimateTxVSize(len(out), 2)) * feeRatePerVB
 		if total >= wantSats+estFee {
 			return out, total, nil

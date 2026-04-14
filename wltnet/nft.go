@@ -159,29 +159,38 @@ func (n *Network) NftList(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, e
 			return &[]wltnft.Nft{}, nil
 		}
 
-		assets := mapData["assets"].([]any)
-		if len(assets) == 0 {
+		assets, ok := mapData["assets"].([]any)
+		if !ok || len(assets) == 0 {
 			return &[]wltnft.Nft{}, nil
 		}
 
 		var nftInfos []NftFetchInfo
 		for _, a := range assets {
-			asset := a.(map[string]any)
-			if asset["asset"].(string) != "nft" {
+			asset, ok := a.(map[string]any)
+			if !ok {
+				continue
+			}
+			assetType, _ := asset["asset"].(string)
+			if assetType != "nft" {
+				continue
+			}
+			address, _ := asset["address"].(string)
+			token, _ := asset["token"].(string)
+			if address == "" || token == "" {
 				continue
 			}
 			i := slices.IndexFunc(nftInfos, func(info NftFetchInfo) bool {
-				return info.ContractAddress == asset["address"].(string)
+				return info.ContractAddress == address
 			})
 			if i == -1 {
 				nftInfos = append(nftInfos, NftFetchInfo{
-					ContractAddress: asset["address"].(string),
-					Tokens:          []string{asset["token"].(string)},
+					ContractAddress: address,
+					Tokens:          []string{token},
 				})
 				continue
 			}
 			info := nftInfos[i]
-			info.Tokens = append(info.Tokens, asset["token"].(string))
+			info.Tokens = append(info.Tokens, token)
 			nftInfos[i] = info
 		}
 
