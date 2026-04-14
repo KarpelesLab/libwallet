@@ -77,6 +77,7 @@ export 'src/models/request_event.dart'
         SolanaSignMessageRequest,
         SolanaSignTransactionRequest,
         SolanaSignAndSendTransactionRequest,
+        MpurseSignMessageRequest,
         UnknownPendingRequest;
 export 'src/models/web3_connection.dart' show Web3Connection;
 export 'src/models/name_resolution.dart' show NameResolution;

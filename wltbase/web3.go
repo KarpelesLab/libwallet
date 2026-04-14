@@ -552,15 +552,42 @@ func web3Req(ctx context.Context, in struct {
 			return nil, fmt.Errorf("failed to load account: %w", err)
 		}
 		return a.Address, nil
-	case "mpurse_signMessage",
-		"mpurse_signRawTransaction",
+	case "mpurse_signMessage":
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("mpurse_signMessage requires 1 parameter")
+		}
+		msg, ok := in.Query.Params[0].(string)
+		if !ok {
+			return nil, errors.New("mpurse_signMessage param must be a string")
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected; call mpurse_getAddress first")
+		}
+		a, err := wltacct.FindAccount(e, conn[0].Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		// Use the account ID (not address) as the back-reference: bitcoin-
+		// family accounts re-format their Address per current network, so
+		// matching on address across a network switch would miss.
+		acctId := a.Id.String()
+		req := &request{
+			Type:    "mpurse_sign_message",
+			Host:    key,
+			Account: &acctId,
+			Value:   msg,
+		}
+		if err := req.run(e); err != nil {
+			return nil, err
+		}
+		return req.Result, nil
+	case "mpurse_signRawTransaction",
 		"mpurse_sendRawTransaction",
 		"mpurse_sendAsset":
-		// Signing flows for mpurse are a future milestone — Monacoin
-		// message/tx signing uses the Bitcoin-family recoverable-signature
-		// scheme which is not yet wired to the TSS signer. The injected
-		// provider surfaces these methods so dApps load cleanly; calling
-		// them returns a clear error so the dApp can fall back or warn.
+		// Tx-level mpurse methods are a future milestone — parsing
+		// arbitrary Monacoin / Counterparty transactions and mapping
+		// inputs to the user's TSS-owned UTXOs isn't wired yet. The
+		// provider surfaces them so dApps load cleanly.
 		return nil, fmt.Errorf("%s is not implemented yet", in.Query.Method)
 
 	default:

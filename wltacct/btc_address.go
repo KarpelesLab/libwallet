@@ -36,6 +36,12 @@ func (a *Account) bitcoinAddress(chainId string, index int, change bool) (string
 			return "", err
 		}
 		return out.Address("litecoin")
+	case "monacoin":
+		out, err := s.Out("p2wpkh")
+		if err != nil {
+			return "", err
+		}
+		return out.Address("monacoin")
 	case "bitcoin-cash":
 		out, err := s.Out("p2pkh")
 		if err != nil {

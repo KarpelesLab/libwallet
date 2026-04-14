@@ -2,6 +2,7 @@
 @Timeout(Duration(minutes: 10))
 library;
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -612,18 +613,9 @@ void main() {
       });
     });
 
-    // ── Clean up wallet ───────────────────────────────────────────────
+    // ── Web3 injection ──────────────────────────────────────────────────
 
-    test('delete wallet', () async {
-      await client.wallets.delete(wallet.id);
-      final wallets = await client.wallets.list();
-      expect(wallets, isEmpty);
-    });
-  });
-
-  // ── Web3 injection ────────────────────────────────────────────────────
-
-  group('Web3 injection', () {
+    group('Web3 injection', () {
     test('injectionScript returns embedded config + provider shim', () async {
       final js = await client.web3.injectionScript(
         name: 'Libwallet Test',
@@ -695,6 +687,75 @@ void main() {
       } on LibwalletException catch (e) {
         expect(e.message, contains('not implemented'));
       }
+    });
+
+    test('mpurse_signMessage surfaces a typed MpurseSignMessageRequest', () async {
+      // Set up a Monacoin network so the mpurse_signMessage approval
+      // handler can pick the right Bitcoin-family signing prefix.
+      final networks = await client.networks.list();
+      var monaNet =
+          networks.where((n) => n.chainId == 'monacoin').firstOrNull;
+      monaNet ??= await client.networks.create(
+        type: 'bitcoin',
+        chainId: 'monacoin',
+        name: 'Monacoin',
+        currencySymbol: 'MONA',
+      );
+      await client.networks.setCurrent(monaNet.id);
+
+      final monaAcct = await client.accounts.create(
+        name: 'MONA',
+        wallet: wallet.id,
+        type: 'bitcoin',
+        index: 5,
+      );
+
+      // Connect first so mpurse_signMessage has a connected account.
+      const origin = 'https://mona.example';
+      final connectFuture = client.pendingRequests
+          .firstWhere((r) => r is ConnectRequest && r.host == origin)
+          .timeout(const Duration(seconds: 5));
+      final getAddressFuture = client.web3.request(
+        url: origin,
+        query: {'method': 'mpurse_getAddress', 'params': []},
+      );
+      final connectReq = await connectFuture;
+      await client.requests.approve(connectReq.id, accounts: [monaAcct.id]);
+      final addr = await getAddressFuture;
+      expect(addr as String, startsWith('mona1'));
+
+      // Fire the signMessage call — routing check. Actual signature-
+      // correctness is covered by a Go unit test.
+      final signReqFuture = client.pendingRequests
+          .firstWhere((r) => r is MpurseSignMessageRequest)
+          .timeout(const Duration(seconds: 5));
+      final signCallFuture = client.web3.request(
+        url: origin,
+        query: {
+          'method': 'mpurse_signMessage',
+          'params': ['hello from mpurse'],
+        },
+      ).catchError((_) => null); // expected to be rejected
+
+      final signReq = await signReqFuture;
+      expect(signReq, isA<MpurseSignMessageRequest>());
+      final mSig = signReq as MpurseSignMessageRequest;
+      expect(mSig.message, 'hello from mpurse');
+      await client.requests.reject(mSig.id);
+      try {
+        await signCallFuture;
+      } catch (_) {/* expected */}
+
+      await client.accounts.delete(monaAcct.id);
+    });
+  });
+
+    // ── Clean up wallet ───────────────────────────────────────────────
+
+    test('delete wallet', () async {
+      await client.wallets.delete(wallet.id);
+      final wallets = await client.wallets.list();
+      expect(wallets, isEmpty);
     });
   });
 

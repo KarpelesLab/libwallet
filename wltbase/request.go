@@ -334,6 +334,37 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		// Approval acknowledged; the actual network save/switch is done by the caller in web3.go.
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
+	case "mpurse_sign_message":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign")
+		}
+		msg, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid message in request")
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account: %w", err)
+		}
+		n, err := wltnet.CurrentNetwork(e)
+		if err != nil {
+			return nil, fmt.Errorf("no current network: %w", err)
+		}
+		prefix, ok := wltacct.BitcoinMessagePrefix(n.ChainId)
+		if !ok {
+			return nil, fmt.Errorf("no Bitcoin-family message prefix known for chain %q", n.ChainId)
+		}
+		signOpt := &wltsign.Opts{
+			Context: ctx,
+			IL:      a.IL,
+			Keys:    in.Keys,
+		}
+		sig, err := a.SignBitcoinMessage(prefix, []byte(msg), signOpt)
+		if err != nil {
+			return nil, fmt.Errorf("mpurse message sign failed: %w", err)
+		}
+		b64 := base64.StdEncoding.EncodeToString(sig)
+		req.Result = &b64
 	case "solana_sign_message":
 		if len(in.Keys) == 0 {
 			return nil, errors.New("keys are required to sign")

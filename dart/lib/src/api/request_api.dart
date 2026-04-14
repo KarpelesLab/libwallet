@@ -1,4 +1,5 @@
 import '../client/transport.dart';
+import '../models/key_description.dart';
 import '../models/request_event.dart';
 
 /// Request approval/rejection for Web3 interactions.
@@ -20,11 +21,22 @@ class RequestApi {
     return PendingRequest.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Approve a request. For `connect` type, pass the account IDs to expose.
-  /// Returns the request with its populated result field.
-  Future<PendingRequest> approve(String id, {List<String>? accounts}) async {
+  /// Approve a request. Returns the request with its populated result field.
+  ///
+  /// - For `connect` types, pass [accounts] — the IDs the dApp is allowed
+  ///   to see.
+  /// - For signing types (`personal_sign`, `sign_typed_data`,
+  ///   `mpurse_sign_message`, `solana_sign_*`, `sign`), pass [keys] — the
+  ///   wallet key shares that unlock the TSS signer (typically the user's
+  ///   password + remote key + store key).
+  Future<PendingRequest> approve(
+    String id, {
+    List<String>? accounts,
+    List<SigningKey>? keys,
+  }) async {
     final params = <String, dynamic>{};
     if (accounts != null) params['Accounts'] = accounts;
+    if (keys != null) params['Keys'] = keys.map((k) => k.toJson()).toList();
     final data = await _conn.request(
         'Request/$id:approve', 'POST', params.isNotEmpty ? params : null);
     return PendingRequest.fromJson(data as Map<String, dynamic>);

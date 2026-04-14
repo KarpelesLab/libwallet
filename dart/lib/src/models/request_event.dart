@@ -82,6 +82,7 @@ sealed class PendingRequest {
       'solana_sign_transaction' => SolanaSignTransactionRequest._(json),
       'solana_sign_send_transaction' =>
         SolanaSignAndSendTransactionRequest._(json),
+      'mpurse_sign_message' => MpurseSignMessageRequest._(json),
       _ => UnknownPendingRequest._(type, json),
     };
   }
@@ -445,6 +446,41 @@ class SolanaSignAndSendTransactionRequest extends PendingRequest {
   String? get broadcastSignature {
     final r = result;
     if (r is Map) return r['signature'] as String?;
+    return null;
+  }
+}
+
+/// Monacoin (mpurse) `signMessage` — sign a Bitcoin-family message with
+/// the standard "\x19Monacoin Signed Message:\n" prefix. Works on any
+/// bitcoin-family chain libwallet has a signing prefix for (bitcoin,
+/// litecoin, dogecoin, bitcoincash, monacoin).
+class MpurseSignMessageRequest extends PendingRequest {
+  MpurseSignMessageRequest._(Map<String, dynamic> j)
+      : super(
+          id: _id(j),
+          status: _status(j),
+          host: _host(j),
+          account: _account(j),
+          rawValue: _value(j),
+          result: _result(j),
+          created: _parseTime(j['Created']),
+          updated: _parseTime(j['Updated']),
+        );
+
+  @override
+  String get type => 'mpurse_sign_message';
+
+  /// Plain-text message to be signed.
+  String get message {
+    final v = rawValue;
+    return v is String ? v : '';
+  }
+
+  /// Base64-encoded 65-byte compact signature after approval. Null while
+  /// pending. Matches Bitcoin Core's `signmessage` output format.
+  String? get signature {
+    final r = result;
+    if (r is String) return r;
     return null;
   }
 }
