@@ -20,7 +20,10 @@ jobs:
       - uses: dart-lang/setup-dart@v1
 
       - name: Build c-shared library for FFI tests
-        run: CGO_ENABLED=1 go build -buildmode=c-shared -o dart/testserver/liblibwallet.dylib ./cshared/
+        run: |
+          CGO_ENABLED=1 CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
+            go build -buildmode=c-shared \
+            -o dart/testserver/liblibwallet.dylib ./cshared/
 
       - name: Install Dart dependencies
         working-directory: dart

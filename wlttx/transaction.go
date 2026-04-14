@@ -250,6 +250,13 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 		if tx.To == "" {
 			return errors.New("recipient (To) is required for erc20_transfer")
 		}
+	case "bitcoin_transfer":
+		if tx.Amount == nil || tx.Amount.Sign() <= 0 {
+			return errors.New("invalid amount")
+		}
+		if tx.To == "" {
+			return errors.New("recipient (To) is required for bitcoin_transfer")
+		}
 	default:
 		return fmt.Errorf("unsupported transaction type %s", tx.Type)
 	}
@@ -303,6 +310,12 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	if n.Type == "solana" {
 		// Solana has fixed fees (~5000 lamports)
 		tx.Fee = wltobj.NewAmountRaw(big.NewInt(5000), 9)
+		return nil
+	}
+
+	if n.Type == "bitcoin" {
+		// Bitcoin-family: fee is computed at SignAndSend time (needs UTXO
+		// selection). Skip EVM-specific nonce/gas fields entirely.
 		return nil
 	}
 
@@ -456,6 +469,20 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		err = tx.signAndSendSolana(ctx, n, acct, keys)
 		if err != nil {
 			return err
+		}
+		return tx.save(e)
+	}
+
+	if n.Type == "bitcoin" {
+		sctx := &SignContext{Env: e}
+		if err := buildBitcoinTx(sctx, tx, n, acct, keys); err != nil {
+			return fmt.Errorf("build bitcoin tx: %w", err)
+		}
+		if err := tx.save(e); err != nil {
+			return err
+		}
+		if err := broadcastBitcoinTx(tx, n); err != nil {
+			return fmt.Errorf("broadcast bitcoin tx: %w", err)
 		}
 		return tx.save(e)
 	}
