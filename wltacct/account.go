@@ -162,17 +162,23 @@ func (a *Account) setCurrent(e wltintf.Env) error {
 	return e.SetCurrent("account", a.Id.String())
 }
 
-// init initializes a new account with a specified wallet and index
-// Derives the account's public key and addresses from the wallet's master key
-// Uses the BIP44 path format: m/44/60/0/{index} (Ethereum-like for now)
-// Returns any error encountered during the initialization
+// init initializes a new account with a specified wallet and index.
+// Derives the account's public key and addresses from the wallet's master key.
+//
+// Path by account type (non-hardened since TSS has no private key material):
+//   - ed25519 wallets (solana): "m" — we can't derive ed25519 children without
+//     hardened steps, so the account is just the wallet pubkey as-is.
+//   - secp256k1 + ethereum: m/44/60/0/{index} (BIP-44 coin_type 60)
+//   - secp256k1 + bitcoin:   m/44/0/0/{index}  (BIP-44 coin_type 0)
 func (a *Account) init(wallet *wltwallet.Wallet) error {
 	a.Chaincode = wallet.Chaincode
 
 	if wallet.Curve == "ed25519" {
-		// For Ed25519 wallets (Solana), use the master public key directly
+		// For Ed25519 wallets (Solana), use the master public key directly.
+		// ed25519 hierarchical derivation requires hardened steps which TSS
+		// can't perform with public keys alone, so path is just "m".
 		a.Curve = "ed25519"
-		a.Path = "m/44/501/0/" + strconv.Itoa(a.Index)
+		a.Path = "m"
 		a.Pubkey = wallet.Pubkey
 		a.IL = nil
 
@@ -185,12 +191,17 @@ func (a *Account) init(wallet *wltwallet.Wallet) error {
 		return nil
 	}
 
-	// Set up derivation path for Ethereum (hardcoded for now)
 	a.Curve = wallet.Curve
 	if a.Curve == "" {
 		a.Curve = "secp256k1"
 	}
-	a.Path = "m/44/60/0/" + strconv.Itoa(a.Index)
+	switch a.Type {
+	case "bitcoin":
+		a.Path = "m/44/0/0/" + strconv.Itoa(a.Index)
+	default:
+		// ethereum (and legacy fallthrough)
+		a.Path = "m/44/60/0/" + strconv.Itoa(a.Index)
+	}
 
 	// Get the wallet's master public key
 	wpubkey, err := wallet.GetPubkey()

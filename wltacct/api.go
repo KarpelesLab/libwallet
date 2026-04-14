@@ -34,6 +34,21 @@ func CreateAccount(e wltintf.Env, wallet *wltwallet.Wallet, name, typ string, in
 		return nil, fmt.Errorf("unsupported account type %s", typ)
 	}
 
+	curve := wallet.Curve
+	if curve == "" {
+		curve = "secp256k1"
+	}
+	switch typ {
+	case "solana":
+		if curve != "ed25519" {
+			return nil, fmt.Errorf("solana account requires ed25519 wallet, got %s", curve)
+		}
+	case "ethereum", "bitcoin":
+		if curve != "secp256k1" {
+			return nil, fmt.Errorf("%s account requires secp256k1 wallet, got %s", typ, curve)
+		}
+	}
+
 	if name == "" {
 		name = fmt.Sprintf("Account %d", index+1)
 	}

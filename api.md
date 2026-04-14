@@ -117,6 +117,12 @@ returns an object with the state of the user's onboarding, useful to check if we
   * `Name`
 * `DELETE Account/<id>` Delete an account and everything related
 * `Account/<id>:setCurrent`
+* `Account/<id>:signMessage` Sign a raw message with the account's TSS key (wallet-host direct-signing, bypasses Web3 approval flow)
+  * `Message` base64 bytes to sign
+  * `Keys` TSS key descriptors
+  * `Mode` optional: `solana` (base58 sig), `evm`/`personal_sign` (0x-hex sig, EIP-191), `raw` (base64 sig). Defaults to `solana` for ed25519 accounts, `evm` for secp256k1.
+* `Account/<id>:signTransaction` Sign an unsigned Solana transaction (base64 in, base64 out). EVM/Bitcoin transactions should use `Transaction:signAndSend`.
+* `Account/<id>:signAndSendTransaction` Sign + broadcast a Solana transaction via the current network's RPC. Returns the broadcast signature (base58).
 
 ## Asset
 

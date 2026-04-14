@@ -124,6 +124,12 @@ func apiCreateWallet(ctx *apirouter.Context, in struct {
 		return nil, fmt.Errorf("need at least 3 keys, got %d", keyCnt)
 	}
 
+	switch in.Curve {
+	case "", "secp256k1", "ed25519":
+	default:
+		return nil, fmt.Errorf("unsupported curve %q (expected \"secp256k1\" or \"ed25519\")", in.Curve)
+	}
+
 	wallet := &Wallet{
 		Id:       xuid.New("wlt"),
 		Name:     in.Name,

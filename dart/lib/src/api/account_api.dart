@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import '../client/transport.dart';
 import '../models/account.dart';
 
@@ -82,6 +85,61 @@ class AccountApi {
     if (network != null) params['Network'] = network;
     final data = await _conn.request('Account/$id:nextAddress', 'POST', params);
     return NextAddress.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Sign an arbitrary message with the account's TSS key.
+  ///
+  /// [message] is the raw bytes to sign.
+  /// [keys] is the list of TSS key descriptors (from wallet state).
+  /// [mode] selects the signing scheme:
+  ///   - `solana` → raw EdDSA; returns base58 signature.
+  ///   - `evm` / `personal_sign` → EIP-191 personal_sign; returns 0x-hex.
+  ///   - `raw` → signs bytes as-is (caller already hashed); returns base64.
+  ///   - `null` → auto-picks `solana` for ed25519, `evm` for secp256k1.
+  Future<Map<String, dynamic>> signMessage(
+    String id, {
+    required Uint8List message,
+    required List<Map<String, dynamic>> keys,
+    String? mode,
+  }) async {
+    final params = <String, dynamic>{
+      'Message': base64.encode(message),
+      'Keys': keys,
+    };
+    if (mode != null) params['Mode'] = mode;
+    final data =
+        await _conn.request('Account/$id:signMessage', 'POST', params);
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Sign an unsigned Solana transaction. Returns the signed transaction
+  /// as base64. For EVM/Bitcoin sends use `TransactionApi.signAndSend`.
+  Future<Uint8List> signTransaction(
+    String id, {
+    required Uint8List transaction,
+    required List<Map<String, dynamic>> keys,
+  }) async {
+    final data = await _conn.request('Account/$id:signTransaction', 'POST', {
+      'Transaction': base64.encode(transaction),
+      'Keys': keys,
+    });
+    final signed = (data as Map)['transaction'] as String;
+    return base64.decode(signed);
+  }
+
+  /// Sign a Solana transaction and broadcast it on the current network.
+  /// Returns the broadcast signature (base58).
+  Future<String> signAndSendTransaction(
+    String id, {
+    required Uint8List transaction,
+    required List<Map<String, dynamic>> keys,
+  }) async {
+    final data =
+        await _conn.request('Account/$id:signAndSendTransaction', 'POST', {
+      'Transaction': base64.encode(transaction),
+      'Keys': keys,
+    });
+    return (data as Map)['signature'] as String;
   }
 
   /// List all HD addresses (receive + change) that have seen any activity,
