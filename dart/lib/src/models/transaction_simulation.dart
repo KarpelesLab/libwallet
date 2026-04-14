@@ -32,6 +32,23 @@ class TransactionSimulation {
   /// - `unknown`:         `{selector, data}`
   final Map<String, dynamic> decodedArgs;
 
+  /// Every transfer the simulated tx will cause, at any call depth.
+  ///
+  /// This is the anti-drainer signal: a dApp can send innocuous-looking
+  /// calldata (e.g. `increaseAllowance` for a tiny amount) that triggers
+  /// a massive Transfer event via a nested call. Showing the user every
+  /// Effect catches that — the top-level [decodedMethod] alone does not.
+  ///
+  /// Populated on EVM chains via erigon's `debug_traceCall` with the
+  /// `callTracer`. On nodes without `debug_*`, this list contains only
+  /// the single effect corresponding to [decodedMethod] (if any).
+  final List<Effect> effects;
+
+  /// Native-balance deltas per address, from erigon's `prestateTracer`
+  /// (diff mode). Values are signed decimal wei — negative means net
+  /// spend (the sender pays gas + any native value attached).
+  final List<BalanceChange> balanceChanges;
+
   // ── EVM ────────────────────────────────────────────────────
   /// EVM gas estimate via `eth_estimateGas` (only set on success).
   final int? gasEstimate;
@@ -62,6 +79,8 @@ class TransactionSimulation {
     this.revertReason,
     this.decodedMethod,
     this.decodedArgs = const {},
+    this.effects = const [],
+    this.balanceChanges = const [],
     this.gasEstimate,
     this.logs,
     this.unitsConsumed,
@@ -79,6 +98,22 @@ class TransactionSimulation {
           .toList();
     }
 
+    List<Effect> parseEffects(dynamic v) {
+      if (v is! List) return const [];
+      return v
+          .whereType<Map>()
+          .map((e) => Effect.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+
+    List<BalanceChange> parseBalanceChanges(dynamic v) {
+      if (v is! List) return const [];
+      return v
+          .whereType<Map>()
+          .map((e) => BalanceChange.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+
     return TransactionSimulation(
       chain: (json['chain'] as String?) ?? '',
       willRevert: json['willRevert'] == true,
@@ -87,6 +122,8 @@ class TransactionSimulation {
       decodedArgs: json['decodedArgs'] is Map
           ? Map<String, dynamic>.from(json['decodedArgs'] as Map)
           : const <String, dynamic>{},
+      effects: parseEffects(json['effects']),
+      balanceChanges: parseBalanceChanges(json['balanceChanges']),
       gasEstimate: (json['gasEstimate'] as num?)?.toInt(),
       logs: (json['logs'] as List?)?.whereType<String>().toList(),
       unitsConsumed: (json['unitsConsumed'] as num?)?.toInt(),
@@ -99,6 +136,65 @@ class TransactionSimulation {
   bool get isEvm => chain == 'evm';
   bool get isSolana => chain == 'solana';
   bool get isBitcoin => chain == 'bitcoin';
+}
+
+/// One observable transfer the simulated tx will cause. Sourced from
+/// erigon's `debug_traceCall` callTracer — every ERC-20 Transfer /
+/// Approval event and every value-carrying CALL / CREATE at any depth.
+class Effect {
+  /// `native_transfer` | `erc20_transfer` | `erc20_approve`.
+  final String type;
+
+  /// ERC-20 token contract address. Empty for native transfers.
+  final String token;
+
+  /// Lowercase hex address.
+  final String from;
+
+  /// Lowercase hex address. For `erc20_approve`, this is the spender.
+  final String to;
+
+  /// Unsigned decimal integer string (wei or token base units).
+  final String amount;
+
+  const Effect({
+    required this.type,
+    this.token = '',
+    required this.from,
+    required this.to,
+    required this.amount,
+  });
+
+  factory Effect.fromJson(Map<String, dynamic> json) => Effect(
+        type: (json['type'] as String?) ?? '',
+        token: (json['token'] as String?) ?? '',
+        from: (json['from'] as String?) ?? '',
+        to: (json['to'] as String?) ?? '',
+        amount: (json['amount'] as String?) ?? '0',
+      );
+
+  bool get isNative => type == 'native_transfer';
+  bool get isErc20Transfer => type == 'erc20_transfer';
+  bool get isErc20Approve => type == 'erc20_approve';
+}
+
+/// Signed native-balance delta for one address across the simulation.
+/// Negative means the address lost balance (paid gas, sent value, etc.).
+class BalanceChange {
+  final String address;
+
+  /// Signed decimal integer string (wei for EVM).
+  final String delta;
+
+  const BalanceChange({required this.address, required this.delta});
+
+  factory BalanceChange.fromJson(Map<String, dynamic> json) => BalanceChange(
+        address: (json['address'] as String?) ?? '',
+        delta: (json['delta'] as String?) ?? '0',
+      );
+
+  /// True if this address lost native balance.
+  bool get isLoss => delta.startsWith('-');
 }
 
 /// One input or output of a bitcoin-family transaction.
