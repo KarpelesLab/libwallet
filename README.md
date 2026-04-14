@@ -2,6 +2,7 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/KarpelesLab/libwallet)](https://goreportcard.com/report/github.com/KarpelesLab/libwallet)
 [![Coverage Status](https://coveralls.io/repos/github/KarpelesLab/libwallet/badge.svg?branch=master)](https://coveralls.io/github/KarpelesLab/libwallet?branch=master)
+[![pub package](https://img.shields.io/pub/v/libwallet.svg)](https://pub.dev/packages/libwallet)
 
 A comprehensive cryptocurrency wallet library written in Go, providing a modular framework for building secure cryptocurrency wallets with multi-chain support.
 
@@ -95,7 +96,7 @@ A pure Dart client is published on pub.dev as [`libwallet`](https://pub.dev/pack
 
 ```yaml
 dependencies:
-  libwallet: ^0.2.0
+  libwallet: ^0.3.1
 ```
 
 ```dart
