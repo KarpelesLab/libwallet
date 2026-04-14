@@ -129,6 +129,19 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `Account/<id>:signTransaction` Sign an unsigned Solana transaction (base64 in, base64 out). EVM/Bitcoin transactions should use `Transaction:signAndSend`.
 * `Account/<id>:signAndSendTransaction` Sign + broadcast a Solana transaction via the current network's RPC. Returns the broadcast signature (base58).
 
+## Web3
+
+* `Web3:request` Proxy a JSON-RPC call from a dApp webview to the wallet. Used internally by the injected provider.
+  * `url` dApp origin (used for per-host connection state)
+  * `query.method` / `query.params` — the JSON-RPC method being invoked
+* `Web3:injectionScript` Generate JavaScript to inject into a WebView. Exposes `window.ethereum` (EIP-1193 + EIP-6963), `window.solana` (Wallet Standard), and `window.mpurse` (Monacoin). See `Web3Api.injectionScript` in the Dart client for a walkthrough.
+  * `Name` wallet display name (required)
+  * `Rdns` reverse DNS identifier, e.g. `com.example.wallet` (required)
+  * `Uuid` stable per-install UUID — cache on the host (required)
+  * `Icon` data: URL or https:// URL for the wallet icon (required for EIP-6963)
+  * `Bridge` name of the host JS message channel the script will post to (required)
+  * `Host` optional dApp origin — pre-populates connected accounts in the returned script
+
 ## Asset
 
 * `GET` (list only)

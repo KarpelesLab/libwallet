@@ -621,6 +621,83 @@ void main() {
     });
   });
 
+  // ── Web3 injection ────────────────────────────────────────────────────
+
+  group('Web3 injection', () {
+    test('injectionScript returns embedded config + provider shim', () async {
+      final js = await client.web3.injectionScript(
+        name: 'Libwallet Test',
+        rdns: 'com.example.libwallet.test',
+        uuid: 'aaaaaaaa-bbbb-4ccc-dddd-eeeeeeeeeeee',
+        icon: 'data:image/svg+xml;base64,PHN2Zy8+',
+        bridge: 'libwalletBridge',
+        host: 'https://example.com',
+      );
+      // Sanity: all three providers landed in the script.
+      expect(js, contains('window.ethereum'));
+      expect(js, contains('window.solana'));
+      expect(js, contains('window.mpurse'));
+      // EIP-6963 announce wiring.
+      expect(js, contains('eip6963:announceProvider'));
+      expect(js, contains('eip6963:requestProvider'));
+      // Wallet Standard register-wallet wiring.
+      expect(js, contains('wallet-standard:register-wallet'));
+      // Config interpolation actually happened.
+      expect(js, contains('Libwallet Test'));
+      expect(js, contains('com.example.libwallet.test'));
+      expect(js, contains('libwalletBridge'));
+      // Placeholder got replaced (no literal __LIBWALLET_CONFIG__).
+      expect(js, isNot(contains('__LIBWALLET_CONFIG__')));
+    });
+
+    test('injectionScript rejects missing required fields', () async {
+      expect(
+        () => client.web3.injectionScript(
+          name: '',
+          rdns: 'x.y',
+          uuid: 'u',
+          icon: 'data:,',
+          bridge: 'b',
+        ),
+        throwsA(isA<LibwalletException>()),
+      );
+    });
+
+    test('mpurse_getAddress over Web3:request triggers a connect prompt',
+        () async {
+      // No accounts connected yet on this host — the call blocks on a
+      // pending connect request. We verify it reaches the request queue
+      // via the pendingRequests stream, then reject.
+      final future = client.pendingRequests
+          .firstWhere((r) => r.host.startsWith('https://example.org'))
+          .timeout(const Duration(seconds: 5));
+
+      final callFuture = client.web3.request(
+        url: 'https://example.org',
+        query: {'method': 'mpurse_getAddress', 'params': []},
+      );
+
+      final req = await future;
+      expect(req, isA<ConnectRequest>());
+      await client.requests.reject(req.id);
+      try {
+        await callFuture;
+      } catch (_) {/* expected: call rejected */}
+    });
+
+    test('mpurse_signRawTransaction returns "not implemented"', () async {
+      try {
+        await client.web3.request(
+          url: 'https://example.org',
+          query: {'method': 'mpurse_signRawTransaction', 'params': ['']},
+        );
+        fail('should have thrown');
+      } on LibwalletException catch (e) {
+        expect(e.message, contains('not implemented'));
+      }
+    });
+  });
+
   // ── Raw request ───────────────────────────────────────────────────────
 
   test('rawRequest works', () async {

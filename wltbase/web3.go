@@ -532,6 +532,37 @@ func web3Req(ctx context.Context, in struct {
 		return req.Result, nil
 	case "wallet_registerOnboarding":
 		return false, nil
+
+	// ── Mpurse (Monacoin) — github.com/tadajam/mpurse ────────────────────
+	case "mpurse_getAddress":
+		// First call triggers a connect prompt, subsequent calls return
+		// the connected address without prompting.
+		if len(conn) == 0 {
+			req := &request{Type: "connect", Host: key}
+			if err := req.run(e); err != nil {
+				return nil, err
+			}
+			conn, _ = e.connectedAccounts(key)
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected")
+		}
+		a, err := wltacct.FindAccount(e, conn[0].Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		return a.Address, nil
+	case "mpurse_signMessage",
+		"mpurse_signRawTransaction",
+		"mpurse_sendRawTransaction",
+		"mpurse_sendAsset":
+		// Signing flows for mpurse are a future milestone — Monacoin
+		// message/tx signing uses the Bitcoin-family recoverable-signature
+		// scheme which is not yet wired to the TSS signer. The injected
+		// provider surfaces these methods so dApps load cleanly; calling
+		// them returns a clear error so the dApp can fall back or warn.
+		return nil, fmt.Errorf("%s is not implemented yet", in.Query.Method)
+
 	default:
 		// relay to current network
 		return n.DoRPC(in.Query.Method, in.Query.Params...)
