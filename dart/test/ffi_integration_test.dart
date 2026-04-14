@@ -572,12 +572,43 @@ void main() {
     // ── Request ────────────────────────────────────────────────────────
 
     group('Request', () {
-      test('test fires a test event', () async {
+      test('raw requestEvents fires on test()', () async {
+        final future = client.requestEvents
+            .first
+            .timeout(const Duration(seconds: 5));
+        final testFuture = client.requests.test();
+        final ev = await future;
+        expect(ev.requestId, isNotEmpty);
+        // The full request should now be embedded in the event.
+        expect(ev.request, isNotNull);
+        expect(ev.request!.host, 'www.example.com');
+        expect(ev.request!, isA<UnknownPendingRequest>());
+        expect(ev.request!.type, 'test');
+        // Reject to unblock the backend's 2-minute timer.
+        await client.requests.reject(ev.requestId);
         try {
-          await client.requests.test();
-        } on LibwalletException {
-          // May fail without a connected Web3 session — acceptable
-        }
+          await testFuture;
+        } catch (_) {}
+      });
+
+      test('pendingRequests stream carries full payload', () async {
+        final future = client.pendingRequests
+            .firstWhere((r) => r.host == 'www.example.com')
+            .timeout(const Duration(seconds: 5));
+
+        final testFuture = client.requests.test();
+
+        final req = await future;
+        expect(req.id, isNotEmpty);
+        expect(req.host, 'www.example.com');
+        expect(req, isA<UnknownPendingRequest>());
+        expect(req.type, 'test');
+        expect(req.isPending, isTrue);
+
+        await client.requests.reject(req.id);
+        try {
+          await testFuture;
+        } catch (_) {}
       });
     });
 

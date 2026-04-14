@@ -21,6 +21,7 @@ import '../api/wallet_key_api.dart';
 import '../api/web3_api.dart';
 import '../api/web3_connection_api.dart';
 import '../events/events.dart';
+import '../models/request_event.dart';
 import 'ffi_transport.dart';
 import 'json_rpc_connection.dart';
 import 'response.dart';
@@ -99,9 +100,53 @@ class LibwalletClient {
   /// Stream of all server-pushed events.
   Stream<LibwalletEvent> get events => _transport.events;
 
-  /// Stream of Web3 request events.
+  /// Stream of raw Web3 request events. Prefer [pendingRequests] for a
+  /// fully-parsed view; this stream is kept for advanced use cases that
+  /// want access to the raw event payload.
   Stream<RequestEvent> get requestEvents =>
       events.where((e) => e is RequestEvent).cast<RequestEvent>();
+
+  /// Stream of pending Web3 requests, fully parsed and ready to render.
+  ///
+  /// The push event now carries the full request payload, so consumers do
+  /// NOT need to call `requests.get(id)` before deciding to approve or
+  /// reject. If the backend is older and omits the payload, falls back
+  /// to a one-time fetch per event.
+  ///
+  /// ```dart
+  /// client.pendingRequests.listen((req) async {
+  ///   switch (req) {
+  ///     case ConnectRequest():
+  ///       if (await showConnectSheet(req.host)) {
+  ///         await client.requests.approve(req.id, accounts: [myAccount.id]);
+  ///       } else {
+  ///         await client.requests.reject(req.id);
+  ///       }
+  ///     case PersonalSignRequest():
+  ///       final ok = await showSignSheet(req.messageAsText ?? 'binary data');
+  ///       ok
+  ///           ? await client.requests.approve(req.id)
+  ///           : await client.requests.reject(req.id);
+  ///     default:
+  ///       await client.requests.reject(req.id);
+  ///   }
+  /// });
+  /// ```
+  Stream<PendingRequest> get pendingRequests async* {
+    await for (final event in requestEvents) {
+      final embedded = event.request;
+      if (embedded != null) {
+        yield embedded;
+        continue;
+      }
+      // Backward-compat fallback: older backend emits only request_id.
+      try {
+        yield await requests.get(event.requestId);
+      } catch (_) {
+        // Skip requests we can't fetch (expired, deleted, etc.).
+      }
+    }
+  }
 
   /// Stream of online/offline status events.
   Stream<OnlineStatusEvent> get onlineStatusEvents =>

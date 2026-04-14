@@ -102,8 +102,14 @@ func (r *request) run(e *env) error {
 	}
 
 	ch := makePendingRequestChan(r.Id.String())
-	// send event
-	go wltutil.BroadcastMsg("request", map[string]any{"request_id": r.Id.String()})
+	// Emit the full request object so consumers can render the prompt
+	// immediately without a follow-up Request/<id> round-trip. request_id
+	// stays at the top level for backward-compat with anything that only
+	// knows the old shape.
+	go wltutil.BroadcastMsg("request", map[string]any{
+		"request_id": r.Id.String(),
+		"request":    r,
+	})
 
 	timeout := time.NewTimer(2 * time.Minute)
 	defer timeout.Stop()

@@ -64,7 +64,20 @@ export 'src/models/nft.dart' show Nft, NftAttribute;
 export 'src/models/crash.dart' show Crash;
 export 'src/models/key_description.dart' show KeyDescription, SigningKey;
 export 'src/models/onboarding.dart' show OnboardingState;
-export 'src/models/request_event.dart' show PendingRequest;
+export 'src/models/request_event.dart'
+    show
+        PendingRequest,
+        ConnectRequest,
+        SignRequest,
+        PersonalSignRequest,
+        SignTypedDataRequest,
+        AddNetworkRequest,
+        ChangeNetworkRequest,
+        WatchAssetRequest,
+        SolanaSignMessageRequest,
+        SolanaSignTransactionRequest,
+        SolanaSignAndSendTransactionRequest,
+        UnknownPendingRequest;
 export 'src/models/web3_connection.dart' show Web3Connection;
 export 'src/models/name_resolution.dart' show NameResolution;
 export 'src/models/signed_message.dart' show SignedMessage;

@@ -1,3 +1,5 @@
+import '../models/request_event.dart' show PendingRequest;
+
 /// Base class for events pushed from libwallet.
 sealed class LibwalletEvent {
   final String event;
@@ -18,11 +20,23 @@ sealed class LibwalletEvent {
   }
 }
 
-/// A Web3 request pending user action.
+/// A Web3 request pending user action. The event carries the full request
+/// payload so the UI can render the prompt immediately without a follow-up
+/// `Request/<id>` round-trip.
 class RequestEvent extends LibwalletEvent {
   RequestEvent(Map<String, dynamic> data) : super('request', data);
 
+  /// Unique request identifier. Present on every request event.
   String get requestId => data['request_id'] as String? ?? '';
+
+  /// Fully-parsed request. Returns null only if the backend is older than
+  /// the event-payload expansion (emits `request_id` only, no `request`).
+  /// In that case the caller must fall back to `client.requests.get(id)`.
+  PendingRequest? get request {
+    final raw = data['request'];
+    if (raw is Map) return PendingRequest.fromJson(Map<String, dynamic>.from(raw));
+    return null;
+  }
 }
 
 /// Network connectivity status changed.
