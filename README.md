@@ -89,6 +89,48 @@ All data is stored in a single **SQLite** database (`sql.db`) using GORM, includ
 
 libwallet provides a comprehensive API for integration. See [api.md](api.md) for detailed endpoint documentation.
 
+## Dart / Flutter
+
+A pure Dart client is published on pub.dev as [`libwallet`](https://pub.dev/packages/libwallet). It communicates with the Go library via direct FFI (no sockets), using `NativeCallable.listener` for Go→Dart callbacks. Source lives in [dart/](dart/).
+
+```yaml
+dependencies:
+  libwallet: ^0.2.0
+```
+
+```dart
+import 'package:libwallet/libwallet.dart';
+
+final client = LibwalletClient.initialize('/path/to/data');
+final wallets = await client.wallets.list();
+```
+
+The Dart package's build hook downloads the matching native binary from the GitHub Release for the target platform at install time — no Go toolchain needed for consumers.
+
+## Managed Release
+
+Releases are fully automated. A single `v{X}.{Y}.{Z}` tag triggers both the Go library release (with native binaries) and the Dart package publish.
+
+**To cut a new release:**
+
+1. Update the Dart package version in `dart/pubspec.yaml` (must match the tag)
+2. Update `dart/CHANGELOG.md`
+3. Commit and push: `git commit -am "bump to 0.2.1" && git push`
+4. Tag and push: `git tag v0.2.1 && git push --tags`
+
+**What happens automatically:**
+
+- **Build workflow** (`.github/workflows/build.yml`) compiles:
+  - gomobile artifacts (iOS `.xcframework`, Android `.aar`)
+  - c-shared libraries for Dart FFI (Android arm64/arm/x64, iOS arm64, macOS arm64/x64, Linux x64)
+  - Creates a GitHub Release with all binaries as assets
+- **Publish Dart workflow** (`.github/workflows/publish-dart.yml`) then:
+  - Verifies the tag version matches `dart/pubspec.yaml`
+  - Waits for the GitHub Release binaries to be uploaded
+  - Publishes the Dart package to pub.dev via OIDC (no credentials stored)
+
+The Dart package version and native library version are always locked together — consumers always get matching binaries.
+
 ## License
 
 Copyright 2025 Karpeles Lab Inc - See [LICENCE.md](LICENCE.md) for details.
