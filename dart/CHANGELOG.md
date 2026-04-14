@@ -1,3 +1,12 @@
+## 0.3.2
+
+- **iOS simulator support**: build hook now detects `iphoneos` vs
+  `iphonesimulator` SDK and downloads the correct binary. Previously
+  the simulator would try to link the device-only binary and fail.
+- Release now includes `liblibwallet-iossimulator-arm64.a` (Apple Silicon)
+  and `liblibwallet-iossimulator-x64.a` (Intel Mac simulators) alongside
+  the existing `liblibwallet-ios-arm64.a` device binary.
+
 ## 0.3.1
 
 - **Bitcoin HD address support**: `bitcoin`-type accounts now derive

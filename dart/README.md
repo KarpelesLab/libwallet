@@ -106,7 +106,8 @@ Supported targets:
 | macOS arm64 / x64 | `.dylib` |
 | Linux x64 | `.so` |
 | Android arm64 / arm / x64 | `.so` |
-| iOS arm64 | static `.a` (linked into the app) |
+| iOS device arm64 | static `.a` (linked into the app) |
+| iOS simulator arm64 / x64 | static `.a` (linked into the app) |
 
 The downloaded binary is cached per-version in the Dart build cache, so
 subsequent builds are instant. The Dart package version and native library

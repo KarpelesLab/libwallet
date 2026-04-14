@@ -37,7 +37,12 @@ void main(List<String> args) async {
         ext = 'so';
         linkMode = DynamicLoadingBundled();
       case OS.iOS:
-        dartName = 'ios-${_archName(arch)}';
+        // Distinguish iOS device (iphoneos) from simulator (iphonesimulator).
+        // The binaries are NOT interchangeable: simulator builds link against
+        // different frameworks than on-device builds.
+        final iosSdk = codeConfig.iOS.targetSdk;
+        final prefix = iosSdk == IOSSdk.iPhoneSimulator ? 'iossimulator' : 'ios';
+        dartName = '$prefix-${_archName(arch)}';
         ext = 'a';
         linkMode = LookupInProcess();
       case OS.windows:
