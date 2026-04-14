@@ -66,6 +66,7 @@ export 'src/models/key_description.dart' show KeyDescription, SigningKey;
 export 'src/models/onboarding.dart' show OnboardingState;
 export 'src/models/request_event.dart' show PendingRequest;
 export 'src/models/web3_connection.dart' show Web3Connection;
+export 'src/models/name_resolution.dart' show NameResolution;
 
 // Events
 export 'src/events/events.dart'
@@ -78,6 +79,7 @@ export 'src/client/ffi_transport.dart' show FfiTransport;
 // API classes (for type access, usually accessed via client.xxx)
 export 'src/api/info_api.dart' show InfoApi;
 export 'src/api/lifecycle_api.dart' show LifecycleApi;
+export 'src/api/name_api.dart' show NameApi;
 export 'src/api/store_key_api.dart' show StoreKeyApi, StoreKeyPair;
 export 'src/api/remote_key_api.dart' show RemoteKeyApi;
 export 'src/api/wallet_api.dart' show WalletApi;

@@ -91,9 +91,14 @@ jobs:
 
       - name: Build c-shared for macOS (Dart FFI)
         run: |
+          # -headerpad_max_install_names reserves header space so that
+          # install_name_tool can later rewrite rpath/id without relinking.
+          # Dart's native_assets pipeline does exactly this on bundling.
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
             go build -buildmode=c-shared -o liblibwallet-macos-arm64.dylib ./cshared/
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+            CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
             go build -buildmode=c-shared -o liblibwallet-macos-x64.dylib ./cshared/
 
       - name: Upload iOS artifact

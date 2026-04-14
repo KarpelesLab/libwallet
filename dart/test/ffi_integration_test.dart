@@ -180,6 +180,30 @@ void main() {
     });
   });
 
+  // ── Name resolution (ENS / SNS) ───────────────────────────────────────
+
+  group('Names', () {
+    test('resolve ENS name', () async {
+      // vitalik.eth is famously stable; use it as a smoke test.
+      try {
+        final res = await client.names.resolve('vitalik.eth');
+        expect(res.name, 'vitalik.eth');
+        expect(res.network, 'ethereum');
+        expect(res.address, startsWith('0x'));
+        expect(res.address.length, 42);
+      } on LibwalletException {
+        // RPC may be unreachable in CI — acceptable.
+      }
+    });
+
+    test('reject unsupported suffix', () async {
+      expect(
+        () => client.names.resolve('foo.com'),
+        throwsA(isA<LibwalletException>()),
+      );
+    });
+  });
+
   // ── RemoteKey ─────────────────────────────────────────────────────────
 
   group('RemoteKey', () {

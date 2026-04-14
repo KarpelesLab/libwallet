@@ -8,6 +8,7 @@ import '../api/contact_api.dart';
 import '../api/crash_api.dart';
 import '../api/info_api.dart';
 import '../api/lifecycle_api.dart';
+import '../api/name_api.dart';
 import '../api/network_api.dart';
 import '../api/nft_api.dart';
 import '../api/remote_key_api.dart';
@@ -48,6 +49,7 @@ class LibwalletClient {
   // API namespaces
   late final InfoApi info = InfoApi(_transport);
   late final LifecycleApi lifecycle = LifecycleApi(_transport);
+  late final NameApi names = NameApi(_transport);
   late final StoreKeyApi storeKeys = StoreKeyApi(_transport);
   late final RemoteKeyApi remoteKeys = RemoteKeyApi(_transport);
   late final WalletApi wallets = WalletApi(_transport);

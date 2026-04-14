@@ -17,6 +17,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltasset"
 	"github.com/KarpelesLab/libwallet/wltcontact"
 	"github.com/KarpelesLab/libwallet/wltcrash"
+	_ "github.com/KarpelesLab/libwallet/wltnames" // registers Names:resolve API
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"

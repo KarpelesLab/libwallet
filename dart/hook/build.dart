@@ -50,7 +50,23 @@ void main(List<String> args) async {
 
     final fileName = 'liblibwallet-$dartName.$ext';
 
-    // Check if binary already exists in the shared output directory (cached)
+    // 1. Prefer a local dev binary at testserver/liblibwallet.<ext>
+    //    (built via `go build -buildmode=c-shared` during development).
+    final localFile =
+        input.packageRoot.resolve('testserver/liblibwallet.$ext');
+    if (File.fromUri(localFile).existsSync()) {
+      output.assets.code.add(
+        CodeAsset(
+          package: input.packageName,
+          name: 'liblibwallet',
+          linkMode: linkMode,
+          file: localFile,
+        ),
+      );
+      return;
+    }
+
+    // 2. Otherwise, check the shared output cache
     final outputDir = input.outputDirectoryShared;
     final cachedFile = outputDir.resolve(fileName);
 

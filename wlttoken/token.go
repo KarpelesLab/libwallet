@@ -105,6 +105,13 @@ func TokenById(e wltintf.Env, id *xuid.XUID) (*token, error) {
 	return wltintf.ByPrimaryKey[token](e, id)
 }
 
+// Exported accessors for external callers (e.g. wlttx for ERC-20 transfer encoding).
+
+func (t *token) GetAddress() string   { return t.Address }
+func (t *token) GetDecimals() int     { return t.Decimals }
+func (t *token) GetType() string      { return t.Type }
+func (t *token) GetNetwork() *xuid.XUID { return t.Network }
+
 func (t *token) ApiDelete(ctx *apirouter.Context) error {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {

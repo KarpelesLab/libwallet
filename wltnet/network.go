@@ -358,7 +358,13 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 			n.validRPC = ethrpc.New(n.RPC)
 			return n.validRPC, nil
 		}
-		n.validRPC = ethrpc.New("https://kristi-cykm4t-fast-mainnet.helius-rpc.com")
+		// Route to the correct Helius endpoint based on chain
+		switch n.ChainId {
+		case "devnet":
+			n.validRPC = ethrpc.New("https://trudie-xvrnf4-fast-devnet.helius-rpc.com")
+		default: // mainnet
+			n.validRPC = ethrpc.New("https://kristi-cykm4t-fast-mainnet.helius-rpc.com")
+		}
 		return n.validRPC, nil
 	}
 	if n.Type == "bitcoin" {
