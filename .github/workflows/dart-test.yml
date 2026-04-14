@@ -52,10 +52,11 @@ jobs:
             fi
           }
 
-  # iOS simulator integration tests (FFI via c-archive)
+  # iOS simulator integration tests (FFI via c-archive).
+  # The Xcode build for the test host takes 25-40 minutes on CI.
   test-ios:
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
 
