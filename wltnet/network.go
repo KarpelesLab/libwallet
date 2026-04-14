@@ -505,22 +505,45 @@ func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		return nil, err
 	}
 
+	// modchain_assets serializes `balance` as a decimal-formatted number
+	// (BtcAmount.MarshalJSON emits "0.00000000" form). Use json.Number to
+	// accept either an integer or decimal representation, then convert
+	// to satoshi via the Decimals field.
 	var resp struct {
 		Assets []struct {
-			Asset   string `json:"asset"`
-			Balance int64  `json:"balance"`
+			Asset    string      `json:"asset"`
+			Decimals int         `json:"decimals"`
+			Balance  json.Number `json:"balance"`
 		} `json:"assets"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("modchain_assets decode: %w", err)
 	}
-	var total int64
+	total := big.NewInt(0)
+	decimals := 8
 	for _, a := range resp.Assets {
-		if a.Asset == "NATIVE" {
-			total += a.Balance
+		if a.Asset != "NATIVE" {
+			continue
 		}
+		if a.Decimals > 0 {
+			decimals = a.Decimals
+		}
+		// Try integer first
+		if i, err := a.Balance.Int64(); err == nil {
+			total.Add(total, big.NewInt(i))
+			continue
+		}
+		// Fallback: decimal string like "0.00000000" → multiply by 10^decimals
+		f, _, err := big.ParseFloat(a.Balance.String(), 10, 256, big.ToNearestEven)
+		if err != nil {
+			return nil, fmt.Errorf("balance %q: %w", a.Balance, err)
+		}
+		mul := new(big.Float).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil))
+		f.Mul(f, mul)
+		i, _ := f.Int(nil)
+		total.Add(total, i)
 	}
-	return wltobj.NewAmountRaw(big.NewInt(total), 8), nil
+	return wltobj.NewAmountRaw(total, decimals), nil
 }
 
 func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.Asset, error) {
