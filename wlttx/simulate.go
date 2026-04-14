@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
@@ -162,6 +163,13 @@ func simulateEVM(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *Tran
 		call["gas"] = fmt.Sprintf("0x%x", tx.Gas)
 	}
 
+	// Bound every RPC call so a slow / hung upstream doesn't freeze the
+	// simulate endpoint. 10 s is generous for eth_call / debug_traceCall
+	// against a local erigon; production public RPCs are slower but
+	// should still return within that window.
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer rpcCancel()
+
 	// Prefer erigon's debug_traceCall (callTracer) — it gives us the
 	// full call tree including nested CALLs and all LOGs, which is what
 	// lets us surface "all transfers that will fire" (anti-drainer) even
@@ -173,7 +181,7 @@ func simulateEVM(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *Tran
 			"withLog": true,
 		},
 	}
-	if raw, err := n.DoRPC("debug_traceCall", call, "latest", tracerCfg); err == nil {
+	if raw, err := n.DoRPCCtx(rpcCtx, "debug_traceCall", call, "latest", tracerCfg); err == nil {
 		var frame callFrame
 		if err := json.Unmarshal(raw, &frame); err == nil {
 			if frame.Error != "" {
@@ -190,9 +198,9 @@ func simulateEVM(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *Tran
 				}
 			}
 		}
-	} else if raw, err := n.DoRPC("eth_call", call, "latest"); err == nil {
+	} else if raw, err := n.DoRPCCtx(rpcCtx, "eth_call", call, "latest"); err == nil {
 		_ = raw
-		if g, err := n.DoRPC("eth_estimateGas", call); err == nil {
+		if g, err := n.DoRPCCtx(rpcCtx, "eth_estimateGas", call); err == nil {
 			var gasHex string
 			if json.Unmarshal(g, &gasHex) == nil {
 				if v, ok := new(big.Int).SetString(strings.TrimPrefix(gasHex, "0x"), 16); ok {
@@ -219,7 +227,7 @@ func simulateEVM(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *Tran
 			"diffMode": true,
 		},
 	}
-	if raw, err := n.DoRPC("debug_traceCall", call, "latest", preCfg); err == nil {
+	if raw, err := n.DoRPCCtx(rpcCtx, "debug_traceCall", call, "latest", preCfg); err == nil {
 		res.BalanceChanges = extractBalanceChanges(raw)
 	}
 
@@ -576,8 +584,10 @@ func simulateSolana(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *T
 	if len(tx.Raw) == 0 {
 		return res, errors.New("solana tx has no raw bytes; call validate first")
 	}
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer rpcCancel()
 	b64 := base64.StdEncoding.EncodeToString(tx.Raw)
-	raw, err := n.DoRPCNamed("simulateTransaction", map[string]any{
+	raw, err := n.DoRPCNamedCtx(rpcCtx, "simulateTransaction", map[string]any{
 		"transaction": b64,
 		"encoding":    "base64",
 		"commitment":  "processed",

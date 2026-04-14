@@ -428,19 +428,36 @@ func (n *Network) DoRPC(method string, args ...any) (json.RawMessage, error) {
 	return e.DoCtx(context.Background(), method, args...)
 }
 
+// DoRPCCtx lets the caller pass a context for timeout / cancellation. Use
+// this for RPC calls that could hang on a misbehaving upstream (simulate,
+// debug_trace*, long-polling etc).
+func (n *Network) DoRPCCtx(ctx context.Context, method string, args ...any) (json.RawMessage, error) {
+	e, err := n.getRPC()
+	if err != nil {
+		return nil, err
+	}
+
+	return e.DoCtx(ctx, method, args...)
+}
+
 // DoRPCNamed sends a JSON-RPC request with named (object) parameters.
 // Required for APIs like Helius DAS (`getAssetsByOwner`) that expect the
 // params field to be a JSON object rather than an array.
 func (n *Network) DoRPCNamed(method string, args map[string]any) (json.RawMessage, error) {
+	return n.DoRPCNamedCtx(context.Background(), method, args)
+}
+
+// DoRPCNamedCtx lets the caller pass a context for timeout / cancellation.
+func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[string]any) (json.RawMessage, error) {
 	e, err := n.getRPC()
 	if err != nil {
 		return nil, err
 	}
 	if r, ok := e.(*ethrpc.RPC); ok {
-		return r.DoNamedCtx(context.Background(), method, args)
+		return r.DoNamedCtx(ctx, method, args)
 	}
 	// Fallback (shouldn't happen with current ethrpc.New): use positional.
-	return e.DoCtx(context.Background(), method, args)
+	return e.DoCtx(ctx, method, args)
 }
 
 type AddressProvider interface {
