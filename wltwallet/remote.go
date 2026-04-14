@@ -3,6 +3,7 @@ package wltwallet
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/rest"
@@ -40,10 +41,21 @@ func remoteNew(ctx context.Context, number string) (*remoteKeyNewResult, error) 
 	return res, rest.Apply(ctx, "EllipX/WalletSign:new", "POST", rest.Param{"number": number}, &res)
 }
 
+// remotekeyNew starts a 2FA session for a phone number or email address.
+// The `number` param accepts either format — the EllipX backend routes SMS
+// vs email based on whether the value contains an "@".
 func remotekeyNew(ctx context.Context, in struct {
-	Number string `json:"number"`
+	Number string `json:"number"` // phone (international format) or email address
+	Email  string `json:"email"`  // alias for Number when using email
 }) (any, error) {
-	res, err := rest.Do(ctx, "EllipX/WalletSign:new", "POST", rest.Param{"number": in.Number})
+	target := in.Number
+	if target == "" {
+		target = in.Email
+	}
+	if target == "" {
+		return nil, errors.New("number or email is required")
+	}
+	res, err := rest.Do(ctx, "EllipX/WalletSign:new", "POST", rest.Param{"number": target})
 	if err != nil {
 		return nil, err
 	}

@@ -1,3 +1,10 @@
+## 0.3.4
+
+- **Email 2FA**: `RemoteKey:new` (and `remoteKeys.create`) now accept
+  an email address in addition to phone numbers. Pass either `number` or
+  `email` — the EllipX backend routes SMS vs email verification based on
+  whether the value contains `@`.
+
 ## 0.3.3
 
 - **Bitcoin balance fix**: `modchain_assets` returns `balance` as a

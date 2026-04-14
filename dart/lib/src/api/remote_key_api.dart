@@ -1,15 +1,29 @@
 import '../client/transport.dart';
 
-/// RemoteKey management for phone-based 2FA recovery keys.
+/// RemoteKey management for 2FA recovery keys.
+///
+/// Supports both phone numbers (SMS verification) and email addresses
+/// (email verification). The EllipX backend routes based on whether the
+/// identifier contains an `@`.
 class RemoteKeyApi {
   final Transport _conn;
 
   RemoteKeyApi(this._conn);
 
   /// Start a new remote key setup. Returns a session ID.
-  Future<dynamic> create({required String number}) async {
+  ///
+  /// Pass either [number] (phone, international format like `+14045551234`)
+  /// or [email] (e.g. `alice@example.com`). Exactly one must be provided.
+  ///
+  /// A verification code will be sent via SMS or email respectively; complete
+  /// setup by calling [validate] with the code.
+  Future<dynamic> create({String? number, String? email}) async {
+    final target = number ?? email;
+    if (target == null || target.isEmpty) {
+      throw ArgumentError('RemoteKey.create requires either number or email');
+    }
     return await _conn.request('RemoteKey:new', 'POST', {
-      'number': number,
+      'number': target,
     });
   }
 
@@ -24,7 +38,7 @@ class RemoteKeyApi {
     });
   }
 
-  /// Validate an SMS code to complete remote key setup.
+  /// Validate an SMS or email verification code to complete remote key setup.
   Future<dynamic> validate({
     required String session,
     required String code,

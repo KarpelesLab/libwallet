@@ -42,7 +42,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 
 ## RemoteKey
 
-* `RemoteKey:new` takes: `number` (intl format), return `session`
+* `RemoteKey:new` takes: `number` (phone in international format OR email address) or `email` alias, returns `session`. The backend routes SMS vs email verification based on whether the value contains `@`.
 * `RemoteKey:reshare` takes: `key`, `curve` (`secp256k1` or `ed25519`), return `session` to initialize a key reshare
 * `RemoteKey:validate` takes: `session` (returned by new or reshare), `code`, returns `RemoteKey`
 
