@@ -67,6 +67,13 @@ export 'src/models/onboarding.dart' show OnboardingState;
 export 'src/models/request_event.dart' show PendingRequest;
 export 'src/models/web3_connection.dart' show Web3Connection;
 export 'src/models/name_resolution.dart' show NameResolution;
+export 'src/models/signed_message.dart' show SignedMessage;
+export 'src/models/remote_key_session.dart'
+    show RemoteKeySession, RemoteKeyValidation;
+export 'src/models/wallet_backup.dart' show WalletBackupEntry;
+export 'src/models/nft_listing.dart' show NftListing;
+export 'src/models/rpc_test.dart' show RpcTestResult;
+export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 
 // Events
 export 'src/events/events.dart'

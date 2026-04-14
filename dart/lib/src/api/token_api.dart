@@ -49,8 +49,23 @@ class TokenApi {
     return Token.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Update a token.
-  Future<Token> update(String id, Map<String, dynamic> fields) async {
+  /// Update a token. Only non-null fields are sent.
+  Future<Token> update(
+    String id, {
+    String? name,
+    String? symbol,
+    int? decimals,
+    String? type,
+    String? logo,
+    String? memo,
+  }) async {
+    final fields = <String, dynamic>{};
+    if (name != null) fields['Name'] = name;
+    if (symbol != null) fields['Symbol'] = symbol;
+    if (decimals != null) fields['Decimals'] = decimals;
+    if (type != null) fields['Type'] = type;
+    if (logo != null) fields['Logo'] = logo;
+    if (memo != null) fields['Memo'] = memo;
     final data = await _conn.request('Token/$id', 'PATCH', fields);
     return Token.fromJson(data as Map<String, dynamic>);
   }

@@ -7,8 +7,11 @@ class InfoApi {
 
   InfoApi(this._conn);
 
-  /// Ping the library to check if it's running.
-  Future<dynamic> ping() => _conn.request('Info:ping', 'GET');
+  /// Ping the library to check if it's running. Returns `"pong"`.
+  Future<String> ping() async {
+    final data = await _conn.request('Info:ping', 'GET');
+    return data as String? ?? '';
+  }
 
   /// Get the library version.
   Future<String> version() async {
@@ -24,8 +27,14 @@ class InfoApi {
     return data as Map<String, dynamic>;
   }
 
-  /// Get the date/time of first run.
-  Future<dynamic> firstRun() => _conn.request('Info:first_run', 'GET');
+  /// Get an opaque identifier for the first-run time of this install.
+  /// Format is `<type>:<unix>:<nano>:<index>` (Go's wltobj.TimeId).
+  /// Returns null if this is the first run and the identifier hasn't
+  /// been persisted yet.
+  Future<String?> firstRun() async {
+    final data = await _conn.request('Info:first_run', 'GET');
+    return data as String?;
+  }
 
   /// Get the onboarding state.
   Future<OnboardingState> onboarding() async {

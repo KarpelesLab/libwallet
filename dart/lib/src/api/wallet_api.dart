@@ -2,6 +2,7 @@ import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
 import '../models/wallet.dart';
+import '../models/wallet_backup.dart';
 
 /// Wallet CRUD, backup, restore, reshare, and multi-create operations.
 class WalletApi {
@@ -81,9 +82,16 @@ class WalletApi {
     await _conn.request('Wallet/$id', 'DELETE');
   }
 
-  /// Get a wallet backup.
-  Future<dynamic> backup(String walletId) async {
-    return await _conn.request('Wallet/$walletId:backup', 'GET');
+  /// Get a wallet backup. Returns one entry per wallet; each entry contains
+  /// a suggested filename and base64url-encoded encrypted payload. Pass the
+  /// entries (as a list of `{filename, data}` maps) back to [restore] to
+  /// restore a wallet.
+  Future<List<WalletBackupEntry>> backup(String walletId) async {
+    final data = await _conn.request('Wallet/$walletId:backup', 'GET');
+    if (data == null) return [];
+    return (data as List)
+        .map((e) => WalletBackupEntry.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   /// Restore wallets from backup files.
@@ -95,8 +103,9 @@ class WalletApi {
     return data as Map<String, dynamic>;
   }
 
-  /// Reshare wallet keys. Yields progress updates, then the result.
-  Stream<ProgressOr<dynamic>> reshare(
+  /// Reshare wallet keys. Yields progress updates, then the regenerated
+  /// wallet with its new key shares.
+  Stream<ProgressOr<Wallet>> reshare(
     String walletId, {
     required List<KeyDescription> oldKeys,
     required List<KeyDescription> newKeys,
@@ -111,7 +120,7 @@ class WalletApi {
         final d = resp.data as Map<String, dynamic>;
         yield Progress(d['count'] as int, d['running'] as int);
       } else {
-        yield Complete(resp.data);
+        yield Complete(Wallet.fromJson(resp.data as Map<String, dynamic>));
       }
     }
   }

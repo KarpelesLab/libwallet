@@ -1,5 +1,6 @@
 import '../client/transport.dart';
 import '../models/network.dart';
+import '../models/rpc_test.dart';
 
 /// Network CRUD and management.
 class NetworkApi {
@@ -56,8 +57,25 @@ class NetworkApi {
     await _conn.request('Network/$id:setCurrent', 'POST');
   }
 
-  /// Update a network.
-  Future<Network> update(String id, Map<String, dynamic> fields) async {
+  /// Update a network. Only non-null fields are sent.
+  Future<Network> update(
+    String id, {
+    String? name,
+    String? rpc,
+    String? currencySymbol,
+    int? currencyDecimals,
+    String? blockExplorer,
+    bool? testNet,
+    int? priority,
+  }) async {
+    final fields = <String, dynamic>{};
+    if (name != null) fields['Name'] = name;
+    if (rpc != null) fields['RPC'] = rpc;
+    if (currencySymbol != null) fields['CurrencySymbol'] = currencySymbol;
+    if (currencyDecimals != null) fields['CurrencyDecimals'] = currencyDecimals;
+    if (blockExplorer != null) fields['BlockExplorer'] = blockExplorer;
+    if (testNet != null) fields['TestNet'] = testNet;
+    if (priority != null) fields['Priority'] = priority;
     final data = await _conn.request('Network/$id', 'PATCH', fields);
     return Network.fromJson(data as Map<String, dynamic>);
   }
@@ -67,8 +85,10 @@ class NetworkApi {
     await _conn.request('Network/$id', 'DELETE');
   }
 
-  /// Test an RPC URL.
-  Future<dynamic> testRpc(String url) async {
-    return await _conn.request('Network:testRPC', 'POST', {'URL': url});
+  /// Test an EVM RPC URL. Returns the chain ID and (if known) metadata
+  /// from the built-in chain registry.
+  Future<RpcTestResult> testRpc(String url) async {
+    final data = await _conn.request('Network:testRPC', 'POST', {'URL': url});
+    return RpcTestResult.fromJson(data as Map<String, dynamic>);
   }
 }

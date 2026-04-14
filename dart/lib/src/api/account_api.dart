@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../client/transport.dart';
 import '../models/account.dart';
+import '../models/signed_message.dart';
 
 /// Account CRUD and management.
 class AccountApi {
@@ -96,7 +97,7 @@ class AccountApi {
   ///   - `evm` / `personal_sign` → EIP-191 personal_sign; returns 0x-hex.
   ///   - `raw` → signs bytes as-is (caller already hashed); returns base64.
   ///   - `null` → auto-picks `solana` for ed25519, `evm` for secp256k1.
-  Future<Map<String, dynamic>> signMessage(
+  Future<SignedMessage> signMessage(
     String id, {
     required Uint8List message,
     required List<Map<String, dynamic>> keys,
@@ -109,7 +110,7 @@ class AccountApi {
     if (mode != null) params['Mode'] = mode;
     final data =
         await _conn.request('Account/$id:signMessage', 'POST', params);
-    return Map<String, dynamic>.from(data as Map);
+    return SignedMessage.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
   /// Sign an unsigned Solana transaction. Returns the signed transaction

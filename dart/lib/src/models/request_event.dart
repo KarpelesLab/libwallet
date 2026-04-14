@@ -18,6 +18,10 @@ class PendingRequest {
   /// Arbitrary value associated with the request (e.g. message to sign).
   final dynamic value;
 
+  /// Result payload once the request has been approved (e.g. signature,
+  /// connected accounts). Null while pending.
+  final dynamic result;
+
   const PendingRequest({
     required this.id,
     required this.type,
@@ -25,6 +29,7 @@ class PendingRequest {
     this.host,
     this.transaction,
     this.value,
+    this.result,
   });
 
   factory PendingRequest.fromJson(Map<String, dynamic> json) {
@@ -35,6 +40,7 @@ class PendingRequest {
       host: json['Host'] as String?,
       transaction: json['Transaction'],
       value: json['Value'],
+      result: json['Result'],
     );
   }
 

@@ -38,8 +38,19 @@ class ContactApi {
     return Contact.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Update a contact.
-  Future<Contact> update(String id, Map<String, dynamic> fields) async {
+  /// Update a contact. Only non-null fields are sent.
+  Future<Contact> update(
+    String id, {
+    String? name,
+    String? address,
+    String? type,
+    String? memo,
+  }) async {
+    final fields = <String, dynamic>{};
+    if (name != null) fields['Name'] = name;
+    if (address != null) fields['Address'] = address;
+    if (type != null) fields['Type'] = type;
+    if (memo != null) fields['Memo'] = memo;
     final data = await _conn.request('Contact/$id', 'PATCH', fields);
     return Contact.fromJson(data as Map<String, dynamic>);
   }

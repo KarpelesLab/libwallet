@@ -2,6 +2,7 @@ import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
 import '../models/transaction.dart';
+import '../models/unsigned_transaction.dart';
 
 /// Transaction creation, validation, signing, and history.
 class TransactionApi {
@@ -34,33 +35,37 @@ class TransactionApi {
     return Transaction.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Validate a transaction without signing.
-  Future<dynamic> validate(Map<String, dynamic> tx) async {
-    return await _conn.request('Transaction:validate', 'POST', tx);
+  /// Validate a transaction without signing. Returns the transaction
+  /// with backend-filled fields (gas estimate, fee, nonce, etc.).
+  Future<Transaction> validate(UnsignedTransaction tx) async {
+    final data = await _conn.request('Transaction:validate', 'POST', tx.toJson());
+    return Transaction.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Sign and send a transaction. Yields progress, then the result.
-  Stream<ProgressOr<dynamic>> signAndSend(Map<String, dynamic> tx) async* {
-    final stream = _conn.send('Transaction:signAndSend', 'POST', tx);
+  /// Sign and send a transaction. Yields progress, then the final signed
+  /// and broadcast transaction.
+  Stream<ProgressOr<Transaction>> signAndSend(UnsignedTransaction tx) async* {
+    final stream = _conn.send('Transaction:signAndSend', 'POST', tx.toJson());
     await for (final resp in stream) {
       if (resp.isError) throw LibwalletException.fromResponse(resp);
       if (resp.isProgress) {
         final d = resp.data as Map<String, dynamic>;
-        yield Progress(
-            d['count'] as int? ?? 0, d['running'] as int? ?? 0);
+        yield Progress(d['count'] as int? ?? 0, d['running'] as int? ?? 0);
       } else {
-        yield Complete(resp.data);
+        yield Complete(Transaction.fromJson(resp.data as Map<String, dynamic>));
       }
     }
   }
 
-  /// Convenience: sign and send, returning only the final result.
-  Future<dynamic> signAndSendSimple(
-    Map<String, dynamic> tx, {
+  /// Convenience: sign and send, returning only the final transaction
+  /// (no progress events). [keys] is inlined into the request payload.
+  Future<Transaction> signAndSendSimple(
+    UnsignedTransaction tx, {
     required List<SigningKey> keys,
   }) async {
-    tx['Keys'] = keys.map((k) => k.toJson()).toList();
-    return await _conn.request('Transaction:signAndSend', 'POST', tx);
+    final data = await _conn.request(
+        'Transaction:signAndSend', 'POST', tx.withKeys(keys).toJson());
+    return Transaction.fromJson(data as Map<String, dynamic>);
   }
 
   /// Delete transactions. Optionally filter by account (From) or network.

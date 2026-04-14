@@ -1,5 +1,6 @@
 import '../client/transport.dart';
 import '../models/nft.dart';
+import '../models/nft_listing.dart';
 
 /// NFT listing and fetching.
 class NftApi {
@@ -8,7 +9,7 @@ class NftApi {
   NftApi(this._conn);
 
   /// List NFTs for the current or specified account/network.
-  Future<Map<String, dynamic>> list({
+  Future<NftListing> list({
     String? network,
     String? account,
   }) async {
@@ -16,7 +17,7 @@ class NftApi {
     if (network != null) params['Network'] = network;
     if (account != null) params['Account'] = account;
     final data = await _conn.request('Nft', 'GET', params.isNotEmpty ? params : null);
-    return data as Map<String, dynamic>;
+    return NftListing.fromJson(data as Map<String, dynamic>);
   }
 
   /// Get a specific NFT by ID.

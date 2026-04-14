@@ -147,7 +147,7 @@ void main() {
       expect(fetched.name, 'Alice');
 
       // Update
-      final updated = await client.contacts.update(contact.id, {'Name': 'Bob'});
+      final updated = await client.contacts.update(contact.id, name: 'Bob');
       expect(updated.name, 'Bob');
 
       // Delete
@@ -163,7 +163,7 @@ void main() {
     test('update does not throw', () async {
       // Lifecycle:update triggers background maintenance — just verify it doesn't error
       try {
-        await client.lifecycle.update();
+        await client.lifecycle.update('foreground');
       } on LibwalletException {
         // May fail if no network — acceptable
       }
@@ -211,16 +211,12 @@ void main() {
     test('new → validate lifecycle', () async {
       // Start remote key setup with test phone
       final session = await client.remoteKeys.create(number: '+14045551234');
-      expect(session, isNotNull);
-
-      // Extract session ID
-      final sessionId = session is Map ? session['session'] as String : session.toString();
-      expect(sessionId, isNotEmpty);
+      expect(session.session, isNotEmpty);
 
       // Validate with test code
       final result =
-          await client.remoteKeys.validate(session: sessionId, code: '000000');
-      expect(result, isNotNull);
+          await client.remoteKeys.validate(session: session.session, code: '000000');
+      expect(result.remoteKey, isNotEmpty);
     });
   });
 
@@ -287,14 +283,10 @@ void main() {
 
     test('restore from backup', () async {
       final backup = await client.wallets.backup(wallet.id);
-      // backup is a list of {filename, data} entries
-      if (backup is List) {
-        final files = backup
-            .map((e) => Map<String, String>.from(e as Map))
-            .toList();
-        final result = await client.wallets.restore(files);
-        expect(result, isA<Map<String, dynamic>>());
-      }
+      expect(backup, isNotEmpty);
+      final files = backup.map((e) => e.toJson()).toList();
+      final result = await client.wallets.restore(files);
+      expect(result, isA<Map<String, dynamic>>());
     });
 
     // ── WalletKey ─────────────────────────────────────────────────────
@@ -389,11 +381,11 @@ void main() {
 
       test('Transaction validate (missing fields returns error)', () async {
         try {
-          await client.transactions.validate({
-            'type': 'transfer',
-            'from': account.id,
-            'to': '0x0000000000000000000000000000000000000000',
-          });
+          await client.transactions.validate(UnsignedTransaction(
+            type: 'transfer',
+            from: account.id,
+            to: '0x0000000000000000000000000000000000000000',
+          ));
         } on LibwalletException catch (e) {
           // Expected: validation error for missing amount/asset etc.
           expect(e.message, isNotEmpty);
@@ -404,7 +396,7 @@ void main() {
 
       test('Nft list', () async {
         final result = await client.nfts.list();
-        expect(result, isA<Map<String, dynamic>>());
+        expect(result, isA<NftListing>());
       });
 
       // ── Token ───────────────────────────────────────────────────────
@@ -445,7 +437,7 @@ void main() {
 
         // Update
         final updated =
-            await client.tokens.update(token.id, {'Name': 'Updated Token'});
+            await client.tokens.update(token.id, name: 'Updated Token');
         expect(updated.name, 'Updated Token');
 
         // Delete

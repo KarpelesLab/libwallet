@@ -1,4 +1,5 @@
 import '../client/transport.dart';
+import '../models/remote_key_session.dart';
 
 /// RemoteKey management for 2FA recovery keys.
 ///
@@ -10,42 +11,48 @@ class RemoteKeyApi {
 
   RemoteKeyApi(this._conn);
 
-  /// Start a new remote key setup. Returns a session ID.
+  /// Start a new remote key setup. Returns a session descriptor.
   ///
   /// Pass either [number] (phone, international format like `+14045551234`)
   /// or [email] (e.g. `alice@example.com`). Exactly one must be provided.
   ///
   /// A verification code will be sent via SMS or email respectively; complete
   /// setup by calling [validate] with the code.
-  Future<dynamic> create({String? number, String? email}) async {
+  Future<RemoteKeySession> create({String? number, String? email}) async {
     final target = number ?? email;
     if (target == null || target.isEmpty) {
       throw ArgumentError('RemoteKey.create requires either number or email');
     }
-    return await _conn.request('RemoteKey:new', 'POST', {
+    final data = await _conn.request('RemoteKey:new', 'POST', {
       'number': target,
     });
+    return RemoteKeySession.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Start a key reshare for an existing remote key. Returns a session ID.
-  Future<dynamic> reshare({
+  /// Start a key reshare for an existing remote key. Returns a session
+  /// descriptor; complete the reshare by calling [validate].
+  Future<RemoteKeySession> reshare({
     required String key,
     required String curve,
   }) async {
-    return await _conn.request('RemoteKey:reshare', 'POST', {
+    final data = await _conn.request('RemoteKey:reshare', 'POST', {
       'key': key,
       'curve': curve,
     });
+    return RemoteKeySession.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Validate an SMS or email verification code to complete remote key setup.
-  Future<dynamic> validate({
+  /// Validate an SMS or email verification code to complete remote key setup
+  /// or reshare. Returns the newly-created (or resharded) remote key
+  /// identifier.
+  Future<RemoteKeyValidation> validate({
     required String session,
     required String code,
   }) async {
-    return await _conn.request('RemoteKey:validate', 'POST', {
+    final data = await _conn.request('RemoteKey:validate', 'POST', {
       'session': session,
       'code': code,
     });
+    return RemoteKeyValidation.fromJson(data as Map<String, dynamic>);
   }
 }
