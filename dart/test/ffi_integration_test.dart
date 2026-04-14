@@ -454,6 +454,63 @@ void main() {
       });
     });
 
+    // ── View accounts ───────────────────────────────────────────────────
+
+    group('View accounts', () {
+      test('create EVM view from address', () async {
+        final view = await client.accounts.createView(
+          type: 'ethereum',
+          address: '0xd8da6bf26964af9d7eed9e03e53415d37aa96045', // vitalik.eth
+          name: 'Vitalik',
+        );
+        expect(view.isViewOnly, isTrue);
+        expect(view.wallet, isEmpty);
+        expect(view.address, '0xd8da6bf26964af9d7eed9e03e53415d37aa96045');
+        expect(view.type, 'ethereum');
+        await client.accounts.delete(view.id);
+      });
+
+      test('create Bitcoin view from xpub', () async {
+        // Known mainnet xpub from the BIP-32 test vectors.
+        const xpub =
+            'xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8';
+        final view = await client.accounts.createView(
+          type: 'bitcoin',
+          xpub: xpub,
+          name: 'BTC watch',
+        );
+        expect(view.isViewOnly, isTrue);
+        expect(view.wallet, isEmpty);
+        expect(view.pubkey, isNotEmpty);
+        expect(view.chaincode, isNotEmpty);
+        // Derived first receive address should round-trip via xpub() call.
+        final roundtripped = await client.accounts.xpub(view.id);
+        expect(roundtripped, isNotEmpty);
+        await client.accounts.delete(view.id);
+      });
+
+      test('rejects xpub for non-bitcoin type', () async {
+        expect(
+          () => client.accounts.createView(
+            type: 'ethereum',
+            xpub: 'xpub...',
+          ),
+          throwsA(isA<LibwalletException>()),
+        );
+      });
+
+      test('rejects both address and xpub', () async {
+        expect(
+          () => client.accounts.createView(
+            type: 'bitcoin',
+            address: 'bc1q...',
+            xpub: 'xpub...',
+          ),
+          throwsA(isA<ArgumentError>()),
+        );
+      });
+    });
+
     // ── Bitcoin HD address support ─────────────────────────────────────
 
     group('Bitcoin HD', () {

@@ -47,6 +47,37 @@ class AccountApi {
     return Account.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Create a read-only ("view") account from an on-chain address or a
+  /// BIP-32 extended public key (xpub, bitcoin-family only).
+  ///
+  /// View accounts have no wallet backing them and cannot sign. They are
+  /// useful for watching a counterparty's address, auditing a paper wallet,
+  /// or mirroring a hardware wallet's public tree.
+  ///
+  /// - Exactly one of [address] or [xpub] must be provided.
+  /// - [xpub] is only valid for `type: 'bitcoin'`; it enables HD gap-limit
+  ///   scans (balance, next receive address, etc.).
+  /// - Plain-[address] view accounts query balance for that single address
+  ///   only — no HD tree.
+  Future<Account> createView({
+    required String type,
+    String name = '',
+    String? address,
+    String? xpub,
+  }) async {
+    if ((address == null || address.isEmpty) == (xpub == null || xpub.isEmpty)) {
+      throw ArgumentError(
+          'createView requires exactly one of address or xpub');
+    }
+    final data = await _conn.request('Account:createView', 'POST', {
+      'Name': name,
+      'Type': type,
+      if (address != null) 'Address': address,
+      if (xpub != null) 'Xpub': xpub,
+    });
+    return Account.fromJson(data as Map<String, dynamic>);
+  }
+
   /// Update an account's name.
   Future<Account> update(String id, {required String name}) async {
     final data = await _conn.request('Account/$id', 'PATCH', {'Name': name});

@@ -82,4 +82,9 @@ class Account {
         'Created': created.toIso8601String(),
         'Updated': updated.toIso8601String(),
       };
+
+  /// True when this account has no backing wallet (created via
+  /// `AccountApi.createView`). View-only accounts can query balance and NFT
+  /// holdings but cannot sign transactions or messages.
+  bool get isViewOnly => wallet.isEmpty;
 }

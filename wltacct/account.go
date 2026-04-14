@@ -63,8 +63,10 @@ func (a *Account) save(e wltintf.Env) error {
 // Handles different network types (evm, bitcoin) and formats addresses accordingly
 // Returns any error encountered during the operation
 func (a *Account) check(e wltintf.Env) error {
-	// Ensure chaincode and curve are present, get from wallet if missing
-	if a.Chaincode == "" || a.Curve == "" {
+	// Ensure chaincode and curve are present, get from wallet if missing.
+	// View-only accounts (a.Wallet == nil) skip this: they were populated
+	// at creation time and have no wallet to fall back to.
+	if !a.IsViewOnly() && (a.Chaincode == "" || a.Curve == "") {
 		wlt, err := a.getWallet(e)
 		if err != nil {
 			return err
@@ -96,6 +98,23 @@ func (a *Account) check(e wltintf.Env) error {
 // set to "N/A". The account's chaincode and curve must already be populated;
 // callers that load via check() are guaranteed to satisfy this.
 func (a *Account) UpdateAddressForNetwork(net *wltnet.Network) error {
+	// Plain-address view accounts (view-only with no pubkey) have a fixed
+	// address the user provided; we cannot re-derive it from key material.
+	// Keep the stored Address as-is and just refresh the URI scheme.
+	if a.IsViewOnly() && a.Pubkey == "" {
+		switch net.Type {
+		case "evm":
+			a.URI = "ethereum:" + a.Address
+		case "bitcoin":
+			a.URI = net.ChainId + ":" + a.Address
+		case "solana":
+			a.URI = "solana:" + a.Address
+		default:
+			a.URI = a.Address
+		}
+		return nil
+	}
+
 	switch net.Type {
 	case "evm":
 		if a.Curve == "ed25519" {
@@ -398,6 +417,9 @@ func (a *Account) accountDelete(e wltintf.Env) error {
 //
 // Returns the signature and any error encountered
 func (a *Account) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	if a.IsViewOnly() {
+		return nil, errors.New("cannot sign: view-only account has no wallet")
+	}
 	aopt, ok := opts.(*wltsign.Opts)
 	if !ok {
 		return nil, errors.New("sign requires appropriate options")

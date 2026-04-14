@@ -117,6 +117,11 @@ returns an object with the state of the user's onboarding, useful to check if we
   * `Name`
 * `DELETE Account/<id>` Delete an account and everything related
 * `Account/<id>:setCurrent`
+* `Account:createView` Create a read-only (view) account with no backing wallet — cannot sign, but can query balance/NFTs.
+  * `Type` ethereum, bitcoin, or solana
+  * `Address` on-chain address to watch (mutually exclusive with `Xpub`)
+  * `Xpub` BIP-32 extended public key (bitcoin-family only; enables HD gap-limit scans)
+  * `Name` optional display name
 * `Account/<id>:signMessage` Sign a raw message with the account's TSS key (wallet-host direct-signing, bypasses Web3 approval flow)
   * `Message` base64 bytes to sign
   * `Keys` TSS key descriptors
