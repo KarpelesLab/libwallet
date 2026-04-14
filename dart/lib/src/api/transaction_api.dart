@@ -2,6 +2,7 @@ import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
 import '../models/transaction.dart';
+import '../models/transaction_simulation.dart';
 import '../models/unsigned_transaction.dart';
 
 /// Transaction creation, validation, signing, and history.
@@ -40,6 +41,25 @@ class TransactionApi {
   Future<Transaction> validate(UnsignedTransaction tx) async {
     final data = await _conn.request('Transaction:validate', 'POST', tx.toJson());
     return Transaction.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Simulate a transaction — returns a structured preview the approval
+  /// UI can show before the user signs. Per chain:
+  ///
+  /// - **EVM**: runs `eth_call` against the current network. On revert,
+  ///   decodes the standard `Error(string)` payload into
+  ///   [TransactionSimulation.revertReason]. On success, attaches an
+  ///   `eth_estimateGas` result in [TransactionSimulation.gasEstimate].
+  ///   Call data is ABI-decoded for common shapes (ERC-20
+  ///   transfer/approve) and surfaced as [decodedMethod] + [decodedArgs].
+  /// - **Solana**: wraps `simulateTransaction`. Returns the program
+  ///   logs, compute-unit usage, and any error.
+  /// - **Bitcoin**: parses `tx.Raw` via outscript and returns decoded
+  ///   inputs / outputs so the UI can render "send X BTC to addr,
+  ///   change Y BTC back to self".
+  Future<TransactionSimulation> simulate(UnsignedTransaction tx) async {
+    final data = await _conn.request('Transaction:simulate', 'POST', tx.toJson());
+    return TransactionSimulation.fromJson(data as Map<String, dynamic>);
   }
 
   /// Sign and send a transaction. Yields progress, then the final signed

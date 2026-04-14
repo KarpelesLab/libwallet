@@ -88,6 +88,8 @@ export 'src/models/remote_key_session.dart'
 export 'src/models/wallet_backup.dart' show WalletBackupEntry;
 export 'src/models/nft_listing.dart' show NftListing;
 export 'src/models/rpc_test.dart' show RpcTestResult;
+export 'src/models/transaction_simulation.dart'
+    show TransactionSimulation, BitcoinIO;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;

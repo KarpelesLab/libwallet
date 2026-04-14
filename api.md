@@ -188,6 +188,7 @@ returns an object with the state of the user's onboarding, useful to check if we
   * Same params as `Transaction:validate` plus:
   * Keys: [ {"Id": "wkey-xxx", "Key": privateKey, {"Id": "wkey-yyy", "Key": password} ]
   * For Solana transactions, signing uses EdDSA TSS and broadcasts via `sendTransaction`
+* `Transaction:simulate` Pre-flight an unsigned transaction and return a structured preview for the approval UI. Same params as `Transaction:validate`. Response fields: `chain`, `willRevert`, `revertReason`, `decodedMethod` (native_transfer / erc20_transfer / erc20_approve / unknown), `decodedArgs`, `gasEstimate` (EVM), `logs` / `unitsConsumed` (Solana), `bitcoinInputs` / `bitcoinOutputs` / `bitcoinFee` (Bitcoin-family).
 * `DELETE Transaction`
   * From: limit transaction deletion to a given account
   * Network: delete transactions on a given network
