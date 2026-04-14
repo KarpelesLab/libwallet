@@ -92,6 +92,19 @@ client.dispose();
 | `client.crashes` | Crash report management |
 | `client.lifecycle` | App lifecycle events |
 
+## Running dApps in a WebView
+
+`client.web3.injectionScript(...)` generates a JS blob that exposes
+libwallet as `window.ethereum` (EIP-1193 + EIP-6963 discovery),
+`window.solana` (Wallet Standard), and `window.mpurse` (Monacoin /
+github.com/tadajam/mpurse). Wire it into a Flutter WebView to let
+arbitrary dApps connect to your wallet.
+
+See **[`doc/webview_integration.md`](doc/webview_integration.md)** for
+the complete guide — outbound RPC bridge, inbound event relay,
+approval-sheet dispatch, re-injection on navigation, and a full
+minimal working example.
+
 ## Native Library
 
 **No Go toolchain required.** This package ships with a Dart build hook
