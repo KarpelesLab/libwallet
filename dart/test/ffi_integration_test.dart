@@ -771,6 +771,53 @@ void main() {
     });
   });
 
+  // ── WalletConnect v2 ──────────────────────────────────────────────────
+
+  group('WalletConnect', () {
+    test('start requires a projectId', () async {
+      expect(
+        () => client.walletConnect.start(projectId: ''),
+        throwsA(isA<LibwalletException>()),
+      );
+    });
+
+    test('pair rejects a malformed URI', () async {
+      // Start with a throwaway projectId — start() itself succeeds even
+      // if the relay never accepts us, because the dial happens in a
+      // background goroutine.
+      try {
+        await client.walletConnect.start(projectId: 'test-project');
+      } on LibwalletException {
+        // already started in another test — ignore
+      }
+      expect(
+        () => client.walletConnect.pair('not-a-wc-uri'),
+        throwsA(isA<LibwalletException>()),
+      );
+    });
+
+    test('sessions() returns empty list initially', () async {
+      final sessions = await client.walletConnect.sessions();
+      expect(sessions, isA<List<WcSession>>());
+      // It may or may not be empty (other tests may have paired), so just
+      // verify the shape parses.
+    });
+
+    test('respondError on unknown topic fails clearly', () async {
+      try {
+        await client.walletConnect.respondError(
+          'deadbeef' * 8, // 64-char hex, but not a known session
+          1,
+          code: 5000,
+          message: 'test',
+        );
+        fail('should have thrown');
+      } on LibwalletException catch (e) {
+        expect(e.message, contains('unknown topic'));
+      }
+    });
+  });
+
   // ── Raw request ───────────────────────────────────────────────────────
 
   test('rawRequest works', () async {

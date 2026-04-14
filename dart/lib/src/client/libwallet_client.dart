@@ -18,8 +18,10 @@ import '../api/token_api.dart';
 import '../api/transaction_api.dart';
 import '../api/wallet_api.dart';
 import '../api/wallet_key_api.dart';
+import '../api/wallet_connect_api.dart';
 import '../api/web3_api.dart';
 import '../api/web3_connection_api.dart';
+import '../models/wc_session.dart';
 import '../events/events.dart';
 import '../models/request_event.dart';
 import 'ffi_transport.dart';
@@ -66,6 +68,7 @@ class LibwalletClient {
   late final Web3ConnectionApi web3Connections =
       Web3ConnectionApi(_transport);
   late final RequestApi requests = RequestApi(_transport);
+  late final WalletConnectApi walletConnect = WalletConnectApi(_transport);
   late final CrashApi crashes = CrashApi(_transport);
 
   LibwalletClient._(this._transport);
@@ -147,6 +150,22 @@ class LibwalletClient {
       }
     }
   }
+
+  /// Stream of incoming WalletConnect v2 session proposals — one per
+  /// inbound `wc_sessionPropose`. Call
+  /// `client.walletConnect.approveSession(proposal.pairingTopic, …)` or
+  /// `rejectSession(proposal.pairingTopic)` in response.
+  Stream<WcSessionProposal> get walletConnectProposals => events
+      .where((e) => e.event == 'wc_session_propose')
+      .map((e) => WcSessionProposal.fromJson(e.data));
+
+  /// Stream of incoming WalletConnect v2 `wc_sessionRequest` events —
+  /// JSON-RPC calls a connected dApp wants the wallet to execute. Route
+  /// through `client.web3.request(...)` and reply with
+  /// `client.walletConnect.respond(...)`.
+  Stream<WcSessionRequest> get walletConnectRequests => events
+      .where((e) => e.event == 'wc_session_request')
+      .map((e) => WcSessionRequest.fromJson(e.data));
 
   /// Stream of online/offline status events.
   Stream<OnlineStatusEvent> get onlineStatusEvents =>

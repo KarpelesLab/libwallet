@@ -142,6 +142,26 @@ returns an object with the state of the user's onboarding, useful to check if we
   * `Bridge` name of the host JS message channel the script will post to (required)
   * `Host` optional dApp origin — pre-populates connected accounts in the returned script
 
+## WalletConnect v2
+
+* `WalletConnect:start` Open the relay WebSocket.
+  * `ProjectID` (required) WalletConnect Cloud project id
+  * `RelayURL` defaults to `wss://relay.walletconnect.com`
+* `WalletConnect:stop` Close the relay connection.
+* `WalletConnect:pair` Start pairing from a `wc:...` URI. Returns the pairing topic.
+* `WalletConnect:sessions` List all non-disconnected sessions.
+* `WalletConnect:approveSession` Approve a `wc_sessionPropose`.
+  * `PairingTopic` the topic the propose arrived on
+  * `Accounts` CAIP-10 list (e.g. `eip155:1:0xabc…`)
+  * `Methods` / `Events` optional filters (default: echo proposer's request)
+* `WalletConnect:rejectSession` Reject a `wc_sessionPropose` with a JSON-RPC error (default code 5000 "User rejected").
+* `WalletConnect:respond` Respond to a `wc_sessionRequest` with a successful result.
+  * `Topic`, `ID`, `Result`
+* `WalletConnect:respondError` Respond to a `wc_sessionRequest` with a JSON-RPC error.
+* `WalletConnect:emitEvent` Push a `wc_sessionEvent` to a session (used for `chainChanged` / `accountsChanged`).
+  * `Topic`, `Name`, `Data`, `ChainID` (CAIP-2)
+* `WalletConnect:disconnect` Send `wc_sessionDelete` and tear down the session locally.
+
 ## Asset
 
 * `GET` (list only)

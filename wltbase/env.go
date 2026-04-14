@@ -24,6 +24,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wlttoken"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/libwallet/wltwallet"
+	"github.com/KarpelesLab/libwallet/wltwc"
 	"github.com/KarpelesLab/spotlib"
 	"github.com/portablesql/psql"
 	_ "github.com/portablesql/psql-sqlite"
@@ -137,6 +138,7 @@ func (e *env) init() error {
 	wltnft.InitEnv(e)
 	wlttoken.InitEnv(e)
 	wltcrash.InitEnv(e)
+	wltwc.InitEnv(e)
 
 	// run initial cache cleanup and start periodic cleanup
 	e.cacheCleanup()

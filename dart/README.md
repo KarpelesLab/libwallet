@@ -91,6 +91,7 @@ client.dispose();
 | `client.requests` | Web3 request approval/rejection |
 | `client.crashes` | Crash report management |
 | `client.lifecycle` | App lifecycle events |
+| `client.walletConnect` | WalletConnect v2 (pairing, sessions, requests) |
 
 ## Running dApps in a WebView
 
@@ -104,6 +105,28 @@ See **[`doc/webview_integration.md`](doc/webview_integration.md)** for
 the complete guide — outbound RPC bridge, inbound event relay,
 approval-sheet dispatch, re-injection on navigation, and a full
 minimal working example.
+
+## Connecting to out-of-app dApps (WalletConnect v2)
+
+For dApps running outside your app (mobile browsers, desktop sites that
+can't embed a WebView), libwallet ships a full WalletConnect v2
+implementation: relay WebSocket client, session persistence, pair /
+propose / request / event / delete flows. Register a projectId at
+cloud.walletconnect.com, then:
+
+```dart
+await client.walletConnect.start(projectId: myProjectId);
+final topic = await client.walletConnect.pair(scannedUri);
+
+client.walletConnectProposals.listen((proposal) async {
+  // show approval sheet, then approveSession / rejectSession
+});
+client.walletConnectRequests.listen((req) async {
+  // route through client.web3.request, reply via walletConnect.respond
+});
+```
+
+Full walkthrough: **[`doc/walletconnect_integration.md`](doc/walletconnect_integration.md)**.
 
 ## Native Library
 

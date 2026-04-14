@@ -89,6 +89,8 @@ export 'src/models/wallet_backup.dart' show WalletBackupEntry;
 export 'src/models/nft_listing.dart' show NftListing;
 export 'src/models/rpc_test.dart' show RpcTestResult;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
+export 'src/models/wc_session.dart'
+    show WcSession, WcSessionProposal, WcSessionRequest;
 
 // Events
 export 'src/events/events.dart'
@@ -117,4 +119,5 @@ export 'src/api/contact_api.dart' show ContactApi;
 export 'src/api/web3_api.dart' show Web3Api;
 export 'src/api/web3_connection_api.dart' show Web3ConnectionApi;
 export 'src/api/request_api.dart' show RequestApi;
+export 'src/api/wallet_connect_api.dart' show WalletConnectApi;
 export 'src/api/crash_api.dart' show CrashApi;
