@@ -1,3 +1,20 @@
+## 0.3.3
+
+- **Bitcoin balance fix**: `modchain_assets` returns `balance` as a
+  decimal-formatted number (`"0.00000000"`), not int64. Decode via
+  `outscript.BtcAmount` which handles both forms. Previously failed with:
+  `json: cannot unmarshal number 0.00000000 into Go struct field`.
+- **Solana NFT fix**: `getAssetsByOwner` (Helius DAS API) requires named
+  JSON-RPC params, not positional. New `Network.DoRPCNamed()` helper.
+  Previously failed with: `invalid type: map, expected a string`.
+- **Bitcoin UTXO decode**: `modchain_lookupTxoBIP32` response uses the
+  same `BtcAmount` serialization for `amt` and `balance` fields. Type
+  switched from int64 to outscript.BtcAmount across wlttx/bitcoin.go.
+- **EVM NFT lookup hardening**: type assertions on the `modchain_assets`
+  response in wltnet/nft.go could panic if any field was missing or the
+  wrong type. Replaced with comma-ok form.
+- iOS Dart Tests CI timeout bumped 45 → 60 minutes (Xcode build slow).
+
 ## 0.3.2
 
 - **iOS simulator support**: build hook now detects `iphoneos` vs
