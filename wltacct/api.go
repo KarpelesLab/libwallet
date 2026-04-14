@@ -24,6 +24,9 @@ func init() {
 		},
 	)
 	pobj.RegisterStatic("Account:setCurrent", accountSetCurrent)
+	pobj.RegisterStatic("Account:nextAddress", accountNextAddress)
+	pobj.RegisterStatic("Account:allAddresses", accountAllAddresses)
+	pobj.RegisterStatic("Account:xpub", accountXpub)
 }
 
 func CreateAccount(e wltintf.Env, wallet *wltwallet.Wallet, name, typ string, index int) (*Account, error) {

@@ -431,8 +431,17 @@ type AddressProvider interface {
 	GetAddress() string
 }
 
+// XpubProvider is implemented by account types that can produce a BIP-32
+// extended public key string (xpub). Used for xpub-aware RPC methods on
+// Bitcoin-family chains.
+type XpubProvider interface {
+	Xpub() (string, error)
+}
+
 func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 	switch n.Type {
+	case "bitcoin":
+		return n.bitcoinBalance(acct)
 	case "evm":
 		// fetch from RPC
 		// https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_getbalance
@@ -470,6 +479,48 @@ func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 	default:
 		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
+}
+
+// bitcoinBalance queries modchain_assets with the account's xpub (preferred)
+// or falls back to a single-address lookup via modchain_lookupTxo. Returns
+// the sum of unspent UTXO amounts as an Amount with 8 decimals (satoshi).
+func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
+	var lookupArg string
+	if xp, ok := acct.(XpubProvider); ok {
+		xpub, err := xp.Xpub()
+		if err == nil && xpub != "" {
+			lookupArg = xpub
+		}
+	}
+	if lookupArg == "" {
+		// Fall back to single-address scan
+		lookupArg = acct.GetAddress()
+	}
+	if lookupArg == "" {
+		return nil, errors.New("no address or xpub available")
+	}
+
+	raw, err := n.DoRPC("modchain_assets", lookupArg)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp struct {
+		Assets []struct {
+			Asset   string `json:"asset"`
+			Balance int64  `json:"balance"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("modchain_assets decode: %w", err)
+	}
+	var total int64
+	for _, a := range resp.Assets {
+		if a.Asset == "NATIVE" {
+			total += a.Balance
+		}
+	}
+	return wltobj.NewAmountRaw(big.NewInt(total), 8), nil
 }
 
 func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.Asset, error) {

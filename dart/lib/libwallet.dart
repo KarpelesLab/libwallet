@@ -85,7 +85,8 @@ export 'src/api/remote_key_api.dart' show RemoteKeyApi;
 export 'src/api/wallet_api.dart' show WalletApi;
 export 'src/api/wallet_key_api.dart' show WalletKeyApi;
 export 'src/api/network_api.dart' show NetworkApi;
-export 'src/api/account_api.dart' show AccountApi;
+export 'src/api/account_api.dart'
+    show AccountApi, NextAddress, HdAddress, AddressListing;
 export 'src/api/asset_api.dart' show AssetApi;
 export 'src/api/nft_api.dart' show NftApi;
 export 'src/api/transaction_api.dart' show TransactionApi;

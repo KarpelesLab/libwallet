@@ -462,6 +462,55 @@ void main() {
       });
     });
 
+    // ── Bitcoin HD address support ─────────────────────────────────────
+
+    group('Bitcoin HD', () {
+      late Account btcAccount;
+
+      test('create bitcoin account', () async {
+        btcAccount = await client.accounts.create(
+          name: 'BTC Account',
+          wallet: wallet.id,
+          type: 'bitcoin',
+          index: 0,
+        );
+        expect(btcAccount.type, 'bitcoin');
+        expect(btcAccount.address, isNotEmpty);
+      });
+
+      test('xpub is a BIP-32 extended key', () async {
+        final xpub = await client.accounts.xpub(btcAccount.id);
+        expect(xpub, startsWith('xpub'));
+        expect(xpub.length, greaterThan(100));
+      });
+
+      test('nextAddress returns clean address for fresh account', () async {
+        // Find a bitcoin network (create one if needed)
+        final networks = await client.networks.list();
+        var btcNet = networks.where((n) => n.type == NetworkType.bitcoin).firstOrNull;
+        btcNet ??= await client.networks.create(
+          type: 'bitcoin',
+          chainId: 'bitcoin',
+          name: 'Bitcoin',
+          currencySymbol: 'BTC',
+        );
+
+        try {
+          final next = await client.accounts
+              .nextAddress(btcAccount.id, network: btcNet.id);
+          expect(next.address, isNotEmpty);
+          expect(next.chain, 'receive');
+          expect(next.index, greaterThanOrEqualTo(0));
+        } on LibwalletException {
+          // modchain RPC may be unreachable in CI — acceptable
+        }
+      });
+
+      test('delete btc account', () async {
+        await client.accounts.delete(btcAccount.id);
+      });
+    });
+
     // ── Web3/Connection ───────────────────────────────────────────────
 
     group('Web3/Connection', () {

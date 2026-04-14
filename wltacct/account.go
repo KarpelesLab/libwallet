@@ -121,69 +121,25 @@ func (a *Account) UpdateAddressForNetwork(net *wltnet.Network) error {
 			a.URI = ""
 			return nil
 		}
-		// For Bitcoin-based chains, derive a child key at m/0
-		pub, err := a.DerivePublic("m/0")
+		// The default display address is the first receive address (m/0/0).
+		// Call ReceiveAddress(i) for other receive indices, ChangeAddress(i)
+		// for change. The xpub covers the entire HD tree below the account key.
+		addr, err := a.bitcoinAddress(net.ChainId, 0, false)
 		if err != nil {
 			return err
 		}
-		s := outscript.New(pub)
-
-		// Format address based on specific blockchain
+		a.Address = addr
 		switch net.ChainId {
 		case "bitcoin":
-			// Bitcoin uses SegWit (p2wpkh)
-			out, err := s.Out("p2wpkh")
-			if err != nil {
-				return err
-			}
-			addr, err := out.Address("bitcoin")
-			if err != nil {
-				return err
-			}
-			a.Address = addr
 			a.URI = "bitcoin:" + addr
-			return nil
-		case "bitcoin-cash":
-			// Bitcoin Cash uses legacy format (p2pkh)
-			out, err := s.Out("p2pkh")
-			if err != nil {
-				return err
-			}
-			addr, err := out.Address("bitcoincash")
-			if err != nil {
-				return err
-			}
-			a.Address = addr
-			a.URI = addr
-			return nil
-		case "dogecoin":
-			// Dogecoin uses legacy format (p2pkh)
-			out, err := s.Out("p2pkh")
-			if err != nil {
-				return err
-			}
-			addr, err := out.Address("dogecoin")
-			if err != nil {
-				return err
-			}
-			a.Address = addr
-			a.URI = "dogecoin:" + addr
-			return nil
 		case "litecoin":
-			// Litecoin uses SegWit (p2wpkh)
-			out, err := s.Out("p2wpkh")
-			if err != nil {
-				return err
-			}
-			addr, err := out.Address("litecoin")
-			if err != nil {
-				return err
-			}
-			a.Address = addr
 			a.URI = "litecoin:" + addr
-			return nil
+		case "dogecoin":
+			a.URI = "dogecoin:" + addr
+		default:
+			a.URI = addr
 		}
-		fallthrough
+		return nil
 	case "solana":
 		pubBytes, err := base64.RawURLEncoding.DecodeString(a.Pubkey)
 		if err != nil {

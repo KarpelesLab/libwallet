@@ -1,3 +1,17 @@
+## 0.3.1
+
+- **Bitcoin HD address support**: `bitcoin`-type accounts now derive
+  multi-address HD trees under their account xpub. Balance queries call
+  `modchain_assets(xpub)` which scans `0..lastI+20` child keys (BIP-44
+  style gap limit) server-side.
+- New `AccountApi.xpub(id)`: returns the BIP-32 extended public key.
+- New `AccountApi.nextAddress(id)`: returns the next clean receive (or
+  change) address based on on-chain scan.
+- New `AccountApi.allAddresses(id)`: lists all HD addresses across
+  receive and change chains with activity markers.
+- `Account.Address` now points to `m/0/0` (first receive address) instead
+  of `m/0` for Bitcoin-family accounts. BTC/LTC/DOGE/BCH supported.
+
 ## 0.3.0
 
 - **EIP-1559 transactions**: Auto-selected when the chain supports it. New
