@@ -581,14 +581,59 @@ func web3Req(ctx context.Context, in struct {
 			return nil, err
 		}
 		return req.Result, nil
-	case "mpurse_signRawTransaction",
-		"mpurse_sendRawTransaction",
-		"mpurse_sendAsset":
-		// Tx-level mpurse methods are a future milestone — parsing
-		// arbitrary Monacoin / Counterparty transactions and mapping
-		// inputs to the user's TSS-owned UTXOs isn't wired yet. The
-		// provider surfaces them so dApps load cleanly.
-		return nil, fmt.Errorf("%s is not implemented yet", in.Query.Method)
+	case "mpurse_signRawTransaction":
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("mpurse_signRawTransaction requires 1 parameter")
+		}
+		txHex, ok := in.Query.Params[0].(string)
+		if !ok {
+			return nil, errors.New("mpurse_signRawTransaction param must be a hex string")
+		}
+		if len(conn) == 0 {
+			return nil, errors.New("no account connected; call mpurse_getAddress first")
+		}
+		a, err := wltacct.FindAccount(e, conn[0].Account.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load account: %w", err)
+		}
+		acctId := a.Id.String()
+		req := &request{
+			Type:    "mpurse_sign_transaction",
+			Host:    key,
+			Account: &acctId,
+			Value:   txHex,
+		}
+		if err := req.run(e); err != nil {
+			return nil, err
+		}
+		return req.Result, nil
+	case "mpurse_sendRawTransaction":
+		// Pass-through — this is just a broadcast of a pre-signed tx, no
+		// wallet authority involved. The signed hex came from
+		// mpurse_signRawTransaction (or another wallet) already.
+		if len(in.Query.Params) < 1 {
+			return nil, errors.New("mpurse_sendRawTransaction requires 1 parameter")
+		}
+		txHex, ok := in.Query.Params[0].(string)
+		if !ok {
+			return nil, errors.New("mpurse_sendRawTransaction param must be a hex string")
+		}
+		raw, err := n.DoRPC("sendrawtransaction", txHex)
+		if err != nil {
+			return nil, fmt.Errorf("sendrawtransaction: %w", err)
+		}
+		var txid string
+		if err := json.Unmarshal(raw, &txid); err != nil {
+			return nil, fmt.Errorf("parse sendrawtransaction response: %w", err)
+		}
+		return txid, nil
+	case "mpurse_sendAsset":
+		// mpurse_sendAsset builds + signs + broadcasts a Counterparty
+		// asset transfer. Counterparty tx construction depends on the
+		// external Counterparty server API, which is out of scope for
+		// this wallet. dApps should build the tx via counterparty and
+		// then call mpurse_signRawTransaction + mpurse_sendRawTransaction.
+		return nil, errors.New("mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction")
 
 	default:
 		// relay to current network

@@ -83,6 +83,7 @@ sealed class PendingRequest {
       'solana_sign_send_transaction' =>
         SolanaSignAndSendTransactionRequest._(json),
       'mpurse_sign_message' => MpurseSignMessageRequest._(json),
+      'mpurse_sign_transaction' => MpurseSignTransactionRequest._(json),
       _ => UnknownPendingRequest._(type, json),
     };
   }
@@ -479,6 +480,40 @@ class MpurseSignMessageRequest extends PendingRequest {
   /// Base64-encoded 65-byte compact signature after approval. Null while
   /// pending. Matches Bitcoin Core's `signmessage` output format.
   String? get signature {
+    final r = result;
+    if (r is String) return r;
+    return null;
+  }
+}
+
+/// Monacoin (mpurse) `signRawTransaction` — sign the inputs of a pre-built
+/// raw Bitcoin-family transaction that belong to this account's xpub tree.
+/// Typical use: dApp built a Counterparty asset transfer, asks the wallet
+/// to sign its inputs.
+class MpurseSignTransactionRequest extends PendingRequest {
+  MpurseSignTransactionRequest._(Map<String, dynamic> j)
+      : super(
+          id: _id(j),
+          status: _status(j),
+          host: _host(j),
+          account: _account(j),
+          rawValue: _value(j),
+          result: _result(j),
+          created: _parseTime(j['Created']),
+          updated: _parseTime(j['Updated']),
+        );
+
+  @override
+  String get type => 'mpurse_sign_transaction';
+
+  /// Unsigned transaction hex provided by the dApp.
+  String get unsignedTxHex {
+    final v = rawValue;
+    return v is String ? v : '';
+  }
+
+  /// Signed transaction hex after approval. Null while pending.
+  String? get signedTxHex {
     final r = result;
     if (r is String) return r;
     return null;

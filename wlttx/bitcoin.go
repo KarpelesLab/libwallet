@@ -182,6 +182,93 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 	return nil
 }
 
+// SignRawBitcoinTx signs every input in a pre-built bitcoin-family
+// transaction that belongs to acct's xpub tree. Returns the signed tx
+// bytes.
+//
+// This is the entry point for mpurse_signRawTransaction and any other flow
+// where the dApp constructs the transaction offline and hands us the raw
+// bytes. Ownership is resolved by scanning modchain_lookupTxoBIP32 on both
+// the receive (m/0) and change (m/1) chains and matching each input's
+// (txid:vout) to the result set.
+//
+// v1 is strict: returns an error if any input is not owned. This covers
+// Counterparty / monacoin asset txs (all inputs are the user's) without
+// paying the complexity cost of partial-sign multi-party transactions.
+func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network, rawTx []byte, keys []*wltsign.KeyDescription) ([]byte, error) {
+	btx := &outscript.BtcTx{}
+	if err := btx.UnmarshalBinary(rawTx); err != nil {
+		return nil, fmt.Errorf("parse tx: %w", err)
+	}
+	if len(btx.In) == 0 {
+		return nil, errors.New("tx has no inputs")
+	}
+
+	xpub, err := acct.Xpub()
+	if err != nil {
+		return nil, fmt.Errorf("xpub: %w", err)
+	}
+
+	type ownedEntry struct {
+		chain, index int
+		amount       outscript.BtcAmount
+		scheme       string
+	}
+	owned := make(map[string]ownedEntry)
+	for _, cp := range []struct {
+		chain int
+		path  string
+	}{{0, "m/0"}, {1, "m/1"}} {
+		txos, err := fetchBitcoinUTXOs(n, xpub, cp.path)
+		if err != nil {
+			return nil, fmt.Errorf("scan %s: %w", cp.path, err)
+		}
+		for _, t := range txos.Txo {
+			owned[t.Txo] = ownedEntry{
+				chain:  cp.chain,
+				index:  t.I,
+				amount: t.Amt,
+				scheme: t.Script,
+			}
+		}
+	}
+
+	sighash := uint32(1)
+	if n.ChainId == "bitcoin-cash" {
+		sighash = 0x41
+	}
+
+	signers := make([]*outscript.BtcTxSign, len(btx.In))
+	for i, in := range btx.In {
+		// BtcTx stores txid little-endian (wire format); modchain returns
+		// txos keyed by the display (big-endian) hex form.
+		var be [32]byte
+		for j := 0; j < 32; j++ {
+			be[j] = in.TXID[31-j]
+		}
+		ref := fmt.Sprintf("%x:%d", be, in.Vout)
+		entry, ok := owned[ref]
+		if !ok {
+			return nil, fmt.Errorf("input %d (%s) is not owned by this account", i, ref)
+		}
+		signer, err := newBtcInputSigner(ctx, acct, entry.chain, entry.index, keys)
+		if err != nil {
+			return nil, fmt.Errorf("new signer for input %d: %w", i, err)
+		}
+		signers[i] = &outscript.BtcTxSign{
+			Key:     signer,
+			Scheme:  entry.scheme,
+			Amount:  entry.amount,
+			SigHash: sighash,
+		}
+	}
+
+	if err := btx.Sign(signers...); err != nil {
+		return nil, fmt.Errorf("sign: %w", err)
+	}
+	return btx.MarshalBinary()
+}
+
 // broadcastBitcoinTx sends the raw transaction via sendrawtransaction.
 func broadcastBitcoinTx(tx *Transaction, n *wltnet.Network) error {
 	if len(tx.Raw) == 0 {

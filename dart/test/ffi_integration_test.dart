@@ -2,7 +2,6 @@
 @Timeout(Duration(minutes: 10))
 library;
 
-import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -677,11 +676,24 @@ void main() {
       } catch (_) {/* expected: call rejected */}
     });
 
-    test('mpurse_signRawTransaction returns "not implemented"', () async {
+    test('mpurse_signRawTransaction rejects calls without a connection',
+        () async {
+      try {
+        await client.web3.request(
+          url: 'https://no-connection.example',
+          query: {'method': 'mpurse_signRawTransaction', 'params': ['0100']},
+        );
+        fail('should have thrown');
+      } on LibwalletException catch (e) {
+        expect(e.message, contains('no account connected'));
+      }
+    });
+
+    test('mpurse_sendAsset still returns "not implemented"', () async {
       try {
         await client.web3.request(
           url: 'https://example.org',
-          query: {'method': 'mpurse_signRawTransaction', 'params': ['']},
+          query: {'method': 'mpurse_sendAsset', 'params': []},
         );
         fail('should have thrown');
       } on LibwalletException catch (e) {

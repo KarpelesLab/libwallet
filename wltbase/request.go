@@ -365,6 +365,32 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		}
 		b64 := base64.StdEncoding.EncodeToString(sig)
 		req.Result = &b64
+	case "mpurse_sign_transaction":
+		if len(in.Keys) == 0 {
+			return nil, errors.New("keys are required to sign")
+		}
+		txHex, ok := req.Value.(string)
+		if !ok {
+			return nil, errors.New("invalid tx in request")
+		}
+		rawTx, err := hex.DecodeString(txHex)
+		if err != nil {
+			return nil, fmt.Errorf("decode tx hex: %w", err)
+		}
+		a, err := wltacct.FindAccount(e, *req.Account)
+		if err != nil {
+			return nil, fmt.Errorf("could not find account: %w", err)
+		}
+		n, err := wltnet.CurrentNetwork(e)
+		if err != nil {
+			return nil, fmt.Errorf("no current network: %w", err)
+		}
+		signed, err := wlttx.SignRawBitcoinTx(&wlttx.SignContext{Env: e}, a, n, rawTx, in.Keys)
+		if err != nil {
+			return nil, fmt.Errorf("mpurse tx sign failed: %w", err)
+		}
+		out := hex.EncodeToString(signed)
+		req.Result = &out
 	case "solana_sign_message":
 		if len(in.Keys) == 0 {
 			return nil, errors.New("keys are required to sign")
