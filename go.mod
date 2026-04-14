@@ -9,7 +9,7 @@ require (
 	github.com/KarpelesLab/emitter v0.3.1
 	github.com/KarpelesLab/ethrpc v0.2.11
 	github.com/KarpelesLab/feapi v0.2.7
-	github.com/KarpelesLab/outscript v0.3.25
+	github.com/KarpelesLab/outscript v0.3.29
 	github.com/KarpelesLab/pjson v0.2.0
 	github.com/KarpelesLab/pobj v0.2.1
 	github.com/KarpelesLab/rest v0.6.17
@@ -19,7 +19,7 @@ require (
 	github.com/KarpelesLab/tss-lib/v2 v2.2.3
 	github.com/KarpelesLab/typutil v0.2.34
 	github.com/KarpelesLab/xuid v1.0.10
-	github.com/fxamacker/cbor/v2 v2.9.0
+	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/google/uuid v1.6.0
 	github.com/portablesql/psql v0.5.8
 	github.com/portablesql/psql-sqlite v0.5.0
@@ -27,7 +27,8 @@ require (
 )
 
 require (
-	github.com/BottleFmt/gobottle v1.0.0 // indirect
+	github.com/BottleFmt/gobottle v1.0.1 // indirect
+	github.com/KarpelesLab/bech32m v0.1.5 // indirect
 	github.com/KarpelesLab/contexter v1.0.2 // indirect
 	github.com/KarpelesLab/countrydb v0.1.3 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
@@ -36,6 +37,7 @@ require (
 	github.com/KarpelesLab/mldsa v0.2.0 // indirect
 	github.com/KarpelesLab/putil v1.0.0 // indirect
 	github.com/KarpelesLab/ringslice v0.1.1 // indirect
+	github.com/KarpelesLab/rlp v0.1.4 // indirect
 	github.com/KarpelesLab/slhdsa v0.1.0 // indirect
 	github.com/KarpelesLab/webutil v0.2.7 // indirect
 	github.com/ModChain/base58 v1.1.0 // indirect

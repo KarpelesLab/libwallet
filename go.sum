@@ -1,10 +1,14 @@
 github.com/BottleFmt/gobottle v1.0.0 h1:9B3jVvusEItcHcdvDHhPshzcl/zhVCobVDrgZ+f3sDg=
 github.com/BottleFmt/gobottle v1.0.0/go.mod h1:atZzDqFCpzjHuLg4bPE5wWFJWqxS5+UtTkxiJbSyKtY=
+github.com/BottleFmt/gobottle v1.0.1 h1:2GFUbtGCChqu9zaIjCdUgVHF4ENGg8QgWnKxJ2zd8rc=
+github.com/BottleFmt/gobottle v1.0.1/go.mod h1:ybPpJsZhSs/LM3GVO8vF1p0EwQF5KrUJHyG+KVwLYwU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/KarpelesLab/apirouter v0.5.28 h1:cKfbZew1AGaeA755/PmHgCd24OfZ79yce7dpQp9/aZ8=
 github.com/KarpelesLab/apirouter v0.5.28/go.mod h1:DWvJgbVmEXGLO6uUpaWUcoaIhLl5XSFriFZWFU8JOhI=
 github.com/KarpelesLab/base58 v1.1.1 h1:TYKMYotRAygpr57rzMHYIriPTwRcNOV/QH5+wJ7wr2s=
 github.com/KarpelesLab/base58 v1.1.1/go.mod h1:QXHyIAfZqjiLAMC9MQTwvgFAlO0R5noDPr29bWYXhH4=
+github.com/KarpelesLab/bech32m v0.1.5 h1:rsJspvheX3hqYwRLs9bLdYIpiYwpqS6GkAM0UXv7Ovw=
+github.com/KarpelesLab/bech32m v0.1.5/go.mod h1:6FeeVNWuq83sf9GDplDJKju/Nizmp8FzOAInqgk65fQ=
 github.com/KarpelesLab/blake256 v1.0.1 h1:nX2AhNgz2YRAlTdLlapEnOIyKxT7Le22OntKtDXr5v0=
 github.com/KarpelesLab/blake256 v1.0.1/go.mod h1:DgAiY5aPPMQGqb5zlsM2aLVwAaWoTbkLS6HISDb3gCA=
 github.com/KarpelesLab/contexter v1.0.2 h1:ZDKROIjv0BL+vSQeXCgGTZT08SOK6MnAyRCsUmyDCpw=
@@ -29,6 +33,8 @@ github.com/KarpelesLab/mldsa v0.2.0 h1:rOTLCBZmLLW7/IpUJ+Z/qslMQm/4s0zXPLA21a+V6
 github.com/KarpelesLab/mldsa v0.2.0/go.mod h1:x1T4Gyd86wpLwnk1LafWJCqD3EwvhZKXK+0QfHgqZBk=
 github.com/KarpelesLab/outscript v0.3.25 h1:6mBCQu9gybdzW7sE6nI3lenPclvcEJVjriFmC6ikbhM=
 github.com/KarpelesLab/outscript v0.3.25/go.mod h1:XaEzcvzoHTl+Erc/XUrKyVGr3XpCuVS/Xh8qFToNvFY=
+github.com/KarpelesLab/outscript v0.3.29 h1:NOS+Hu+zo+qujuuj3bQSO1VmfcxoCGsqPQpOunnSb9g=
+github.com/KarpelesLab/outscript v0.3.29/go.mod h1:MalUfVIVyJZiJvax9aMOcVpLofVPfIuR0trMr/0yjww=
 github.com/KarpelesLab/pjson v0.2.0 h1:Qpv9v6AhvcH7k+iFMPUN11bcgqHyyBNCvRweh9eI7JY=
 github.com/KarpelesLab/pjson v0.2.0/go.mod h1:v3xur0hbHYFmi0vlNqUOqXE7FGmz845gtFJONiuwKho=
 github.com/KarpelesLab/pobj v0.2.1 h1:4I31k/rWcip74a2GngCmD30kx1LSNclvfkEN7TlrIj8=
@@ -39,6 +45,8 @@ github.com/KarpelesLab/rest v0.6.17 h1:AQcuA/DJ3YzoWO5mUT/2Q775bKAwD/JlycPwlRd3Q
 github.com/KarpelesLab/rest v0.6.17/go.mod h1:rhLtP2T+hYHfOAUIDvxTzGyMj8iWtvus+Nb1IhSJFAg=
 github.com/KarpelesLab/ringslice v0.1.1 h1:qJNai4Tj9KvK7xwCflrUJF3gQreiTYFdro6UUbhiFx0=
 github.com/KarpelesLab/ringslice v0.1.1/go.mod h1:zgkPNTVpFNkUQNPOd9LglWQKSWjUnL+EWJOe3zBO+RU=
+github.com/KarpelesLab/rlp v0.1.4 h1:a6ch3onXlnbyhV2B+MQFL/0o1YRvtfW09ZX4bzY2OTY=
+github.com/KarpelesLab/rlp v0.1.4/go.mod h1:rAUJTMT4oS7JA7DfxejVw7/8XlCh4XZ7RHQ+78fWpz8=
 github.com/KarpelesLab/secp256k1 v0.2.8 h1:VNkim4pC82SliqHgpFESGVB1o27F+HYgbTq6z/7xHew=
 github.com/KarpelesLab/secp256k1 v0.2.8/go.mod h1:M2Gltf+zSqq2h164eczlRLdydwZgPDoM0GkTqi+Ep3s=
 github.com/KarpelesLab/slhdsa v0.1.0 h1:5qAT+oWF5ENEXQA6qrgpHNwwt1GXPwjKSjplFSqcEp0=
@@ -80,6 +88,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=
 github.com/fxamacker/cbor/v2 v2.9.0/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
+github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
+github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/gogo/protobuf v1.3.2 h1:Ov1cvc58UF3b5XjBnZv7+opcTcQFZebYjWzi34vdm4Q=
 github.com/gogo/protobuf v1.3.2/go.mod h1:P1XiOD3dCwIKUDQYPy72D8LYyHL2YPYrpS2s69NZV8Q=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
