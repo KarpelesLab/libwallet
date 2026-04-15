@@ -175,6 +175,7 @@ func accountSignAndSendTransaction(ctx *apirouter.Context, in struct {
 	if err := json.Unmarshal(result, &txHash); err != nil {
 		return nil, fmt.Errorf("failed to parse send response: %w", err)
 	}
+	wltintf.NotifyTxBroadcast(e)
 	return map[string]any{
 		"signature": txHash,
 	}, nil

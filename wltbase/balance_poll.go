@@ -52,6 +52,10 @@ func newBalancePoller(e *env) *balancePoller {
 // run is the poll loop. Starts an immediate poll, then every
 // balancePollInterval or whenever kick is signalled.
 func (p *balancePoller) run() {
+	// Subscribe to tx-broadcast events so the poller refreshes right
+	// after a send instead of waiting up to 60 s for the next tick.
+	go p.listenTxBroadcasts()
+
 	ticker := time.NewTicker(balancePollInterval)
 	defer ticker.Stop()
 	p.poll()
@@ -70,6 +74,20 @@ func (p *balancePoller) run() {
 			}
 			p.poll()
 		}
+	}
+}
+
+// listenTxBroadcasts nudges the poller every time a tx-broadcast
+// event fires (see wltintf.NotifyTxBroadcast). The channel lives for
+// the lifetime of the env — stop is handled by the main loop, this
+// goroutine just exits when the env shuts down and the channel closes.
+func (p *balancePoller) listenTxBroadcasts() {
+	if p.env == nil || p.env.em == nil {
+		return
+	}
+	ch := p.env.em.On("tx:broadcast")
+	for range ch {
+		p.Nudge()
 	}
 }
 

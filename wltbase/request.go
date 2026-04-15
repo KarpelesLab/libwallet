@@ -503,6 +503,7 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		if err := json.Unmarshal(result, &txHash); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction hash: %w", err)
 		}
+		wltintf.NotifyTxBroadcast(env)
 		req.Result = map[string]any{
 			"signature": txHash,
 		}

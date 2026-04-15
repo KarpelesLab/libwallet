@@ -9,6 +9,7 @@ import (
 
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 )
@@ -173,6 +174,7 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 
 	tx.Hash = txHash
 	tx.URL = n.TransactionUrl(txHash)
+	wltintf.NotifyTxBroadcast(wltintf.GetEnv(ctx))
 
 	return nil
 }

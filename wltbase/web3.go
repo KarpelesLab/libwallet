@@ -12,6 +12,7 @@ import (
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/pobj"
@@ -626,6 +627,7 @@ func web3Req(ctx context.Context, in struct {
 		if err := json.Unmarshal(raw, &txid); err != nil {
 			return nil, fmt.Errorf("parse sendrawtransaction response: %w", err)
 		}
+		wltintf.NotifyTxBroadcast(e)
 		return txid, nil
 	case "mpurse_sendAsset":
 		// mpurse_sendAsset builds + signs + broadcasts a Counterparty

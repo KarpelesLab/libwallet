@@ -484,6 +484,7 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		if err := broadcastBitcoinTx(tx, n); err != nil {
 			return fmt.Errorf("broadcast bitcoin tx: %w", err)
 		}
+		wltintf.NotifyTxBroadcast(e)
 		return tx.save(e)
 	}
 
@@ -518,6 +519,7 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 	// should already be the same
 	tx.Hash = hash
 	tx.URL = n.TransactionUrl(tx.Hash)
+	wltintf.NotifyTxBroadcast(e)
 	if err := tx.save(e); err != nil {
 		return fmt.Errorf("failed to save transaction after broadcast: %w", err)
 	}
