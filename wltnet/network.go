@@ -419,13 +419,17 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 	return list, nil
 }
 
-func (n *Network) DoRPC(method string, args ...any) (json.RawMessage, error) {
-	e, err := n.getRPC()
-	if err != nil {
-		return nil, err
-	}
+// defaultRPCTimeout bounds any call to DoRPC / DoRPCNamed that didn't
+// provide its own context. A misbehaving upstream can't wedge a
+// goroutine indefinitely — one failed RPC bubbles up an error after at
+// most this long. Callers that genuinely need longer must go through
+// DoRPCCtx / DoRPCNamedCtx with their own context.
+const defaultRPCTimeout = 30 * time.Second
 
-	return e.DoCtx(context.Background(), method, args...)
+func (n *Network) DoRPC(method string, args ...any) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+	return n.DoRPCCtx(ctx, method, args...)
 }
 
 // DoRPCCtx lets the caller pass a context for timeout / cancellation. Use
@@ -443,8 +447,13 @@ func (n *Network) DoRPCCtx(ctx context.Context, method string, args ...any) (jso
 // DoRPCNamed sends a JSON-RPC request with named (object) parameters.
 // Required for APIs like Helius DAS (`getAssetsByOwner`) that expect the
 // params field to be a JSON object rather than an array.
+//
+// Uses defaultRPCTimeout to bound the call. Use DoRPCNamedCtx when the
+// caller needs a different deadline.
 func (n *Network) DoRPCNamed(method string, args map[string]any) (json.RawMessage, error) {
-	return n.DoRPCNamedCtx(context.Background(), method, args)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+	return n.DoRPCNamedCtx(ctx, method, args)
 }
 
 // DoRPCNamedCtx lets the caller pass a context for timeout / cancellation.
@@ -471,14 +480,14 @@ type XpubProvider interface {
 	Xpub() (string, error)
 }
 
-func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
+func (n *Network) nativeBalance(ctx context.Context, acct AddressProvider) (*wltobj.Amount, error) {
 	switch n.Type {
 	case "bitcoin":
-		return n.bitcoinBalance(acct)
+		return n.bitcoinBalance(ctx, acct)
 	case "evm":
 		// fetch from RPC
 		// https://ethereum.org/en/developers/docs/apis/json-rpc/#eth_getbalance
-		amt, err := ethrpc.ReadString(n.DoRPC("eth_getBalance", acct.GetAddress(), "latest"))
+		amt, err := ethrpc.ReadString(n.DoRPCCtx(ctx, "eth_getBalance", acct.GetAddress(), "latest"))
 		if err != nil {
 			return nil, err
 		}
@@ -498,7 +507,7 @@ func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		}
 		return wltobj.NewAmountRaw(i, decimals), nil
 	case "solana":
-		result, err := n.DoRPC("getBalance", acct.GetAddress())
+		result, err := n.DoRPCCtx(ctx, "getBalance", acct.GetAddress())
 		if err != nil {
 			return nil, err
 		}
@@ -517,7 +526,7 @@ func (n *Network) nativeBalance(acct AddressProvider) (*wltobj.Amount, error) {
 // bitcoinBalance queries modchain_assets with the account's xpub (preferred)
 // or falls back to a single-address lookup via modchain_lookupTxo. Returns
 // the sum of unspent UTXO amounts as an Amount with 8 decimals (satoshi).
-func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
+func (n *Network) bitcoinBalance(ctx context.Context, acct AddressProvider) (*wltobj.Amount, error) {
 	var lookupArg string
 	if xp, ok := acct.(XpubProvider); ok {
 		xpub, err := xp.Xpub()
@@ -533,7 +542,7 @@ func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
 		return nil, errors.New("no address or xpub available")
 	}
 
-	raw, err := n.DoRPC("modchain_assets", lookupArg)
+	raw, err := n.DoRPCCtx(ctx, "modchain_assets", lookupArg)
 	if err != nil {
 		return nil, err
 	}
@@ -566,10 +575,10 @@ func (n *Network) bitcoinBalance(acct AddressProvider) (*wltobj.Amount, error) {
 	return wltobj.NewAmountRaw(new(big.Int).SetUint64(total), decimals), nil
 }
 
-func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.Asset, error) {
+func (n *Network) NativeAsset(ctx context.Context, e wltintf.Env, acct AddressProvider) (*wltasset.Asset, error) {
 	switch n.Type {
 	case "evm":
-		amt, err := n.nativeBalance(acct)
+		amt, err := n.nativeBalance(ctx, acct)
 		if err != nil {
 			return nil, err
 		}
@@ -594,7 +603,7 @@ func (n *Network) NativeAsset(e wltintf.Env, acct AddressProvider) (*wltasset.As
 
 		return asset, nil
 	case "bitcoin", "solana":
-		amt, err := n.nativeBalance(acct)
+		amt, err := n.nativeBalance(ctx, acct)
 		if err != nil {
 			return nil, err
 		}

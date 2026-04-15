@@ -11,6 +11,7 @@ package wltbase
 // traffic and battery drain while the app isn't visible.
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +19,14 @@ import (
 	"github.com/KarpelesLab/libwallet/wltutil"
 )
 
-const balancePollInterval = 60 * time.Second
+const (
+	balancePollInterval = 60 * time.Second
+	// balancePollTimeout bounds how long one poll can block on RPCs. A
+	// hung upstream is abandoned and we try again on the next tick —
+	// much better than piling up goroutines or wedging the whole Go
+	// runtime on process exit.
+	balancePollTimeout = 15 * time.Second
+)
 
 // balancePoller holds the diff state for one env.
 type balancePoller struct {
@@ -97,7 +105,9 @@ func (p *balancePoller) Nudge() {
 
 // poll fetches the current snapshot, diffs, and broadcasts on change.
 func (p *balancePoller) poll() {
-	snap, err := currentAssets(p.env, nil, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), balancePollTimeout)
+	defer cancel()
+	snap, err := currentAssets(ctx, p.env, nil, nil)
 	if err != nil {
 		// Typical cause: no current account / network configured yet.
 		// Silently skip; the first setCurrent will Nudge us.

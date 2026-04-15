@@ -1,6 +1,7 @@
 package wltbase
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 
@@ -37,7 +38,12 @@ type assetSnapshot struct {
 // currentAssets builds an assetSnapshot for the current account + network
 // (or the specific ones passed in). Extracted so both the list endpoint
 // and the balance poller can use the same logic.
-func currentAssets(e wltintf.Env, n *wltnet.Network, acct *wltacct.Account) (*assetSnapshot, error) {
+//
+// ctx is threaded through every RPC call so callers can bound the work
+// (the background poller wraps this in a 15 s timeout; the API endpoint
+// inherits the apirouter request context). Without a deadline, a slow
+// or unreachable upstream RPC would hang this call indefinitely.
+func currentAssets(ctx context.Context, e wltintf.Env, n *wltnet.Network, acct *wltacct.Account) (*assetSnapshot, error) {
 	if n == nil {
 		var err error
 		n, err = wltnet.CurrentNetwork(e)
@@ -58,14 +64,14 @@ func currentAssets(e wltintf.Env, n *wltnet.Network, acct *wltacct.Account) (*as
 
 	var assets []*wltasset.Asset
 	if acct.GetAddress() != "N/A" {
-		if nat, err := n.NativeAsset(e, acct); err == nil {
+		if nat, err := n.NativeAsset(ctx, e, acct); err == nil {
 			assets = append(assets, nat)
 		} else {
 			return nil, err
 		}
 	}
 	if n.Type == "solana" && acct.GetAddress() != "N/A" {
-		if tokens, err := n.SolanaTokenBalances(e, acct); err == nil {
+		if tokens, err := n.SolanaTokenBalances(ctx, e, acct); err == nil {
 			assets = append(assets, tokens...)
 		}
 	}
@@ -77,7 +83,7 @@ func apiListAsset(ctx *apirouter.Context) (any, error) {
 	if e == nil {
 		return nil, errors.New("failed to get env")
 	}
-	snap, err := currentAssets(e,
+	snap, err := currentAssets(ctx, e,
 		apirouter.GetObject[wltnet.Network](ctx, "Network"),
 		apirouter.GetObject[wltacct.Account](ctx, "Account"),
 	)

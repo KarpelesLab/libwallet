@@ -1,6 +1,7 @@
 package wltnet
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -59,8 +60,8 @@ type solanaTokenAccountsResult struct {
 }
 
 // SolanaTokenBalances returns SPL token balances for the given account.
-func (n *Network) SolanaTokenBalances(e wltintf.Env, acct AddressProvider) ([]*wltasset.Asset, error) {
-	result, err := n.DoRPC("getTokenAccountsByOwner",
+func (n *Network) SolanaTokenBalances(ctx context.Context, e wltintf.Env, acct AddressProvider) ([]*wltasset.Asset, error) {
+	result, err := n.DoRPCCtx(ctx, "getTokenAccountsByOwner",
 		acct.GetAddress(),
 		map[string]any{"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
 		map[string]any{"encoding": "jsonParsed"},
