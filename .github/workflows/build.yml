@@ -27,6 +27,13 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Build Android AAR
+        # -Wl,-z,max-page-size=16384 is required on Android 15+: the OS
+        # now supports 16 KB page devices (Pixel 8+ etc.) and refuses to
+        # load .so files whose PT_LOAD segments are aligned below that.
+        # Set via CGO_LDFLAGS so every cgo-linked .so inside the AAR
+        # picks it up.
+        env:
+          CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
         run: |
           GIT_TAG=$(git rev-parse --short HEAD)
           DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
@@ -36,6 +43,8 @@ jobs:
             -o libwallet.aar .
 
       - name: Build c-shared libraries for Android (Dart FFI)
+        env:
+          CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
         run: |
           NDK=$ANDROID_HOME/ndk/27.2.12479018
           for arch_go_abi in "arm64:aarch64-linux-android21:android-arm64" "amd64:x86_64-linux-android21:android-x64" "arm:armv7a-linux-androideabi21:android-arm"; do
@@ -44,6 +53,40 @@ jobs:
             CGO_ENABLED=1 GOOS=android GOARCH=$GOARCH CC=$CC \
               go build -buildmode=c-shared -o "liblibwallet-${NAME}.so" ./cshared/
           done
+
+      - name: Verify Android .so files are 16 KB aligned
+        run: |
+          set -e
+          fail=0
+          # Dart-FFI .so files sit at the repo root.
+          for so in liblibwallet-android-*.so; do
+            echo "── $so ──"
+            readelf -lW "$so" | awk '
+              /LOAD/ {
+                n = strtonum($NF)
+                status = (n >= 16384) ? "OK" : "FAIL"
+                printf "  %s  LOAD  Align=%s (%d)\n", status, $NF, n
+                if (n < 16384) exit 1
+              }' || fail=1
+          done
+          # .so files inside the AAR (jni/<abi>/*.so).
+          tmp=$(mktemp -d)
+          unzip -q libwallet.aar -d "$tmp"
+          for so in "$tmp"/jni/*/*.so; do
+            echo "── ${so#$tmp/} ──"
+            readelf -lW "$so" | awk '
+              /LOAD/ {
+                n = strtonum($NF)
+                status = (n >= 16384) ? "OK" : "FAIL"
+                printf "  %s  LOAD  Align=%s (%d)\n", status, $NF, n
+                if (n < 16384) exit 1
+              }' || fail=1
+          done
+          rm -rf "$tmp"
+          if [ $fail -ne 0 ]; then
+            echo "::error::One or more Android .so files have LOAD segments aligned below 16 KB — will fail to load on Android 15+ devices."
+            exit 1
+          fi
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v7
