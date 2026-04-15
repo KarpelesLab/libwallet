@@ -1,3 +1,6 @@
+import '../models/account.dart';
+import '../models/asset.dart';
+import '../models/network.dart';
 import '../models/request_event.dart' show PendingRequest;
 
 /// Base class for events pushed from libwallet.
@@ -14,6 +17,7 @@ sealed class LibwalletEvent {
         ? Map<String, dynamic>.from(rawData)
         : <String, dynamic>{};
     if (event == 'request') return RequestEvent(data);
+    if (event == 'balances_changed') return BalancesChangedEvent(data);
     if (event == 'online_status') return OnlineStatusEvent(data);
     if (event.startsWith('js:')) return JsEvent(event, data);
     return UnknownEvent(event, data);
@@ -36,6 +40,39 @@ class RequestEvent extends LibwalletEvent {
     final raw = data['request'];
     if (raw is Map) return PendingRequest.fromJson(Map<String, dynamic>.from(raw));
     return null;
+  }
+}
+
+/// Balances changed on the current account / network. Fired by the
+/// background poller every 60 s when anything differs from the
+/// previous snapshot (or immediately on app resume from background).
+class BalancesChangedEvent extends LibwalletEvent {
+  BalancesChangedEvent(Map<String, dynamic> data)
+      : super('balances_changed', data);
+
+  /// Network the snapshot was taken against.
+  Network? get network {
+    final n = data['network'];
+    if (n is Map) return Network.fromJson(Map<String, dynamic>.from(n));
+    return null;
+  }
+
+  /// Account the snapshot was taken for.
+  Account? get account {
+    final a = data['account'];
+    if (a is Map) return Account.fromJson(Map<String, dynamic>.from(a));
+    return null;
+  }
+
+  /// Updated asset list — one entry per asset (native + any tokens the
+  /// poller could enumerate on this chain family).
+  List<Asset> get assets {
+    final v = data['assets'];
+    if (v is! List) return const [];
+    return v
+        .whereType<Map>()
+        .map((e) => Asset.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 }
 

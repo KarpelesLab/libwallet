@@ -36,6 +36,7 @@ type env struct {
 	sqlCtx  context.Context // context with psql backend plugged in
 	spot    *spotlib.Client
 	em      *emitter.Hub
+	poller  *balancePoller // nil until init finishes
 }
 
 type client struct {
@@ -143,6 +144,12 @@ func (e *env) init() error {
 	// run initial cache cleanup and start periodic cleanup
 	e.cacheCleanup()
 	go e.cacheCleanupLoop()
+
+	// start background balance polling — emits `balances_changed`
+	// every 60 s when the current account / network balances change.
+	// The host uses Lifecycle:update to pause it while backgrounded.
+	e.poller = newBalancePoller(e)
+	go e.poller.run()
 
 	return nil
 }

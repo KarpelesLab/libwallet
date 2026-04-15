@@ -93,7 +93,13 @@ export 'src/models/wc_session.dart'
 
 // Events
 export 'src/events/events.dart'
-    show LibwalletEvent, RequestEvent, OnlineStatusEvent, JsEvent, UnknownEvent;
+    show
+        LibwalletEvent,
+        RequestEvent,
+        BalancesChangedEvent,
+        OnlineStatusEvent,
+        JsEvent,
+        UnknownEvent;
 
 // Transport (for advanced use)
 export 'src/client/transport.dart' show Transport;

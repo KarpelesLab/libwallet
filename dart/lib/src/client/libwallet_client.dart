@@ -152,6 +152,15 @@ class LibwalletClient {
   Stream<OnlineStatusEvent> get onlineStatusEvents =>
       events.where((e) => e is OnlineStatusEvent).cast<OnlineStatusEvent>();
 
+  /// Stream of balance-change snapshots for the current account /
+  /// network. Fired by a background poller every 60 s (paused while the
+  /// app reports `lifecycle.update('background')`, resumed immediately
+  /// on `foreground`). The snapshot always contains the full asset list
+  /// — not a delta — so the UI can do a straight replace.
+  Stream<BalancesChangedEvent> get balanceChanges => events
+      .where((e) => e is BalancesChangedEvent)
+      .cast<BalancesChangedEvent>();
+
   /// Stream of JavaScript-originated events (chainChanged, accountsChanged).
   Stream<JsEvent> get jsEvents =>
       events.where((e) => e is JsEvent).cast<JsEvent>();
