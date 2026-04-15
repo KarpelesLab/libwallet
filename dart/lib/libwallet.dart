@@ -100,7 +100,7 @@ export 'src/client/transport.dart' show Transport;
 export 'src/client/ffi_transport.dart' show FfiTransport;
 
 // API classes (for type access, usually accessed via client.xxx)
-export 'src/api/info_api.dart' show InfoApi;
+export 'src/api/info_api.dart' show InfoApi, WalletInfo;
 export 'src/api/lifecycle_api.dart' show LifecycleApi;
 export 'src/api/name_api.dart' show NameApi;
 export 'src/api/store_key_api.dart' show StoreKeyApi, StoreKeyPair;

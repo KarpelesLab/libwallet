@@ -23,6 +23,29 @@ func init() {
 	pobj.RegisterStatic("Info:paths", infoPaths)
 	pobj.RegisterStatic("Info:first_run", infoFirstRun)
 	pobj.RegisterStatic("Info:onboarding", infoOnboarding)
+	pobj.RegisterStatic("Info:setWalletInfo", infoSetWalletInfo)
+	pobj.RegisterStatic("Info:getWalletInfo", infoGetWalletInfo)
+}
+
+// infoSetWalletInfo registers the host wallet's identity block.
+// Currently sends ClientID as the Sec-ClientId HTTP header on every
+// Crypto/WalletSign:* call; Name + Version are stored for future use.
+// Pass zero-valued fields to clear.
+func infoSetWalletInfo(in struct {
+	ClientID string `json:"ClientId"`
+	Name     string `json:"Name"`
+	Version  string `json:"Version"`
+}) (any, error) {
+	wltwallet.SetWalletInfo(wltwallet.WalletInfo{
+		ClientID: in.ClientID,
+		Name:     in.Name,
+		Version:  in.Version,
+	})
+	return wltwallet.GetWalletInfo(), nil
+}
+
+func infoGetWalletInfo() (any, error) {
+	return wltwallet.GetWalletInfo(), nil
 }
 
 func infoPing() (any, error) {
