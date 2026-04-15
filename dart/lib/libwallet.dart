@@ -1,18 +1,15 @@
 /// Pure Dart client for the libwallet cryptocurrency wallet library.
 ///
-/// Communicates with the Go library via direct FFI calls (preferred) or
-/// Unix sockets (legacy fallback). No background disconnection issues.
+/// Communicates with the Go library via direct FFI calls
+/// (`NativeCallable.listener`) — no sockets, no background-disconnection
+/// issues, no IPC.
 ///
 /// ## Quick Start
 ///
 /// ```dart
 /// import 'package:libwallet/libwallet.dart';
 ///
-/// // FFI (preferred — direct function calls, no sockets):
 /// final client = LibwalletClient.initialize('/path/to/data');
-///
-/// // Or Unix socket (legacy fallback):
-/// // final client = await LibwalletClient.connect('/path/to/ipc.sock');
 ///
 /// // Check connectivity
 /// await client.info.ping();
@@ -30,16 +27,16 @@
 ///   ],
 /// )) {
 ///   switch (event) {
-///     case Progress(:final count, :final running):
-///       print('Progress: $running / ${count + 1}');
+///     case Progress(:final fraction):
+///       print('Progress: ${(fraction * 100).toStringAsFixed(1)}%');
 ///     case Complete(:final value):
 ///       print('Created wallet: ${value.id}');
 ///   }
 /// }
 ///
-/// // Listen for events
-/// client.requestEvents.listen((event) {
-///   print('New request: ${event.requestId}');
+/// // Listen for requests (connect / sign prompts from dApps)
+/// client.pendingRequests.listen((req) {
+///   // route to your approval UI
 /// });
 ///
 /// client.dispose();

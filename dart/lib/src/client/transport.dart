@@ -5,9 +5,9 @@ import 'response.dart';
 
 /// Abstract transport layer for communicating with the Go library.
 ///
-/// Two implementations exist:
-/// - [FfiTransport] — direct FFI calls via NativeCallable (preferred)
-/// - [JsonRpcConnection] — Unix socket (legacy fallback)
+/// The only implementation is [FfiTransport] — direct FFI calls via
+/// `dart:ffi` + `NativeCallable.listener`. The interface is kept
+/// abstract so tests can mock it.
 abstract class Transport {
   /// Stream of server-pushed events.
   Stream<LibwalletEvent> get events;

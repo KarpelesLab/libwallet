@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:ffi';
-import 'dart:io';
 
 import '../api/account_api.dart';
 import '../api/asset_api.dart';
@@ -25,26 +24,19 @@ import '../models/wc_session.dart';
 import '../events/events.dart';
 import '../models/request_event.dart';
 import 'ffi_transport.dart';
-import 'json_rpc_connection.dart';
 import 'response.dart';
 import 'transport.dart';
 
 /// Main client for interacting with the libwallet Go library.
 ///
 /// Provides typed API namespaces, event streams, and manages the underlying
-/// transport (FFI or Unix socket).
+/// FFI transport (direct Go function calls via `dart:ffi`).
 ///
 /// ## Usage
 ///
-/// Initialize via FFI (preferred — no sockets, works in background):
 /// ```dart
 /// final client = LibwalletClient.initialize('/path/to/data');
 /// final wallets = await client.wallets.list();
-/// ```
-///
-/// Connect via Unix socket (legacy fallback):
-/// ```dart
-/// final client = await LibwalletClient.connect('/path/to/ipc.sock');
 /// ```
 class LibwalletClient {
   final Transport _transport;
@@ -73,31 +65,20 @@ class LibwalletClient {
 
   LibwalletClient._(this._transport);
 
-  /// Initialize the Go library via FFI (preferred).
+  /// Initialize the Go library via FFI.
   ///
-  /// Loads the Go shared library and communicates via direct function calls.
-  /// No sockets, no background disconnection issues.
+  /// Loads the Go shared library and communicates via direct function
+  /// calls — no sockets, no background-disconnection issues, no IPC.
   ///
   /// If [library] is provided, uses that DynamicLibrary. Otherwise loads
-  /// the default platform library.
+  /// the default platform library (`liblibwallet.so` / `.dylib` /
+  /// `libwallet.framework` depending on OS).
   static LibwalletClient initialize(
     String dataDir, {
     DynamicLibrary? library,
   }) {
     final transport = FfiTransport.initialize(dataDir, library: library);
     return LibwalletClient._(transport);
-  }
-
-  /// Connect to an existing Unix domain socket (legacy fallback).
-  static Future<LibwalletClient> connect(String socketPath) async {
-    final connection = await JsonRpcConnection.connect(socketPath);
-    return LibwalletClient._(connection);
-  }
-
-  /// Wrap an already-connected [socket] (legacy fallback).
-  static LibwalletClient fromSocket(Socket socket) {
-    final connection = JsonRpcConnection.fromSocket(socket);
-    return LibwalletClient._(connection);
   }
 
   /// Stream of all server-pushed events.
