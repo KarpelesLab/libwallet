@@ -1,3 +1,23 @@
+## 0.3.7
+
+- **Wallet-identity plumbing**: new `client.info.setWalletInfo(clientId:,
+  name?, version?)` registers the host wallet with libwallet. The
+  `clientId` is sent as the `Sec-ClientId` HTTP header on every
+  `Crypto/WalletSign:*` call, which the WalletSign backend uses to
+  pick branded SMS / email copy, apply per-app rate limits, and tag
+  audit logs. `name` / `version` are stored for future use (untrusted
+  display strings, diagnostics). Called once at startup; backward-
+  compatible (header not sent if not configured).
+- **EIP-6963 UUID fix**: webview injection docs corrected — generate a
+  fresh UUIDv4 per page load (spec requirement), do NOT persist
+  across launches. `rdns` is the stable identifier dApps key off, not
+  `uuid`.
+- **Drop Unix-socket transport fallback**: FFI is the only supported
+  transport now. Removed `LibwalletClient.connect(socketPath)` /
+  `.fromSocket(socket)`, `JsonRpcConnection`, request framing helper,
+  and the socket-based testserver binary. `Transport` interface stays
+  (test mocks still work) but has one implementation.
+
 ## 0.3.6
 
 - **WalletConnect v2**: full wallet-side implementation. `client.walletConnect`
