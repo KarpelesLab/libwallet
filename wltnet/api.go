@@ -1,6 +1,7 @@
 package wltnet
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -237,31 +238,119 @@ func apiCreateNetwork(ctx *apirouter.Context, n *Network) (any, error) {
 	return n, n.Save(e)
 }
 
-func networkTestRPC(ctx *apirouter.Context, in struct{ URL string }) (any, error) {
+// networkTestRPC pings an RPC endpoint and returns a structured health
+// snapshot. Type is required — use "evm", "solana", or "bitcoin"
+// depending on which kind of node the URL points at. Response shape
+// depends on [Type]:
+//
+//   evm     : {RPC, Type, ChainId, Name?, CurrencySymbol?, EVM_Info?}
+//   solana  : {RPC, Type, SolanaVersion, SolanaCluster}
+//              cluster ∈ {"mainnet-beta", "devnet", "testnet", "unknown"}
+//   bitcoin : {RPC, Type, Chain, Blocks}
+func networkTestRPC(ctx *apirouter.Context, in struct {
+	URL  string
+	Type string
+}) (any, error) {
 	u := in.URL
 	if u == "" {
 		return nil, errors.New("invalid url")
 	}
+	typ := in.Type
+	if typ == "" {
+		// Back-compat: the endpoint used to accept only EVM URLs.
+		typ = "evm"
+	}
 
-	// rpc
+	switch typ {
+	case "evm":
+		return testRPCEVM(u)
+	case "solana":
+		return testRPCSolana(u)
+	case "bitcoin":
+		return testRPCBitcoin(u)
+	default:
+		return nil, fmt.Errorf("unsupported Type %q (want evm | solana | bitcoin)", typ)
+	}
+}
+
+func testRPCEVM(u string) (any, error) {
 	rpc := ethrpc.New(u)
 	id, err := ethrpc.ReadUint64(rpc.Do("net_version"))
 	if err != nil {
 		return nil, err
 	}
-
 	res := map[string]any{
 		"RPC":     u,
+		"Type":    "evm",
 		"ChainId": id,
 	}
-
-	// get chain info
-	info := chains.Get(id)
-	if info == nil {
-		return res, nil
+	if info := chains.Get(id); info != nil {
+		res["EVM_Info"] = info
+		res["Name"] = info.Name
+		res["CurrencySymbol"] = info.NativeCurrency.Symbol
 	}
-	res["EVM_Info"] = info
-	res["Name"] = info.Name
-	res["CurrencySymbol"] = info.NativeCurrency.Symbol
 	return res, nil
+}
+
+// solanaClusters maps genesis-hash (base58) to the named Solana cluster.
+// These hashes are immutable per-cluster. When getGenesisHash returns
+// something else, report "unknown" rather than guessing.
+var solanaClusters = map[string]string{
+	"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp1T3LwG9BWb8e": "mainnet-beta",
+	"EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG": "devnet",
+	"4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY": "testnet",
+}
+
+func testRPCSolana(u string) (any, error) {
+	rpc := ethrpc.New(u)
+	// getVersion → {"solana-core": "1.17.x", "feature-set": 12345}
+	raw, err := rpc.Do("getVersion")
+	if err != nil {
+		return nil, fmt.Errorf("getVersion: %w", err)
+	}
+	var ver struct {
+		Core       string `json:"solana-core"`
+		FeatureSet uint64 `json:"feature-set"`
+	}
+	if err := json.Unmarshal(raw, &ver); err != nil {
+		return nil, fmt.Errorf("decode getVersion: %w", err)
+	}
+
+	// Identify the cluster via the genesis hash.
+	genesis, err := ethrpc.ReadString(rpc.Do("getGenesisHash"))
+	cluster := "unknown"
+	if err == nil {
+		if name, ok := solanaClusters[genesis]; ok {
+			cluster = name
+		}
+	}
+	return map[string]any{
+		"RPC":           u,
+		"Type":          "solana",
+		"SolanaVersion": ver.Core,
+		"SolanaCluster": cluster,
+	}, nil
+}
+
+func testRPCBitcoin(u string) (any, error) {
+	rpc := ethrpc.New(u)
+	// getblockchaininfo works against modchain proxies, native bitcoind,
+	// and any fork (litecoind, dogecoind, monacoin-core, bitcoin-abc).
+	raw, err := rpc.Do("getblockchaininfo")
+	if err != nil {
+		return nil, fmt.Errorf("getblockchaininfo: %w", err)
+	}
+	var info struct {
+		Chain  string `json:"chain"`  // "main" / "test" / "regtest" / "signet" (also "monacoin" / etc. on forks)
+		Blocks uint64 `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return nil, fmt.Errorf("decode getblockchaininfo: %w", err)
+	}
+	return map[string]any{
+		"RPC":    u,
+		"Type":   "bitcoin",
+		"Chain":  info.Chain,
+		"Blocks": info.Blocks,
+	}, nil
 }

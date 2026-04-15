@@ -100,8 +100,12 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `Network/<id>:setCurrent`
 * `PATCH Network/id`
 * `DELETE Network/id`
-* `POST Network:testRPC`
+* `POST Network:testRPC` Probe an RPC endpoint and return a health snapshot
   * `URL` URL of RPC server to test
+  * `Type` (optional, default `evm`) — one of `evm` / `solana` / `bitcoin`
+  * EVM: `net_version` → `{ChainId, Name?, CurrencySymbol?, EVM_Info?}`
+  * Solana: `getVersion` + `getGenesisHash` → `{SolanaVersion, SolanaCluster}` (cluster ∈ mainnet-beta / devnet / testnet / unknown)
+  * Bitcoin-family: `getblockchaininfo` → `{Chain, Blocks}`
 
 ## Account
 

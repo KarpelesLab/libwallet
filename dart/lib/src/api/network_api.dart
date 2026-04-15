@@ -85,10 +85,25 @@ class NetworkApi {
     await _conn.request('Network/$id', 'DELETE');
   }
 
-  /// Test an EVM RPC URL. Returns the chain ID and (if known) metadata
-  /// from the built-in chain registry.
-  Future<RpcTestResult> testRpc(String url) async {
-    final data = await _conn.request('Network:testRPC', 'POST', {'URL': url});
+  /// Probe an RPC endpoint and return a structured health snapshot.
+  ///
+  /// [type] selects which RPC surface to speak:
+  /// - `evm` (default) — `net_version`, returns chain id + optional
+  ///   name/currency from the built-in registry.
+  /// - `solana` — `getVersion` + `getGenesisHash`, returns solana-core
+  ///   version and resolved cluster (`mainnet-beta` / `devnet` /
+  ///   `testnet` / `unknown`).
+  /// - `bitcoin` — `getblockchaininfo`, returns chain name and block
+  ///   height. Works against modchain proxies, native bitcoind, and
+  ///   any fork (litecoind, dogecoind, monacoin-core, bitcoin-abc).
+  ///
+  /// Inspect [RpcTestResult.type] or use the `isEvm` / `isSolana` /
+  /// `isBitcoin` getters to pick the right read-side fields.
+  Future<RpcTestResult> testRpc(String url, {String type = 'evm'}) async {
+    final data = await _conn.request('Network:testRPC', 'POST', {
+      'URL': url,
+      'Type': type,
+    });
     return RpcTestResult.fromJson(data as Map<String, dynamic>);
   }
 }
