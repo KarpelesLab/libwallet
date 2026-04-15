@@ -47,9 +47,10 @@ Everything in the middle box is what you implement.
 - A WebView that supports JS channels and `runJavaScript`. Tested with
   `webview_flutter 4.x`. Same shape works on `flutter_inappwebview`,
   `InAppWebView`, and equivalent Android/iOS native WebViews.
-- A persistent **install UUID**. Generate once, store in platform
-  storage, never change. EIP-6963 uses this to let dApps remember
-  which wallet the user chose.
+- A **UUIDv4 per page load**. Per EIP-6963, the `uuid` in the announce
+  event identifies the announcement for the lifetime of the page only.
+  Generate a fresh one every time you inject — do NOT cache across
+  launches, and do NOT share it across tabs/pages.
 
 ## Step 1 — ask libwallet for the script
 
@@ -57,16 +58,16 @@ Everything in the middle box is what you implement.
 final js = await client.web3.injectionScript(
   name: 'MyWallet',
   rdns: 'com.example.mywallet',          // reverse-DNS, required by EIP-6963
-  uuid: installUuid,                     // stable per install
+  uuid: Uuid().v4(),                     // fresh per page load (spec requirement)
   icon: 'data:image/svg+xml;base64,...', // or https://... URL
   bridge: 'libwalletBridge',             // name of the JS channel you install
   host: currentPageUrl,                  // optional — pre-fills connected accounts
 );
 ```
 
-Regenerate the script per page navigation if `host` should reflect the
-new origin. The script has no external dependencies; it's safe to
-cache and reuse for many dApps during a session.
+Regenerate the script (and its UUID) on every navigation. The provider
+JS itself has no external dependencies; the heavy work is the
+embedded config JSON which is small.
 
 ## Step 2 — outbound: JS → host → libwallet → host → JS
 
@@ -206,7 +207,7 @@ webview.setNavigationDelegate(NavigationDelegate(
     final js = await client.web3.injectionScript(
       name: 'MyWallet',
       rdns: 'com.example.mywallet',
-      uuid: installUuid,
+      uuid: Uuid().v4(), // fresh UUIDv4 per load — spec requirement
       icon: iconDataUrl,
       bridge: 'libwalletBridge',
       host: url,
@@ -225,8 +226,10 @@ after bundle load still works because EIP-6963 is event-driven.
 - **JS channel name must match the `bridge:` argument.** Mismatch =
   silent hang. The provider logs `console.warn` if it can't find the
   channel — check the WebView console first.
-- **Install UUID must persist.** Rotating the UUID every launch breaks
-  wallet-remembering in dApps. Generate once, store in secure storage.
+- **Fresh UUID per page load.** EIP-6963 scopes `uuid` to "the
+  lifetime of the page" — generate a new UUIDv4 on every injection.
+  Don't cache it, don't persist it across launches. dApps identify a
+  wallet across page loads via `rdns` (which IS stable), not `uuid`.
 - **iOS WKWebView text-channel escaping.** The Dart `runJavaScript`
   wrapper handles quoting, but if you build the JS string manually,
   backtick-escape user-provided strings. Use `jsonEncode` for
@@ -250,12 +253,10 @@ after bundle load still works because EIP-6963 is event-driven.
 class WebWalletWebView extends StatefulWidget {
   final String url;
   final LibwalletClient client;
-  final String installUuid;
 
   const WebWalletWebView({
     required this.url,
     required this.client,
-    required this.installUuid,
   });
 
   @override
@@ -279,7 +280,7 @@ class _WebWalletWebViewState extends State<WebWalletWebView> {
           final js = await widget.client.web3.injectionScript(
             name: 'MyWallet',
             rdns: 'com.example.mywallet',
-            uuid: widget.installUuid,
+            uuid: const Uuid().v4(), // fresh per injection
             icon: _kWalletIconDataUrl,
             bridge: 'libwalletBridge',
             host: url,

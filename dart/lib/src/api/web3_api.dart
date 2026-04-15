@@ -49,10 +49,13 @@ class Web3Api {
   ///    ${jsonEncode(data)})')` and the provider re-emits it in the right
   ///    shape per standard (EIP-1193 / mpurse updateEmitter / Solana).
   ///
-  /// [name] / [icon] / [rdns] / [uuid] are the EIP-6963 info fields. The
-  /// UUID should be generated ONCE per install and persisted (EIP-6963
-  /// requires stability so dApps can cache the selection). Icon is a
-  /// `data:` URL (recommended) or HTTPS URL.
+  /// [name] / [icon] / [rdns] / [uuid] are the EIP-6963 info fields.
+  /// Per EIP-6963, [uuid] must be a UUIDv4 that uniquely identifies this
+  /// provider announcement for the lifetime of the page — generate a
+  /// fresh one on every injection (or on every `start` of a new WebView
+  /// session). Do NOT persist it across launches. Icon is a `data:` URL
+  /// (recommended — works offline and avoids leaking the user's wallet
+  /// to your CDN) or HTTPS URL.
   ///
   /// [host] is optional. When provided (e.g. the current page URL), the
   /// returned script pre-populates connected accounts so the provider can
