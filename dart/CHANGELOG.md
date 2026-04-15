@@ -1,3 +1,29 @@
+## 0.3.8
+
+- **Background balance polling**: new `client.balanceChanges` stream
+  yields a `BalancesChangedEvent` (full `{network, account, assets}`
+  snapshot) every 60 s when the current account / network balances
+  change. Lifecycle-aware — pauses under `Lifecycle:update('background')`
+  / `paused`, resumes with an immediate poll on `foreground` /
+  `resumed` / `active`.
+- **RPC timeouts (reliability fix)**: all `Network.DoRPC` /
+  `DoRPCNamed` calls are now bounded by a 30 s default deadline.
+  A misbehaving upstream (dead Ethereum public RPC, stale Solana
+  endpoint, etc.) can no longer wedge a goroutine forever. The
+  balance poller uses a tighter 15 s cap. Callers that need a
+  specific deadline can use the existing `DoRPCCtx` /
+  `DoRPCNamedCtx`. Fixes an iOS CI hang.
+- **Network:testRPC extended**: now accepts `type` = `evm` /
+  `solana` / `bitcoin` and probes the right health method per
+  family. EVM is still the default; `RpcTestResult` gained
+  `solanaVersion` / `solanaCluster` / `bitcoinChain` /
+  `bitcoinBlocks` fields + `isEvm` / `isSolana` / `isBitcoin`
+  getters.
+- **Android 16 KB page alignment**: CI now builds every Android
+  `.so` (both the AAR and the Dart FFI set) with
+  `-Wl,-z,max-page-size=16384` and verifies it with `readelf`.
+  Required for Android 15+ devices with 16 KB page size (Pixel 8+).
+
 ## 0.3.7
 
 - **Wallet-identity plumbing**: new `client.info.setWalletInfo(clientId:,
