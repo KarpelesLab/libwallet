@@ -152,6 +152,16 @@ class LibwalletClient {
   Stream<OnlineStatusEvent> get onlineStatusEvents =>
       events.where((e) => e is OnlineStatusEvent).cast<OnlineStatusEvent>();
 
+  /// Stream of tx-history backfill events. Fires after libwallet
+  /// pulls on-chain activity (via `modchain_historyByAddress` or
+  /// Otterscan `ots_searchTransactionsAfter`) for the current account
+  /// + network and inserts new rows into the local Transaction table.
+  /// The host can rebind its transaction list via
+  /// `client.transactions.list()` on each event.
+  Stream<TxHistoryUpdatedEvent> get txHistoryUpdates => events
+      .where((e) => e is TxHistoryUpdatedEvent)
+      .cast<TxHistoryUpdatedEvent>();
+
   /// Stream of balance-change snapshots for the current account /
   /// network. Fired by a background poller every 60 s (paused while the
   /// app reports `lifecycle.update('background')`, resumed immediately

@@ -151,6 +151,11 @@ func (e *env) init() error {
 	e.poller = newBalancePoller(e)
 	go e.poller.run()
 
+	// Subscribe to current-account / current-network changes and
+	// run a tx-history backfill for the live (account, network)
+	// via modchain_historyByAddress / ots_searchTransactionsAfter.
+	watchCurrentChanges(e)
+
 	return nil
 }
 

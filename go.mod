@@ -33,6 +33,7 @@ require (
 	github.com/KarpelesLab/countrydb v0.1.3 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
 	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
+	github.com/KarpelesLab/evmabiless v0.1.15 // indirect
 	github.com/KarpelesLab/lngdb v1.0.1 // indirect
 	github.com/KarpelesLab/mldsa v0.2.0 // indirect
 	github.com/KarpelesLab/putil v1.0.0 // indirect

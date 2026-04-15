@@ -1,6 +1,7 @@
 package wltacct
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -232,5 +233,11 @@ func accountSetCurrent(ctx *apirouter.Context) (any, error) {
 	}
 
 	err := acct.setCurrent(e)
+	if err == nil {
+		// Notify subscribers (balance poller + tx history backfill
+		// in wltbase) that the current account has changed. The
+		// emit is async; the API call itself doesn't block on it.
+		e.Emitter().Emit(context.Background(), "account:current_changed", acct.Id.String())
+	}
 	return acct, err
 }

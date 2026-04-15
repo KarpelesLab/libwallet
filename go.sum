@@ -25,6 +25,8 @@ github.com/KarpelesLab/emitter v0.3.1 h1:3uLKPoX+pNv4lQp0T/eD1gNkS/yakuKR0poZ9vU
 github.com/KarpelesLab/emitter v0.3.1/go.mod h1:JOaQADpNVN0OJfhkDurRCUkMEotPM8Pukh3DadTOY+4=
 github.com/KarpelesLab/ethrpc v0.2.11 h1:j3KWl9llKI2JgBS0D6uYk/tIeqg4CEmGlSX8Bg9rKWk=
 github.com/KarpelesLab/ethrpc v0.2.11/go.mod h1:YovY3YaYAtl5awPXlDTP6tPP8PJRKqoBx4dSJx2q6ro=
+github.com/KarpelesLab/evmabiless v0.1.15 h1:US++uqGNSn12wGfi10q7c2Za0pSIJ4gtui3HDcm1ULs=
+github.com/KarpelesLab/evmabiless v0.1.15/go.mod h1:TNVbUuRKpAZgEN+U1kqQO2mYKdtOcNqwftWAbis8nec=
 github.com/KarpelesLab/feapi v0.2.7 h1:1+ftJLAqAcCZAbGObNRNlH/oSfg7d7ao0OY9ArXAGDI=
 github.com/KarpelesLab/feapi v0.2.7/go.mod h1:1rQ3TA2zgVxHcQf+3At3oeS8jVkuK471SxoNXbP1aT8=
 github.com/KarpelesLab/lngdb v1.0.1 h1:vJcjRN0/4IaAbCWBrXN9YpGs7ZmmReAZA3B0bbRs5RE=

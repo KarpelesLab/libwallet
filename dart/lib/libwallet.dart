@@ -97,6 +97,7 @@ export 'src/events/events.dart'
         LibwalletEvent,
         RequestEvent,
         BalancesChangedEvent,
+        TxHistoryUpdatedEvent,
         OnlineStatusEvent,
         JsEvent,
         UnknownEvent;

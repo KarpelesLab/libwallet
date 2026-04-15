@@ -18,6 +18,7 @@ sealed class LibwalletEvent {
         : <String, dynamic>{};
     if (event == 'request') return RequestEvent(data);
     if (event == 'balances_changed') return BalancesChangedEvent(data);
+    if (event == 'tx:history_updated') return TxHistoryUpdatedEvent(data);
     if (event == 'online_status') return OnlineStatusEvent(data);
     if (event.startsWith('js:')) return JsEvent(event, data);
     return UnknownEvent(event, data);
@@ -74,6 +75,24 @@ class BalancesChangedEvent extends LibwalletEvent {
         .map((e) => Asset.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
+}
+
+/// Fires after a background sweep inserted new on-chain transactions
+/// into the local Transaction table for the current (account, network).
+/// The payload reports how many rows were added; the host can then
+/// re-query `client.transactions.list()` to render them.
+class TxHistoryUpdatedEvent extends LibwalletEvent {
+  TxHistoryUpdatedEvent(Map<String, dynamic> data)
+      : super('tx:history_updated', data);
+
+  /// Account ID the backfill targeted (matches `Account.id`).
+  String get accountId => (data['account'] as String?) ?? '';
+
+  /// Network ID the backfill targeted (matches `Network.id`).
+  String get networkId => (data['network'] as String?) ?? '';
+
+  /// Number of new transactions inserted in this sweep.
+  int get count => (data['count'] as num?)?.toInt() ?? 0;
 }
 
 /// Network connectivity status changed.

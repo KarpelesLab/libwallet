@@ -1,6 +1,7 @@
 package wltnet
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -218,6 +219,11 @@ func networkSetCurrent(ctx *apirouter.Context) (any, error) {
 	}
 
 	err := nt.SetCurrent(e)
+	if err == nil {
+		// Fire event for subscribers in wltbase (balance poller,
+		// tx-history backfill). Async — doesn't block the API call.
+		e.Emitter().Emit(context.Background(), "network:current_changed", nt.Id.String())
+	}
 	return nt, err
 }
 
