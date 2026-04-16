@@ -1,3 +1,16 @@
+## 0.3.10
+
+- **Solana ed25519 self-heal now actually runs** (follow-up to 0.3.9):
+  the self-heal path in 0.3.9 had a wrong type assertion against the
+  signing context — it silently never triggered, so affected wallets
+  kept failing every send attempt. Fixed to use `wltintf.GetEnv(ctx)`.
+  Additionally, added a pre-flight repair step in the Solana send
+  path that decrypts one key share BEFORE building the transaction
+  and patches `acct.Pubkey` in-memory, so the **first** send on an
+  upgraded install succeeds instead of needing a failed-then-retry
+  cycle. New exported helper `wltwallet.EnsureEd25519Pubkey` is a
+  no-op when the wallet is already correct.
+
 ## 0.3.9
 
 - **Solana ed25519 pubkey fix** (breaking for existing Solana wallets):
