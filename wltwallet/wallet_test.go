@@ -1,7 +1,9 @@
 package wltwallet
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -184,6 +186,28 @@ func TestEdDSAWalletCreate(t *testing.T) {
 	log.Printf("eddsa wallet ready, pubkey=%s", w.Pubkey)
 	origPubkey := w.Pubkey
 
+	// The pubkey stored on the Wallet struct MUST be the
+	// spec-compliant compressed Ed25519 encoding (32-byte little-
+	// endian Y with X-sign bit in MSB of byte 31) — not a raw X
+	// coordinate. Without this check the wallet produces valid TSS
+	// signatures that Solana rejects because the displayed pubkey
+	// doesn't match the signing key. Regression guard for the bug
+	// fixed in 2c8b25d / 0c1e355.
+	edPubBytes, err := base64.RawURLEncoding.DecodeString(w.Pubkey)
+	if err != nil {
+		t.Fatalf("wallet pubkey is not valid base64: %s", err)
+	}
+	if len(edPubBytes) != ed25519.PublicKeySize {
+		t.Fatalf("wallet pubkey must be %d bytes, got %d", ed25519.PublicKeySize, len(edPubBytes))
+	}
+	// Cross-check against what stdlib would produce from the same
+	// Edwards point: the TSS public key, serialized via the library's
+	// canonical compressed form, must match byte-for-byte.
+	canonical := w.Keys[0].eddata.EDDSAPub.ToEd25519PubKey().Serialize()
+	if !bytes.Equal(edPubBytes, canonical) {
+		t.Fatalf("wallet pubkey mismatch with canonical compressed form:\n  got:  %x\n  want: %x", edPubBytes, canonical)
+	}
+
 	// sign with keys 0+1
 	opts := &wltsign.Opts{Context: context.Background()}
 	for _, k := range w.Keys[:2] {
@@ -199,6 +223,17 @@ func TestEdDSAWalletCreate(t *testing.T) {
 		t.Errorf("expected 64-byte signature, got %d bytes", len(sig1))
 	}
 	log.Printf("eddsa sig1 (len %d) = %x", len(sig1), sig1)
+
+	// End-to-end verification against stdlib: the signature the TSS
+	// just produced MUST verify under the pubkey the wallet reports.
+	// A mismatch here means Solana's signature-verification would
+	// also reject the tx — catches the same class of bug the user
+	// hit in production (Transaction did not pass signature
+	// verification) regardless of which of the many encoding steps
+	// is wrong.
+	if !ed25519.Verify(ed25519.PublicKey(edPubBytes), msg1, sig1) {
+		t.Fatalf("stdlib ed25519.Verify rejected the TSS signature under the wallet's own pubkey — Solana will do the same")
+	}
 
 	// sign a different message with same keys
 	msg2 := []byte("second message")
