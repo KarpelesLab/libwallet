@@ -54,13 +54,13 @@ jobs:
 
   # iOS simulator integration tests (FFI via c-archive).
   # The Xcode build for the test host takes 25-40 minutes on CI.
-  # Happy path including tests completes in ~8 min; 20 min gives a
-  # comfortable buffer without letting a hung RPC call wedge the
-  # pipeline for an hour (all libwallet RPC calls are now bounded by
-  # a 30 s timeout, so any real hang fails fast rather than stalls).
+  # Happy path including tests is ~8 min; we've seen 20-25 min runs
+  # on slow runners though, so keep 30 min as the cap. All libwallet
+  # RPC calls are bounded by a 30 s timeout internally, so any real
+  # hang fails fast rather than stalling the whole pipeline.
   test-ios:
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
