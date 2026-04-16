@@ -12,6 +12,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wltwallet"
 )
 
 // Solana System Program ID (all ones in base58)
@@ -89,6 +90,26 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 
 // signAndSendSolana handles the full Solana transaction flow
 func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, keys []*wltsign.KeyDescription) error {
+	// Repair the Ed25519 pubkey if it was stored under the legacy
+	// X-coord-big-endian encoding — otherwise the fee-payer pubkey
+	// (acct.Address) the tx carries doesn't match the pubkey the TSS
+	// signs with, and Solana rejects the tx with
+	// "Transaction did not pass signature verification". Decrypts one
+	// key share, no user prompt. No-op when already correct.
+	if e := wltintf.GetEnv(ctx); e != nil && acct.Wallet != nil {
+		if w, werr := walletByAccount(e, acct); werr == nil {
+			if want, rerr := wltwallet.EnsureEd25519Pubkey(e, w, keys); rerr == nil && want != acct.Pubkey {
+				// In-memory patch for the current signing call.
+				// The wallet:pubkey_repaired emit inside
+				// EnsureEd25519Pubkey takes care of persisting the
+				// new Pubkey to every linked Account record for
+				// future loads.
+				acct.Pubkey = want
+				_ = acct.UpdateAddressForNetwork(n)
+			}
+		}
+	}
+
 	// Decode sender address
 	fromBytes, err := base58.Bitcoin.Decode(acct.Address)
 	if err != nil {

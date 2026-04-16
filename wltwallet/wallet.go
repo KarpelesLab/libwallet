@@ -374,6 +374,49 @@ func (w *Wallet) getKey(id string) *WalletKey {
 	return nil
 }
 
+// EnsureEd25519Pubkey decrypts the first provided key to extract the
+// canonical compressed-Y Ed25519 public key and compares it against
+// Wallet.Pubkey. When they disagree (the legacy X-coord-big-endian
+// encoding wallets created before the fix) the wallet is repaired,
+// resaved, and wallet:pubkey_repaired is emitted so Account records
+// linked to this wallet also get updated.
+//
+// Safe to call before every Ed25519 TSS signing flow — no-op when the
+// wallet already has the correct pubkey. Returns the authoritative
+// compressed pubkey (base64 RawURLEncoding).
+func EnsureEd25519Pubkey(e wltintf.Env, w *Wallet, keys []*wltsign.KeyDescription) (string, error) {
+	if w == nil || w.Curve != "ed25519" || len(keys) == 0 {
+		if w != nil {
+			return w.Pubkey, nil
+		}
+		return "", nil
+	}
+	kd := keys[0]
+	wk := w.getKey(kd.Id)
+	if wk == nil {
+		return w.Pubkey, fmt.Errorf("key %s not in wallet %s", kd.Id, w.Id)
+	}
+	eddata, err := wk.decryptEdDSA(kd, keySignPurpose)
+	if err != nil {
+		return w.Pubkey, err
+	}
+	want := base64.RawURLEncoding.EncodeToString(eddata.EDDSAPub.ToEd25519PubKey().Serialize())
+	if w.Pubkey == want {
+		return want, nil
+	}
+	w.Pubkey = want
+	if err := w.save(e); err != nil {
+		return want, err
+	}
+	if em := e.Emitter(); em != nil {
+		em.Emit(context.Background(), "wallet:pubkey_repaired", map[string]string{
+			"wallet": w.Id.String(),
+			"pubkey": want,
+		})
+	}
+	return want, nil
+}
+
 // Sign the digest using the wallet, returning a DER encoded signature
 // Implements the crypto.Signer interface
 // Parameters:
@@ -476,7 +519,11 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 				want := base64.RawURLEncoding.EncodeToString(eddata.EDDSAPub.ToEd25519PubKey().Serialize())
 				if w.Pubkey != want {
 					w.Pubkey = want
-					if env, ok := aopt.Context.(wltintf.Env); ok {
+					// aopt.Context is an *apirouter.Context (or any
+					// context.Context); the Env is attached as an
+					// object on it — use GetEnv to retrieve it. The
+					// earlier direct type-assertion never matched.
+					if env := wltintf.GetEnv(aopt.Context); env != nil {
 						// non-fatal: if the save fails, the next
 						// sign attempt will retry the repair.
 						_ = w.save(env)
