@@ -1,3 +1,30 @@
+## 0.3.9
+
+- **Solana ed25519 pubkey fix** (breaking for existing Solana wallets):
+  ed25519 wallets created pre-0.3.9 stored the X coordinate of the
+  Edwards point (big-endian) as the "public key" instead of the
+  standard compressed encoding (Y little-endian with X's sign bit in
+  the MSB of byte 31). Consequences: the displayed Solana address was
+  wrong, balance queries hit a different address from the one the
+  TSS signs with, and every `sendTransaction` failed with
+  "Transaction did not pass signature verification". Fixed at wallet
+  creation via `ToEd25519PubKey().Serialize()`. Existing broken
+  wallets self-heal on the first sign attempt (which fails once,
+  then the repair propagates to the wallet + linked accounts and
+  the retry succeeds).
+- **On-chain tx history backfill** (EVM): `client.transactions.list()`
+  now includes on-chain activity, not just txs this install built.
+  Triggered in the background on `Account:setCurrent` /
+  `Network:setCurrent` / env init. First tries
+  `modchain_historyByAddress`, falls back to Otterscan's
+  `ots_searchTransactionsAfter` (erigon v3). New
+  `client.txHistoryUpdates` stream fires when new rows land.
+- **Immediate balance refresh after sends**: every `Transaction:
+  signAndSend` / `Account:signAndSendTransaction` /
+  `mpurse_sendRawTransaction` / `solana_sign_send_transaction` now
+  nudges the background balance poller. Users see the new balance
+  within ~1 s instead of up to 60 s.
+
 ## 0.3.8
 
 - **Background balance polling**: new `client.balanceChanges` stream
