@@ -11,9 +11,39 @@ import (
 	"github.com/portablesql/psql"
 )
 
-func Init(e wltintf.Env) {
-	go handleWalletDelete(e, e.Emitter().On("wallet:delete"))
-	go handleWalletRestore(e, e.Emitter().On("wallet:restored"))
+// handleWalletPubkeyRepair updates cached Account.Pubkey for every
+// account linked to a wallet whose Ed25519 pubkey was re-serialized
+// from the old (buggy X-coord) encoding to the standard compressed-Y
+// form. Without this, the account's displayed Solana address would
+// stay stale even after the wallet self-healed.
+func handleWalletPubkeyRepair(e wltintf.Env, ch <-chan *emitter.Event) {
+	for ev := range ch {
+		payload, err := emitter.Arg[map[string]string](ev, 0)
+		if err != nil {
+			log.Printf("wallet:pubkey_repaired: bad payload: %s", err)
+			continue
+		}
+		walletId, newPubkey := payload["wallet"], payload["pubkey"]
+		if walletId == "" || newPubkey == "" {
+			continue
+		}
+		accts, err := psql.Fetch[Account](e, map[string]any{"Wallet": walletId})
+		if err != nil {
+			log.Printf("wallet:pubkey_repaired: fetch accounts: %s", err)
+			continue
+		}
+		for _, acct := range accts {
+			if acct.Pubkey == newPubkey {
+				continue
+			}
+			acct.Pubkey = newPubkey
+			// Re-derive Address for whatever the current network is.
+			acct.save(e)
+			// Deferred Address refresh: the next check() call
+			// (triggered by the account being loaded) picks up
+			// the new Pubkey.
+		}
+	}
 }
 
 func handleWalletRestore(e wltintf.Env, ch <-chan *emitter.Event) {

@@ -340,10 +340,15 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 		return errors.New("eddsa key generation failed")
 	}
 
-	// Extract Ed25519 public key
-	edPub := w.Keys[0].eddata.EDDSAPub
-	pubBytes := make([]byte, 32)
-	edPub.X().FillBytes(pubBytes)
+	// Extract Ed25519 public key using the standard compressed
+	// encoding (32-byte little-endian Y with X-sign bit in MSB of
+	// byte 31). Writing the X coordinate alone — what an earlier
+	// version of this code did — produced an address that wasn't
+	// the on-curve pubkey the TSS actually signs with, so Solana
+	// rejected every send with "Transaction did not pass signature
+	// verification" and balance queries hit a different address
+	// from the one the TSS controls.
+	pubBytes := w.Keys[0].eddata.EDDSAPub.ToEd25519PubKey().Serialize()
 	w.Pubkey = base64.RawURLEncoding.EncodeToString(pubBytes)
 	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
 
@@ -447,6 +452,14 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 	res := make(chan any, len(keys))
 
 	if w.Curve == "ed25519" {
+		// Self-heal Pubkey for wallets created before the X-coord →
+		// compressed-Y encoding fix. The persisted Pubkey is
+		// authoritative; if it doesn't match the on-curve serialization
+		// of the (soon-to-be-decrypted) EDDSAPub, we'd sign with the
+		// real key but emit a tx with the wrong pubkey → Solana
+		// rejects with "Transaction did not pass signature verification".
+		// Repair done once per sign, after the first key decrypts.
+		var repairedPubkey bool
 		for n, kd := range keys {
 			p := w.getKey(kd.Id)
 			if p == nil {
@@ -457,6 +470,27 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 			eddata, err := p.decryptEdDSA(kd, keySignPurpose)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decrypt eddsa key %s for signing: %w", kd.Id, err)
+			}
+			if !repairedPubkey {
+				repairedPubkey = true
+				want := base64.RawURLEncoding.EncodeToString(eddata.EDDSAPub.ToEd25519PubKey().Serialize())
+				if w.Pubkey != want {
+					w.Pubkey = want
+					if env, ok := aopt.Context.(wltintf.Env); ok {
+						// non-fatal: if the save fails, the next
+						// sign attempt will retry the repair.
+						_ = w.save(env)
+						// Linked Account records cached the old
+						// Pubkey at init; emit so wltacct can
+						// propagate the fix.
+						if em := env.Emitter(); em != nil {
+							em.Emit(context.Background(), "wallet:pubkey_repaired", map[string]string{
+								"wallet": w.Id.String(),
+								"pubkey": want,
+							})
+						}
+					}
+				}
 			}
 			sg, err := eddata.NewSigning(signCtx, msg, params)
 			if err != nil {
