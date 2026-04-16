@@ -1,3 +1,32 @@
+## 0.3.13
+
+- **Logs routed over the event channel** (fixes 0.3.12's silent
+  logging on iOS). 0.3.12 wired every internal diagnostic through
+  `wltlog`, but the underlying `log.Printf` writes to the Go
+  runtime's `os.Stderr` — which Flutter+iOS swallows entirely, and
+  Flutter+Android filters out of `flutter logs` by default. End
+  result: testers saw no output even with `logLevel: "debug"`. Fixed
+  by routing every wltlog emission through the apirouter broadcast
+  channel (same pipe Web3 requests / balance changes already use).
+- **New `LogEvent` + `client.logs` stream**: subscribe once at
+  startup and forward to `developer.log` / `print` so the logs show
+  up in Flutter's log output on every platform:
+
+      import 'dart:developer' as developer;
+      client.logs.listen((e) {
+        developer.log(e.message, name: 'libwallet.${e.level}');
+      });
+      await client.info.setWalletInfo(
+        clientId: '...',
+        logLevel: kDebugMode ? 'debug' : 'off',
+      );
+
+  `LogEvent` is also emitted on the general `client.events` stream
+  for hosts that want a single subscription.
+- **Sink safety**: a panic inside the sink falls back to stderr
+  with no rethrow, so a broken logging pipeline can never take down
+  a send.
+
 ## 0.3.12
 
 - **Leveled logging (`wltlog`) controlled by `setWalletInfo`**: new
