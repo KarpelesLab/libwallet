@@ -86,6 +86,10 @@ func accountSignMessage(ctx *apirouter.Context, in struct {
 
 	switch mode {
 	case "solana":
+		// Self-heal the Ed25519 pubkey if we're still on the legacy
+		// encoding. Done before signing so "publicKey" in the
+		// response is the corrected address.
+		_, _ = EnsureEd25519PubkeyOnAccount(ctx, acct, in.Keys)
 		sig, err := acct.Sign(nil, msgBytes, signOpt)
 		if err != nil {
 			return nil, fmt.Errorf("solana sign failed: %w", err)
@@ -198,6 +202,15 @@ func signSolanaTransaction(ctx *apirouter.Context, txB64 string, keys []*wltsign
 	if acct.Curve != "ed25519" {
 		return nil, nil, errors.New("signTransaction currently supports Solana (ed25519) only — use Transaction:signAndSend for EVM/Bitcoin")
 	}
+
+	// Pre-flight Ed25519 pubkey self-heal: if the wallet was created
+	// under the legacy X-coord encoding, repair it now and persist
+	// the corrected Account so the dApp's NEXT read of
+	// window.solana.publicKey returns the right address.
+	// The CURRENT tx was built with the old address, so signing it
+	// will still be rejected by Solana — that's OK, the user's app
+	// will retry after the pubkey refreshes on the JS side.
+	_, _ = EnsureEd25519PubkeyOnAccount(ctx, acct, keys)
 
 	txBytes, err := base64.StdEncoding.DecodeString(txB64)
 	if err != nil {

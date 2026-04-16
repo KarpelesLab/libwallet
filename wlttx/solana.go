@@ -12,7 +12,6 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/libwallet/wltwallet"
 )
 
 // Solana System Program ID (all ones in base58)
@@ -96,19 +95,11 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// signs with, and Solana rejects the tx with
 	// "Transaction did not pass signature verification". Decrypts one
 	// key share, no user prompt. No-op when already correct.
-	if e := wltintf.GetEnv(ctx); e != nil && acct.Wallet != nil {
-		if w, werr := walletByAccount(e, acct); werr == nil {
-			if want, rerr := wltwallet.EnsureEd25519Pubkey(e, w, keys); rerr == nil && want != acct.Pubkey {
-				// In-memory patch for the current signing call.
-				// The wallet:pubkey_repaired emit inside
-				// EnsureEd25519Pubkey takes care of persisting the
-				// new Pubkey to every linked Account record for
-				// future loads.
-				acct.Pubkey = want
-				_ = acct.UpdateAddressForNetwork(n)
-			}
-		}
-	}
+	_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, acct, keys)
+	// Re-derive a.Address explicitly against the network we're about
+	// to send on. EnsureEd25519PubkeyOnAccount uses CurrentNetwork,
+	// which can lag behind the caller's tx.Network override.
+	_ = acct.UpdateAddressForNetwork(n)
 
 	// Decode sender address
 	fromBytes, err := base58.Bitcoin.Decode(acct.Address)

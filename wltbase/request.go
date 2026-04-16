@@ -407,6 +407,11 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		if err != nil {
 			return nil, fmt.Errorf("could not find account: %w", err)
 		}
+		// Legacy-wallet Ed25519 pubkey repair (see
+		// wltwallet.EnsureEd25519Pubkey). Persists the corrected
+		// Address so the dApp's next window.solana.publicKey read
+		// returns the right value.
+		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
 		signOpt := &wltsign.Opts{
 			Context: ctx,
 			Keys:    in.Keys,
@@ -435,6 +440,12 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		if err != nil {
 			return nil, fmt.Errorf("could not find account: %w", err)
 		}
+		// Legacy-wallet Ed25519 pubkey repair. The CURRENT tx was
+		// built by the dApp from the (wrong) pre-repair address, so
+		// this signing attempt will still fail verification when
+		// broadcast — but by the time the dApp refetches publicKey
+		// and rebuilds, a.Address is correct.
+		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
 		// Solana transactions: the message to sign starts after the signature slots.
 		// For a single-signer tx: compact-u16(1) + 64 bytes signature placeholder = 65 bytes header.
 		// The message is everything after the signatures section.
@@ -471,6 +482,9 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		if err != nil {
 			return nil, fmt.Errorf("could not find account: %w", err)
 		}
+		// Legacy-wallet Ed25519 pubkey repair. See notes on the
+		// solana_sign_transaction case above.
+		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
 		msgBytes, err := solanaExtractMessage(txBytes)
 		if err != nil {
 			return nil, err
