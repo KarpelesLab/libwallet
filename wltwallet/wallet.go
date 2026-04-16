@@ -16,6 +16,7 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltcrash"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
@@ -495,6 +496,7 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 	res := make(chan any, len(keys))
 
 	if w.Curve == "ed25519" {
+		wltlog.Debugf("wallet-sign: ed25519 id=%s threshold=%d keys_provided=%d msg_len=%d", w.Id, w.Threshold, len(keys), len(digest))
 		// Self-heal Pubkey for wallets created before the X-coord →
 		// compressed-Y encoding fix. The persisted Pubkey is
 		// authoritative; if it doesn't match the on-curve serialization
@@ -510,14 +512,18 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 			}
 			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
 			params.SetBroker(hub.local[idmap[n].Id])
+			decStart := time.Now()
 			eddata, err := p.decryptEdDSA(kd, keySignPurpose)
 			if err != nil {
+				wltlog.Errorf("wallet-sign: ed25519 decrypt key %s failed after %s: %s", kd.Id, time.Since(decStart).Round(time.Millisecond), err)
 				return nil, fmt.Errorf("failed to decrypt eddsa key %s for signing: %w", kd.Id, err)
 			}
+			wltlog.Debugf("wallet-sign: ed25519 key %s decrypted in %s (type=%s)", kd.Id, time.Since(decStart).Round(time.Millisecond), p.Type)
 			if !repairedPubkey {
 				repairedPubkey = true
 				want := base64.RawURLEncoding.EncodeToString(eddata.EDDSAPub.ToEd25519PubKey().Serialize())
 				if w.Pubkey != want {
+					wltlog.Warnf("wallet-sign: ed25519 Pubkey mismatch on wallet %s — persisted %q but TSS says %q (repairing)", w.Id, w.Pubkey, want)
 					w.Pubkey = want
 					// aopt.Context is an *apirouter.Context (or any
 					// context.Context); the Env is attached as an

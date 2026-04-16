@@ -7,6 +7,7 @@ import (
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/pobj"
@@ -25,27 +26,56 @@ func init() {
 	pobj.RegisterStatic("Info:onboarding", infoOnboarding)
 	pobj.RegisterStatic("Info:setWalletInfo", infoSetWalletInfo)
 	pobj.RegisterStatic("Info:getWalletInfo", infoGetWalletInfo)
+
+	// gitTag is populated by -ldflags in release builds (see the
+	// Build workflow). An empty gitTag means this binary was built
+	// from source without a release tag — usually a dev/CI build,
+	// so default to "debug" logging. Release binaries default to
+	// "info" so end users don't see per-RPC chatter but still get
+	// the state-change lines that matter for support diagnosis.
+	if gitTag == "" {
+		wltlog.SetAutoDefault(wltlog.LevelDebug)
+	} else {
+		wltlog.SetAutoDefault(wltlog.LevelInfo)
+	}
 }
 
 // infoSetWalletInfo registers the host wallet's identity block.
 // Currently sends ClientID as the Sec-ClientId HTTP header on every
-// Crypto/WalletSign:* call; Name + Version are stored for future use.
-// Pass zero-valued fields to clear.
+// Crypto/WalletSign:* call; Name + Version are stored for future use;
+// LogLevel controls wltlog verbosity. Pass zero-valued fields to clear.
 func infoSetWalletInfo(in struct {
 	ClientID string `json:"ClientId"`
 	Name     string `json:"Name"`
 	Version  string `json:"Version"`
+	LogLevel string `json:"LogLevel"`
 }) (any, error) {
 	wltwallet.SetWalletInfo(wltwallet.WalletInfo{
 		ClientID: in.ClientID,
 		Name:     in.Name,
 		Version:  in.Version,
+		LogLevel: in.LogLevel,
 	})
-	return wltwallet.GetWalletInfo(), nil
+	return infoGetWalletInfoValue(), nil
 }
 
 func infoGetWalletInfo() (any, error) {
-	return wltwallet.GetWalletInfo(), nil
+	return infoGetWalletInfoValue(), nil
+}
+
+// infoGetWalletInfoValue returns the stored WalletInfo plus the
+// effective log level (what libwallet is actually using right now),
+// so hosts can tell whether an empty LogLevel resolved to "debug" or
+// "info" without having to recompute the logic themselves.
+func infoGetWalletInfoValue() map[string]any {
+	info := wltwallet.GetWalletInfo()
+	return map[string]any{
+		"clientId":           info.ClientID,
+		"name":               info.Name,
+		"version":            info.Version,
+		"logLevel":           info.LogLevel,
+		"effectiveLogLevel":  wltlog.GetLevel().String(),
+	}
 }
 
 func infoPing() (any, error) {

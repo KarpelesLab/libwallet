@@ -18,6 +18,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltasset"
 	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltutil"
@@ -440,8 +441,16 @@ func (n *Network) DoRPCCtx(ctx context.Context, method string, args ...any) (jso
 	if err != nil {
 		return nil, err
 	}
-
-	return e.DoCtx(ctx, method, args...)
+	start := time.Now()
+	res, err := e.DoCtx(ctx, method, args...)
+	if wltlog.Enabled(wltlog.LevelDebug) {
+		if err != nil {
+			wltlog.Debugf("rpc: chain=%s method=%s FAIL in %s: %s", n.ChainId, method, time.Since(start).Round(time.Millisecond), err)
+		} else {
+			wltlog.Debugf("rpc: chain=%s method=%s OK in %s (%d bytes)", n.ChainId, method, time.Since(start).Round(time.Millisecond), len(res))
+		}
+	}
+	return res, err
 }
 
 // DoRPCNamed sends a JSON-RPC request with named (object) parameters.
@@ -462,11 +471,22 @@ func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[str
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
+	var res json.RawMessage
 	if r, ok := e.(*ethrpc.RPC); ok {
-		return r.DoNamedCtx(ctx, method, args)
+		res, err = r.DoNamedCtx(ctx, method, args)
+	} else {
+		// Fallback (shouldn't happen with current ethrpc.New): use positional.
+		res, err = e.DoCtx(ctx, method, args)
 	}
-	// Fallback (shouldn't happen with current ethrpc.New): use positional.
-	return e.DoCtx(ctx, method, args)
+	if wltlog.Enabled(wltlog.LevelDebug) {
+		if err != nil {
+			wltlog.Debugf("rpc-named: chain=%s method=%s FAIL in %s: %s", n.ChainId, method, time.Since(start).Round(time.Millisecond), err)
+		} else {
+			wltlog.Debugf("rpc-named: chain=%s method=%s OK in %s (%d bytes)", n.ChainId, method, time.Since(start).Round(time.Millisecond), len(res))
+		}
+	}
+	return res, err
 }
 
 type AddressProvider interface {

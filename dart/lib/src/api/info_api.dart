@@ -52,17 +52,24 @@ class InfoApi {
   ///   WalletSign backend operator.
   /// - [name] / [version] are stored for future use (untrusted
   ///   display strings on approval prompts, diagnostics). Optional.
+  /// - [logLevel] controls libwallet's leveled logging. Valid values:
+  ///   `"debug"`, `"info"`, `"warn"`, `"error"`, `"off"`. Empty
+  ///   resolves to libwallet's auto-default (`"debug"` on dev
+  ///   binaries, `"info"` on release binaries). A common pattern is
+  ///   `logLevel: kDebugMode ? "debug" : "off"`.
   ///
   /// Pass empty strings to clear.
   Future<WalletInfo> setWalletInfo({
     required String clientId,
     String name = '',
     String version = '',
+    String logLevel = '',
   }) async {
     final data = await _conn.request('Info:setWalletInfo', 'POST', {
       'ClientId': clientId,
       'Name': name,
       'Version': version,
+      'LogLevel': logLevel,
     });
     return WalletInfo.fromJson(Map<String, dynamic>.from(data as Map));
   }
@@ -85,15 +92,29 @@ class WalletInfo {
   /// Host app version (e.g. `1.4.2`). Diagnostic only.
   final String version;
 
+  /// Requested log level. Empty means "auto" (debug on dev binaries,
+  /// info on release binaries).
+  final String logLevel;
+
+  /// The log level libwallet is actually using, after resolving
+  /// [logLevel] against the auto-default. Echoed by the Go side on
+  /// every `setWalletInfo` / `getWalletInfo` so the host doesn't have
+  /// to recompute the mapping.
+  final String effectiveLogLevel;
+
   const WalletInfo({
     this.clientId = '',
     this.name = '',
     this.version = '',
+    this.logLevel = '',
+    this.effectiveLogLevel = '',
   });
 
   factory WalletInfo.fromJson(Map<String, dynamic> json) => WalletInfo(
         clientId: (json['clientId'] as String?) ?? '',
         name: (json['name'] as String?) ?? '',
         version: (json['version'] as String?) ?? '',
+        logLevel: (json['logLevel'] as String?) ?? '',
+        effectiveLogLevel: (json['effectiveLogLevel'] as String?) ?? '',
       );
 }

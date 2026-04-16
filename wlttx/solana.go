@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"time"
 
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 )
@@ -91,9 +92,9 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 
 // signAndSendSolana handles the full Solana transaction flow
 func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, keys []*wltsign.KeyDescription) error {
-	// Diagnostic trace so the tester's logs confirm this path is
-	// reached and show the state BEFORE the repair attempt.
-	log.Printf("solana-send: entry tx.From=%q tx.To=%q acct.Id=%s acct.Pubkey=%q acct.Address=%q acct.Curve=%q keys=%d",
+	// Debug trace so the tester's logs confirm this path is reached
+	// and show the state BEFORE the repair attempt.
+	wltlog.Debugf("solana-send: entry tx.From=%q tx.To=%q acct.Id=%s acct.Pubkey=%q acct.Address=%q acct.Curve=%q keys=%d",
 		tx.From, tx.To, acct.Id, acct.Pubkey, acct.Address, acct.Curve, len(keys))
 
 	// Repair the Ed25519 pubkey if it was stored under the legacy
@@ -107,7 +108,7 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// to send on. EnsureEd25519PubkeyOnAccount uses CurrentNetwork,
 	// which can lag behind the caller's tx.Network override.
 	_ = acct.UpdateAddressForNetwork(n)
-	log.Printf("solana-send: post-repair acct.Pubkey=%q acct.Address=%q", acct.Pubkey, acct.Address)
+	wltlog.Debugf("solana-send: post-repair acct.Pubkey=%q acct.Address=%q", acct.Pubkey, acct.Address)
 
 	// Decode sender address
 	fromBytes, err := base58.Bitcoin.Decode(acct.Address)
@@ -165,19 +166,23 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 		Context: ctx,
 		Keys:    keys,
 	}
+	signStart := time.Now()
 	signature, err := acct.Sign(nil, message, signOpt)
 	if err != nil {
+		wltlog.Errorf("solana-send: TSS sign failed after %s: %s", time.Since(signStart).Round(time.Millisecond), err)
 		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
+	wltlog.Debugf("solana-send: TSS sign complete in %s (sig len=%d)", time.Since(signStart).Round(time.Millisecond), len(signature))
+
 	// Local verification against the pubkey we're about to put in
 	// the fee-payer slot. If this fails, Solana will fail too, and
 	// we'd rather surface the exact reason now than get a generic
 	// "Transaction did not pass signature verification" from the RPC.
 	if !verifyEd25519Signature(from[:], message, signature) {
-		log.Printf("solana-send: LOCAL verify FAILED — sig does not validate under fee-payer pubkey %x (sig=%x, msg len=%d)", from[:], signature, len(message))
+		wltlog.Errorf("solana-send: LOCAL verify FAILED — sig does not validate under fee-payer pubkey %x (sig=%x, msg len=%d)", from[:], signature, len(message))
 		return fmt.Errorf("signature does not verify against fee-payer pubkey locally (sig len=%d, acct.Address=%s) — TSS key shares may be inconsistent with stored pubkey", len(signature), acct.Address)
 	}
-	log.Printf("solana-send: LOCAL verify OK (sig len=%d)", len(signature))
+	wltlog.Debugf("solana-send: LOCAL verify OK")
 
 	// Build the full transaction: compact-u16(numSignatures) + signatures + message
 	var rawTx []byte
@@ -189,10 +194,12 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 
 	// Broadcast via sendTransaction
 	txBase58 := base58.Bitcoin.Encode(rawTx)
+	broadcastStart := time.Now()
 	result, err := n.DoRPC("sendTransaction", txBase58, map[string]any{
 		"encoding": "base58",
 	})
 	if err != nil {
+		wltlog.Errorf("solana-send: broadcast failed after %s: %s", time.Since(broadcastStart).Round(time.Millisecond), err)
 		return fmt.Errorf("failed to send transaction: %w", err)
 	}
 
@@ -204,6 +211,11 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	tx.Hash = txHash
 	tx.URL = n.TransactionUrl(txHash)
 	wltintf.NotifyTxBroadcast(wltintf.GetEnv(ctx))
+	// State change worth emitting at info level — shows up in
+	// release binaries so the support team can correlate a broadcast
+	// event with on-chain data.
+	wltlog.Infof("solana-send: broadcast OK chain=%s from=%s to=%s lamports=%d hash=%s (broadcast %s)",
+		n.ChainId, acct.Address, tx.To, lamports, txHash, time.Since(broadcastStart).Round(time.Millisecond))
 
 	return nil
 }

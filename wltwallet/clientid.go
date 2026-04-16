@@ -15,6 +15,8 @@ import (
 	"context"
 	"net/http"
 	"sync/atomic"
+
+	"github.com/KarpelesLab/libwallet/wltlog"
 )
 
 // WalletInfo is the identity block host wallets pass to libwallet so
@@ -34,18 +36,35 @@ type WalletInfo struct {
 	// Version is the host app's version string (e.g. "1.4.2"). Optional,
 	// diagnostic only.
 	Version string `json:"version,omitempty"`
+
+	// LogLevel controls libwallet's leveled-log output. Valid values:
+	// "debug", "info", "warn", "error", "off". Empty string resolves
+	// to libwallet's auto-default — "info" on release binaries and
+	// "debug" on dev binaries (see wltlog.SetAutoDefault). Host apps
+	// typically set this from their own debug/release flag — in Dart
+	// that's `kDebugMode ? "debug" : "off"`.
+	LogLevel string `json:"logLevel,omitempty"`
 }
 
 var walletInfo atomic.Pointer[WalletInfo]
 
 // SetWalletInfo replaces the current wallet-identity record. Pass a
-// zero-value struct to clear.
+// zero-value struct to clear. Applies info.LogLevel to the wltlog
+// package as a side effect so the next log call uses the requested
+// verbosity.
 func SetWalletInfo(info WalletInfo) {
 	if info == (WalletInfo{}) {
 		walletInfo.Store(nil)
+		// Reset to auto-default so a later call without LogLevel
+		// doesn't inherit a prior host's pick.
+		wltlog.SetLevelString("")
 		return
 	}
 	walletInfo.Store(&info)
+	// LogLevel is applied on every call so the host can flip
+	// verbosity at runtime (e.g. from a debug settings screen)
+	// without having to re-register all other fields.
+	wltlog.SetLevelString(info.LogLevel)
 }
 
 // GetWalletInfo returns the currently configured wallet-identity record
