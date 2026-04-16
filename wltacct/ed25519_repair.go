@@ -29,22 +29,55 @@ import (
 // often: the provided Keys did not decrypt) — callers can treat it
 // as a soft failure and attempt signing anyway.
 func EnsureEd25519PubkeyOnAccount(ctx context.Context, a *Account, keys []*wltsign.KeyDescription) (bool, error) {
-	if a == nil || a.Curve != "ed25519" || a.Wallet == nil {
+	if a == nil {
+		log.Printf("ed25519-repair: skip — account is nil")
+		return false, nil
+	}
+	// a.Curve is only populated if the account was loaded via
+	// AccountById (which runs check()). The address-lookup path
+	// in FindAccount bypasses check(), so a.Curve may be empty
+	// here even for a proper Ed25519 account. Fall back to the
+	// wallet's curve in that case.
+	if a.Wallet == nil {
+		log.Printf("ed25519-repair: skip — account %s has no wallet (view-only?)", a.Id)
 		return false, nil
 	}
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
+		log.Printf("ed25519-repair: skip — GetEnv(ctx) returned nil (account %s)", a.Id)
 		return false, nil
 	}
 	w, err := wltwallet.WalletById(e, a.Wallet)
 	if err != nil {
+		log.Printf("ed25519-repair: skip — WalletById(%s) failed: %s", a.Wallet, err)
 		return false, err
+	}
+	if a.Curve == "" {
+		a.Curve = w.Curve
+	}
+	if a.Curve != "ed25519" {
+		log.Printf("ed25519-repair: skip — account %s curve is %q, wallet curve is %q", a.Id, a.Curve, w.Curve)
+		return false, nil
+	}
+	if len(keys) == 0 {
+		log.Printf("ed25519-repair: skip — account %s has no keys provided for decrypt", a.Id)
+		return false, nil
 	}
 	want, err := wltwallet.EnsureEd25519Pubkey(e, w, keys)
 	if err != nil {
+		log.Printf("ed25519-repair: skip — EnsureEd25519Pubkey on wallet %s failed: %s (key[0].Id=%s)", w.Id, err, keys[0].Id)
 		return false, err
 	}
-	if want == "" || want == a.Pubkey {
+	if want == "" {
+		log.Printf("ed25519-repair: skip — EnsureEd25519Pubkey returned empty want (wallet %s)", w.Id)
+		return false, nil
+	}
+	// Diagnostic: always log the comparison so testers can tell
+	// whether the wallet+account were ALREADY on the correct
+	// encoding (so this repair wasn't the fix they needed).
+	log.Printf("ed25519-repair: account %s wallet %s: want=%q acct.Pubkey=%q wallet.Pubkey=%q acct.Address=%q",
+		a.Id, w.Id, want, a.Pubkey, w.Pubkey, a.Address)
+	if want == a.Pubkey {
 		return false, nil
 	}
 	oldPubkey := a.Pubkey
@@ -62,8 +95,6 @@ func EnsureEd25519PubkeyOnAccount(ctx context.Context, a *Account, keys []*wltsi
 		log.Printf("ed25519-repair: account %s pubkey repaired in-memory but save failed: %s", a.Id, serr)
 		return true, serr
 	}
-	// High-visibility log: when a tester reports that Solana sends
-	// still fail, grep for this line to confirm the self-heal fired.
 	log.Printf("ed25519-repair: account %s (wallet %s) pubkey/address repaired: pubkey %q → %q, address %q → %q",
 		a.Id, a.Wallet, oldPubkey, a.Pubkey, oldAddress, a.Address)
 	return true, nil

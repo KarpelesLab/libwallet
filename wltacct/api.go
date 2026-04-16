@@ -155,6 +155,13 @@ func FindAccount(e wltintf.Env, id string) (*Account, error) {
 	if err != nil {
 		return nil, fs.ErrNotExist
 	}
+	// The address-lookup path used to skip check(), which left
+	// acct.Curve empty for pre-curve-tracking records. That in
+	// turn short-circuited EnsureEd25519PubkeyOnAccount's curve
+	// gate and meant the Ed25519 pubkey self-heal never fired.
+	// Also refreshes Address for the current network so stale
+	// rows don't linger after a pubkey repair.
+	_ = acct.check(e)
 	return acct, nil
 }
 
