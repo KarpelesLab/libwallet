@@ -1,3 +1,52 @@
+## 0.3.12
+
+- **Leveled logging (`wltlog`) controlled by `setWalletInfo`**: new
+  `LogLevel` field on `WalletInfo`. Valid: `"debug" | "info" | "warn"
+  | "error" | "off"`; empty resolves to libwallet's auto-default —
+  `"debug"` on dev binaries (gitTag empty), `"info"` on release
+  binaries. Typical pattern: `logLevel: kDebugMode ? "debug" : "off"`.
+  Every log call site routes through `wltlog.{Debugf,Infof,Warnf,
+  Errorf}`; lines are prefixed `[debug] / [info] / [warn] / [error]`
+  so testers can grep by level regardless of the host's logger.
+  `getWalletInfo` also returns `effectiveLogLevel` so the host can
+  see what libwallet actually resolved `""` to.
+- **Ed25519 self-heal diagnostics**: the self-heal now logs a
+  specific skip reason at every gate (nil account, no wallet,
+  `GetEnv(ctx)` nil, `WalletById` failed, wrong curve, no keys,
+  decrypt failed, empty want, already-correct), visible at `debug`.
+  The actual repair (Pubkey/Address flip) logs at `info`. Combined
+  with the always-on `want` vs `acct.Pubkey` vs `wallet.Pubkey`
+  dump, a tester flipping `logLevel: "debug"` gets everything
+  needed to pin down why a Solana send fails.
+- **`FindAccount` now runs `check()` on the address-lookup path**:
+  previously only the ID-lookup branch refreshed Curve / Address —
+  tx.From is almost always an address, so account records with an
+  empty Curve (rare but possible) would silently short-circuit the
+  Ed25519 self-heal's curve gate. Fixed by calling `acct.check(e)`
+  after the by-Address fetch.
+- **Pre-broadcast Ed25519 verify**: `Transaction:signAndSend` on
+  Solana now runs `ed25519.Verify(fee_payer, message, sig)` locally
+  before sending to the RPC. Catches pubkey/key-share mismatches
+  with a specific error message ("TSS key shares may be inconsistent
+  with stored pubkey") instead of the generic Solana-side rejection.
+- **Extended pre-flight repair to every Solana sign path**: 0.3.11
+  put the pre-flight only in `Transaction:signAndSend`. The shared
+  helper `wltacct.EnsureEd25519PubkeyOnAccount` is now called from
+  `Account:signMessage` (solana mode), `Account:signTransaction`,
+  `Account:signAndSendTransaction`, and Web3 `solana_sign_message`
+  / `solana_sign_transaction` / `solana_sign_send_transaction`. The
+  helper also saves the repaired Account row synchronously so the
+  dApp's next `window.solana.publicKey` read returns the corrected
+  address.
+- **Per-RPC timing logs** (at `debug`): every `Network.DoRPC` /
+  `DoRPCNamed` emits `rpc: chain=X method=Y OK in Nms (B bytes)` or
+  `FAIL in Nms: err`. Quiet at `info`; noisy but invaluable when
+  reproducing a bug.
+- **Per-key-decrypt timing** (`wallet-sign` logs, at `debug`): entry
+  line with wallet id/threshold/keys/msg_len; per-key "decrypted in
+  N ms (type=Password|StoreKey|…)". Pubkey mismatch detected during
+  sign logs at `warn`.
+
 ## 0.3.11
 
 - **Solana ed25519 self-heal across every sign path**: 0.3.10 only
