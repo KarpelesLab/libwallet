@@ -99,6 +99,7 @@ export 'src/events/events.dart'
         BalancesChangedEvent,
         TxHistoryUpdatedEvent,
         OnlineStatusEvent,
+        LogEvent,
         JsEvent,
         UnknownEvent;
 

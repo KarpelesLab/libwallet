@@ -31,6 +31,7 @@
 package wltlog
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"sync/atomic"
@@ -70,6 +71,15 @@ var currentLevel atomic.Int32
 // autoDefault is the level picked when LogLevel is empty. Overridden
 // by wltbase at package init time based on whether gitTag is set.
 var autoDefault atomic.Int32
+
+// output is a host-supplied sink. On Flutter+iOS the Go runtime's
+// os.Stderr doesn't reach the Dart-side logger, so every visible
+// log line has to flow through the callback channel the host has
+// already wired up for events. wltbase registers such a sink in
+// its init; tests and CLI builds leave it nil and get log.Printf.
+type Sink func(level Level, line string)
+
+var output atomic.Pointer[Sink]
 
 func init() {
 	// Safe initial default until wltbase (or a test) bumps it.
@@ -153,26 +163,65 @@ func Enabled(l Level) bool {
 	return Level(currentLevel.Load()) >= l
 }
 
+// SetSink installs a host-side log sink. wltbase calls this from its
+// init() with a function that forwards every line to the apirouter
+// broadcast channel, so the Dart side receives them as "log" events
+// and can route them to `developer.log`. Pass nil to fall back to the
+// stderr default (useful for tests).
+func SetSink(fn Sink) {
+	if fn == nil {
+		output.Store(nil)
+		return
+	}
+	output.Store(&fn)
+}
+
+// emit writes one log line. When a sink is installed the stderr
+// log.Printf path is skipped — not because the sink is untrusted but
+// because on Flutter+iOS log.Printf goes nowhere readable anyway, and
+// on Android it would double-log. Tests (no sink) keep the stderr
+// output they rely on.
+//
+// A panic inside the sink is swallowed and falls back to stderr so a
+// broken logging pipeline can never take down a user's send.
+func emit(level Level, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	if p := output.Load(); p != nil {
+		delivered := false
+		func() {
+			defer func() {
+				_ = recover()
+			}()
+			(*p)(level, line)
+			delivered = true
+		}()
+		if delivered {
+			return
+		}
+	}
+	log.Printf("[%s] %s", level, line)
+}
+
 // Debugf logs at LevelDebug. Format is a Printf-style template; the
 // output is prefixed with "[debug] " so callers can grep by level
 // regardless of the host's logger format.
 func Debugf(format string, args ...any) {
 	if Enabled(LevelDebug) {
-		log.Printf("[debug] "+format, args...)
+		emit(LevelDebug, format, args...)
 	}
 }
 
 // Infof logs at LevelInfo.
 func Infof(format string, args ...any) {
 	if Enabled(LevelInfo) {
-		log.Printf("[info] "+format, args...)
+		emit(LevelInfo, format, args...)
 	}
 }
 
 // Warnf logs at LevelWarn.
 func Warnf(format string, args ...any) {
 	if Enabled(LevelWarn) {
-		log.Printf("[warn] "+format, args...)
+		emit(LevelWarn, format, args...)
 	}
 }
 
@@ -180,6 +229,6 @@ func Warnf(format string, args ...any) {
 // errors to the user. This is only the log side.
 func Errorf(format string, args ...any) {
 	if Enabled(LevelError) {
-		log.Printf("[error] "+format, args...)
+		emit(LevelError, format, args...)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/pobj"
 )
@@ -38,6 +39,21 @@ func init() {
 	} else {
 		wltlog.SetAutoDefault(wltlog.LevelInfo)
 	}
+
+	// On Flutter+iOS the Go runtime's stderr doesn't reach the
+	// Dart-side logger, so log.Printf output is invisible to the
+	// host app no matter how verbose the level. Route every log
+	// line through the broadcast channel instead — Dart already
+	// subscribes to that stream for Web3 requests and online
+	// status events. Host apps print the "log" event payload
+	// with developer.log / print; release builds can silence it
+	// by setting LogLevel="off". See dart/lib/src/client/*.
+	wltlog.SetSink(func(level wltlog.Level, line string) {
+		wltutil.BroadcastMsg("log", map[string]any{
+			"level": level.String(),
+			"msg":   line,
+		})
+	})
 }
 
 // infoSetWalletInfo registers the host wallet's identity block.

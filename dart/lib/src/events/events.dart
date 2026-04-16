@@ -20,6 +20,7 @@ sealed class LibwalletEvent {
     if (event == 'balances_changed') return BalancesChangedEvent(data);
     if (event == 'tx:history_updated') return TxHistoryUpdatedEvent(data);
     if (event == 'online_status') return OnlineStatusEvent(data);
+    if (event == 'log') return LogEvent(data);
     if (event.startsWith('js:')) return JsEvent(event, data);
     return UnknownEvent(event, data);
   }
@@ -100,6 +101,27 @@ class OnlineStatusEvent extends LibwalletEvent {
   OnlineStatusEvent(Map<String, dynamic> data) : super('online_status', data);
 
   bool get isOnline => data['online'] == true;
+}
+
+/// A leveled log line emitted by the Go side of libwallet.
+///
+/// On Flutter+iOS the Go runtime's stderr is swallowed, so libwallet
+/// routes its internal logs through the event channel instead. Host
+/// apps listen via [client.logs] and forward to `developer.log` /
+/// `print` — that's the only way to see wltlog output on iOS.
+///
+/// Volume is controlled by `Info:setWalletInfo`'s `logLevel` field.
+/// Release binaries default to `info`; dev binaries default to
+/// `debug`. Pass `"off"` to silence entirely.
+class LogEvent extends LibwalletEvent {
+  LogEvent(Map<String, dynamic> data) : super('log', data);
+
+  /// One of `"debug"`, `"info"`, `"warn"`, `"error"`.
+  String get level => (data['level'] as String?) ?? 'info';
+
+  /// The formatted message (already level-prefixed would be redundant
+  /// — use [level] for filtering and [message] for the text).
+  String get message => (data['msg'] as String?) ?? '';
 }
 
 /// A JavaScript-originated event (chainChanged, accountsChanged, etc.).

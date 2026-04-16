@@ -84,6 +84,24 @@ class LibwalletClient {
   /// Stream of all server-pushed events.
   Stream<LibwalletEvent> get events => _transport.events;
 
+  /// Stream of log lines emitted by the Go side of libwallet.
+  ///
+  /// On Flutter+iOS the Go runtime's stderr is NOT captured by the
+  /// host app's logger, so every log line has to ride the event
+  /// channel. Wire this stream up early in your app startup:
+  ///
+  /// ```dart
+  /// import 'dart:developer' as developer;
+  /// client.logs.listen((e) {
+  ///   developer.log(e.message, name: 'libwallet.${e.level}');
+  /// });
+  /// ```
+  ///
+  /// Volume is controlled by `Info:setWalletInfo`'s `logLevel` field
+  /// (empty → auto; `"off"` to silence; `"debug"` for everything).
+  Stream<LogEvent> get logs =>
+      events.where((e) => e is LogEvent).cast<LogEvent>();
+
   /// Stream of raw Web3 request events. Prefer [pendingRequests] for a
   /// fully-parsed view; this stream is kept for advanced use cases that
   /// want access to the raw event payload.
