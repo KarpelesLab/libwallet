@@ -2,10 +2,12 @@ package wlttx
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltacct"
@@ -89,6 +91,11 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 
 // signAndSendSolana handles the full Solana transaction flow
 func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, keys []*wltsign.KeyDescription) error {
+	// Diagnostic trace so the tester's logs confirm this path is
+	// reached and show the state BEFORE the repair attempt.
+	log.Printf("solana-send: entry tx.From=%q tx.To=%q acct.Id=%s acct.Pubkey=%q acct.Address=%q acct.Curve=%q keys=%d",
+		tx.From, tx.To, acct.Id, acct.Pubkey, acct.Address, acct.Curve, len(keys))
+
 	// Repair the Ed25519 pubkey if it was stored under the legacy
 	// X-coord-big-endian encoding — otherwise the fee-payer pubkey
 	// (acct.Address) the tx carries doesn't match the pubkey the TSS
@@ -100,6 +107,7 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// to send on. EnsureEd25519PubkeyOnAccount uses CurrentNetwork,
 	// which can lag behind the caller's tx.Network override.
 	_ = acct.UpdateAddressForNetwork(n)
+	log.Printf("solana-send: post-repair acct.Pubkey=%q acct.Address=%q", acct.Pubkey, acct.Address)
 
 	// Decode sender address
 	fromBytes, err := base58.Bitcoin.Decode(acct.Address)
@@ -161,6 +169,15 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	if err != nil {
 		return fmt.Errorf("failed to sign transaction: %w", err)
 	}
+	// Local verification against the pubkey we're about to put in
+	// the fee-payer slot. If this fails, Solana will fail too, and
+	// we'd rather surface the exact reason now than get a generic
+	// "Transaction did not pass signature verification" from the RPC.
+	if !verifyEd25519Signature(from[:], message, signature) {
+		log.Printf("solana-send: LOCAL verify FAILED — sig does not validate under fee-payer pubkey %x (sig=%x, msg len=%d)", from[:], signature, len(message))
+		return fmt.Errorf("signature does not verify against fee-payer pubkey locally (sig len=%d, acct.Address=%s) — TSS key shares may be inconsistent with stored pubkey", len(signature), acct.Address)
+	}
+	log.Printf("solana-send: LOCAL verify OK (sig len=%d)", len(signature))
 
 	// Build the full transaction: compact-u16(numSignatures) + signatures + message
 	var rawTx []byte
@@ -189,4 +206,17 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	wltintf.NotifyTxBroadcast(wltintf.GetEnv(ctx))
 
 	return nil
+}
+
+// verifyEd25519Signature checks that sig is a valid Ed25519 signature of
+// msg under pubkey. Returns false on invalid pubkey length (Ed25519 is 32
+// bytes) or on any verification error. Used as a local guard before
+// broadcasting so we can distinguish "pubkey/share mismatch" from
+// "Solana-side rejection for other reasons".
+func verifyEd25519Signature(pubkey, msg, sig []byte) bool {
+	if len(pubkey) != ed25519.PublicKeySize || len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	defer func() { _ = recover() }() // stdlib panics on malformed pubkey
+	return ed25519.Verify(ed25519.PublicKey(pubkey), msg, sig)
 }
