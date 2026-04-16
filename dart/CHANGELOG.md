@@ -1,3 +1,31 @@
+## 0.3.11
+
+- **Solana ed25519 self-heal across every sign path**: 0.3.10 only
+  repaired the legacy pubkey encoding inside `Transaction:signAndSend`.
+  A tester reported sends still failing on 0.3.10, which turned out to
+  be a different entry point: `Account:signAndSendTransaction` and the
+  Web3 `solana_sign_{message,transaction,send_transaction}` approvers
+  bypassed the repair. Extracted the fix into
+  `wltacct.EnsureEd25519PubkeyOnAccount` and wired it into every
+  Solana-capable sign path, including `Account:signMessage`. The
+  helper also saves the repaired Account row synchronously (not just
+  via the async `wallet:pubkey_repaired` handler) so the next
+  `FindAccount` / `window.solana.publicKey` read returns the
+  corrected address in the same request lifecycle.
+- **Visibility log**: self-heal now emits
+  `ed25519-repair: account <id> (wallet <id>) pubkey/address
+  repaired: ...` to `log.Printf` when it fires. If affected users
+  report that sends still fail after upgrading, grep logs for
+  `ed25519-repair:` — presence confirms the native binary upgrade
+  landed and the repair ran; absence means the app is still running
+  a pre-0.3.9 `liblibwallet.<ext>` from the package cache.
+- **Regression test**: `TestEdDSAWalletCreate` now asserts the stored
+  `Wallet.Pubkey` byte-matches the canonical compressed-Y Ed25519
+  form, and that stdlib `ed25519.Verify(storedPubkey, msg, sig)`
+  accepts the TSS signature. Either assert would have caught the
+  original 0.3.9 encoding bug locally — same rejection Solana does
+  on-chain.
+
 ## 0.3.10
 
 - **Solana ed25519 self-heal now actually runs** (follow-up to 0.3.9):
