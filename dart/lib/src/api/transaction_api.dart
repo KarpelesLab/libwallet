@@ -1,6 +1,7 @@
 import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
+import '../models/max_sendable_result.dart';
 import '../models/transaction.dart';
 import '../models/transaction_simulation.dart';
 import '../models/unsigned_transaction.dart';
@@ -86,6 +87,37 @@ class TransactionApi {
     final data = await _conn.request(
         'Transaction:signAndSend', 'POST', tx.withKeys(keys).toJson());
     return Transaction.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Compute the maximum amount sendable from [from] in the given
+  /// [asset], accounting for network fees and, on Solana, the
+  /// rent-exempt minimums the sender must retain and a new recipient
+  /// must receive.
+  ///
+  /// Pass [to] on Solana to detect a brand-new recipient — when the
+  /// recipient account doesn't exist yet, the returned [max] is
+  /// reduced so the transfer can fund it to rent-exemption. On EVM
+  /// and Bitcoin [to] is ignored in v1.
+  ///
+  /// [asset] defaults to the network's native currency. Token assets
+  /// (ERC-20, SPL) return an error in v1 — the full token balance is
+  /// always sendable, and fees are paid in native currency; call
+  /// maxSendable for the native asset to verify the account can cover
+  /// the fee.
+  Future<MaxSendableResult> maxSendable({
+    String? from,
+    String? to,
+    String? asset,
+    String? network,
+  }) async {
+    final params = <String, dynamic>{};
+    if (from != null) params['from'] = from;
+    if (to != null) params['to'] = to;
+    if (asset != null) params['asset'] = asset;
+    if (network != null) params['network'] = network;
+    final data = await _conn.request(
+        'Transaction:maxSendable', 'POST', params.isNotEmpty ? params : null);
+    return MaxSendableResult.fromJson(data as Map<String, dynamic>);
   }
 
   /// Delete transactions. Optionally filter by account (From) or network.

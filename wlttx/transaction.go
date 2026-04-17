@@ -310,6 +310,18 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	if n.Type == "solana" {
 		// Solana has fixed fees (~5000 lamports)
 		tx.Fee = wltobj.NewAmountRaw(big.NewInt(5000), 9)
+		// Pre-flight: for native SOL transfers ("transfer" or
+		// "solana_transfer"), verify the sender's balance can
+		// cover amount + fee + rent-exempt minimums. This is
+		// purely a UX guard: without it, an over-sized send
+		// surfaces as the cryptic "insufficient funds for rent"
+		// from simulateTransaction after signing. SPL transfers
+		// and raw evm-on-solana variants don't pass through this.
+		if tx.Type == "transfer" || tx.Type == "solana_transfer" {
+			if err := preflightSolanaNativeSend(e, n, acct, tx); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 

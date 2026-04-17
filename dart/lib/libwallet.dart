@@ -87,6 +87,8 @@ export 'src/models/nft_listing.dart' show NftListing;
 export 'src/models/rpc_test.dart' show RpcTestResult;
 export 'src/models/transaction_simulation.dart'
     show TransactionSimulation, Effect, BalanceChange, BitcoinIO;
+export 'src/models/max_sendable_result.dart'
+    show MaxSendableResult, ReservedAmount;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;
