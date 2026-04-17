@@ -97,6 +97,12 @@ jobs:
           ")
           echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
           xcrun simctl boot "$DEVICE_ID"
+          # Block until the simulator is fully booted. Without this,
+          # `simctl boot` returns as soon as the boot process starts
+          # but services (including the Dart VM discovery path) may
+          # not yet be ready — flutter test's attach can then silently
+          # retry-then-timeout. This matches ~40% of the flaky runs.
+          xcrun simctl bootstatus "$DEVICE_ID" -b
 
       - name: Install Flutter dependencies
         working-directory: dart/test_app
