@@ -17,6 +17,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltasset"
 	"github.com/KarpelesLab/libwallet/wltcontact"
 	"github.com/KarpelesLab/libwallet/wltcrash"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	_ "github.com/KarpelesLab/libwallet/wltnames" // registers Names:resolve API
 	"github.com/KarpelesLab/libwallet/wltnet"
 	_ "github.com/KarpelesLab/libwallet/wltswap"  // registers Swap:quote and Swap:execute
@@ -88,6 +89,19 @@ func CleanupTempEnv(environment any) error {
 func (e *env) init() error {
 	var err error
 
+	// Progress logs during init. The integration test suite
+	// occasionally hangs between "Xcode build done" and the first
+	// test print on iOS — evidence points at setUpAll's call to
+	// LibwalletClient.initialize stalling in one of these steps.
+	// Each step prints its wall-clock so the next hang identifies
+	// itself in the run log. Remove once the flake source is
+	// confirmed + fixed.
+	initStart := time.Now()
+	step := func(name string) {
+		log.Printf("wltbase/init: %s (elapsed %s)", name, time.Since(initStart).Round(time.Millisecond))
+	}
+	step("start")
+
 	// make sure dataDir exists and is a directory
 	if st, err := os.Stat(e.dataDir); err != nil {
 		err = os.MkdirAll(e.dataDir, 0755)
@@ -97,22 +111,27 @@ func (e *env) init() error {
 	} else if !st.IsDir() {
 		return errors.New("dataDir exists but is not a directory")
 	}
+	step("dataDir ready")
 
 	// connect Spot using dynamic (temporary) key
+	step("spotlib.New: enter")
 	e.spot, err = spotlib.New(map[string]string{"project": "libwallet"})
 	if err != nil {
 		return fmt.Errorf("failed to initialize Spot client: %w", err)
 	}
+	step("spotlib.New: exit")
 	go e.handleStatusEvent(e.spot.Events.On("status"))
 
 	// open sql database via psql
 	sqlPath := filepath.Join(e.dataDir, "sql.db")
+	step("psql.New: enter")
 	be, err := psql.New("sqlite:" + sqlPath)
 	if err != nil {
 		return fmt.Errorf("failed to open SQL database at %s: %w", sqlPath, err)
 	}
 	e.sqlCtx = be.Plug(context.Background())
 	e.Context = e.sqlCtx
+	step("psql.New: exit")
 
 	// migrate from BoltDB if data.db exists
 	boltPath := filepath.Join(e.dataDir, "data.db")
@@ -129,33 +148,48 @@ func (e *env) init() error {
 		now := wltobj.NewTimeId().Bytes(nil)
 		e.ConfigSet("first_run", now)
 	}
+	step("config ready")
 
 	// initialize sub-packages (no AutoMigrate needed, psql auto-creates tables)
-	wltasset.InitEnv(e)
-	wltnet.InitEnv(e)
-	wlttx.InitEnv(e)
-	wltacct.InitEnv(e)
-	wltwallet.InitEnv(e)
-	wltcontact.InitEnv(e)
-	wltnft.InitEnv(e)
-	wlttoken.InitEnv(e)
-	wltcrash.InitEnv(e)
-	wltwc.InitEnv(e)
+	for _, pkg := range []struct {
+		name string
+		fn   func(wltintf.Env)
+	}{
+		{"wltasset", wltasset.InitEnv},
+		{"wltnet", wltnet.InitEnv},
+		{"wlttx", wlttx.InitEnv},
+		{"wltacct", wltacct.InitEnv},
+		{"wltwallet", wltwallet.InitEnv},
+		{"wltcontact", wltcontact.InitEnv},
+		{"wltnft", wltnft.InitEnv},
+		{"wlttoken", wlttoken.InitEnv},
+		{"wltcrash", wltcrash.InitEnv},
+		{"wltwc", wltwc.InitEnv},
+	} {
+		step(pkg.name + ".InitEnv: enter")
+		pkg.fn(e)
+		step(pkg.name + ".InitEnv: exit")
+	}
 
 	// run initial cache cleanup and start periodic cleanup
+	step("cacheCleanup: enter")
 	e.cacheCleanup()
+	step("cacheCleanup: exit")
 	go e.cacheCleanupLoop()
 
 	// start background balance polling — emits `balances_changed`
 	// every 60 s when the current account / network balances change.
 	// The host uses Lifecycle:update to pause it while backgrounded.
+	step("balancePoller: start")
 	e.poller = newBalancePoller(e)
 	go e.poller.run()
 
 	// Subscribe to current-account / current-network changes and
 	// run a tx-history backfill for the live (account, network)
 	// via modchain_historyByAddress / ots_searchTransactionsAfter.
+	step("watchCurrentChanges: enter")
 	watchCurrentChanges(e)
+	step("init complete")
 
 	return nil
 }
