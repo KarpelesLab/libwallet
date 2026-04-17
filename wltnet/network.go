@@ -537,7 +537,28 @@ func (n *Network) nativeBalance(ctx context.Context, acct AddressProvider) (*wlt
 		if err := json.Unmarshal(result, &balResult); err != nil {
 			return nil, err
 		}
-		return wltobj.NewAmountRaw(new(big.Int).SetUint64(balResult.Value), 9), nil
+		// Subtract the rent-exempt minimum so the balance the UI
+		// shows matches what the user can actually spend. The
+		// reserve is real SOL that paid for the account to exist
+		// on-chain, but the user can never withdraw it without
+		// closing the account — exposing it in the displayed
+		// balance led to confusion (receive 0.01 SOL, see
+		// 0.01089 balance, only able to send ~0.00910 once
+		// fees and the reserve are subtracted at send time).
+		// RPC failure here falls back to the canonical 0-byte
+		// system-account value so we never over-report the
+		// spendable amount.
+		raw := balResult.Value
+		rentRaw, rerr := n.DoRPCCtx(ctx, "getMinimumBalanceForRentExemption", 0)
+		var rent uint64 = 890880
+		if rerr == nil {
+			_ = json.Unmarshal(rentRaw, &rent)
+		}
+		var spendable uint64
+		if raw > rent {
+			spendable = raw - rent
+		}
+		return wltobj.NewAmountRaw(new(big.Int).SetUint64(spendable), 9), nil
 	default:
 		return nil, fmt.Errorf("unsupported type %s", n.Type)
 	}
