@@ -86,7 +86,13 @@ export 'src/models/wallet_backup.dart' show WalletBackupEntry;
 export 'src/models/nft_listing.dart' show NftListing;
 export 'src/models/rpc_test.dart' show RpcTestResult;
 export 'src/models/transaction_simulation.dart'
-    show TransactionSimulation, Effect, BalanceChange, BitcoinIO;
+    show
+        TransactionSimulation,
+        Effect,
+        BalanceChange,
+        BitcoinIO,
+        Warning,
+        WarningSeverity;
 export 'src/models/max_sendable_result.dart'
     show MaxSendableResult, ReservedAmount;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;

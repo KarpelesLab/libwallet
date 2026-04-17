@@ -49,6 +49,12 @@ class TransactionSimulation {
   /// spend (the sender pays gas + any native value attached).
   final List<BalanceChange> balanceChanges;
 
+  /// Non-blocking advisories the approval UI should show.
+  ///
+  /// Codes are stable; match on [Warning.code] to drive UI copy /
+  /// confirmation steps. See [Warning] for the code table.
+  final List<Warning> warnings;
+
   // ── EVM ────────────────────────────────────────────────────
   /// EVM gas estimate via `eth_estimateGas` (only set on success).
   final int? gasEstimate;
@@ -81,6 +87,7 @@ class TransactionSimulation {
     this.decodedArgs = const {},
     this.effects = const [],
     this.balanceChanges = const [],
+    this.warnings = const [],
     this.gasEstimate,
     this.logs,
     this.unitsConsumed,
@@ -114,6 +121,14 @@ class TransactionSimulation {
           .toList();
     }
 
+    List<Warning> parseWarnings(dynamic v) {
+      if (v is! List) return const [];
+      return v
+          .whereType<Map>()
+          .map((e) => Warning.fromJson(Map<String, dynamic>.from(e)))
+          .toList();
+    }
+
     return TransactionSimulation(
       chain: (json['chain'] as String?) ?? '',
       willRevert: json['willRevert'] == true,
@@ -124,6 +139,7 @@ class TransactionSimulation {
           : const <String, dynamic>{},
       effects: parseEffects(json['effects']),
       balanceChanges: parseBalanceChanges(json['balanceChanges']),
+      warnings: parseWarnings(json['warnings']),
       gasEstimate: (json['gasEstimate'] as num?)?.toInt(),
       logs: (json['logs'] as List?)?.whereType<String>().toList(),
       unitsConsumed: (json['unitsConsumed'] as num?)?.toInt(),
@@ -232,4 +248,70 @@ class BitcoinIO {
         txid: (json['txid'] as String?) ?? '',
         vout: (json['vout'] as num?)?.toInt() ?? 0,
       );
+}
+
+/// Severity bucket for a [Warning].
+class WarningSeverity {
+  /// Purely informational — show for context, don't require
+  /// confirmation.
+  static const String info = 'info';
+
+  /// Something surprising the user should confirm before signing.
+  static const String warn = 'warn';
+
+  /// The transaction is guaranteed to fail; the app should refuse
+  /// to sign it.
+  static const String block = 'block';
+}
+
+/// One advisory about a pending transaction surfaced by
+/// `Transaction:simulate`.
+///
+/// Stable [code] values (match on these for UI copy / affordances):
+///
+/// - `recipient_is_contract` (severity `warn`) — EVM: sending native
+///   currency to a contract address. Funds can be permanently lost
+///   if the contract has no payable fallback.
+/// - `recipient_new_account` (severity `info`) — Solana: recipient
+///   account doesn't exist yet and will be created by this transfer.
+/// - `erc20_approve_unlimited` (severity `warn`) — EVM: approve call
+///   grants effectively unlimited allowance (top bit set). Classic
+///   drainer vector.
+/// - `net_loss_exceeds_amount` (severity `warn`) — EVM: simulated
+///   native-balance loss is greater than the intended transfer
+///   amount plus fees. Suggests the tx does more than it declares.
+/// - `priority_fee_recommended` (severity `info`) — Solana: network
+///   congestion suggests adding a compute-unit price.
+class Warning {
+  /// Stable machine-readable code.
+  final String code;
+
+  /// One of [WarningSeverity] constants: `info`, `warn`, or `block`.
+  final String severity;
+
+  /// Human-readable description. Suitable for showing to users but
+  /// apps generally customize copy based on [code].
+  final String message;
+
+  /// Which input field this warning refers to, if any. One of
+  /// `to`, `amount`, `fee`, or empty.
+  final String field;
+
+  const Warning({
+    required this.code,
+    required this.severity,
+    required this.message,
+    this.field = '',
+  });
+
+  factory Warning.fromJson(Map<String, dynamic> json) => Warning(
+        code: (json['code'] as String?) ?? '',
+        severity: (json['severity'] as String?) ?? WarningSeverity.warn,
+        message: (json['message'] as String?) ?? '',
+        field: (json['field'] as String?) ?? '',
+      );
+
+  bool get isInfo => severity == WarningSeverity.info;
+  bool get isWarn => severity == WarningSeverity.warn;
+  bool get isBlocking => severity == WarningSeverity.block;
 }

@@ -45,6 +45,12 @@ type SimulationResult struct {
 	WillRevert    bool   `json:"willRevert"`       // true if the sim failed or eth_call reverted
 	RevertReason  string `json:"revertReason,omitempty"`
 
+	// Warnings surfaced to the approval UI. Non-blocking at simulate
+	// time (the tx can still be signed); apps choose whether to
+	// confirm with the user. See the Warning.Code table in the
+	// package docs for the stable code set.
+	Warnings []Warning `json:"warnings,omitempty"`
+
 	// Decoded high-level operation when we can recognize the TOP-LEVEL tx
 	// shape. For a richer "all transfers that will fire at any depth"
 	// view (the anti-drainer signal), use Effects.
@@ -128,16 +134,26 @@ func apiSimulateTransaction(ctx context.Context, tx *Transaction) (any, error) {
 		return nil, fmt.Errorf("no current network: %w", err)
 	}
 
+	var res *SimulationResult
 	switch n.Type {
 	case "evm":
-		return simulateEVM(ctx, e, n, tx)
+		res, err = simulateEVM(ctx, e, n, tx)
 	case "solana":
-		return simulateSolana(ctx, e, n, tx)
+		res, err = simulateSolana(ctx, e, n, tx)
 	case "bitcoin":
-		return simulateBitcoin(ctx, e, n, tx)
+		res, err = simulateBitcoin(ctx, e, n, tx)
 	default:
 		return &SimulationResult{Chain: n.Type, DecodedMethod: "unknown"}, nil
 	}
+	if err != nil || res == nil {
+		return res, err
+	}
+	// Collect non-blocking warnings. Bounded so a slow node can't
+	// wedge simulate.
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	res.Warnings = append(res.Warnings, collectSimulationWarnings(wctx, n, tx)...)
+	return res, nil
 }
 
 // ── EVM ───────────────────────────────────────────────────────────────────

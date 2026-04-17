@@ -13,14 +13,156 @@ package wlttx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
+	"strings"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 )
+
+// Warning severity levels. Stable — apps pattern-match on these.
+const (
+	WarnSeverityInfo  = "info"
+	WarnSeverityWarn  = "warn"
+	WarnSeverityBlock = "block"
+)
+
+// Warning codes surfaced via SimulationResult.Warnings. Keep these
+// stable — apps in the wild match on them to drive UI affordances.
+const (
+	WarnRecipientIsContract    = "recipient_is_contract"
+	WarnRecipientNewAccount    = "recipient_new_account"
+	WarnErc20ApproveUnlimited  = "erc20_approve_unlimited"
+	WarnNetLossExceedsAmount   = "net_loss_exceeds_amount"
+	WarnPriorityFeeRecommended = "priority_fee_recommended"
+)
+
+// Warning is one advisory finding the approval UI can show before
+// letting the user sign. Info is a neutral note; warn asks for
+// confirmation; block indicates the tx will fail and should be
+// refused by the app.
+type Warning struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	Field    string `json:"field,omitempty"` // "to" | "amount" | "fee"
+}
+
+// collectSimulationWarnings runs chain-appropriate non-blocking
+// warning checks against tx. Errors from individual RPC calls are
+// swallowed — a transient node failure shouldn't stop simulate from
+// returning its primary payload.
+func collectSimulationWarnings(ctx context.Context, n *wltnet.Network, tx *Transaction) []Warning {
+	var out []Warning
+	switch n.Type {
+	case "evm":
+		out = appendEVMWarnings(ctx, n, tx, out)
+	case "solana":
+		out = appendSolanaWarnings(ctx, n, tx, out)
+	}
+	return out
+}
+
+// appendEVMWarnings collects recipient_is_contract and
+// erc20_approve_unlimited warnings.
+func appendEVMWarnings(ctx context.Context, n *wltnet.Network, tx *Transaction, out []Warning) []Warning {
+	// recipient_is_contract: fires for a native transfer whose "to"
+	// has deployed bytecode. Users occasionally send ETH to a
+	// contract that doesn't implement a fallback receive and the
+	// funds get stuck; surfacing this lets the UI pause.
+	if (tx.Type == "transfer" || tx.Type == "evm") && tx.To != "" && (tx.Amount != nil && tx.Amount.Sign() > 0 || tx.Value != nil && tx.Value.Sign() > 0) && tx.Data == "" {
+		if isContract(ctx, n, tx.To) {
+			out = append(out, Warning{
+				Code:     WarnRecipientIsContract,
+				Severity: WarnSeverityWarn,
+				Message:  fmt.Sprintf("recipient %s is a contract — plain transfers to contracts without a payable fallback are permanently lost", tx.To),
+				Field:    "to",
+			})
+		}
+	}
+
+	// erc20_approve_unlimited: an approve for amounts near 2^256-1
+	// is effectively unlimited (the classic "infinite approval"
+	// footgun drainers exploit).
+	if tx.Data != "" {
+		data := strings.TrimPrefix(strings.TrimPrefix(tx.Data, "0x"), "0X")
+		if len(data) >= 8+128 && data[:8] == erc20ApproveSelector {
+			_, amount, ok := decodeERC20TransferArgs(data[8:])
+			if ok && isUnlimitedApproval(amount) {
+				out = append(out, Warning{
+					Code:     WarnErc20ApproveUnlimited,
+					Severity: WarnSeverityWarn,
+					Message:  "this transaction grants an unlimited allowance to the spender — a compromised or malicious spender contract can drain the entire token balance at any time",
+					Field:    "amount",
+				})
+			}
+		}
+	}
+	return out
+}
+
+// appendSolanaWarnings adds recipient_new_account (info) when the
+// recipient account does not exist yet. The blocking "amount below
+// recipient rent" case is already handled in preflightSolanaNativeSend.
+func appendSolanaWarnings(ctx context.Context, n *wltnet.Network, tx *Transaction, out []Warning) []Warning {
+	if (tx.Type != "transfer" && tx.Type != "solana_transfer") || tx.To == "" {
+		return out
+	}
+	exists, err := solanaAccountExists(ctx, n, tx.To)
+	if err != nil {
+		return out
+	}
+	if !exists {
+		out = append(out, Warning{
+			Code:     WarnRecipientNewAccount,
+			Severity: WarnSeverityInfo,
+			Message:  "recipient account does not exist yet and will be created by this transfer — double-check the address",
+			Field:    "to",
+		})
+	}
+	return out
+}
+
+// isContract reports whether there is deployed bytecode at addr on n.
+// Transient RPC errors return false (non-blocking best-effort).
+func isContract(ctx context.Context, n *wltnet.Network, addr string) bool {
+	raw, err := n.DoRPCCtx(ctx, "eth_getCode", addr, "latest")
+	if err != nil {
+		return false
+	}
+	var code string
+	if err := json.Unmarshal(raw, &code); err != nil {
+		return false
+	}
+	// Accounts without bytecode return "0x" or "0x0".
+	code = strings.TrimPrefix(strings.TrimPrefix(code, "0x"), "0X")
+	for _, c := range code {
+		if c != '0' {
+			return true
+		}
+	}
+	return false
+}
+
+// unlimitedApprovalThreshold marks the cutoff at which an ERC-20
+// approve is treated as effectively unlimited: any amount with the
+// top bit set (> 2^255). In practice drainers use 2^256-1; legitimate
+// UIs occasionally use 2^248 or similar "very large" constants; both
+// exceed this threshold.
+var unlimitedApprovalThreshold = new(big.Int).Lsh(big.NewInt(1), 255)
+
+func isUnlimitedApproval(amount *big.Int) bool {
+	if amount == nil {
+		return false
+	}
+	return amount.Cmp(unlimitedApprovalThreshold) >= 0
+}
+
 
 // PreflightError is returned by pre-flight checks when a transaction is
 // guaranteed to fail. It carries a machine-readable Code so apps can
