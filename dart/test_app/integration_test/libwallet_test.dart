@@ -1,3 +1,5 @@
+// Diagnostic prints in setUpAll help track down a CI-side iOS hang.
+// ignore_for_file: avoid_print
 import 'dart:ffi';
 import 'dart:io';
 
@@ -13,10 +15,20 @@ void main() {
   late Directory tempDir;
 
   setUpAll(() async {
+    // Temporary diagnostic timing — test-ios hangs randomly somewhere
+    // in setUpAll and the Go-side log.Printf output doesn't reach
+    // Flutter's test output on iOS. Each print() here lands in the
+    // CI log so the next hang shows which line stalled.
+    final t0 = DateTime.now();
+    String elapsed() =>
+        '${DateTime.now().difference(t0).inMilliseconds}ms';
+    print('[setUpAll T+0] getApplicationDocumentsDirectory…');
     final appDir = await getApplicationDocumentsDirectory();
+    print('[setUpAll T+${elapsed()}] appDir=${appDir.path}');
     tempDir = Directory('${appDir.path}/libwallet-test');
     if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     tempDir.createSync();
+    print('[setUpAll T+${elapsed()}] tempDir ready');
 
     // Load the c-shared library via FFI — no platform channel needed.
     // On iOS the lib is statically linked into the app binary.
@@ -29,8 +41,19 @@ void main() {
     } else {
       throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
     }
+    print('[setUpAll T+${elapsed()}] DynamicLibrary loaded');
 
+    print('[setUpAll T+${elapsed()}] LibwalletClient.initialize: enter');
     client = LibwalletClient.initialize(tempDir.path, library: lib);
+    print('[setUpAll T+${elapsed()}] LibwalletClient.initialize: exit');
+
+    // Subscribe to the Go-side log stream so init and runtime log
+    // lines make it into Flutter's test output too — gives us
+    // post-hoc visibility into the Go side even after setUpAll.
+    client.logs.listen((e) {
+      print('[wltlog ${e.level}] ${e.message}');
+    });
+    print('[setUpAll T+${elapsed()}] logs subscribed — setUpAll done');
   });
 
   tearDownAll(() async {
