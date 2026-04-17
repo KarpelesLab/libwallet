@@ -162,16 +162,21 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	}
 
 	q := &Quote{
-		Provider:     "jupiter_ultra",
-		Chain:        "solana",
-		TokenIn:      req.TokenIn,
-		TokenOut:     req.TokenOut,
-		AmountIn:     wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
-		AmountOut:    wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
-		MinAmountOut: wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
-		PriceImpact:  priceImpact,
-		FeeBps:       DefaultFeeBps,
-		SlippageBps:  slippage,
+		Provider:      "jupiter_ultra",
+		ProviderLabel: "Jupiter Ultra",
+		Chain:         "solana",
+		TokenIn:       req.TokenIn,
+		TokenOut:      req.TokenOut,
+		AmountIn:      wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
+		AmountOut:     wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
+		MinAmountOut:  wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
+		PriceImpact:   priceImpact,
+		FeeBps:        DefaultFeeBps,
+		SlippageBps:   slippage,
+		ReferralFee:   computeReferralFee(amountIn, DefaultFeeBps, req.TokenIn.Decimals),
+		// Solana base fee is 5000 lamports; v1 doesn't surface
+		// ComputeBudget priority fees the Jupiter tx may have set.
+		NetworkFee:   wltobj.NewAmountRaw(big.NewInt(5000), 9),
 		Route:        route,
 		providerBlob: &jupiterBlob{RawTx: rawTx, RequestId: resp.RequestId},
 	}

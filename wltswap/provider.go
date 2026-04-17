@@ -3,9 +3,11 @@ package wltswap
 import (
 	"context"
 	"fmt"
+	"math/big"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltsign"
 )
 
@@ -45,6 +47,18 @@ func getProvider(name string) (Provider, error) {
 		return nil, newErr(ErrCodeInvalidRequest, fmt.Sprintf("unknown provider %q", name))
 	}
 	return p, nil
+}
+
+// computeReferralFee returns amountIn * bps / 10_000 with matching
+// decimals, suitable for dropping straight into Quote.ReferralFee.
+// Handy in adapters so the math lives in one place.
+func computeReferralFee(amountIn *big.Int, bps uint16, decimals int) *wltobj.Amount {
+	if amountIn == nil || bps == 0 {
+		return wltobj.NewAmountRaw(big.NewInt(0), decimals)
+	}
+	v := new(big.Int).Mul(amountIn, big.NewInt(int64(bps)))
+	v.Quo(v, big.NewInt(10_000))
+	return wltobj.NewAmountRaw(v, decimals)
 }
 
 // selectProvider decides which provider to use for a given request.

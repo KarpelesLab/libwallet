@@ -96,7 +96,7 @@ export 'src/models/transaction_simulation.dart'
 export 'src/models/max_sendable_result.dart'
     show MaxSendableResult, ReservedAmount;
 export 'src/models/swap_quote.dart'
-    show SwapQuote, SwapTokenRef, SwapRouteHop, SwapResult;
+    show SwapQuote, SwapTokenRef, SwapRouteHop, SwapResult, ApprovalPreview;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;

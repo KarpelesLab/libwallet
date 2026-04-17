@@ -14,13 +14,20 @@
   `SwapQuote.requiresApproval`, `approvalSpender`,
   `currentAllowance`, and `neededAllowance`. When
   `requiresApproval` is true, call the new `swap.buildApproval()`
-  — it returns a validated `Transaction` the app feeds into
-  `transactions.signAndSendSimple()` before `swap.execute()`. The
-  default approval amount is **exactly** the swap's input amount,
-  so a compromised router can only drain what the user already
-  agreed to. Pass `approvalAmount: 'max'` to opt into the classic
-  unlimited approve, or a decimal string for a custom cap — surface
-  the trade-off clearly when the user does so.
+  — it returns a rich `ApprovalPreview` (token, spender label,
+  amount, `isUnlimited` flag, current allowance, network fee, plus
+  the validated `Transaction` to sign) ready to drop into an
+  approval sheet. Default approval amount is **exactly** the swap's
+  input amount, so a compromised router can only drain what the
+  user already agreed to. Pass `approvalAmount: 'max'` to opt into
+  the classic unlimited approve, or a decimal string for a custom
+  cap — surface the trade-off via `preview.isUnlimited` in the UI.
+- **Richer Quote payload for UI approval sheets**: `SwapQuote` now
+  carries `providerLabel` (human-friendly name), `referralFee`
+  (the 50 bps platform fee as an absolute amount in the input
+  token's units), and `networkFee` (estimated chain gas in native
+  currency). Apps no longer have to compute these from bps or
+  gas*gasPrice themselves.
 - **Known limitations in v1**:
   - The 1inch API key ships empty in this build; populate
     `wltswap.OneInchAPIKey` to enable EVM swaps.

@@ -1,4 +1,5 @@
 import 'amount.dart';
+import 'transaction.dart';
 
 /// A swap quote returned by [SwapApi.quote].
 ///
@@ -13,6 +14,10 @@ class SwapQuote {
   /// Which aggregator produced the quote: `jupiter_ultra`, `dflow`,
   /// or `1inch`.
   final String provider;
+
+  /// Human-friendly provider name: `"Jupiter Ultra"`, `"dFlow"`,
+  /// `"1inch"`. Safe to show in UI without further mapping.
+  final String providerLabel;
 
   /// Chain family: `solana` or `evm`.
   final String chain;
@@ -46,6 +51,17 @@ class SwapQuote {
   /// Slippage tolerance in basis points.
   final int slippageBps;
 
+  /// Platform referral fee as an absolute amount in the INPUT
+  /// token's units (`amountIn * feeBps / 10000`). Null when the
+  /// provider doesn't report one. Use this for "Platform fee:
+  /// 0.005 SOL" UI strings.
+  final Amount? referralFee;
+
+  /// Estimated chain-side fee the user pays (gas on EVM, signature
+  /// + priority on Solana). Always in the chain's native currency.
+  /// Render as "Network fee".
+  final Amount? networkFee;
+
   /// Route breakdown — one entry per hop in the swap path. Purely
   /// informative; the aggregator decides actual routing.
   final List<SwapRouteHop> route;
@@ -73,6 +89,7 @@ class SwapQuote {
   const SwapQuote({
     required this.quoteId,
     required this.provider,
+    this.providerLabel = '',
     required this.chain,
     required this.tokenIn,
     required this.tokenOut,
@@ -83,6 +100,8 @@ class SwapQuote {
     this.priceImpact = 0,
     this.feeBps = 0,
     this.slippageBps = 0,
+    this.referralFee,
+    this.networkFee,
     this.route = const [],
     this.requiresApproval = false,
     this.approvalSpender = '',
@@ -104,6 +123,7 @@ class SwapQuote {
     return SwapQuote(
       quoteId: (json['quoteId'] as String?) ?? '',
       provider: (json['provider'] as String?) ?? '',
+      providerLabel: (json['providerLabel'] as String?) ?? '',
       chain: (json['chain'] as String?) ?? '',
       tokenIn:
           SwapTokenRef.fromJson(Map<String, dynamic>.from(json['tokenIn'] as Map)),
@@ -115,6 +135,8 @@ class SwapQuote {
       priceImpact: (json['priceImpact'] as num?)?.toDouble() ?? 0,
       feeBps: (json['feeBps'] as num?)?.toInt() ?? 0,
       slippageBps: (json['slippageBps'] as num?)?.toInt() ?? 0,
+      referralFee: parseAmount(json['referralFee']),
+      networkFee: parseAmount(json['networkFee']),
       route: parseRoute(json['route']),
       expiresAt: DateTime.parse(json['expiresAt'] as String),
       requiresApproval: json['requiresApproval'] == true,
@@ -181,6 +203,86 @@ class SwapRouteHop {
         inSymbol: (json['inSymbol'] as String?) ?? '',
         outSymbol: (json['outSymbol'] as String?) ?? '',
         share: (json['share'] as num?)?.toDouble() ?? 0,
+      );
+}
+
+/// The result of [SwapApi.buildApproval] — everything a UI needs to
+/// render the `"Approve <token> for <spender>"` sheet plus the
+/// underlying [Transaction] to sign.
+///
+/// Typical approval UI:
+///
+/// ```
+/// Approve ${preview.token.symbol}
+/// to ${preview.spenderLabel}  (${preview.spender})
+/// amount: ${preview.isUnlimited ? 'Unlimited' : preview.amount}
+/// network fee ≈ ${preview.networkFee}
+/// [Approve] [Cancel]
+/// ```
+///
+/// On confirm:
+///
+/// ```dart
+/// await client.transactions.signAndSendSimple(preview.tx, keys: keys);
+/// ```
+class ApprovalPreview {
+  /// The token being approved.
+  final SwapTokenRef token;
+
+  /// The address that will receive the allowance — typically the
+  /// aggregator's router contract.
+  final String spender;
+
+  /// Human-friendly label for [spender] (e.g. `"1inch Aggregation
+  /// Router"`).
+  final String spenderLabel;
+
+  /// The approval amount in token base units. When
+  /// [isUnlimited] is true, this encodes the classic
+  /// `uint256.max`.
+  final Amount amount;
+
+  /// True when the approval is at or above `2^255` — effectively
+  /// unlimited on any real-world token. Show a prominent warning
+  /// in UI; a compromised spender contract can drain the full
+  /// balance at any time.
+  final bool isUnlimited;
+
+  /// What's currently approved to [spender] — zero for first-time
+  /// approvals. Handy for "current 0 → new 1.0" UI.
+  final Amount? currentAllowance;
+
+  /// Estimated chain gas cost for the approval tx itself.
+  final Amount? networkFee;
+
+  /// The validated transaction to sign. Pass to
+  /// `client.transactions.signAndSendSimple(tx, keys: keys)`.
+  final Transaction tx;
+
+  const ApprovalPreview({
+    required this.token,
+    required this.spender,
+    required this.amount,
+    required this.tx,
+    this.spenderLabel = '',
+    this.isUnlimited = false,
+    this.currentAllowance,
+    this.networkFee,
+  });
+
+  factory ApprovalPreview.fromJson(Map<String, dynamic> json) => ApprovalPreview(
+        token: SwapTokenRef.fromJson(
+            Map<String, dynamic>.from(json['token'] as Map)),
+        spender: (json['spender'] as String?) ?? '',
+        spenderLabel: (json['spenderLabel'] as String?) ?? '',
+        amount: Amount.fromJson(json['amount']),
+        isUnlimited: json['isUnlimited'] == true,
+        currentAllowance: json['currentAllowance'] == null
+            ? null
+            : Amount.fromJson(json['currentAllowance']),
+        networkFee:
+            json['networkFee'] == null ? null : Amount.fromJson(json['networkFee']),
+        tx: Transaction.fromJson(Map<String, dynamic>.from(json['tx'] as Map)),
       );
 }
 

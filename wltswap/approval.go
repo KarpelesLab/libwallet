@@ -126,6 +126,46 @@ func hexAddressBytes(addr string) ([]byte, error) {
 	return b, nil
 }
 
+// ApprovalPreview is returned by Swap:buildApproval. It carries
+// every field a UI approval sheet typically renders — spender
+// address + human label, decoded amount, unlimited-flag, network
+// fee estimate — plus the underlying Transaction the caller feeds
+// into Transaction:signAndSend.
+//
+// The UI pattern:
+//
+//	"Approve <preview.token.symbol>"
+//	"to <preview.spenderLabel> (<preview.spender>)"
+//	"amount: <preview.amount> (<'Unlimited' if preview.isUnlimited>)"
+//	"network fee ~ <preview.networkFee>"
+//	[Approve] [Cancel]
+type ApprovalPreview struct {
+	// Token being approved.
+	Token TokenRef `json:"token"`
+	// Spender is the address receiving the allowance.
+	Spender string `json:"spender"`
+	// SpenderLabel is the aggregator's friendly name (e.g.
+	// "1inch Aggregation Router"). Derived from the quote's
+	// ProviderLabel. UIs can map / override as they see fit.
+	SpenderLabel string `json:"spenderLabel,omitempty"`
+	// Amount is the approval amount in token base units.
+	Amount *wltobj.Amount `json:"amount"`
+	// IsUnlimited flags approvals at or near uint256.max — same
+	// threshold used by the erc20_approve_unlimited simulate
+	// warning (top bit set).
+	IsUnlimited bool `json:"isUnlimited"`
+	// CurrentAllowance is what's already approved — zero for
+	// first-time approvals. Helps the UI say "current 0 → 1.0".
+	CurrentAllowance *wltobj.Amount `json:"currentAllowance,omitempty"`
+	// NetworkFee is the estimated chain gas cost for the approval
+	// tx itself (distinct from the swap's gas).
+	NetworkFee *wltobj.Amount `json:"networkFee,omitempty"`
+	// Tx is the validated Transaction the app feeds into
+	// Transaction:signAndSend. Already has Nonce / Gas / GasPrice
+	// / Fee populated.
+	Tx *wlttx.Transaction `json:"tx"`
+}
+
 // BuildApprovalRequest is the input to Swap:buildApproval.
 type BuildApprovalRequest struct {
 	QuoteId string `json:"quoteId"`
@@ -214,5 +254,41 @@ func swapBuildApproval(ctx context.Context, req *BuildApprovalRequest) (any, err
 	if err := tx.Validate(e); err != nil {
 		return nil, fmt.Errorf("validate approval tx: %w", err)
 	}
-	return tx, nil
+
+	return &ApprovalPreview{
+		Token:            q.TokenIn,
+		Spender:          q.ApprovalSpender,
+		SpenderLabel:     approvalSpenderLabel(q),
+		Amount:           wltobj.NewAmountRaw(new(big.Int).Set(amount), q.TokenIn.Decimals),
+		IsUnlimited:      isUnlimitedApprovalAmount(amount),
+		CurrentAllowance: q.CurrentAllowance,
+		NetworkFee:       tx.Fee,
+		Tx:               tx,
+	}, nil
+}
+
+// isUnlimitedApprovalAmount reports whether amount is at or above
+// the 2^255 threshold also used by the erc20_approve_unlimited
+// simulate warning. Kept in sync with wlttx.unlimitedApprovalThreshold.
+func isUnlimitedApprovalAmount(amount *big.Int) bool {
+	if amount == nil {
+		return false
+	}
+	threshold := new(big.Int).Lsh(big.NewInt(1), 255)
+	return amount.Cmp(threshold) >= 0
+}
+
+// approvalSpenderLabel maps the quote's provider to a user-facing
+// label for the spender contract. For 1inch the router is their
+// "Aggregation Router V6" on every chain; future adapters with
+// multiple possible spenders would extend the switch.
+func approvalSpenderLabel(q *Quote) string {
+	switch q.Provider {
+	case "1inch":
+		return "1inch Aggregation Router"
+	}
+	if q.ProviderLabel != "" {
+		return q.ProviderLabel + " Router"
+	}
+	return q.Provider
 }

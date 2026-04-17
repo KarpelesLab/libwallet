@@ -141,18 +141,21 @@ func (dflowProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltacct
 	}
 
 	return &Quote{
-		Provider:     "dflow",
-		Chain:        "solana",
-		TokenIn:      req.TokenIn,
-		TokenOut:     req.TokenOut,
-		AmountIn:     wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
-		AmountOut:    wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
-		MinAmountOut: wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
-		PriceImpact:  parseFloat(qResp.PriceImpactPct),
-		FeeBps:       DefaultFeeBps,
-		SlippageBps:  req.SlippageBps,
-		Route:        route,
-		providerBlob: &dflowBlob{RawTx: rawTx},
+		Provider:      "dflow",
+		ProviderLabel: "dFlow",
+		Chain:         "solana",
+		TokenIn:       req.TokenIn,
+		TokenOut:      req.TokenOut,
+		AmountIn:      wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
+		AmountOut:     wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
+		MinAmountOut:  wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
+		PriceImpact:   parseFloat(qResp.PriceImpactPct),
+		FeeBps:        DefaultFeeBps,
+		SlippageBps:   req.SlippageBps,
+		ReferralFee:   computeReferralFee(amountIn, DefaultFeeBps, req.TokenIn.Decimals),
+		NetworkFee:    wltobj.NewAmountRaw(big.NewInt(5000), 9),
+		Route:         route,
+		providerBlob:  &dflowBlob{RawTx: rawTx},
 	}, nil
 }
 

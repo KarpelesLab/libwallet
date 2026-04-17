@@ -56,19 +56,36 @@ type TokenRef struct {
 // not JSON-serialized) holds whatever adapter-specific data is
 // needed to drive Swap:execute later.
 type Quote struct {
-	QuoteId      string         `json:"quoteId"`
-	Provider     string         `json:"provider"` // "jupiter_ultra" | "dflow" | "1inch"
-	Chain        string         `json:"chain"`    // "solana" | "evm"
+	QuoteId       string `json:"quoteId"`
+	Provider      string `json:"provider"`      // "jupiter_ultra" | "dflow" | "1inch"
+	ProviderLabel string `json:"providerLabel"` // human-friendly: "Jupiter Ultra" / "dFlow" / "1inch"
+	Chain         string `json:"chain"`         // "solana" | "evm"
+
 	TokenIn      TokenRef       `json:"tokenIn"`
 	TokenOut     TokenRef       `json:"tokenOut"`
 	AmountIn     *wltobj.Amount `json:"amountIn"`
 	AmountOut    *wltobj.Amount `json:"amountOut"`
 	MinAmountOut *wltobj.Amount `json:"minAmountOut"`
-	PriceImpact  float64        `json:"priceImpact,omitempty"`
-	FeeBps       uint16         `json:"feeBps"`
-	SlippageBps  uint16         `json:"slippageBps"`
-	Route        []RouteHop     `json:"route,omitempty"`
-	ExpiresAt    time.Time      `json:"expiresAt"`
+
+	// PriceImpact is the provider-reported execution drift as a
+	// fraction (0.01 = 1%). Apps typically warn at > 1%.
+	PriceImpact float64 `json:"priceImpact,omitempty"`
+
+	// Fees — bps for app-side math, absolute amounts for display.
+	FeeBps      uint16         `json:"feeBps"`
+	SlippageBps uint16         `json:"slippageBps"`
+	// ReferralFee is our 50 bps take, denominated in the INPUT
+	// token's base units (amountIn * feeBps / 10_000). Use this
+	// for "platform fee: 0.005 SOL" UI strings.
+	ReferralFee *wltobj.Amount `json:"referralFee,omitempty"`
+	// NetworkFee is the estimated chain-side fee paid by the user
+	// (gas on EVM, signature + priority on Solana). Always in the
+	// native currency with the chain's decimals. Call it "Network
+	// fee" in UI to distinguish from the platform referral fee.
+	NetworkFee *wltobj.Amount `json:"networkFee,omitempty"`
+
+	Route     []RouteHop `json:"route,omitempty"`
+	ExpiresAt time.Time  `json:"expiresAt"`
 
 	// ── EVM approval fields (populated by 1inch adapter for non-
 	// native tokenIn; all zero-valued on Solana and for native ETH

@@ -108,17 +108,37 @@ func (oneInchProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	minOut := new(big.Int).Mul(amountOut, bpsFactor)
 	minOut.Quo(minOut, big.NewInt(10_000))
 
+	// NetworkFee: 1inch returns tx.gas and tx.gasPrice — multiply
+	// for the upper-bound gas cost in the chain's native token.
+	info, cerr := n.GetChainInfo()
+	nativeDecimals := 18
+	if cerr == nil {
+		if n.CurrencyDecimals > 0 {
+			nativeDecimals = n.CurrencyDecimals
+		} else {
+			nativeDecimals = info.NativeCurrency.Decimals
+		}
+	}
+	var networkFee *wltobj.Amount
+	if gp, ok := new(big.Int).SetString(resp.Tx.GasPrice, 10); ok && gp != nil {
+		cost := new(big.Int).Mul(gp, new(big.Int).SetUint64(resp.Tx.Gas))
+		networkFee = wltobj.NewAmountRaw(cost, nativeDecimals)
+	}
+
 	q := &Quote{
-		Provider:     "1inch",
-		Chain:        "evm",
-		TokenIn:      req.TokenIn,
-		TokenOut:     req.TokenOut,
-		AmountIn:     wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
-		AmountOut:    wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
-		MinAmountOut: wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
-		FeeBps:       DefaultFeeBps,
-		SlippageBps:  req.SlippageBps,
-		providerBlob: &oneInchBlob{Tx: resp.Tx},
+		Provider:      "1inch",
+		ProviderLabel: "1inch",
+		Chain:         "evm",
+		TokenIn:       req.TokenIn,
+		TokenOut:      req.TokenOut,
+		AmountIn:      wltobj.NewAmountRaw(amountIn, req.TokenIn.Decimals),
+		AmountOut:     wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
+		MinAmountOut:  wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
+		FeeBps:        DefaultFeeBps,
+		SlippageBps:   req.SlippageBps,
+		ReferralFee:   computeReferralFee(amountIn, DefaultFeeBps, req.TokenIn.Decimals),
+		NetworkFee:    networkFee,
+		providerBlob:  &oneInchBlob{Tx: resp.Tx},
 	}
 
 	// Allowance check — skip for native input (ETH swaps attach

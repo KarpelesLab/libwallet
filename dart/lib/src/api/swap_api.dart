@@ -1,7 +1,6 @@
 import '../client/transport.dart';
 import '../models/key_description.dart';
 import '../models/swap_quote.dart';
-import '../models/transaction.dart';
 
 /// Token swaps — Jupiter Ultra / dFlow on Solana, 1inch on EVM.
 ///
@@ -85,9 +84,14 @@ class SwapApi {
   /// prerequisite on EVM.
   ///
   /// Only call this when [SwapQuote.requiresApproval] is true. The
-  /// returned transaction is validated (nonce / gas / fee pre-
-  /// filled) — pass it directly to
-  /// `client.transactions.signAndSendSimple(tx, keys: …)`.
+  /// returned [ApprovalPreview] is everything a UI needs to render
+  /// the approval sheet — spender address + human label, amount,
+  /// unlimited flag, current allowance, network fee — plus the
+  /// underlying validated transaction. Sign and broadcast via:
+  ///
+  /// ```dart
+  /// await client.transactions.signAndSendSimple(preview.tx, keys: keys);
+  /// ```
   ///
   /// [approvalAmount] defaults to the quote's exact input amount
   /// (tightest possible — a compromised router can only drain what
@@ -97,9 +101,10 @@ class SwapApi {
   /// multiple swaps).
   ///
   /// Raising the approval amount above `amountIn` widens the blast
-  /// radius if the router is ever exploited — surface a clear
-  /// warning to the user when they opt into it.
-  Future<Transaction> buildApproval({
+  /// radius if the router is ever exploited — use
+  /// [ApprovalPreview.isUnlimited] to surface a clear warning in
+  /// the UI.
+  Future<ApprovalPreview> buildApproval({
     required String quoteId,
     String? approvalAmount,
     String? from,
@@ -108,7 +113,7 @@ class SwapApi {
     if (approvalAmount != null) params['approvalAmount'] = approvalAmount;
     if (from != null) params['from'] = from;
     final data = await _conn.request('Swap:buildApproval', 'POST', params);
-    return Transaction.fromJson(data as Map<String, dynamic>);
+    return ApprovalPreview.fromJson(data as Map<String, dynamic>);
   }
 
   /// Execute a previously-issued quote.
