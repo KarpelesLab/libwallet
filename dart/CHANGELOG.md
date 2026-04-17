@@ -1,3 +1,43 @@
+## 0.3.14
+
+- **`Transaction:maxSendable`** (`TransactionApi.maxSendable`): new
+  cross-chain endpoint that returns the largest amount safely
+  sendable from an account, with a breakdown of the fee and (on
+  Solana) rent-exempt reservations. Fixes the "tap Max → get
+  `insufficient funds for rent`" bug: apps can now pre-compute the
+  right amount instead of letting the broadcast fail. EVM and
+  Bitcoin supported; token (ERC-20 / SPL) assets return an explicit
+  error — full token balance is always sendable, fees paid in
+  native.
+- **Solana native-send preflight**: `Transaction:validate` now runs
+  a balance / fee / rent check for Solana native transfers before
+  signing. Typed codes: `insufficient_balance`, `below_sender_rent`,
+  `recipient_rent_not_funded` — apps see a structured error with the
+  exact shortfall instead of Solana's opaque simulator rejection.
+- **`TransactionSimulation.warnings`**: simulate now returns a list
+  of advisory `Warning`s with stable codes. Non-blocking — the tx
+  can still be signed; apps decide whether to confirm with the
+  user. Initial codes: `recipient_is_contract` (EVM native send to
+  a contract address), `recipient_new_account` (Solana recipient
+  doesn't exist yet), `erc20_approve_unlimited` (approve with top
+  bit set — drainer vector), `priority_fee_recommended` (Solana
+  median priority fee > 0 but tx has no ComputeBudget).
+- **Solana priority fees** (opt-in): new `computeUnitLimit` /
+  `computeUnitPrice` / `priorityLevel` fields on
+  `UnsignedTransaction`. Set `priorityLevel: "low" | "medium" |
+  "high"` to have `validate` pick a percentile of recent on-chain
+  prioritization fees; or pin `computeUnitPrice` (microlamports/CU)
+  directly. `"none"` opts out explicitly. Empty (default) preserves
+  the legacy 5000-lamport flat fee — the serialized message is
+  byte-identical to pre-0.3.14 for unchanged callers.
+- **Solana displayed balance excludes rent reserve**: a user who
+  receives 0.01 SOL now sees `0.01` in their wallet instead of
+  `0.01089` (the extra ~0.00089 is the rent-exempt minimum the
+  account needs to stay alive on-chain and is never spendable
+  without closing the account). `maxSendable` still reports the raw
+  balance and breakdown for apps that want to show "0.01 spendable
+  + 0.00089 reserved + 0.000005 fee".
+
 ## 0.3.13
 
 - **Logs routed over the event channel** (fixes 0.3.12's silent
