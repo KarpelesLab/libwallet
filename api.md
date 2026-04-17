@@ -187,17 +187,53 @@ returns an object with the state of the user's onboarding, useful to check if we
   * _convert=USD (add FiatAmount and FiatCurrency to each asset with converted amount, can accept USD/EUR/GBP/JPY)
 * `GET Transaction/<id>`
 * `Transaction:validate` Validates if a transaction is OK, returns errors if anything seems wrong
-  * Supported transaction types: `transfer`, `evm`, `solana_transfer`, `solana_spl_transfer`
+  * Supported transaction types: `transfer`, `evm`, `solana_transfer`, `solana_spl_transfer`, `erc20_transfer`, `bitcoin_transfer`
+  * Solana-native transfers run a preflight check and fail fast with a typed `PreflightError` (codes: `insufficient_balance`, `below_sender_rent`, `recipient_rent_not_funded`) instead of deferring the rejection to the RPC simulator.
+  * Solana priority-fee fields (all opt-in; zero preserves legacy 5000-lamport flat fee):
+    * `computeUnitLimit` (uint32): SetComputeUnitLimit argument
+    * `computeUnitPrice` (uint64, microlamports per CU): explicit price pin; wins over `priorityLevel`
+    * `priorityLevel`: `"none"` | `"low"` (25th pctile) | `"medium"` (50th) | `"high"` (75th) of recent `getRecentPrioritizationFees`
 * `Transaction:signAndSend`
   * Same params as `Transaction:validate` plus:
   * Keys: [ {"Id": "wkey-xxx", "Key": privateKey, {"Id": "wkey-yyy", "Key": password} ]
   * For Solana transactions, signing uses EdDSA TSS and broadcasts via `sendTransaction`
-* `Transaction:simulate` Pre-flight an unsigned transaction and return a structured preview for the approval UI. Same params as `Transaction:validate`. Response fields: `chain`, `willRevert`, `revertReason`, `decodedMethod` (native_transfer / erc20_transfer / erc20_approve / unknown), `decodedArgs`, `gasEstimate` (EVM), `logs` / `unitsConsumed` (Solana), `bitcoinInputs` / `bitcoinOutputs` / `bitcoinFee` (Bitcoin-family).
+* `Transaction:simulate` Pre-flight an unsigned transaction and return a structured preview for the approval UI. Same params as `Transaction:validate`. Response fields: `chain`, `willRevert`, `revertReason`, `decodedMethod` (native_transfer / erc20_transfer / erc20_approve / unknown), `decodedArgs`, `gasEstimate` (EVM), `logs` / `unitsConsumed` (Solana), `bitcoinInputs` / `bitcoinOutputs` / `bitcoinFee` (Bitcoin-family), `effects` (every transfer at any call depth — anti-drainer signal), `balanceChanges` (signed native-balance deltas per address), `warnings` (advisory findings — see below).
+  * `warnings` codes (stable): `recipient_is_contract` (EVM native send to a contract — funds may be stuck), `recipient_new_account` (Solana recipient doesn't exist yet), `erc20_approve_unlimited` (approve at/above 2^255 — drainer vector), `net_loss_exceeds_amount` (sender loses more than declared amount + fee), `priority_fee_recommended` (Solana network median priority fee > 0 but tx has no ComputeBudget).
+* `Transaction:maxSendable` Compute the largest amount safely sendable from an account, accounting for network fees and (on Solana) rent-exempt minimums. Native-only in v1 — for tokens use Asset:list since the full balance is sendable and fees are paid in native.
+  * `from` Sender account address or ID (defaults to current)
+  * `to` (optional): recipient — on Solana, used to check if the account exists; new accounts need rent-exempt funding counted against Max
+  * `asset` (optional): asset key, defaults to network native
+  * `network` (optional): override current network
+  * Response: `{ chain, max, balance, fee, reserved: [{kind, amount}], reason }` where `kind` is `"fee"` / `"sender_rent"` / `"recipient_rent"`. `reason` is populated when `max` is zero.
 * `DELETE Transaction`
   * From: limit transaction deletion to a given account
   * Network: delete transactions on a given network
   * If no parameter is passed, ALL of the transaction history will be cleared
 * `DELETE Transaction/id`
+
+## Swap
+
+Token swaps powered by Jupiter Ultra + dFlow (Solana) and 1inch (EVM). Two-step flow: `Swap:quote` returns a quote cached server-side for 90 s, `Swap:execute` signs and broadcasts. On EVM, ERC-20 input tokens require a prior `approve` — use `Swap:buildApproval` in between. 50 bps referral fee is routed to the configured fee accounts; Solana auto-falls-back from Jupiter to dFlow on provider failure. Full UI integration guide in `dart/doc/swap_integration.md`.
+
+* `Swap:quote` Get a swap quote.
+  * `tokenIn`, `tokenOut`: `{ address, symbol, decimals }`. Address `"NATIVE"` means the chain's native currency (SOL / ETH); on EVM also accepts the 1inch sentinel `0xeeee…eeee`.
+  * `amountIn`: input amount in base units (decimal string)
+  * `slippageBps` (optional): default 50 (0.5%)
+  * `from` (optional): sender account (defaults to current)
+  * `network` (optional): override current network
+  * `provider` (optional): pin a specific aggregator — `"jupiter_ultra"` / `"dflow"` / `"1inch"`. Empty = auto with fallback.
+  * Response: `{ quoteId, provider, providerLabel, chain, tokenIn, tokenOut, amountIn, amountOut, minAmountOut, priceImpact, feeBps, slippageBps, referralFee, networkFee, route: [{venue, share}], expiresAt, requiresApproval, approvalSpender, currentAllowance, neededAllowance }`. The approval fields are populated for non-native EVM inputs; zero-valued otherwise.
+* `Swap:buildApproval` Build the ERC-20 `approve` transaction an EVM swap needs as a prerequisite. Only call when `quote.requiresApproval == true`.
+  * `quoteId`: from a prior `Swap:quote`
+  * `approvalAmount` (optional): defaults to exactly the quote's `amountIn` (tight — compromised router can only drain what the user agreed to swap). Pass `"max"` / `"unlimited"` for the classic uint256 max, or a decimal string for a custom cap.
+  * `from` (optional): override the account the quote was issued for
+  * Response `ApprovalPreview`: `{ token, spender, spenderLabel, amount, isUnlimited, currentAllowance, networkFee, tx }`. Pass `tx` to `Transaction:signAndSend`.
+* `Swap:execute` Sign and broadcast a previously-issued quote.
+  * `quoteId`
+  * `Keys`: same key-descriptor array as `Transaction:signAndSend`
+  * `from` (optional)
+  * Response `SwapResult`: `{ quoteId, provider, chain, hash, url, quote }`. Quote expires after 90 s — if execution fails with `quote_expired`, re-quote.
+  * Stable error codes: `quote_expired`, `quote_not_found`, `no_liquidity`, `slippage_exceeded`, `provider_unavailable`, `provider_bad_request`, `unsupported_chain`, `unsupported_token_pair`, `missing_api_key`, `invalid_request`.
 
 ## Token
 
