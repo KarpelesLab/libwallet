@@ -53,6 +53,23 @@ class SwapQuote {
   /// When this quote stops being accepted by [SwapApi.execute].
   final DateTime expiresAt;
 
+  /// True when the swap needs an ERC-20 `approve` tx to run before
+  /// [SwapApi.execute] can succeed. Always false on Solana (no
+  /// allowance model) and false for native ETH → token swaps.
+  final bool requiresApproval;
+
+  /// The address that needs the allowance — typically the
+  /// aggregator's router. Empty when [requiresApproval] is false.
+  final String approvalSpender;
+
+  /// The amount currently approved to [approvalSpender]. Null when
+  /// unknown (RPC failure) or irrelevant (no approval needed).
+  final Amount? currentAllowance;
+
+  /// The minimum allowance the swap needs. Equal to [amountIn] for
+  /// a token-in swap; null otherwise.
+  final Amount? neededAllowance;
+
   const SwapQuote({
     required this.quoteId,
     required this.provider,
@@ -67,6 +84,10 @@ class SwapQuote {
     this.feeBps = 0,
     this.slippageBps = 0,
     this.route = const [],
+    this.requiresApproval = false,
+    this.approvalSpender = '',
+    this.currentAllowance,
+    this.neededAllowance,
   });
 
   factory SwapQuote.fromJson(Map<String, dynamic> json) {
@@ -77,6 +98,8 @@ class SwapQuote {
           .map((e) => SwapRouteHop.fromJson(Map<String, dynamic>.from(e)))
           .toList();
     }
+
+    Amount? parseAmount(dynamic v) => v == null ? null : Amount.fromJson(v);
 
     return SwapQuote(
       quoteId: (json['quoteId'] as String?) ?? '',
@@ -94,6 +117,10 @@ class SwapQuote {
       slippageBps: (json['slippageBps'] as num?)?.toInt() ?? 0,
       route: parseRoute(json['route']),
       expiresAt: DateTime.parse(json['expiresAt'] as String),
+      requiresApproval: json['requiresApproval'] == true,
+      approvalSpender: (json['approvalSpender'] as String?) ?? '',
+      currentAllowance: parseAmount(json['currentAllowance']),
+      neededAllowance: parseAmount(json['neededAllowance']),
     );
   }
 

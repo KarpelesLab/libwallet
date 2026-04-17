@@ -8,10 +8,20 @@
   `SwapResult` with the on-chain tx hash + explorer URL. All
   providers are wired with a 50 bps referral fee to libwallet's fee
   accounts (Solana: `BF436…`, EVM: `0x17Ab…`).
+- **Approval detection + tight default on EVM swaps**: for ERC-20
+  input tokens on 1inch, `quote()` now reads the router's current
+  allowance via `eth_call` and populates
+  `SwapQuote.requiresApproval`, `approvalSpender`,
+  `currentAllowance`, and `neededAllowance`. When
+  `requiresApproval` is true, call the new `swap.buildApproval()`
+  — it returns a validated `Transaction` the app feeds into
+  `transactions.signAndSendSimple()` before `swap.execute()`. The
+  default approval amount is **exactly** the swap's input amount,
+  so a compromised router can only drain what the user already
+  agreed to. Pass `approvalAmount: 'max'` to opt into the classic
+  unlimited approve, or a decimal string for a custom cap — surface
+  the trade-off clearly when the user does so.
 - **Known limitations in v1**:
-  - ERC-20 swaps on EVM require the input token to be pre-approved
-    to 1inch's allowance target — drive the approval via
-    `Transaction:signAndSend` before calling `swap.execute`.
   - The 1inch API key ships empty in this build; populate
     `wltswap.OneInchAPIKey` to enable EVM swaps.
   - No token resolver yet: callers pass `SwapTokenRef` with

@@ -76,22 +76,22 @@ func (oneInchProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	feePct := float64(DefaultFeeBps) / 100.0
 
 	endpoint := fmt.Sprintf("%s/%s/swap", OneInchBaseURL, n.ChainId)
-	q := url.Values{}
-	q.Set("src", src)
-	q.Set("dst", dst)
-	q.Set("amount", req.AmountIn)
-	q.Set("from", acct.GetAddress())
-	q.Set("slippage", strconvFmtFloat(slippagePct))
-	q.Set("referrer", OneInchReferrer)
-	q.Set("fee", strconvFmtFloat(feePct))
-	q.Set("disableEstimate", "false")
-	q.Set("allowPartialFill", "false")
+	query := url.Values{}
+	query.Set("src", src)
+	query.Set("dst", dst)
+	query.Set("amount", req.AmountIn)
+	query.Set("from", acct.GetAddress())
+	query.Set("slippage", strconvFmtFloat(slippagePct))
+	query.Set("referrer", OneInchReferrer)
+	query.Set("fee", strconvFmtFloat(feePct))
+	query.Set("disableEstimate", "false")
+	query.Set("allowPartialFill", "false")
 
 	var resp oneInchSwapResponse
 	hdr := func(h http.Header) {
 		h.Set("Authorization", "Bearer "+OneInchAPIKey)
 	}
-	if err := httpGetJSON(ctx, endpoint, q, hdr, &resp); err != nil {
+	if err := httpGetJSON(ctx, endpoint, query, hdr, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Tx.To == "" || resp.Tx.Data == "" {
@@ -108,7 +108,7 @@ func (oneInchProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	minOut := new(big.Int).Mul(amountOut, bpsFactor)
 	minOut.Quo(minOut, big.NewInt(10_000))
 
-	return &Quote{
+	q := &Quote{
 		Provider:     "1inch",
 		Chain:        "evm",
 		TokenIn:      req.TokenIn,
@@ -119,7 +119,37 @@ func (oneInchProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 		FeeBps:       DefaultFeeBps,
 		SlippageBps:  req.SlippageBps,
 		providerBlob: &oneInchBlob{Tx: resp.Tx},
-	}, nil
+	}
+
+	// Allowance check — skip for native input (ETH swaps attach
+	// value directly, no approve needed). The spender is the
+	// router address 1inch returned in tx.to.
+	if !isNativeEVMInput(req.TokenIn.Address) {
+		spender := resp.Tx.To
+		current, err := readERC20Allowance(ctx, n, req.TokenIn.Address, acct.GetAddress(), spender)
+		q.ApprovalSpender = spender
+		q.NeededAllowance = wltobj.NewAmountRaw(new(big.Int).Set(amountIn), req.TokenIn.Decimals)
+		if err == nil {
+			q.CurrentAllowance = wltobj.NewAmountRaw(current, req.TokenIn.Decimals)
+			q.RequiresApproval = current.Cmp(amountIn) < 0
+		} else {
+			// Unknown allowance — err on the side of "needs
+			// approval" so the app surfaces a confirm step.
+			q.CurrentAllowance = wltobj.NewAmountRaw(big.NewInt(0), req.TokenIn.Decimals)
+			q.RequiresApproval = true
+		}
+	}
+
+	return q, nil
+}
+
+// isNativeEVMInput reports whether the token input is the chain's
+// native currency (no allowance ever needed).
+func isNativeEVMInput(addr string) bool {
+	if addr == "" || addr == "NATIVE" {
+		return true
+	}
+	return strings.EqualFold(addr, OneInchNativeSentinel)
 }
 
 func (oneInchProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {

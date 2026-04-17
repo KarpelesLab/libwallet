@@ -70,6 +70,25 @@ type Quote struct {
 	Route        []RouteHop     `json:"route,omitempty"`
 	ExpiresAt    time.Time      `json:"expiresAt"`
 
+	// ── EVM approval fields (populated by 1inch adapter for non-
+	// native tokenIn; all zero-valued on Solana and for native ETH
+	// swaps) ───────────────────────────────────────────────────────
+	//
+	// RequiresApproval is true when the router contract needs a
+	// higher allowance on the input token than what the user
+	// currently has.
+	RequiresApproval bool `json:"requiresApproval,omitempty"`
+	// ApprovalSpender is the address that needs the allowance
+	// (the aggregator's router contract). Empty on chains /
+	// pairs where approval is never needed.
+	ApprovalSpender string `json:"approvalSpender,omitempty"`
+	// CurrentAllowance is what the spender already has. Zero for
+	// first-time approvals.
+	CurrentAllowance *wltobj.Amount `json:"currentAllowance,omitempty"`
+	// NeededAllowance is the minimum the spender needs for the
+	// swap — equal to AmountIn.
+	NeededAllowance *wltobj.Amount `json:"neededAllowance,omitempty"`
+
 	// provider-internal fields — not JSON-exposed.
 	providerBlob any       `json:"-"`
 	createdAt    time.Time `json:"-"`

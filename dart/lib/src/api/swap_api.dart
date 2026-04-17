@@ -1,6 +1,7 @@
 import '../client/transport.dart';
 import '../models/key_description.dart';
 import '../models/swap_quote.dart';
+import '../models/transaction.dart';
 
 /// Token swaps — Jupiter Ultra / dFlow on Solana, 1inch on EVM.
 ///
@@ -78,6 +79,36 @@ class SwapApi {
     if (provider != null) params['provider'] = provider;
     final data = await _conn.request('Swap:quote', 'POST', params);
     return SwapQuote.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Build the ERC-20 `approve` transaction the swap needs as a
+  /// prerequisite on EVM.
+  ///
+  /// Only call this when [SwapQuote.requiresApproval] is true. The
+  /// returned transaction is validated (nonce / gas / fee pre-
+  /// filled) — pass it directly to
+  /// `client.transactions.signAndSendSimple(tx, keys: …)`.
+  ///
+  /// [approvalAmount] defaults to the quote's exact input amount
+  /// (tightest possible — a compromised router can only drain what
+  /// the user already agreed to swap). Pass `"max"` to request the
+  /// classic `uint256.max` unlimited approval; pass a decimal string
+  /// to approve a specific amount (e.g. for batched trades across
+  /// multiple swaps).
+  ///
+  /// Raising the approval amount above `amountIn` widens the blast
+  /// radius if the router is ever exploited — surface a clear
+  /// warning to the user when they opt into it.
+  Future<Transaction> buildApproval({
+    required String quoteId,
+    String? approvalAmount,
+    String? from,
+  }) async {
+    final params = <String, dynamic>{'quoteId': quoteId};
+    if (approvalAmount != null) params['approvalAmount'] = approvalAmount;
+    if (from != null) params['from'] = from;
+    final data = await _conn.request('Swap:buildApproval', 'POST', params);
+    return Transaction.fromJson(data as Map<String, dynamic>);
   }
 
   /// Execute a previously-issued quote.
