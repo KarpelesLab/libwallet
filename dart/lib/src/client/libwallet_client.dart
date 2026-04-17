@@ -13,6 +13,7 @@ import '../api/nft_api.dart';
 import '../api/remote_key_api.dart';
 import '../api/request_api.dart';
 import '../api/store_key_api.dart';
+import '../api/swap_api.dart';
 import '../api/token_api.dart';
 import '../api/transaction_api.dart';
 import '../api/wallet_api.dart';
@@ -54,6 +55,7 @@ class LibwalletClient {
   late final AssetApi assets = AssetApi(_transport);
   late final NftApi nfts = NftApi(_transport);
   late final TransactionApi transactions = TransactionApi(_transport);
+  late final SwapApi swap = SwapApi(_transport);
   late final TokenApi tokens = TokenApi(_transport);
   late final ContactApi contacts = ContactApi(_transport);
   late final Web3Api web3 = Web3Api(_transport);

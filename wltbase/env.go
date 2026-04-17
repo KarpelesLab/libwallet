@@ -19,6 +19,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltcrash"
 	_ "github.com/KarpelesLab/libwallet/wltnames" // registers Names:resolve API
 	"github.com/KarpelesLab/libwallet/wltnet"
+	_ "github.com/KarpelesLab/libwallet/wltswap"  // registers Swap:quote and Swap:execute
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wlttoken"

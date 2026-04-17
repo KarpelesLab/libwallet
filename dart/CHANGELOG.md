@@ -1,3 +1,23 @@
+## 0.3.15
+
+- **Swap API** (`SwapApi` / `client.swap`): token swaps on Solana
+  (Jupiter Ultra primary, dFlow fallback) and EVM (1inch). Two-step
+  flow: `quote()` returns a `SwapQuote` with expected output, min
+  output after slippage, route breakdown, and a 90 s quoteId;
+  `execute(quoteId, keys)` signs and broadcasts, returning a
+  `SwapResult` with the on-chain tx hash + explorer URL. All
+  providers are wired with a 50 bps referral fee to libwallet's fee
+  accounts (Solana: `BF436…`, EVM: `0x17Ab…`).
+- **Known limitations in v1**:
+  - ERC-20 swaps on EVM require the input token to be pre-approved
+    to 1inch's allowance target — drive the approval via
+    `Transaction:signAndSend` before calling `swap.execute`.
+  - The 1inch API key ships empty in this build; populate
+    `wltswap.OneInchAPIKey` to enable EVM swaps.
+  - No token resolver yet: callers pass `SwapTokenRef` with
+    `address` + `decimals` fully resolved (the data is already
+    available from `Asset:list`).
+
 ## 0.3.14
 
 - **`Transaction:maxSendable`** (`TransactionApi.maxSendable`): new
