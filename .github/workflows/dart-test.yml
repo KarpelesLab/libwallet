@@ -104,7 +104,14 @@ jobs:
 
       - name: Run iOS integration tests
         working-directory: dart/test_app
-        run: flutter test integration_test/libwallet_test.dart -d "$DEVICE_ID"
+        # --verbose exposes the test-driver's attach / VM-service
+        # handshake. ~40% of runs time out at 30 min with no setUpAll
+        # print output, which means `flutter test` never attaches
+        # to the app — known Flutter + iOS sim flake (driver retries
+        # without logging). Verbose makes those retries visible so
+        # we can distinguish "driver can't attach" from "app hangs
+        # in its main()".
+        run: flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID"
 
   # Android emulator integration tests (FFI via c-shared)
   test-android:
