@@ -20,9 +20,21 @@ import (
 // Solana System Program ID (all ones in base58)
 var solanaSystemProgram = [32]byte{}
 
+// ComputeBudget111111111111111111111111111111 — the on-chain program
+// that reads SetComputeUnitLimit / SetComputeUnitPrice instructions.
+// Populated at init from the canonical base58 form.
+var solanaComputeBudgetProgram [32]byte
+
 func init() {
 	// System Program = 11111111111111111111111111111111 (all zeros)
 	// Already initialized to zero
+
+	cb, err := base58.Bitcoin.Decode("ComputeBudget111111111111111111111111111111")
+	if err != nil || len(cb) != 32 {
+		// Fail loud: this is a compile-time constant.
+		panic(fmt.Sprintf("libwallet: invalid ComputeBudget program id: %v (len=%d)", err, len(cb)))
+	}
+	copy(solanaComputeBudgetProgram[:], cb)
 }
 
 // compactU16 encodes a uint16 in Solana's compact-u16 format
@@ -45,8 +57,31 @@ func solanaTransferInstruction(lamports uint64) []byte {
 	return data
 }
 
-// buildSOLTransferMessage builds a Solana transaction message for a native SOL transfer
-func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash [32]byte) []byte {
+// computeBudgetSetLimit encodes a SetComputeUnitLimit instruction
+// body: [0x02, u32 LE].
+func computeBudgetSetLimit(cu uint32) []byte {
+	data := make([]byte, 5)
+	data[0] = 0x02
+	binary.LittleEndian.PutUint32(data[1:], cu)
+	return data
+}
+
+// computeBudgetSetPrice encodes a SetComputeUnitPrice instruction
+// body: [0x03, u64 LE] where the price is microlamports per CU.
+func computeBudgetSetPrice(microLamportsPerCU uint64) []byte {
+	data := make([]byte, 9)
+	data[0] = 0x03
+	binary.LittleEndian.PutUint64(data[1:], microLamportsPerCU)
+	return data
+}
+
+// buildSOLTransferMessage builds a Solana transaction message for a
+// native SOL transfer. When cuLimit or cuPrice is non-zero, the
+// message also includes the corresponding ComputeBudget instructions
+// (SetComputeUnitLimit and/or SetComputeUnitPrice), the ComputeBudget
+// program is appended to the account keys, and the header readonly-
+// unsigned count is bumped accordingly.
+func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash [32]byte, cuLimit uint32, cuPrice uint64) []byte {
 	// Message format:
 	// Header: [numRequiredSignatures, numReadonlySignedAccounts, numReadonlyUnsignedAccounts]
 	// compact-u16 numAccountKeys
@@ -55,34 +90,73 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 	// compact-u16 numInstructions
 	// instructions
 
+	hasCB := cuLimit > 0 || cuPrice > 0
+
 	var msg []byte
 
 	// Header
 	msg = append(msg, 1) // 1 required signature (sender)
 	msg = append(msg, 0) // 0 readonly signed accounts
-	msg = append(msg, 1) // 1 readonly unsigned account (System Program)
+	if hasCB {
+		msg = append(msg, 2) // SystemProgram + ComputeBudget are readonly-unsigned
+	} else {
+		msg = append(msg, 1) // SystemProgram only
+	}
 
-	// Account keys: [from, to, SystemProgram]
-	msg = append(msg, compactU16(3)...)
+	// Account keys
+	// Legacy: [from, to, SystemProgram] (indices 0,1,2)
+	// With CB: [from, to, SystemProgram, ComputeBudget] (indices 0,1,2,3)
+	if hasCB {
+		msg = append(msg, compactU16(4)...)
+	} else {
+		msg = append(msg, compactU16(3)...)
+	}
 	msg = append(msg, from[:]...)
 	msg = append(msg, to[:]...)
 	msg = append(msg, solanaSystemProgram[:]...)
+	if hasCB {
+		msg = append(msg, solanaComputeBudgetProgram[:]...)
+	}
 
 	// Recent blockhash
 	msg = append(msg, recentBlockhash[:]...)
 
-	// Instructions (1 instruction: System Program Transfer)
-	msg = append(msg, compactU16(1)...) // 1 instruction
+	// Instructions. ComputeBudget instructions come first (Solana
+	// requires them before any instruction that would consume CUs).
+	numInstr := uint16(1)
+	if cuLimit > 0 {
+		numInstr++
+	}
+	if cuPrice > 0 {
+		numInstr++
+	}
+	msg = append(msg, compactU16(numInstr)...)
 
-	// Instruction:
-	msg = append(msg, 2) // programIdIndex = 2 (SystemProgram is at index 2)
+	const (
+		programIdxSystem = byte(2)
+		programIdxCB     = byte(3)
+	)
 
-	// Account indexes: [0 (from, writable+signer), 1 (to, writable)]
+	if cuLimit > 0 {
+		msg = append(msg, programIdxCB)        // programIdIndex = ComputeBudget
+		msg = append(msg, compactU16(0)...)    // no accounts
+		data := computeBudgetSetLimit(cuLimit)
+		msg = append(msg, compactU16(uint16(len(data)))...)
+		msg = append(msg, data...)
+	}
+	if cuPrice > 0 {
+		msg = append(msg, programIdxCB)        // programIdIndex = ComputeBudget
+		msg = append(msg, compactU16(0)...)    // no accounts
+		data := computeBudgetSetPrice(cuPrice)
+		msg = append(msg, compactU16(uint16(len(data)))...)
+		msg = append(msg, data...)
+	}
+
+	// System Program Transfer instruction.
+	msg = append(msg, programIdxSystem)
 	msg = append(msg, compactU16(2)...) // 2 accounts
 	msg = append(msg, 0)                // from
 	msg = append(msg, 1)                // to
-
-	// Instruction data
 	instrData := solanaTransferInstruction(lamports)
 	msg = append(msg, compactU16(uint16(len(instrData)))...)
 	msg = append(msg, instrData...)
@@ -158,8 +232,12 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	var recentBlockhash [32]byte
 	copy(recentBlockhash[:], bhBytes)
 
-	// Build the transaction message
-	message := buildSOLTransferMessage(from, to, lamports, recentBlockhash)
+	// Build the transaction message. ComputeBudget instructions
+	// are included when tx.ComputeUnitLimit or ComputeUnitPrice was
+	// set (either explicitly by the caller or via PriorityLevel in
+	// Validate). Zero values reproduce the legacy 3-account layout
+	// so unchanged callers keep their byte-for-byte behaviour.
+	message := buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
 
 	// Sign the message with EdDSA TSS
 	signOpt := &wltsign.Opts{

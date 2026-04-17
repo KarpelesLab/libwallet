@@ -48,6 +48,10 @@ type Transaction struct {
 	Amount       *wltobj.Amount            `json:"amount" sql:",type=JSON,format=json"`
 	Value        *wltobj.Amount            `json:"value,omitempty" sql:",type=JSON,format=json"`
 	Data         string                    `json:"data,omitempty" sql:",type=TEXT"`
+	// ── Solana priority fees (opt-in; zero values preserve legacy behaviour) ──
+	ComputeUnitLimit uint32 `json:"computeUnitLimit,omitempty" sql:"-"` // SetComputeUnitLimit instruction argument
+	ComputeUnitPrice uint64 `json:"computeUnitPrice,omitempty" sql:"-"` // microlamports per CU; 0 = use PriorityLevel
+	PriorityLevel    string `json:"priorityLevel,omitempty" sql:"-"`    // "none" | "low" | "medium" | "high"
 	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
 	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
 	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
@@ -308,15 +312,18 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 
 	if n.Type == "solana" {
-		// Solana has fixed fees (~5000 lamports)
-		tx.Fee = wltobj.NewAmountRaw(big.NewInt(5000), 9)
-		// Pre-flight: for native SOL transfers ("transfer" or
-		// "solana_transfer"), verify the sender's balance can
-		// cover amount + fee + rent-exempt minimums. This is
-		// purely a UX guard: without it, an over-sized send
-		// surfaces as the cryptic "insufficient funds for rent"
-		// from simulateTransaction after signing. SPL transfers
-		// and raw evm-on-solana variants don't pass through this.
+		// Resolve PriorityLevel → ComputeUnitPrice / Limit via
+		// getRecentPrioritizationFees when the caller opted in
+		// but didn't pin an explicit price. Default (empty
+		// PriorityLevel) preserves the legacy no-compute-budget
+		// behaviour.
+		if err := resolveSolanaPriority(n, tx); err != nil {
+			return err
+		}
+		// Compute the actual fee: 5000 lamport signature fee +
+		// ceil(cuLimit * cuPrice / 1_000_000) lamport priority
+		// fee. Zero cuLimit/cuPrice collapses to the legacy 5000.
+		tx.Fee = wltobj.NewAmountRaw(big.NewInt(int64(solanaFeeLamports(tx))), 9)
 		if tx.Type == "transfer" || tx.Type == "solana_transfer" {
 			if err := preflightSolanaNativeSend(e, n, acct, tx); err != nil {
 				return err

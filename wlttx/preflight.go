@@ -107,23 +107,36 @@ func appendEVMWarnings(ctx context.Context, n *wltnet.Network, tx *Transaction, 
 }
 
 // appendSolanaWarnings adds recipient_new_account (info) when the
-// recipient account does not exist yet. The blocking "amount below
-// recipient rent" case is already handled in preflightSolanaNativeSend.
+// recipient account does not exist yet, and priority_fee_recommended
+// (info) when the network is congested but the tx carries no
+// ComputeBudget instructions. The blocking "amount below recipient
+// rent" case is already handled in preflightSolanaNativeSend.
 func appendSolanaWarnings(ctx context.Context, n *wltnet.Network, tx *Transaction, out []Warning) []Warning {
-	if (tx.Type != "transfer" && tx.Type != "solana_transfer") || tx.To == "" {
-		return out
+	if tx.Type == "transfer" || tx.Type == "solana_transfer" {
+		if tx.To != "" {
+			if exists, err := solanaAccountExists(ctx, n, tx.To); err == nil && !exists {
+				out = append(out, Warning{
+					Code:     WarnRecipientNewAccount,
+					Severity: WarnSeverityInfo,
+					Message:  "recipient account does not exist yet and will be created by this transfer — double-check the address",
+					Field:    "to",
+				})
+			}
+		}
 	}
-	exists, err := solanaAccountExists(ctx, n, tx.To)
-	if err != nil {
-		return out
-	}
-	if !exists {
-		out = append(out, Warning{
-			Code:     WarnRecipientNewAccount,
-			Severity: WarnSeverityInfo,
-			Message:  "recipient account does not exist yet and will be created by this transfer — double-check the address",
-			Field:    "to",
-		})
+
+	// priority_fee_recommended: only fires when the caller hasn't
+	// already opted into a compute-budget price and the network
+	// median priority fee is non-zero in the recent window.
+	if tx.ComputeUnitPrice == 0 {
+		if price, err := solanaRecentPrioritizationFee(ctx, n, 0.50); err == nil && price > 0 {
+			out = append(out, Warning{
+				Code:     WarnPriorityFeeRecommended,
+				Severity: WarnSeverityInfo,
+				Message:  fmt.Sprintf("network median priority fee is %d microlamports/CU — set PriorityLevel to get this transaction included faster", price),
+				Field:    "fee",
+			})
+		}
 	}
 	return out
 }

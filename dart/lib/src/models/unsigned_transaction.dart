@@ -55,6 +55,20 @@ class UnsignedTransaction {
   /// Transaction format override: `legacy` or `eip1559`. Normally auto-selected.
   final String? format;
 
+  /// Solana only — compute-unit limit. Leave null for the default
+  /// (~1000 CU for a simple transfer). Ignored on other chains.
+  final int? computeUnitLimit;
+
+  /// Solana only — compute-unit price in microlamports per CU.
+  /// Set to 0 (or leave null) to let [priorityLevel] decide.
+  final int? computeUnitPrice;
+
+  /// Solana only — named shorthand for a priority fee: `none`
+  /// (no ComputeBudget instructions), `low` (25th percentile of
+  /// recent network fees), `medium` (50th), `high` (75th). When
+  /// [computeUnitPrice] is set, that wins over [priorityLevel].
+  final String? priorityLevel;
+
   /// Signing keys — required only for `signAndSend`, ignored by `validate`.
   final List<SigningKey>? keys;
 
@@ -73,6 +87,9 @@ class UnsignedTransaction {
     this.maxPriorityFeePerGas,
     this.nonce,
     this.format,
+    this.computeUnitLimit,
+    this.computeUnitPrice,
+    this.priorityLevel,
     this.keys,
   });
 
@@ -124,6 +141,9 @@ class UnsignedTransaction {
         maxPriorityFeePerGas: maxPriorityFeePerGas,
         nonce: nonce,
         format: format,
+        computeUnitLimit: computeUnitLimit,
+        computeUnitPrice: computeUnitPrice,
+        priorityLevel: priorityLevel,
         keys: k,
       );
 
@@ -143,6 +163,9 @@ class UnsignedTransaction {
     }
     if (nonce != null) m['nonce'] = nonce;
     if (format != null) m['format'] = format;
+    if (computeUnitLimit != null) m['computeUnitLimit'] = computeUnitLimit;
+    if (computeUnitPrice != null) m['computeUnitPrice'] = computeUnitPrice;
+    if (priorityLevel != null) m['priorityLevel'] = priorityLevel;
     if (keys != null) m['Keys'] = keys!.map((k) => k.toJson()).toList();
     return m;
   }
