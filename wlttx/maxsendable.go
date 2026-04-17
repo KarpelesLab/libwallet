@@ -25,7 +25,6 @@ import (
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/xuid"
 )
 
 func init() {
@@ -43,12 +42,14 @@ type MaxSendableRequest struct {
 	// from the input count + a single output). On EVM it's ignored
 	// for v1 (the 21000-gas assumption covers EOA destinations).
 	To string `json:"to,omitempty"`
-	// Asset is the asset key to compute max against. Empty or a key
-	// ending in ".NATIVE" means the network's native currency.
-	// Non-native (token) assets return an error in v1.
+	// Asset is the asset key to compute max against. Canonical
+	// form is "<type>.<chainId>.<suffix>" (e.g. "evm.1.NATIVE",
+	// "solana.mainnet-beta.<mint>") — identical to the keys
+	// Asset:list returns. The network is inferred from the
+	// "<type>.<chainId>." prefix; empty or bare "NATIVE" falls
+	// back to the current network's native currency. Non-native
+	// (token) assets return an error in v1.
 	Asset string `json:"asset,omitempty"`
-	// Network overrides the current network.
-	Network string `json:"network,omitempty"`
 }
 
 // ReservedAmt is one line item in MaxSendableResult.Reserved — an amount
@@ -91,7 +92,7 @@ func apiMaxSendable(ctx context.Context, req *MaxSendableRequest) (any, error) {
 		return nil, err
 	}
 
-	n, err := resolveNetwork(e, req.Network)
+	n, err := resolveNetwork(e, req.Asset)
 	if err != nil {
 		return nil, err
 	}
@@ -123,15 +124,48 @@ func resolveAccount(e wltintf.Env, from string) (*wltacct.Account, error) {
 	return wltacct.FindAccount(e, from)
 }
 
-func resolveNetwork(e wltintf.Env, network string) (*wltnet.Network, error) {
-	if network == "" {
+// resolveNetwork picks the network the maxSendable call applies to.
+// Derives from asset's "<type>.<chainId>." prefix; falls back to the
+// current network when asset is empty or a bare "NATIVE".
+func resolveNetwork(e wltintf.Env, asset string) (*wltnet.Network, error) {
+	prefix := networkFromAssetPrefix(asset)
+	if prefix == "" {
 		return wltnet.CurrentNetwork(e)
 	}
-	id, err := xuid.Parse(network)
-	if err != nil {
-		return nil, fmt.Errorf("invalid network id %q: %w", network, err)
-	}
+	id := wltnet.NetworkIdForTypeAndChainId(derivedType(prefix), derivedChain(prefix))
 	return wltnet.NetworkById(e, id)
+}
+
+// networkFromAssetPrefix returns the "<type>.<chainId>" prefix of an
+// asset key or "" when the key isn't in canonical form. Handles the
+// special "NATIVE" / "" cases as "" (no prefix).
+func networkFromAssetPrefix(asset string) string {
+	if asset == "" || asset == "NATIVE" {
+		return ""
+	}
+	parts := strings.SplitN(asset, ".", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + "." + parts[1]
+}
+
+// derivedType / derivedChain split the "<type>.<chainId>" string
+// produced by networkFromAssetPrefix. Both return "" on malformed
+// input.
+func derivedType(prefix string) string {
+	i := strings.IndexByte(prefix, '.')
+	if i < 0 {
+		return ""
+	}
+	return prefix[:i]
+}
+func derivedChain(prefix string) string {
+	i := strings.IndexByte(prefix, '.')
+	if i < 0 {
+		return ""
+	}
+	return prefix[i+1:]
 }
 
 // isNativeAsset reports whether the asset key refers to the network's

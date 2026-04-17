@@ -141,6 +141,49 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 	}
 }
 
+func TestNetworkFromAssetPrefix(t *testing.T) {
+	cases := map[string]string{
+		"":                          "",
+		"NATIVE":                    "",
+		"evm.1.NATIVE":              "evm.1",
+		"evm.137.NATIVE":            "evm.137",
+		"solana.mainnet-beta.NATIVE": "solana.mainnet-beta",
+		"solana.mainnet-beta.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "solana.mainnet-beta",
+		"evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48":                 "evm.1",
+		// Malformed — not in canonical form, no prefix derivable.
+		"bare":                           "",
+		"evm":                            "",
+		"evm.":                           "evm.", // technically 2 parts with empty chainId — documented edge case
+	}
+	for in, want := range cases {
+		if got := networkFromAssetPrefix(in); got != want {
+			t.Errorf("networkFromAssetPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestDerivedTypeChain(t *testing.T) {
+	tests := []struct {
+		prefix    string
+		wantType  string
+		wantChain string
+	}{
+		{"evm.1", "evm", "1"},
+		{"solana.mainnet-beta", "solana", "mainnet-beta"},
+		{"bitcoin.bitcoin", "bitcoin", "bitcoin"},
+		{"", "", ""},
+		{"no-dot", "", ""},
+	}
+	for _, c := range tests {
+		if got := derivedType(c.prefix); got != c.wantType {
+			t.Errorf("derivedType(%q) = %q, want %q", c.prefix, got, c.wantType)
+		}
+		if got := derivedChain(c.prefix); got != c.wantChain {
+			t.Errorf("derivedChain(%q) = %q, want %q", c.prefix, got, c.wantChain)
+		}
+	}
+}
+
 func TestIsNativeAsset(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -202,8 +202,7 @@ returns an object with the state of the user's onboarding, useful to check if we
 * `Transaction:maxSendable` Compute the largest amount safely sendable from an account, accounting for network fees and (on Solana) rent-exempt minimums. Native-only in v1 — for tokens use Asset:list since the full balance is sendable and fees are paid in native.
   * `from` Sender account address or ID (defaults to current)
   * `to` (optional): recipient — on Solana, used to check if the account exists; new accounts need rent-exempt funding counted against Max
-  * `asset` (optional): asset key, defaults to network native
-  * `network` (optional): override current network
+  * `asset` (optional): asset key in canonical `<type>.<chainId>.<suffix>` form (e.g. `evm.1.NATIVE`, `solana.mainnet-beta.<mint>` — same keys Asset:list returns). The network is derived from the prefix. Defaults to the current network's native when omitted or a bare `NATIVE`.
   * Response: `{ chain, max, balance, fee, reserved: [{kind, amount}], reason }` where `kind` is `"fee"` / `"sender_rent"` / `"recipient_rent"`. `reason` is populated when `max` is zero.
 * `DELETE Transaction`
   * From: limit transaction deletion to a given account

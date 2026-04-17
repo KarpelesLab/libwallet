@@ -94,27 +94,28 @@ class TransactionApi {
   /// rent-exempt minimums the sender must retain and a new recipient
   /// must receive.
   ///
+  /// [asset] is the canonical asset key returned by `Asset:list`
+  /// (e.g. `"evm.1.NATIVE"`, `"solana.mainnet-beta.<mint>"`). The
+  /// network is derived from the `"<type>.<chainId>."` prefix; when
+  /// [asset] is omitted or bare `"NATIVE"`, the current network's
+  /// native currency is used. Token assets (ERC-20, SPL) return an
+  /// error in v1 — the full token balance is always sendable and
+  /// fees are paid in native currency; call `maxSendable` on the
+  /// native asset to check whether the account can cover the fee.
+  ///
   /// Pass [to] on Solana to detect a brand-new recipient — when the
   /// recipient account doesn't exist yet, the returned [max] is
   /// reduced so the transfer can fund it to rent-exemption. On EVM
   /// and Bitcoin [to] is ignored in v1.
-  ///
-  /// [asset] defaults to the network's native currency. Token assets
-  /// (ERC-20, SPL) return an error in v1 — the full token balance is
-  /// always sendable, and fees are paid in native currency; call
-  /// maxSendable for the native asset to verify the account can cover
-  /// the fee.
   Future<MaxSendableResult> maxSendable({
     String? from,
     String? to,
     String? asset,
-    String? network,
   }) async {
     final params = <String, dynamic>{};
     if (from != null) params['from'] = from;
     if (to != null) params['to'] = to;
     if (asset != null) params['asset'] = asset;
-    if (network != null) params['network'] = network;
     final data = await _conn.request(
         'Transaction:maxSendable', 'POST', params.isNotEmpty ? params : null);
     return MaxSendableResult.fromJson(data as Map<String, dynamic>);
