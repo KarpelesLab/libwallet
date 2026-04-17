@@ -81,6 +81,7 @@ client.dispose();
 | `client.networks` | Network CRUD, current network, RPC testing |
 | `client.assets` | Balance queries with fiat conversion |
 | `client.transactions` | Transaction history, validation, signing |
+| `client.swap` | Token swaps (Jupiter Ultra / dFlow on Solana, 1inch on EVM) |
 | `client.tokens` | Custom token CRUD, on-chain discovery |
 | `client.nfts` | NFT listing and metadata |
 | `client.contacts` | Address book CRUD |
@@ -127,6 +128,37 @@ client.walletConnectRequests.listen((req) async {
 ```
 
 Full walkthrough: **[`doc/walletconnect_integration.md`](doc/walletconnect_integration.md)**.
+
+## Token swaps
+
+`client.swap` exposes a quote-then-execute flow powered by Jupiter
+Ultra + dFlow on Solana and 1inch on EVM. Quotes carry everything a
+UI needs — expected output, min-received, price impact, route
+breakdown, absolute fees — and the approval step (EVM ERC-20 input
+only) returns a rich `ApprovalPreview` pre-decoded for an approval
+sheet. The default approval amount is *exactly* the swap's input so
+a compromised router can only drain what the user agreed to; apps
+can opt into unlimited with `approvalAmount: 'max'`.
+
+```dart
+final quote = await client.swap.quote(
+  tokenIn: SwapTokenRef(address: 'NATIVE', decimals: 9),
+  tokenOut: SwapTokenRef(
+    address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    symbol: 'USDC',
+    decimals: 6,
+  ),
+  amountIn: '10000000',
+);
+if (quote.requiresApproval) {
+  final preview = await client.swap.buildApproval(quoteId: quote.quoteId);
+  await client.transactions.signAndSendSimple(preview.tx, keys: keys);
+}
+final result = await client.swap.execute(quoteId: quote.quoteId, keys: keys);
+```
+
+Full walkthrough with UI patterns, copy guidelines, and error
+handling: **[`doc/swap_integration.md`](doc/swap_integration.md)**.
 
 ## Native Library
 
