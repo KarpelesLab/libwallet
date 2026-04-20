@@ -1,3 +1,24 @@
+## 0.3.19
+
+- **New `swap.availability()` endpoint** — UI feature-flag for the
+  "Swap" button. No RPC calls; returns `{available, network,
+  providers, reason}` in a couple of ms. Gate per specific
+  `<type>.<chainId>` (e.g. `"evm.1"` / `"solana.mainnet-beta"`) so
+  devnet / testnet / unsupported EVM chains don't render the Swap
+  affordance:
+  - Solana mainnet → available (Jupiter + dFlow).
+  - Solana devnet / testnet → `unsupported_chain`.
+  - EVM chains covered by 1inch (`1`, `10`, `56`, `100`, `137`,
+    `250`, `324`, `8453`, `42161`, `43114`, `59144`) → available
+    once `OneInchAPIKey` is compiled in; `missing_api_key` until
+    then.
+  - Other EVM chains → `unsupported_chain` (1inch doesn't cover
+    them — would 404 upstream).
+  - Bitcoin-family (bitcoin, bitcoin-cash, litecoin, dogecoin,
+    monacoin, …) → `unsupported_chain`.
+  - `SwapAvailability.chainFamily` / `chainId` getters split
+    `network` for apps that need the family vs. the specific id.
+
 ## 0.3.18
 
 - **`accounts.delete()` now cascade-removes Web3 connections** that
