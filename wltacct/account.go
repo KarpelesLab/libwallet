@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log"
 	"math/big"
 	"strconv"
 	"strings"
@@ -394,15 +395,45 @@ func (a *Account) ApiDelete(ctx *apirouter.Context) error {
 	return a.accountDelete(e)
 }
 
-// accountDelete removes an account and related data from the database
-// Emits an "account:delete" event and deletes the account record
-// TODO: Also delete transactions and connected sites once implemented
-// Returns any error encountered during deletion
+// Delete removes the account and cascade-deletes its Web3
+// connections. Exported wrapper around accountDelete so non-API
+// callers (background tasks, tests) can drive the same flow without
+// constructing an apirouter.Context.
+func (a *Account) Delete(e wltintf.Env) error {
+	return a.accountDelete(e)
+}
+
+// connectedSiteRef is a minimal stub matching the ConnectedSite
+// table owned by wltbase. Defined here so accountDelete can
+// cascade-delete connections without creating a wltacct → wltbase
+// import cycle (wltbase already imports wltacct). Only the fields
+// needed for the delete (table name + WHERE column) are present.
+type connectedSiteRef struct {
+	psql.Name `sql:"ConnectedSite"`
+	Id        *xuid.XUID `sql:",key=PRIMARY"`
+	Account   *xuid.XUID `sql:",type=VARCHAR,size=255"`
+}
+
+// accountDelete removes an account and its connected Web3 sites in
+// one synchronous step so no orphan ConnectedSite rows survive the
+// account.
+//
+// We run the cascade BEFORE the account row goes away. Failures to
+// clean up connections are logged but don't block the account
+// delete — leaving the account behind because of a stale ConnectedSite
+// row would be the worse outcome (user thinks account is gone, it
+// isn't).
+//
+// Transactions are intentionally NOT deleted: tx history can outlive
+// the account that originated it, by design.
 func (a *Account) accountDelete(e wltintf.Env) error {
-	// delete any transaction from this account
+	// Cascade: drop any Web3 connections referencing this account.
+	if _, err := psql.ForceDelete[connectedSiteRef](e, map[string]any{"Account": a.Id}); err != nil {
+		log.Printf("accountDelete: failed to cascade-delete ConnectedSite rows for %s: %v", a.Id, err)
+	}
+
+	// Notify any other listeners (event channel subscribers).
 	e.Emitter().Emit(context.Background(), "account:delete", a.Id.String())
-	//TODO e.sql.Where(map[string]any{"From": a.Id.String()}).Delete(&Transaction{})
-	//TODO e.sql.Where(map[string]any{"Account": a.Id.String()}).Delete(&connectedSite{})
 
 	_, err := psql.ForceDelete[Account](e, map[string]any{"Id": a.Id})
 	return err
