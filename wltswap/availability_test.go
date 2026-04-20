@@ -15,84 +15,145 @@ func fullReg() map[string]Provider {
 func TestComputeAvailability(t *testing.T) {
 	tests := []struct {
 		name          string
-		chain         string
+		netType       string
+		chainId       string
 		reg           map[string]Provider
 		oneInchKey    string
 		wantAvailable bool
-		wantChain     string
+		wantNetwork   string
 		wantProviders []string
 		wantReason    string
 	}{
+		// ── Solana ────────────────────────────────────────────
 		{
-			name:          "solana — both providers registered",
-			chain:         "solana",
+			name:          "solana mainnet — available",
+			netType:       "solana",
+			chainId:       "mainnet-beta",
 			reg:           fullReg(),
 			wantAvailable: true,
-			wantChain:     "solana",
+			wantNetwork:   "solana.mainnet-beta",
 			wantProviders: []string{"jupiter_ultra", "dflow"},
 		},
 		{
-			name:          "solana — only jupiter registered",
-			chain:         "solana",
-			reg:           map[string]Provider{"jupiter_ultra": &jupiterProvider{}},
-			wantAvailable: true,
-			wantChain:     "solana",
-			wantProviders: []string{"jupiter_ultra"},
+			name:        "solana devnet — not supported (Jupiter/dFlow mainnet-only)",
+			netType:     "solana",
+			chainId:     "devnet",
+			reg:         fullReg(),
+			wantNetwork: "solana.devnet",
+			wantReason:  "unsupported_chain",
 		},
 		{
-			name:          "solana — no providers at all",
-			chain:         "solana",
-			reg:           map[string]Provider{},
-			wantAvailable: false,
-			wantChain:     "solana",
-			wantReason:    "unsupported_chain",
+			name:        "solana testnet — not supported",
+			netType:     "solana",
+			chainId:     "testnet",
+			reg:         fullReg(),
+			wantNetwork: "solana.testnet",
+			wantReason:  "unsupported_chain",
 		},
 		{
-			name:          "evm — missing API key (current default build)",
-			chain:         "evm",
-			reg:           fullReg(),
-			oneInchKey:    "",
-			wantAvailable: false,
-			wantChain:     "evm",
+			name:        "solana mainnet — no providers registered",
+			netType:     "solana",
+			chainId:     "mainnet-beta",
+			reg:         map[string]Provider{},
+			wantNetwork: "solana.mainnet-beta",
+			wantReason:  "unsupported_chain",
+		},
+
+		// ── EVM ────────────────────────────────────────────────
+		{
+			name:        "evm ethereum — missing API key",
+			netType:     "evm",
+			chainId:     "1",
+			reg:         fullReg(),
+			oneInchKey:  "",
+			wantNetwork: "evm.1",
 			wantProviders: []string{"1inch"},
-			wantReason:    "missing_api_key",
+			wantReason:  "missing_api_key",
 		},
 		{
-			name:          "evm — API key populated",
-			chain:         "evm",
+			name:          "evm ethereum — key populated",
+			netType:       "evm",
+			chainId:       "1",
 			reg:           fullReg(),
 			oneInchKey:    "test-key-123",
 			wantAvailable: true,
-			wantChain:     "evm",
+			wantNetwork:   "evm.1",
 			wantProviders: []string{"1inch"},
 		},
 		{
-			name:          "evm — key populated but no provider registered",
-			chain:         "evm",
-			reg:           map[string]Provider{},
+			name:          "evm polygon — key populated",
+			netType:       "evm",
+			chainId:       "137",
+			reg:           fullReg(),
 			oneInchKey:    "test-key-123",
-			wantAvailable: false,
-			wantChain:     "evm",
-			wantReason:    "unsupported_chain",
+			wantAvailable: true,
+			wantNetwork:   "evm.137",
+			wantProviders: []string{"1inch"},
 		},
 		{
-			name:          "bitcoin — not supported",
-			chain:         "bitcoin",
+			name:          "evm arbitrum — key populated",
+			netType:       "evm",
+			chainId:       "42161",
 			reg:           fullReg(),
-			wantAvailable: false,
-			wantChain:     "bitcoin",
-			wantReason:    "unsupported_chain",
+			oneInchKey:    "test-key-123",
+			wantAvailable: true,
+			wantNetwork:   "evm.42161",
+			wantProviders: []string{"1inch"},
+		},
+		{
+			name:        "evm chain not in 1inch coverage — key populated but unsupported",
+			netType:     "evm",
+			chainId:     "99999",
+			reg:         fullReg(),
+			oneInchKey:  "test-key-123",
+			wantNetwork: "evm.99999",
+			wantReason:  "unsupported_chain",
+		},
+		{
+			name:        "evm chain not in 1inch coverage + no key — chain-level miss wins",
+			netType:     "evm",
+			chainId:     "99999",
+			reg:         fullReg(),
+			oneInchKey:  "",
+			wantNetwork: "evm.99999",
+			wantReason:  "unsupported_chain",
+		},
+
+		// ── Bitcoin family ─────────────────────────────────────
+		{
+			name:        "bitcoin mainnet — not supported",
+			netType:     "bitcoin",
+			chainId:     "bitcoin",
+			reg:         fullReg(),
+			wantNetwork: "bitcoin.bitcoin",
+			wantReason:  "unsupported_chain",
+		},
+		{
+			name:        "dogecoin — not supported",
+			netType:     "bitcoin",
+			chainId:     "dogecoin",
+			reg:         fullReg(),
+			wantNetwork: "bitcoin.dogecoin",
+			wantReason:  "unsupported_chain",
+		},
+		{
+			name:        "litecoin — not supported",
+			netType:     "bitcoin",
+			chainId:     "litecoin",
+			reg:         fullReg(),
+			wantNetwork: "bitcoin.litecoin",
+			wantReason:  "unsupported_chain",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := computeAvailability(tc.chain, tc.reg, tc.oneInchKey)
+			got := computeAvailability(tc.netType, tc.chainId, tc.reg, tc.oneInchKey)
 			if got.Available != tc.wantAvailable {
 				t.Errorf("Available = %v, want %v", got.Available, tc.wantAvailable)
 			}
-			if got.Chain != tc.wantChain {
-				t.Errorf("Chain = %q, want %q", got.Chain, tc.wantChain)
+			if got.Network != tc.wantNetwork {
+				t.Errorf("Network = %q, want %q", got.Network, tc.wantNetwork)
 			}
 			if got.Reason != tc.wantReason {
 				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)

@@ -37,15 +37,18 @@ class SwapApi {
   ///
   /// Call this once when the active network changes — use the
   /// result to gate a "Swap" button / screen entry in the UI. No
-  /// RPC calls are made; the response is purely local policy based
-  /// on which providers are wired into this build and whether they
-  /// have the credentials they need.
+  /// RPC calls are made; the response is purely local policy.
   ///
-  /// In the current build, `available` is only true on Solana
-  /// (Jupiter Ultra + dFlow, no API keys required). EVM returns
-  /// `available: false, reason: "missing_api_key"` until the 1inch
-  /// key is compiled in. Bitcoin returns `reason:
-  /// "unsupported_chain"`.
+  /// The check is **per specific chain id**, not per family:
+  /// Solana mainnet is available via Jupiter + dFlow, but devnet /
+  /// testnet aren't. 1inch covers a specific list of EVM chains
+  /// (Ethereum / Polygon / BNB / Arbitrum / Optimism / Base /
+  /// Avalanche / Gnosis / Fantom / zkSync Era / Linea) — other EVM
+  /// chains return `unsupported_chain` even with a valid key.
+  /// Bitcoin-family chains always return `unsupported_chain`.
+  ///
+  /// In the current build the 1inch API key ships empty, so EVM
+  /// returns `reason: "missing_api_key"` on the supported chains.
   Future<SwapAvailability> availability() async {
     final data = await _conn.request('Swap:availability', 'GET');
     return SwapAvailability.fromJson(data as Map<String, dynamic>);

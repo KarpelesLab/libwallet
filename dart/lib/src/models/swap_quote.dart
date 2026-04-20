@@ -291,38 +291,65 @@ class ApprovalPreview {
 /// UIs typically call this once when the current network changes to
 /// decide whether to render a "Swap" button / nav entry. No RPC
 /// calls are made; the response is purely local policy.
+///
+/// The check is **per specific chain**, not per family — Jupiter and
+/// dFlow route only on Solana mainnet (devnet / testnet return
+/// `unsupported_chain`), and 1inch supports a fixed list of EVM chain
+/// ids (Ethereum, Polygon, BNB, Arbitrum, Optimism, Base, Avalanche,
+/// Gnosis, Fantom, zkSync Era, Linea). An EVM chain outside that list
+/// returns `unsupported_chain` even when the 1inch API key is set.
 class SwapAvailability {
   /// True when `swap.quote()` / `swap.execute()` can succeed on the
   /// current network in this build. Gate the Swap button on this.
   final bool available;
 
-  /// Current network chain family: `"solana"`, `"evm"`, `"bitcoin"`.
-  final String chain;
+  /// Canonical network identifier matching the format Asset:list
+  /// uses — `"<type>.<chainId>"`, e.g. `"evm.1"`, `"evm.137"`,
+  /// `"solana.mainnet-beta"`, `"bitcoin.dogecoin"`. Split on `.` to
+  /// get the chain family.
+  final String network;
 
-  /// Provider names eligible on this chain in fallback order
-  /// (`["jupiter_ultra", "dflow"]` on Solana, `["1inch"]` on EVM).
-  /// Empty when the chain has no registered providers at all.
+  /// Provider names eligible on this specific chain in fallback
+  /// order (e.g. `["jupiter_ultra", "dflow"]` on Solana mainnet,
+  /// `["1inch"]` on Ethereum). Empty when no provider covers this
+  /// chain.
   final List<String> providers;
 
   /// Stable machine-readable reason when [available] is false:
-  /// `"unsupported_chain"` (no provider for this chain) /
-  /// `"missing_api_key"` (EVM build has no 1inch key compiled in).
+  /// - `"unsupported_chain"` — chain family / specific chainId has
+  ///   no provider (Bitcoin family, Solana devnet, unlisted EVM)
+  /// - `"missing_api_key"` — 1inch key not compiled in (EVM only)
+  ///
   /// Empty when [available] is true.
   final String reason;
 
   const SwapAvailability({
     required this.available,
-    required this.chain,
+    required this.network,
     this.providers = const [],
     this.reason = '',
   });
 
   factory SwapAvailability.fromJson(Map<String, dynamic> json) => SwapAvailability(
         available: json['available'] == true,
-        chain: (json['chain'] as String?) ?? '',
+        network: (json['network'] as String?) ?? '',
         providers: (json['providers'] as List?)?.whereType<String>().toList() ?? const [],
         reason: (json['reason'] as String?) ?? '',
       );
+
+  /// Convenience: the chain family portion of [network] (`"evm"`,
+  /// `"solana"`, `"bitcoin"`).
+  String get chainFamily {
+    final i = network.indexOf('.');
+    return i < 0 ? network : network.substring(0, i);
+  }
+
+  /// Convenience: the chain id portion of [network] (`"1"`, `"137"`,
+  /// `"mainnet-beta"`, `"dogecoin"`).
+  String get chainId {
+    final i = network.indexOf('.');
+    return i < 0 ? '' : network.substring(i + 1);
+  }
 }
 
 /// The result of [SwapApi.execute]: a successfully broadcast swap.

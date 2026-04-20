@@ -218,7 +218,7 @@ Token swaps powered by Jupiter Ultra + dFlow (Solana) and 1inch (EVM). Two-step 
 
 * `Swap:availability` Check whether swap works on the current network. No RPC calls — purely local policy. Gate the UI's "Swap" affordance on this.
   * No parameters.
-  * Response: `{ available, chain, providers: [...], reason }`. `chain` is `"solana"` / `"evm"` / `"bitcoin"`. `providers` lists the eligible aggregators in fallback order. When `available` is false, `reason` is `"unsupported_chain"` (chain has no provider) or `"missing_api_key"` (EVM build ships without the 1inch key). In the current build only Solana is available.
+  * Response: `{ available, network, providers: [...], reason }`. `network` is the canonical `<type>.<chainId>` identifier matching Asset:list (`"evm.1"`, `"evm.137"`, `"solana.mainnet-beta"`, `"bitcoin.dogecoin"`, …). `providers` lists the eligible aggregators for **this specific chainId** in fallback order. When `available` is false, `reason` is `"unsupported_chain"` (chain family / specific chainId has no provider — Bitcoin-family, Solana devnet, unlisted EVM) or `"missing_api_key"` (EVM build ships without the 1inch key). Coverage: Solana mainnet (Jupiter + dFlow); EVM chains 1 / 10 / 56 / 100 / 137 / 250 / 324 / 8453 / 42161 / 43114 / 59144 via 1inch (requires API key).
 * `Swap:quote` Get a swap quote.
   * `tokenIn`, `tokenOut`: `{ address, symbol, decimals }`. Address `"NATIVE"` means the chain's native currency (SOL / ETH); on EVM also accepts the 1inch sentinel `0xeeee…eeee`.
   * `amountIn`: input amount in base units (decimal string)
