@@ -216,6 +216,9 @@ returns an object with the state of the user's onboarding, useful to check if we
 
 Token swaps powered by Jupiter Ultra + dFlow (Solana) and 1inch (EVM). Two-step flow: `Swap:quote` returns a quote cached server-side for 90 s, `Swap:execute` signs and broadcasts. On EVM, ERC-20 input tokens require a prior `approve` — use `Swap:buildApproval` in between. 50 bps referral fee is routed to the configured fee accounts; Solana auto-falls-back from Jupiter to dFlow on provider failure. Full UI integration guide in `dart/doc/swap_integration.md`.
 
+* `Swap:availability` Check whether swap works on the current network. No RPC calls — purely local policy. Gate the UI's "Swap" affordance on this.
+  * No parameters.
+  * Response: `{ available, chain, providers: [...], reason }`. `chain` is `"solana"` / `"evm"` / `"bitcoin"`. `providers` lists the eligible aggregators in fallback order. When `available` is false, `reason` is `"unsupported_chain"` (chain has no provider) or `"missing_api_key"` (EVM build ships without the 1inch key). In the current build only Solana is available.
 * `Swap:quote` Get a swap quote.
   * `tokenIn`, `tokenOut`: `{ address, symbol, decimals }`. Address `"NATIVE"` means the chain's native currency (SOL / ETH); on EVM also accepts the 1inch sentinel `0xeeee…eeee`.
   * `amountIn`: input amount in base units (decimal string)

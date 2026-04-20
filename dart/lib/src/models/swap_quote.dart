@@ -286,6 +286,45 @@ class ApprovalPreview {
       );
 }
 
+/// Result of [SwapApi.availability] — feature-flag for the UI.
+///
+/// UIs typically call this once when the current network changes to
+/// decide whether to render a "Swap" button / nav entry. No RPC
+/// calls are made; the response is purely local policy.
+class SwapAvailability {
+  /// True when `swap.quote()` / `swap.execute()` can succeed on the
+  /// current network in this build. Gate the Swap button on this.
+  final bool available;
+
+  /// Current network chain family: `"solana"`, `"evm"`, `"bitcoin"`.
+  final String chain;
+
+  /// Provider names eligible on this chain in fallback order
+  /// (`["jupiter_ultra", "dflow"]` on Solana, `["1inch"]` on EVM).
+  /// Empty when the chain has no registered providers at all.
+  final List<String> providers;
+
+  /// Stable machine-readable reason when [available] is false:
+  /// `"unsupported_chain"` (no provider for this chain) /
+  /// `"missing_api_key"` (EVM build has no 1inch key compiled in).
+  /// Empty when [available] is true.
+  final String reason;
+
+  const SwapAvailability({
+    required this.available,
+    required this.chain,
+    this.providers = const [],
+    this.reason = '',
+  });
+
+  factory SwapAvailability.fromJson(Map<String, dynamic> json) => SwapAvailability(
+        available: json['available'] == true,
+        chain: (json['chain'] as String?) ?? '',
+        providers: (json['providers'] as List?)?.whereType<String>().toList() ?? const [],
+        reason: (json['reason'] as String?) ?? '',
+      );
+}
+
 /// The result of [SwapApi.execute]: a successfully broadcast swap.
 class SwapResult {
   /// The quote ID that produced this result.

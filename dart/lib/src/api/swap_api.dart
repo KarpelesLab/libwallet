@@ -33,6 +33,24 @@ class SwapApi {
 
   SwapApi(this._conn);
 
+  /// Report whether swap is available on the current network.
+  ///
+  /// Call this once when the active network changes — use the
+  /// result to gate a "Swap" button / screen entry in the UI. No
+  /// RPC calls are made; the response is purely local policy based
+  /// on which providers are wired into this build and whether they
+  /// have the credentials they need.
+  ///
+  /// In the current build, `available` is only true on Solana
+  /// (Jupiter Ultra + dFlow, no API keys required). EVM returns
+  /// `available: false, reason: "missing_api_key"` until the 1inch
+  /// key is compiled in. Bitcoin returns `reason:
+  /// "unsupported_chain"`.
+  Future<SwapAvailability> availability() async {
+    final data = await _conn.request('Swap:availability', 'GET');
+    return SwapAvailability.fromJson(data as Map<String, dynamic>);
+  }
+
   /// Get a swap quote.
   ///
   /// [tokenIn] and [tokenOut] are resolved by address + decimals — a
