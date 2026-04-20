@@ -1,3 +1,19 @@
+## 0.3.16
+
+- **Fix: `Transaction:signAndSend` now backfills `Fee` server-side**
+  before saving. The new typed `UnsignedTransaction` deliberately
+  omits `fee` (server is the source of truth) but signAndSend
+  wasn't recomputing it on its own — apps that went straight to
+  signAndSend (or used the typed shape) ended up with `null` Fee
+  in tx history. Same formulas Validate already uses (gas ×
+  gasPrice on EVM, `5000 + ceil(cuLimit*cuPrice/1e6)` on Solana).
+  No client change needed.
+- **`Transaction:maxSendable` no longer takes `network`** — it's
+  derived from the asset key's `<type>.<chainId>.` prefix (the
+  same shape `Asset:list` returns). Empty / bare `NATIVE` falls
+  back to the current network. Pre-release cleanup; 0.3.15 was
+  not consumed externally with the old shape.
+
 ## 0.3.15
 
 - **Swap API** (`SwapApi` / `client.swap`): token swaps on Solana
