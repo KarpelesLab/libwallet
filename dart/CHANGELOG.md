@@ -1,3 +1,14 @@
+## 0.3.18
+
+- **`accounts.delete()` now cascade-removes Web3 connections** that
+  reference the deleted account. Before 0.3.18 those rows were left
+  behind pointing at a non-existent account id — every list of
+  connected sites for that account would keep returning stale data
+  until the user manually deleted each one. Done synchronously, so
+  no orphan window exists. Scoped: unrelated connections for other
+  accounts are untouched. Transactions are intentionally NOT
+  cascaded (tx history outlives the originating account by design).
+
 ## 0.3.17
 
 - **`Transaction:list` now supports cursor pagination + filters that
