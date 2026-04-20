@@ -1,3 +1,15 @@
+## 0.3.17
+
+- **`Transaction:list` now supports cursor pagination + filters that
+  the docs always promised.** Up to 0.3.16 the handler was hardcoded
+  to 50 rows and the `From` / `Network` query params were silently
+  ignored on this path (only `DELETE Transaction` honoured them).
+  New `before` (RFC3339Nano cursor on `Created`) and `limit`
+  (default 50, capped 200) params drive an infinite-scroll pattern
+  — the response stays a flat list, clients derive the next cursor
+  from `last.created`. Dart `transactions.list()` gains the new
+  parameters with an example in the docstring.
+
 ## 0.3.16
 
 - **Fix: `Transaction:signAndSend` now backfills `Fee` server-side**
