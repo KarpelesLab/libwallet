@@ -112,53 +112,42 @@ jobs:
         working-directory: dart/test_app
         # `flutter test` on the iOS simulator periodically hangs at
         # "Waiting for VM Service port to be available" — a known
-        # Flutter+sim mDNS / port-publish race that has nothing to
+        # Flutter + sim mDNS / port-publish race that has nothing to
         # do with libwallet (confirmed: setUpAll never starts on hung
-        # runs). Bound each attempt at 10 min and retry once, so a
-        # single bad attach burns ~10 min instead of the 30-min job
-        # cap. --verbose keeps the driver's attach trace visible so
-        # we keep collecting evidence on every run.
+        # runs).
         #
-        # macOS doesn't ship GNU `timeout`, so we implement the
-        # bound in pure shell with a watchdog subshell.
+        # Failure signature: Flutter's own internal timeout fires at
+        # ~7m43s with exit 1 and '0 tests passed' — LOOKS identical
+        # to a real test failure to any naive retry-on-nonzero-exit
+        # loop. We differentiate by scanning the captured output for
+        # 'Waiting for VM Service port to be available' AND '0 tests
+        # passed'; that conjunction only happens on the attach hang.
+        # Any other failure (a real test regression) is surfaced
+        # immediately so we never mask a real bug.
         run: |
           set +e
-          run_with_timeout() {
-            local secs=$1
-            shift
-            "$@" &
-            local pid=$!
-            ( sleep "$secs" && kill -TERM "$pid" 2>/dev/null ) &
-            local watchdog=$!
-            wait "$pid"
-            local rc=$?
-            kill -TERM "$watchdog" 2>/dev/null
-            wait "$watchdog" 2>/dev/null
-            return "$rc"
-          }
+          LOG=$RUNNER_TEMP/flutter-test.log
           for attempt in 1 2; do
             echo "::group::flutter test attempt $attempt"
-            run_with_timeout 600 \
-              flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID"
-            EXIT=$?
+            flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID" 2>&1 | tee "$LOG"
+            EXIT=${PIPESTATUS[0]}
             echo "::endgroup::"
             if [ $EXIT -eq 0 ]; then
               exit 0
             fi
-            # 143 = process killed by SIGTERM (the watchdog's signal).
-            # Anything else is a real failure — don't mask it with a
-            # retry that hides regressions.
-            if [ $EXIT -ne 143 ]; then
-              echo "flutter test failed with exit $EXIT (not a timeout) — not retrying"
-              exit $EXIT
+            if grep -q "Waiting for VM Service port to be available" "$LOG" \
+               && grep -q "0 tests passed" "$LOG"; then
+              echo "Attempt $attempt: VM Service attach hang (flake); rebooting sim and retrying"
+              xcrun simctl shutdown "$DEVICE_ID" || true
+              xcrun simctl boot "$DEVICE_ID"
+              xcrun simctl bootstatus "$DEVICE_ID" -b
+              continue
             fi
-            echo "Attempt $attempt timed out at 10 min; rebooting simulator and retrying"
-            xcrun simctl shutdown "$DEVICE_ID" || true
-            xcrun simctl boot "$DEVICE_ID"
-            xcrun simctl bootstatus "$DEVICE_ID" -b
+            echo "flutter test failed with exit $EXIT (real failure, not the attach hang) — not retrying"
+            exit $EXIT
           done
-          echo "Both attempts hit the 10-min driver-attach cap"
-          exit 124
+          echo "Both attempts hit the VM Service attach hang"
+          exit 1
 
   # Android emulator integration tests (FFI via c-shared)
   test-android:
