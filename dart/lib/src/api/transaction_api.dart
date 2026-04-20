@@ -12,17 +12,43 @@ class TransactionApi {
 
   TransactionApi(this._conn);
 
-  /// List transactions. Optionally filter by account (From) or network,
-  /// and convert amounts to a fiat currency.
+  /// List transactions, newest first.
+  ///
+  /// Filter by [from] (account) and / or [network]. Set [convert] to
+  /// a fiat currency code (e.g. `"USD"`) to attach `fiatAmount` and
+  /// `fiatCurrency` on each row.
+  ///
+  /// Paging is cursor-based on the `Created` timestamp. Pass
+  /// [before] = the previous page's last item's `created` field
+  /// (formatted as RFC3339Nano) to fetch the next page. [limit]
+  /// caps the page size — defaults to 50, capped at 200.
+  ///
+  /// Example infinite-scroll pattern:
+  ///
+  /// ```dart
+  /// var page = await client.transactions.list(limit: 50);
+  /// while (page.length == 50) {
+  ///   final next = await client.transactions.list(
+  ///     limit: 50,
+  ///     before: page.last.created!.toIso8601String(),
+  ///   );
+  ///   page.addAll(next);
+  ///   if (next.length < 50) break;
+  /// }
+  /// ```
   Future<List<Transaction>> list({
     String? from,
     String? network,
     String? convert,
+    String? before,
+    int? limit,
   }) async {
     final params = <String, dynamic>{};
     if (from != null) params['From'] = from;
     if (network != null) params['Network'] = network;
     if (convert != null) params['_convert'] = convert;
+    if (before != null) params['before'] = before;
+    if (limit != null) params['limit'] = limit;
     final data = await _conn.request(
         'Transaction', 'GET', params.isNotEmpty ? params : null);
     if (data == null) return [];

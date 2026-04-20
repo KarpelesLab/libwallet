@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
@@ -60,13 +61,51 @@ func apiFetchTransaction(ctx *apirouter.Context, in struct{ Id string }) (any, e
 	return TransactionById(e, id)
 }
 
+// Transaction list paging defaults.
+const (
+	txListDefaultLimit = 50
+	txListMaxLimit     = 200
+)
+
 func apiListTransaction(ctx *apirouter.Context) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
 		return nil, errors.New("failed to get env")
 	}
 
-	res, err := psql.Fetch[Transaction](e, nil, psql.Sort(psql.S("Created", "DESC")), psql.Limit(50))
+	// Build the where clause from the documented filter params plus
+	// the new `before` cursor. Up to 0.3.16 the From/Network filters
+	// were documented in api.md but never read on this path — only
+	// Clear honoured them. Bring List into parity here.
+	where := make(map[string]any)
+	if from, ok := apirouter.GetParam[string](ctx, "From"); ok && from != "" {
+		where["From"] = from
+	}
+	if net, ok := apirouter.GetParam[string](ctx, "Network"); ok && net != "" {
+		where["Network"] = net
+	}
+	if before, ok := apirouter.GetParam[string](ctx, "before"); ok && before != "" {
+		t, err := time.Parse(time.RFC3339Nano, before)
+		if err != nil {
+			return nil, fmt.Errorf("invalid 'before' timestamp (want RFC3339): %w", err)
+		}
+		where["Created"] = map[string]any{"$lt": t}
+	}
+
+	limit := txListDefaultLimit
+	if l, ok := apirouter.GetParam[int](ctx, "limit"); ok && l > 0 {
+		limit = l
+		if limit > txListMaxLimit {
+			limit = txListMaxLimit
+		}
+	}
+
+	var whereArg any
+	if len(where) > 0 {
+		whereArg = where
+	}
+
+	res, err := psql.Fetch[Transaction](e, whereArg, psql.Sort(psql.S("Created", "DESC")), psql.Limit(limit))
 	if err != nil {
 		return nil, err
 	}

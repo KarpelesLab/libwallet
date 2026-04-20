@@ -181,10 +181,12 @@ returns an object with the state of the user's onboarding, useful to check if we
 
 ## Transaction
 
-* `GET Transaction`
-  * From: limit transaction list to a given account
-  * Network: find transactions on a given network
-  * _convert=USD (add FiatAmount and FiatCurrency to each asset with converted amount, can accept USD/EUR/GBP/JPY)
+* `GET Transaction` (newest first; cursor-paginated on `Created`)
+  * `From`: limit transaction list to a given account
+  * `Network`: find transactions on a given network
+  * `before`: RFC3339Nano timestamp — return rows with `Created` strictly less than this (the previous page's last `created`). Omit for the first page.
+  * `limit`: max rows to return (default 50, capped at 200)
+  * `_convert=USD` (add FiatAmount and FiatCurrency to each asset with converted amount, can accept USD/EUR/GBP/JPY)
 * `GET Transaction/<id>`
 * `Transaction:validate` Validates if a transaction is OK, returns errors if anything seems wrong
   * Supported transaction types: `transfer`, `evm`, `solana_transfer`, `solana_spl_transfer`, `erc20_transfer`, `bitcoin_transfer`
