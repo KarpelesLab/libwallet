@@ -489,6 +489,13 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		if err != nil {
 			return err
 		}
+		// Fee is purely informational on Solana (computed by the
+		// network from the message contents) but persisted so tx
+		// history shows it. Backfill from the same formula
+		// Validate uses, so callers that skipped validate (or
+		// went through the typed UnsignedTransaction which has
+		// no fee field) still get the correct value saved.
+		tx.Fee = wltobj.NewAmountRaw(big.NewInt(int64(solanaFeeLamports(tx))), 9)
 		return tx.save(e)
 	}
 
@@ -524,6 +531,16 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		return err
 	}
 	tx.Raw = buf
+
+	// Backfill Fee from gas × gasPrice (legacy) / gas × maxFeePerGas
+	// (eip1559) so it ends up in the saved row. Validate already
+	// does this, but callers can reach signAndSend without going
+	// through validate first (the typed Dart UnsignedTransaction
+	// has no fee field on purpose — server is the source of truth).
+	// Best-effort: if computeFee returns an error we still save
+	// the broadcast tx without a fee number rather than fail the
+	// whole call.
+	_ = tx.computeFee(n)
 
 	err = tx.save(e)
 	if err != nil {
