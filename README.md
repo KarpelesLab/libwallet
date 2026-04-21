@@ -86,10 +86,6 @@ go test ./...
 
 All data is stored in a single **SQLite** database (`sql.db`) using GORM, including configuration, cached data with automatic expiration, and all wallet/account/transaction state.
 
-## API
-
-libwallet provides a comprehensive API for integration. See [api.md](api.md) for detailed endpoint documentation.
-
 ## Dart / Flutter
 
 A pure Dart client is published on pub.dev as [`libwallet`](https://pub.dev/packages/libwallet). It communicates with the Go library via direct FFI (no sockets), using `NativeCallable.listener` for Go→Dart callbacks. Source lives in [dart/](dart/).
