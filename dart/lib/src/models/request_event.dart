@@ -77,6 +77,7 @@ sealed class PendingRequest {
       'sign_typed_data' => SignTypedDataRequest._(json),
       'add_network' => AddNetworkRequest._(json),
       'change_network' => ChangeNetworkRequest._(json),
+      'add_and_switch_network' => AddAndSwitchNetworkRequest._(json),
       'watch_asset' => WatchAssetRequest._(json),
       'solana_sign_message' => SolanaSignMessageRequest._(json),
       'solana_sign_transaction' => SolanaSignTransactionRequest._(json),
@@ -302,6 +303,37 @@ class ChangeNetworkRequest extends PendingRequest {
   String get type => 'change_network';
 
   /// Target network descriptor.
+  Network? get network {
+    final v = rawValue;
+    if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));
+    return null;
+  }
+}
+
+/// dApp called `wallet_switchEthereumChain` for a chain the wallet
+/// hasn't seen yet, but which libwallet recognized from its static
+/// chain metadata (chainid.network). Approval means "add this chain
+/// AND switch to it" in one step; the UI should render both actions
+/// in a single approval sheet (e.g. "etherscan.io wants to add
+/// Polygon and switch to it"). Reject → the dApp gets user-rejected.
+class AddAndSwitchNetworkRequest extends PendingRequest {
+  AddAndSwitchNetworkRequest._(Map<String, dynamic> j)
+      : super(
+          id: _id(j),
+          status: _status(j),
+          host: _host(j),
+          account: _account(j),
+          rawValue: _value(j),
+          result: _result(j),
+          created: _parseTime(j['Created']),
+          updated: _parseTime(j['Updated']),
+        );
+
+  @override
+  String get type => 'add_and_switch_network';
+
+  /// Proposed network descriptor — same shape as
+  /// [AddNetworkRequest.network] / [ChangeNetworkRequest.network].
   Network? get network {
     final v = rawValue;
     if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));

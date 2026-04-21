@@ -289,7 +289,7 @@ Token swaps powered by Jupiter Ultra + dFlow (Solana) and 1inch (EVM). Two-step 
     * `eth_signTypedData_v4` / `eth_signTypedData_v3` / `eth_signTypedData` — EIP-712 typed data signing
     * `eth_sendTransaction` — sign and broadcast a transaction
     * `wallet_addEthereumChain` — EIP-3085 add a new chain
-    * `wallet_switchEthereumChain` — EIP-3326 switch chains
+    * `wallet_switchEthereumChain` — EIP-3326 switch chains. Accepts both the spec shape `[{chainId: "0x…"}]` and the bare-string form some dApps send. When the target chain isn't registered yet but is known in libwallet's static chain metadata, emits a combined `add_and_switch_network` approval request so the UI can show "add + switch" in one prompt instead of bouncing the dApp with a 4902 error.
     * `wallet_requestPermissions` / `wallet_getPermissions` — EIP-2255 permissions
     * `wallet_watchAsset` — EIP-747 request to watch a token
     * `solana_connect` / `solana_requestAccounts` — connect and return public keys
@@ -317,7 +317,7 @@ Web3/Connection manages which sites have access to which accounts
 * EVENT: `{"result":"event","event":"request","data":{"request_id":"..."}}` A new request is PENDING
 * `GET Request:test` to run a test on the event
 * `GET Request/<id>` to fetch a given request including its details (request, etc)
-  * Type can be one of: connect, sign, personal_sign, sign_typed_data, add_network, change_network, watch_asset, solana_sign_message, solana_sign_transaction, solana_sign_send_transaction, test
+  * Type can be one of: connect, sign, personal_sign, sign_typed_data, add_network, change_network, add_and_switch_network, watch_asset, solana_sign_message, solana_sign_transaction, solana_sign_send_transaction, test
   * Status can be one of: pending, accepted, rejected, timedout
   * Transaction can be optionally included if request is for sign
   * Value can be optionally included, is context of the request (will replace Transaction)

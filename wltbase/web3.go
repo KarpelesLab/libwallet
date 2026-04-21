@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/KarpelesLab/apirouter"
+	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
@@ -357,9 +358,23 @@ func web3Req(ctx context.Context, in struct {
 		if len(in.Query.Params) < 1 {
 			return nil, errors.New("wallet_switchEthereumChain requires 1 parameter")
 		}
-		s, err := typutil.As[string](in.Query.Params[0])
-		if err != nil {
-			return nil, err
+		// EIP-3326 compliant form: [{ chainId: "0x…" }]. Some
+		// non-compliant dApps pass the bare hex string instead —
+		// accept both. Pre-0.3.20 only handled the bare-string
+		// form, which produced a "failed to convert
+		// map[string]interface {} to string" 500 on etherscan.io
+		// and any other spec-compliant caller.
+		var s string
+		switch p := in.Query.Params[0].(type) {
+		case string:
+			s = p
+		case map[string]any:
+			if v, ok := p["chainId"].(string); ok {
+				s = v
+			}
+		}
+		if s == "" {
+			return nil, errors.New("wallet_switchEthereumChain: expected { chainId: \"0x…\" } or a bare hex chainId string")
 		}
 		// The chain ID as a 0x-prefixed hexadecimal string, per the eth_chainId method.
 		bigV, ok := new(big.Int).SetString(s, 0)
@@ -369,8 +384,38 @@ func web3Req(ctx context.Context, in struct {
 		id := wltnet.NetworkIdForTypeAndChainId("evm", bigV.Text(10))
 		net, err := wltnet.NetworkById(e, id)
 		if err != nil {
-			// likely does not exist
-			return nil, &apirouter.Error{Code: 4902, Message: "Unrecognized chain ID. Try adding the chain using wallet_addEthereumChain first."}
+			// Chain isn't in the wallet yet. If we know it from
+			// the static chain list (chainid.network data via
+			// ethrpc/chains), offer to add+switch in one
+			// approval. Unknown-to-us chains keep returning 4902
+			// so dApps fall back to wallet_addEthereumChain with
+			// explicit parameters.
+			net = buildNetworkFromChainInfo(bigV)
+			if net == nil {
+				return nil, &apirouter.Error{Code: 4902, Message: "Unrecognized chain ID. Try adding the chain using wallet_addEthereumChain first."}
+			}
+			req := &request{
+				// New subtype: UI can render "dApp wants to add
+				// <Chain> and switch to it" in a single prompt
+				// instead of the back-to-back add+switch the
+				// spec nominally implies. Hosts that haven't
+				// updated their UI get the familiar add_network
+				// copy via the existing handler (request.go
+				// already groups them).
+				Type:  "add_and_switch_network",
+				Host:  key,
+				Value: net,
+			}
+			if err := req.run(e); err != nil {
+				return nil, err
+			}
+			if err := net.Save(e); err != nil {
+				return nil, err
+			}
+			if err := net.SetCurrent(e); err != nil {
+				return nil, err
+			}
+			return nil, nil
 		}
 
 		req := &request{
@@ -660,5 +705,30 @@ func web3HexValue(in any) []byte {
 		return r
 	default:
 		return nil
+	}
+}
+
+// buildNetworkFromChainInfo returns a *Network populated from the
+// static chainid.network metadata when the given chain id is known
+// there, or nil when it isn't. Used by wallet_switchEthereumChain
+// to offer a single "add + switch" approval for well-known chains
+// the wallet hasn't seen yet, instead of bouncing back with the
+// EIP-3326 4902 error.
+func buildNetworkFromChainInfo(chainId *big.Int) *wltnet.Network {
+	if !chainId.IsUint64() {
+		return nil
+	}
+	info := chains.Get(chainId.Uint64())
+	if info == nil || info.NativeCurrency == nil {
+		return nil
+	}
+	return &wltnet.Network{
+		Id:               wltnet.NetworkIdForTypeAndChainId("evm", chainId.Text(10)),
+		Type:             "evm",
+		ChainId:          chainId.Text(10),
+		Name:             info.Name,
+		RPC:              "auto",
+		CurrencySymbol:   info.NativeCurrency.Symbol,
+		CurrencyDecimals: info.NativeCurrency.Decimals,
 	}
 }

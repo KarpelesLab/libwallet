@@ -330,8 +330,11 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		}
 		str := "0x" + hex.EncodeToString(sig)
 		req.Result = &str
-	case "add_network", "change_network":
+	case "add_network", "change_network", "add_and_switch_network":
 		// Approval acknowledged; the actual network save/switch is done by the caller in web3.go.
+		// `add_and_switch_network` is emitted by wallet_switchEthereumChain when the target
+		// chain isn't yet registered but is recognized in the static chain metadata — the
+		// UI should surface both actions (add + switch) in a single approval prompt.
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
 	case "mpurse_sign_message":
