@@ -1,3 +1,33 @@
+## 0.3.20
+
+- **Fix: `swap.availability()` 404 on 0.3.19.** The handler
+  signature included a spurious `*struct{}` second arg that
+  apirouter's dispatcher didn't match, so the endpoint never
+  resolved at call time. Realigned to the idiomatic zero-param
+  shape used by other parameterless handlers.
+- **Fix: `wallet_switchEthereumChain` params.** 0.3.19 decoded the
+  first param as a string, which failed with `failed to convert
+  map[string]interface {} to string` on EIP-3326-compliant dApps
+  like etherscan.io. Now accepts both the spec shape
+  `[{chainId: "0x…"}]` and the bare-string form some non-compliant
+  dApps still send.
+- **New: combined add + switch approval flow.** When a dApp calls
+  `wallet_switchEthereumChain` for a chain the wallet hasn't seen
+  yet but which libwallet recognizes from its static chain
+  metadata, emits a single `add_and_switch_network` approval
+  request (new `AddAndSwitchNetworkRequest` subtype). The UI can
+  render "etherscan.io wants to add Polygon and switch to it" in
+  one prompt instead of bouncing the dApp with a 4902 error and
+  forcing it to retry through `wallet_addEthereumChain`.
+  Unknown-to-libwallet chains still return 4902.
+- **Breaking: `rawRequest` / `rawRequestWithProgress` removed**
+  from `LibwalletClient`. The typed API namespaces cover the
+  feature surface; the raw door encouraged callers to hardcode
+  paths and couple themselves to internal wire shapes, which
+  meant every server-side rename silently broke them. Migrate to
+  the equivalent typed call (`client.info.ping()`,
+  `client.transactions.list()`, etc).
+
 ## 0.3.19
 
 - **New `swap.availability()` endpoint** — UI feature-flag for the
