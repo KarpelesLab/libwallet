@@ -58,8 +58,12 @@ var oneInchSupportedChains = map[string]bool{
 	"59144": true, // Linea
 }
 
-// swapAvailability is the Swap:availability entry point.
-func swapAvailability(ctx context.Context, _ *struct{}) (any, error) {
+// swapAvailability is the Swap:availability entry point. No input
+// params — signature matches the idiom used by other zero-param
+// handlers (infoOnboarding, infoFirstRun). An anonymous
+// `*struct{}` second arg was tried and produced a route-miss from
+// apirouter's dispatcher.
+func swapAvailability(ctx context.Context) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
 		return nil, errors.New("failed to get env")
