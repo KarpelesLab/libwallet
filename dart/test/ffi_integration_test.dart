@@ -848,10 +848,4 @@ void main() {
     });
   });
 
-  // ── Raw request ───────────────────────────────────────────────────────
-
-  test('rawRequest works', () async {
-    final result = await client.rawRequest('Info:ping');
-    expect(result, isNotNull);
-  });
 }

@@ -25,7 +25,6 @@ import '../models/wc_session.dart';
 import '../events/events.dart';
 import '../models/request_event.dart';
 import 'ffi_transport.dart';
-import 'response.dart';
 import 'transport.dart';
 
 /// Main client for interacting with the libwallet Go library.
@@ -194,24 +193,6 @@ class LibwalletClient {
   /// Stream of JavaScript-originated events (chainChanged, accountsChanged).
   Stream<JsEvent> get jsEvents =>
       events.where((e) => e is JsEvent).cast<JsEvent>();
-
-  /// Send a raw request. For advanced use when the typed APIs are insufficient.
-  Future<dynamic> rawRequest(
-    String path, {
-    String verb = 'GET',
-    Map<String, dynamic>? params,
-  }) {
-    return _transport.request(path, verb, params);
-  }
-
-  /// Send a raw request that may yield progress updates.
-  Stream<LibwalletResponse> rawRequestWithProgress(
-    String path, {
-    String verb = 'GET',
-    Map<String, dynamic>? params,
-  }) {
-    return _transport.send(path, verb, params);
-  }
 
   /// Close the transport and clean up resources.
   void dispose() {

@@ -126,9 +126,4 @@ void main() {
     final afterDelete = await client.wallets.list();
     expect(afterDelete, isEmpty);
   });
-
-  testWidgets('raw request works', (tester) async {
-    final result = await client.rawRequest('Info:ping');
-    expect(result, isNotNull);
-  });
 }
