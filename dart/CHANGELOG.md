@@ -1,3 +1,14 @@
+## 0.3.21
+
+- **Fix: `wallet_revokePermissions` (EIP-2255).** Was unhandled in
+  0.3.20 and fell through to the chain-RPC relay, surfacing as
+  `invalid character 'm' looking for beginning of value` on
+  etherscan.io and any other dApp that calls it. Now revoking
+  `eth_accounts` drops every `ConnectedSite` row for the requesting
+  host (same effect as `solana_disconnect` on the Solana side) and
+  returns null. Unknown permissions are silently ignored for
+  forward-compat (matches MetaMask).
+
 ## 0.3.20
 
 - **Fix: `swap.availability()` 404 on 0.3.19.** The handler
