@@ -1,3 +1,24 @@
+## 0.3.25
+
+- **Rich payloads on the remaining approval events.** Same
+  decode-at-emit philosophy as 0.3.24's sign events, now applied
+  to `ConnectRequest`, `AddNetworkRequest`, and `WatchAssetRequest`:
+  - **`ConnectRequest`** now carries `method` (which RPC asked),
+    `family` (evm/solana/bitcoin), `availableAccounts`
+    (curve-compatible accounts pre-fetched for the picker),
+    `alreadyConnectedIds` (pre-check in picker; render "Reconnect"
+    vs "Connect"), and `requestedPermissions` (EIP-2255).
+  - **`AddNetworkRequest`** flags phishing vectors: `isKnown`
+    (chainId in the static chain registry), `knownName` (the
+    canonical name — compare to `network.name` to detect
+    impersonation), `alreadyExists` (no-op approval), and the
+    `nameMismatch` convenience getter.
+  - **`WatchAssetRequest`** gains typed EIP-747 accessors:
+    `assetType`, `address`, `symbol`, `decimals`, `image`,
+    `tokenId`, plus `addressLooksInvalid` and `isAlreadyTracked`
+    heuristics. The old `asset` raw-map getter still works for
+    backward compat.
+
 ## 0.3.24
 
 - **BREAKING: unified signing events.** Every on-chain transaction
