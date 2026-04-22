@@ -1,3 +1,59 @@
+## 0.3.22
+
+- **EIP-2255 wire shape fix.** `wallet_requestPermissions` and
+  `wallet_getPermissions` now return one permission entry per
+  capability (the EIP-2255 shape) with all authorised addresses in
+  a single `restrictReturnedAccounts` caveat — instead of one entry
+  per account with a missing `parentCapability` field. dApps that
+  read `perm.parentCapability` (etherscan.io, MetaMask test-dapp,
+  most wallet UI kits) now get `"eth_accounts"` instead of
+  `undefined`.
+- **`eth_accounts` is filtered to EVM-compatible addresses.** Solana
+  / Monacoin accounts that happen to be connected to the same dApp
+  no longer leak through, and `"N/A"` placeholders (from ed25519
+  accounts re-derived for an EVM network) are dropped. Empty result
+  is `[]`, not `null`.
+- **Cross-chain auto-switch (`ChainSwitchRequest`).** When a dApp
+  calls an action method (sign / send / connect) on a chain family
+  different from the wallet's current network, libwallet now emits
+  a `chain_switch` approval that lets the user pick BOTH the target
+  network AND an account in one prompt. On approve, the wallet
+  switches network and saves a `ConnectedSite` for `(host, account)`
+  so the original method runs with the dApp already connected. Skip
+  the prompt automatically when the wallet has no compatible
+  network or account for the requested family — original handler
+  errors more informatively in that case.
+- **`Web3:request` recognises `wallet_revokePermissions`** (EIP-2255
+  revoke). Was unhandled in pre-0.3.21 builds and fell through to
+  the chain RPC relay producing `failed to decode response …
+  invalid character 'm'`. Already fixed in 0.3.21; the docs now call
+  this out explicitly.
+- **`wallet_switchEthereumChain` accepts both spec + bare-string
+  param shapes.** Etherscan and other EIP-3326-compliant dApps no
+  longer 500 with `failed to convert map[string]interface {} to
+  string`. When the target chain isn't registered yet but is in
+  libwallet's static metadata, emits a combined
+  `add_and_switch_network` approval instead of bouncing 4902.
+- **Network change happens server-side.** When the user approves
+  any network-changing request (`change_network`,
+  `add_and_switch_network`, `chain_switch`), libwallet calls
+  `SetCurrent` itself before returning to the dApp. Hosts no longer
+  need to call `client.networks.setCurrent(...)` after
+  `requests.approve(...)` — the workaround is redundant on 0.3.22+.
+- **NFTs on non-mainnet EVM chains return `[]` instead of 500.**
+  `Nft:list` on Sepolia (and any other non-mainnet EVM chain not
+  covered by the modchain provider) now returns an empty list so
+  the wallet UI just renders "no NFTs" instead of failing the whole
+  asset view.
+- **Doc: webview integration guide gained a "Network + permission
+  semantics" section** answering who switches the network on
+  approval, who switches the account, what the EIP-2255 wire shape
+  is, and where the typical workarounds were masking real bugs.
+  Step 4's example switch covers `AddNetworkRequest`,
+  `ChangeNetworkRequest`, `AddAndSwitchNetworkRequest`,
+  `ChainSwitchRequest`, and `WatchAssetRequest` with concrete
+  approve calls.
+
 ## 0.3.21
 
 - **Fix: `wallet_revokePermissions` (EIP-2255).** Was unhandled in
