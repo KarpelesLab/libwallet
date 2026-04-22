@@ -77,7 +77,14 @@ func web3Req(ctx context.Context, in struct {
 	// active one, ask the user to switch + pick an account in one
 	// approval. After approval the rest of the handler proceeds
 	// against the chosen network.
-	if family := methodChainFamily(in.Query.Method); family != "" && isActionMethod(in.Query.Method) && family != n.Type {
+	//
+	// Skip the prompt when we have no candidate networks OR no
+	// compatible accounts for the requested family — there's
+	// nothing useful for the user to pick. Let the original handler
+	// run and surface its own (more informative) error in that
+	// case. This also keeps the test suite's no-bitcoin-account
+	// fixtures hitting the mpurse_* handlers as before.
+	if family := methodChainFamily(in.Query.Method); family != "" && isActionMethod(in.Query.Method) && family != n.Type && hasChainSwitchCandidates(e, family) {
 		sel, err := requestChainSwitch(e, key, family, in.Query.Method, n)
 		if err != nil {
 			return nil, err

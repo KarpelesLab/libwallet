@@ -111,6 +111,23 @@ func candidateAccountsForFamily(e *env, family string) ([]*wltacct.Account, erro
 		psql.Sort(psql.S("Created", "ASC")))
 }
 
+// hasChainSwitchCandidates reports whether we have at least one
+// candidate network AND at least one candidate account for the
+// requested family. Cheap (two psql lookups) — used to gate the
+// chain_switch prompt at the top of Web3:request so we don't show
+// a "switch network" sheet that the user can't actually fulfil.
+// When this returns false the original method handler runs and
+// surfaces its own error (e.g. "no account connected"), which is
+// more informative than a generic 4901.
+func hasChainSwitchCandidates(e *env, family string) bool {
+	nets, _ := candidateNetworksForFamily(e, family)
+	if len(nets) == 0 {
+		return false
+	}
+	accts, _ := candidateAccountsForFamily(e, family)
+	return len(accts) > 0
+}
+
 // chainSwitchSelection is what comes back from the user's approval
 // of a chain_switch request — which specific network + account they
 // chose to use for this dApp interaction.
