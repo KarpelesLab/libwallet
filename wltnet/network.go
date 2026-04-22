@@ -671,8 +671,14 @@ func (n *Network) NativeAsset(ctx context.Context, e wltintf.Env, acct AddressPr
 func (n *Network) Nfts(e wltintf.Env, acct AddressProvider) (*[]wltnft.Nft, error) {
 	switch n.Type {
 	case "evm":
+		// modchain_assets — the upstream NFT discovery service —
+		// is mainnet-only. For any other EVM chain (Sepolia,
+		// Polygon, Arbitrum, Base, …) return an empty list so
+		// the wallet UI just renders "no NFTs" instead of
+		// surfacing a 500 to the user. As we add coverage for
+		// more chains, extend the supported set here.
 		if n.ChainId != "1" {
-			return nil, errors.New("unsupported for this ethereum network with chain id " + n.ChainId)
+			return &[]wltnft.Nft{}, nil
 		}
 		nfts, err := n.NftList(e, acct)
 		if err != nil {
