@@ -1,3 +1,57 @@
+## 0.3.24
+
+- **BREAKING: unified signing events.** Every on-chain transaction
+  signing flow (`eth_sendTransaction`, `solana_signTransaction`,
+  `solana_signAndSendTransaction`, `mpurse_signRawTransaction`)
+  now comes through a single `TransactionSignRequest`. Every
+  arbitrary-data signing flow (`personal_sign`,
+  `eth_signTypedData*`, `solana_signMessage`, `mpurse_signMessage`)
+  comes through a single `MessageSignRequest`. Branch on
+  `req.method` (and `req.chain`) for chain-specific copy.
+
+  **Removed Dart classes:** `SignRequest`, `PersonalSignRequest`,
+  `SignTypedDataRequest`, `SolanaSignMessageRequest`,
+  `SolanaSignTransactionRequest`,
+  `SolanaSignAndSendTransactionRequest`,
+  `MpurseSignMessageRequest`, `MpurseSignTransactionRequest`.
+
+- **Rich decoded payload on every event** — host UIs no longer
+  need a follow-up `Transaction:simulate` call to render an
+  approval sheet. `TransactionSignRequest` carries:
+  - `decodedMethod` / `decodedArgs` — recognised top-level
+    operation (`native_transfer`, `erc20_transfer`,
+    `erc20_approve`, …)
+  - `effects` — every transfer / approve at any call depth
+  - `balanceChanges` — signed native-balance deltas per address
+  - `warnings` — stable-coded advisories
+    (`recipient_is_contract`, `erc20_approve_unlimited`,
+    `net_loss_exceeds_amount`, …)
+  - `willRevert` / `revertReason`
+  - `feeAmount` + `feeDecimals` + `feeSymbol`, `networkName`,
+    `sizeBytes`, `raw`
+  - chain-specific extras: `evmTransaction`,
+    `solanaUnitsConsumed`, `solanaLogs`, `bitcoinInputs`,
+    `bitcoinOutputs`, `bitcoinFeeSats`
+
+  EVM gets the full simulate decoder run at request-emit time;
+  Solana decodes the common System Program transfer locally;
+  Bitcoin runs through the existing `simulateBitcoin` decoder.
+
+- **`MessageSignRequest` decoded payload:**
+  - `messageBytes` (raw) + `messageText` (UTF-8 try)
+  - `structuredData` / `structuredPrimaryType` /
+    `structuredDomain` for EIP-712
+  - **Auto-detected SIWE / SIWS** (`isSiwe` / `isSiws`) with
+    parsed `siweFields` (`domain`, `address`, `uri`, `version`,
+    `chainid`, `nonce`, `issuedat`, `expirationtime`, …) — UIs
+    can render a friendly "Login to example.com" prompt instead
+    of a raw message body.
+  - `warnings` (e.g. message contains a URL)
+
+- **New helper types** for the rich payload: `TxSignEffect`,
+  `TxSignBalanceChange`, `TxSignWarning`, `TxSignBitcoinIO` —
+  exported from `package:libwallet/libwallet.dart`.
+
 ## 0.3.23
 
 - **BREAKING: unified network-switch approval.** Every network
