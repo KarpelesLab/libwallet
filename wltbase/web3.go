@@ -2,6 +2,7 @@ package wltbase
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -264,13 +265,12 @@ func web3Req(ctx context.Context, in struct {
 		}
 
 		req := &request{
-			Type:    "personal_sign",
+			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   "0x" + hex.EncodeToString(valBin),
+			Value:   newMessageSignValue(ctx, "evm", "personal_sign", a.Address, valBin, ""),
 		}
-		err = req.run(e)
-		if err != nil {
+		if err := req.run(e); err != nil {
 			return nil, err
 		}
 		// approved
@@ -314,13 +314,12 @@ func web3Req(ctx context.Context, in struct {
 			return nil, fmt.Errorf("failed to load account: %w", err)
 		}
 		req := &request{
-			Type:    "sign_typed_data",
+			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   typedDataStr,
+			Value:   newMessageSignValue(ctx, "evm", in.Query.Method, a.Address, nil, typedDataStr),
 		}
-		err = req.run(e)
-		if err != nil {
+		if err := req.run(e); err != nil {
 			return nil, err
 		}
 		return req.Result, nil
@@ -347,17 +346,18 @@ func web3Req(ctx context.Context, in struct {
 			return nil, err
 		}
 		tx.Type = "evm"
-		err = tx.Validate(e)
-		if err != nil {
+		if err := tx.Validate(e); err != nil {
 			return nil, err
 		}
+		val := newEVMTransactionSignValue(ctx, e, n, tx, "eth_sendTransaction")
 		req := &request{
-			Type:        "sign",
+			Type:        "transaction_sign",
 			Host:        key,
+			Account:     ptrOfAddr(tx.From),
 			Transaction: tx,
+			Value:       val,
 		}
-		err = req.run(e)
-		if err != nil {
+		if err := req.run(e); err != nil {
 			return nil, err
 		}
 		// approved
@@ -517,11 +517,12 @@ func web3Req(ctx context.Context, in struct {
 		if err != nil {
 			return nil, fmt.Errorf("failed to load account: %w", err)
 		}
+		raw, _ := base64.StdEncoding.DecodeString(msgB64)
 		req := &request{
-			Type:    "solana_sign_message",
+			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   msgB64,
+			Value:   newMessageSignValue(ctx, "solana", "solana_signMessage", a.Address, raw, ""),
 		}
 		err = req.run(e)
 		if err != nil {
@@ -549,10 +550,10 @@ func web3Req(ctx context.Context, in struct {
 			return nil, fmt.Errorf("failed to load account: %w", err)
 		}
 		req := &request{
-			Type:    "solana_sign_transaction",
+			Type:    "transaction_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   txB64,
+			Value:   newSolanaTransactionSignValue(ctx, e, n, a.Address, txB64, "solana_signTransaction"),
 		}
 		err = req.run(e)
 		if err != nil {
@@ -580,10 +581,10 @@ func web3Req(ctx context.Context, in struct {
 			return nil, fmt.Errorf("failed to load account: %w", err)
 		}
 		req := &request{
-			Type:    "solana_sign_send_transaction",
+			Type:    "transaction_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   txB64,
+			Value:   newSolanaTransactionSignValue(ctx, e, n, a.Address, txB64, "solana_signAndSendTransaction"),
 		}
 		err = req.run(e)
 		if err != nil {
@@ -632,10 +633,10 @@ func web3Req(ctx context.Context, in struct {
 		// matching on address across a network switch would miss.
 		acctId := a.Id.String()
 		req := &request{
-			Type:    "mpurse_sign_message",
+			Type:    "message_sign",
 			Host:    key,
 			Account: &acctId,
-			Value:   msg,
+			Value:   newMessageSignValue(ctx, "bitcoin", "mpurse_signMessage", a.Address, []byte(msg), ""),
 		}
 		if err := req.run(e); err != nil {
 			return nil, err
@@ -658,10 +659,10 @@ func web3Req(ctx context.Context, in struct {
 		}
 		acctId := a.Id.String()
 		req := &request{
-			Type:    "mpurse_sign_transaction",
+			Type:    "transaction_sign",
 			Host:    key,
 			Account: &acctId,
-			Value:   txHex,
+			Value:   newBitcoinTransactionSignValue(ctx, e, n, a.Address, txHex, "mpurse_signRawTransaction"),
 		}
 		if err := req.run(e); err != nil {
 			return nil, err

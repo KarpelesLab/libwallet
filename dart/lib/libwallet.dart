@@ -65,17 +65,15 @@ export 'src/models/request_event.dart'
     show
         PendingRequest,
         ConnectRequest,
-        SignRequest,
-        PersonalSignRequest,
-        SignTypedDataRequest,
+        TransactionSignRequest,
+        MessageSignRequest,
         AddNetworkRequest,
         ChainSwitchRequest,
         WatchAssetRequest,
-        SolanaSignMessageRequest,
-        SolanaSignTransactionRequest,
-        SolanaSignAndSendTransactionRequest,
-        MpurseSignMessageRequest,
-        MpurseSignTransactionRequest,
+        TxSignEffect,
+        TxSignBalanceChange,
+        TxSignWarning,
+        TxSignBitcoinIO,
         UnknownPendingRequest;
 export 'src/models/web3_connection.dart' show Web3Connection;
 export 'src/models/name_resolution.dart' show NameResolution;

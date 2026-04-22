@@ -769,7 +769,8 @@ void main() {
       // Fire the signMessage call — routing check. Actual signature-
       // correctness is covered by a Go unit test.
       final signReqFuture = client.pendingRequests
-          .firstWhere((r) => r is MpurseSignMessageRequest)
+          .firstWhere((r) =>
+              r is MessageSignRequest && r.method == 'mpurse_signMessage')
           .timeout(const Duration(seconds: 5));
       final signCallFuture = client.web3.request(
         url: origin,
@@ -780,9 +781,10 @@ void main() {
       ).catchError((_) => null); // expected to be rejected
 
       final signReq = await signReqFuture;
-      expect(signReq, isA<MpurseSignMessageRequest>());
-      final mSig = signReq as MpurseSignMessageRequest;
-      expect(mSig.message, 'hello from mpurse');
+      expect(signReq, isA<MessageSignRequest>());
+      final mSig = signReq as MessageSignRequest;
+      expect(mSig.method, 'mpurse_signMessage');
+      expect(mSig.messageText, 'hello from mpurse');
       await client.requests.reject(mSig.id);
       try {
         await signCallFuture;

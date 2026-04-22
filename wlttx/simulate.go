@@ -116,6 +116,17 @@ type BitcoinIO struct {
 // the same Transaction shape as Transaction:validate, runs the per-chain
 // simulator, returns a SimulationResult.
 func apiSimulateTransaction(ctx context.Context, tx *Transaction) (any, error) {
+	return Simulate(ctx, tx)
+}
+
+// Simulate exposes the per-chain simulation pipeline so callers
+// other than the Transaction:simulate endpoint (notably the Web3
+// sign-request emitter in wltbase) can attach decoded data to
+// approval prompts without a separate RPC round-trip from Dart.
+//
+// Returns (*SimulationResult, error). The result may be nil when
+// the chain type has no simulator.
+func Simulate(ctx context.Context, tx *Transaction) (*SimulationResult, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
 		return nil, errors.New("failed to get env")

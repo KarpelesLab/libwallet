@@ -2,21 +2,13 @@ package wltbase
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
 	"github.com/KarpelesLab/apirouter"
-	"github.com/KarpelesLab/base58"
-	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/libwallet/wltacct"
-	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/libwallet/wlttx"
@@ -24,7 +16,6 @@ import (
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
-	"golang.org/x/crypto/sha3"
 )
 
 func init() {
@@ -267,73 +258,24 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 			}
 			go wltutil.BroadcastMsg("js:accountsChanged", map[string]any{"accounts": list})
 		}
-	case "sign":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("no keys in approve sign, keys are required to sign the transaction")
-		}
-		err := req.Transaction.SignAndSend(e, in.Keys)
-		if err != nil {
+	case "transaction_sign":
+		// Unified tx-signing approval. Method-dispatched against
+		// the rich TransactionSignValue payload the emitter built
+		// — same chain coverage as the old per-method cases
+		// (sign / solana_sign_transaction /
+		// solana_sign_send_transaction / mpurse_sign_transaction)
+		// but exposed as a single event type to the host.
+		if err := approveTransactionSign(ctx, e, req, in.Keys); err != nil {
 			return nil, err
 		}
-	case "personal_sign":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("no keys in approve sign, keys are required to sign the transaction")
-		}
-		signStr := req.Value.(string) // 0x...
-		signBin, err := hex.DecodeString(signStr[2:])
-		if err != nil {
+	case "message_sign":
+		// Unified arbitrary-data signing approval (personal_sign,
+		// eth_signTypedData*, solana_signMessage,
+		// mpurse_signMessage). Method dispatch from the rich
+		// MessageSignValue payload.
+		if err := approveMessageSign(ctx, e, req, in.Keys); err != nil {
 			return nil, err
 		}
-		fullSignBin := append([]byte("\x19Ethereum Signed Message:\n"), []byte(strconv.Itoa(len(signBin)))...)
-		fullSignBin = append(fullSignBin, signBin...)
-		messageHash := cryptutil.Hash(fullSignBin, sha3.NewLegacyKeccak256)
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account for signature: %w", err)
-		}
-
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			IL:      a.IL,
-			Keys:    in.Keys,
-		}
-		sig, err := a.Sign(rand.Reader, messageHash, signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("signature failed: %w", err)
-		}
-		str := "0x" + hex.EncodeToString(sig)
-		req.Result = &str
-	case "sign_typed_data":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign typed data")
-		}
-		typedDataStr, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid typed data in request")
-		}
-		td, err := ParseEIP712TypedData(typedDataStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse EIP-712 data: %w", err)
-		}
-		digest, err := td.HashEIP712()
-		if err != nil {
-			return nil, fmt.Errorf("failed to compute EIP-712 hash: %w", err)
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account for signature: %w", err)
-		}
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			IL:      a.IL,
-			Keys:    in.Keys,
-		}
-		sig, err := a.Sign(rand.Reader, digest, signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("EIP-712 signature failed: %w", err)
-		}
-		str := "0x" + hex.EncodeToString(sig)
-		req.Result = &str
 	case "add_network":
 		// wallet_addEthereumChain — pure add, no switch. Approval
 		// acknowledged; the actual Save is done by the web3.go
@@ -395,193 +337,6 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		req.Result = result
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
-	case "mpurse_sign_message":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign")
-		}
-		msg, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid message in request")
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account: %w", err)
-		}
-		n, err := wltnet.CurrentNetwork(e)
-		if err != nil {
-			return nil, fmt.Errorf("no current network: %w", err)
-		}
-		prefix, ok := wltacct.BitcoinMessagePrefix(n.ChainId)
-		if !ok {
-			return nil, fmt.Errorf("no Bitcoin-family message prefix known for chain %q", n.ChainId)
-		}
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			IL:      a.IL,
-			Keys:    in.Keys,
-		}
-		sig, err := a.SignBitcoinMessage(prefix, []byte(msg), signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("mpurse message sign failed: %w", err)
-		}
-		b64 := base64.StdEncoding.EncodeToString(sig)
-		req.Result = &b64
-	case "mpurse_sign_transaction":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign")
-		}
-		txHex, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid tx in request")
-		}
-		rawTx, err := hex.DecodeString(txHex)
-		if err != nil {
-			return nil, fmt.Errorf("decode tx hex: %w", err)
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account: %w", err)
-		}
-		n, err := wltnet.CurrentNetwork(e)
-		if err != nil {
-			return nil, fmt.Errorf("no current network: %w", err)
-		}
-		signed, err := wlttx.SignRawBitcoinTx(&wlttx.SignContext{Env: e}, a, n, rawTx, in.Keys)
-		if err != nil {
-			return nil, fmt.Errorf("mpurse tx sign failed: %w", err)
-		}
-		out := hex.EncodeToString(signed)
-		req.Result = &out
-	case "solana_sign_message":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign")
-		}
-		msgB64, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid message in request")
-		}
-		msgBytes, err := base64.StdEncoding.DecodeString(msgB64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode message: %w", err)
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account: %w", err)
-		}
-		// Legacy-wallet Ed25519 pubkey repair (see
-		// wltwallet.EnsureEd25519Pubkey). Persists the corrected
-		// Address so the dApp's next window.solana.publicKey read
-		// returns the right value.
-		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			Keys:    in.Keys,
-		}
-		sig, err := a.Sign(nil, msgBytes, signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("solana sign failed: %w", err)
-		}
-		req.Result = map[string]any{
-			"signature": base58.Bitcoin.Encode(sig),
-			"publicKey": a.Address,
-		}
-	case "solana_sign_transaction":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign")
-		}
-		txB64, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid transaction in request")
-		}
-		txBytes, err := base64.StdEncoding.DecodeString(txB64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode transaction: %w", err)
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account: %w", err)
-		}
-		// Legacy-wallet Ed25519 pubkey repair. The CURRENT tx was
-		// built by the dApp from the (wrong) pre-repair address, so
-		// this signing attempt will still fail verification when
-		// broadcast — but by the time the dApp refetches publicKey
-		// and rebuilds, a.Address is correct.
-		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
-		// Solana transactions: the message to sign starts after the signature slots.
-		// For a single-signer tx: compact-u16(1) + 64 bytes signature placeholder = 65 bytes header.
-		// The message is everything after the signatures section.
-		msgBytes, err := solanaExtractMessage(txBytes)
-		if err != nil {
-			return nil, err
-		}
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			Keys:    in.Keys,
-		}
-		sig, err := a.Sign(nil, msgBytes, signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("solana sign failed: %w", err)
-		}
-		// Replace the first 64-byte signature slot with our signature
-		signedTx := solanaInsertSignature(txBytes, sig)
-		req.Result = map[string]any{
-			"transaction": base64.StdEncoding.EncodeToString(signedTx),
-		}
-	case "solana_sign_send_transaction":
-		if len(in.Keys) == 0 {
-			return nil, errors.New("keys are required to sign")
-		}
-		txB64, ok := req.Value.(string)
-		if !ok {
-			return nil, errors.New("invalid transaction in request")
-		}
-		txBytes, err := base64.StdEncoding.DecodeString(txB64)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode transaction: %w", err)
-		}
-		a, err := wltacct.FindAccount(e, *req.Account)
-		if err != nil {
-			return nil, fmt.Errorf("could not find account: %w", err)
-		}
-		// Legacy-wallet Ed25519 pubkey repair. See notes on the
-		// solana_sign_transaction case above.
-		_, _ = wltacct.EnsureEd25519PubkeyOnAccount(ctx, a, in.Keys)
-		msgBytes, err := solanaExtractMessage(txBytes)
-		if err != nil {
-			return nil, err
-		}
-		signOpt := &wltsign.Opts{
-			Context: ctx,
-			Keys:    in.Keys,
-		}
-		sig, err := a.Sign(nil, msgBytes, signOpt)
-		if err != nil {
-			return nil, fmt.Errorf("solana sign failed: %w", err)
-		}
-		signedTx := solanaInsertSignature(txBytes, sig)
-
-		// Broadcast via Solana RPC
-		env := wltintf.GetEnv(ctx)
-		if env == nil {
-			return nil, errors.New("failed to get env")
-		}
-		net, err := wltnet.CurrentNetwork(env)
-		if err != nil {
-			return nil, err
-		}
-		txBase58 := base58.Bitcoin.Encode(signedTx)
-		result, err := net.DoRPC("sendTransaction", txBase58, map[string]any{"encoding": "base58"})
-		if err != nil {
-			return nil, fmt.Errorf("failed to send transaction: %w", err)
-		}
-		var txHash string
-		if err := json.Unmarshal(result, &txHash); err != nil {
-			return nil, fmt.Errorf("failed to parse transaction hash: %w", err)
-		}
-		wltintf.NotifyTxBroadcast(env)
-		req.Result = map[string]any{
-			"signature": txHash,
-		}
 	}
 
 	return req, req.respond(e, "accepted")

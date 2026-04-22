@@ -156,33 +156,56 @@ client.pendingRequests.listen((req) async {
         await client.requests.reject(req.id);
       }
 
-    case PersonalSignRequest():
-      final text = req.messageAsText ?? 'binary: ${req.messageBytes.length} bytes';
-      final ok = await showSignSheet(req.host, text);
+    case TransactionSignRequest():
+      // Unified on-chain tx signing. Covers eth_sendTransaction,
+      // solana_signTransaction, solana_signAndSendTransaction,
+      // mpurse_signRawTransaction. Branch on req.chain / req.method
+      // for chain-specific copy; the decoded payload (effects,
+      // balanceChanges, warnings, fee, etc.) drives the sheet.
+      final ok = await showTransactionSheet(
+        host: req.host,
+        chain: req.chain,
+        method: req.method,
+        decodedMethod: req.decodedMethod,
+        decodedArgs: req.decodedArgs,
+        effects: req.effects,
+        balanceChanges: req.balanceChanges,
+        warnings: req.warnings,
+        feeAmount: req.feeAmount,
+        feeDecimals: req.feeDecimals,
+        feeSymbol: req.feeSymbol,
+        networkName: req.networkName,
+        sizeBytes: req.sizeBytes,
+        willRevert: req.willRevert,
+        revertReason: req.revertReason,
+      );
       ok
           ? await client.requests.approve(req.id, keys: await askKeys())
           : await client.requests.reject(req.id);
 
-    case SignTypedDataRequest():
-      final ok = await showTypedDataSheet(req.host, req.typedData);
-      ok
-          ? await client.requests.approve(req.id, keys: await askKeys())
-          : await client.requests.reject(req.id);
-
-    case SolanaSignTransactionRequest():
-      final ok = await showSolanaTxSheet(req.host, req.transactionBytes);
-      ok
-          ? await client.requests.approve(req.id, keys: await askKeys())
-          : await client.requests.reject(req.id);
-
-    case MpurseSignMessageRequest():
-      final ok = await showSignSheet(req.host, req.message);
-      ok
-          ? await client.requests.approve(req.id, keys: await askKeys())
-          : await client.requests.reject(req.id);
-
-    case MpurseSignTransactionRequest():
-      final ok = await showBtcTxSheet(req.host, req.unsignedTxHex);
+    case MessageSignRequest():
+      // Unified message signing — personal_sign,
+      // eth_signTypedData*, solana_signMessage, mpurse_signMessage.
+      // Branch on req.method or use the decoded helpers:
+      //
+      //   - req.isSiwe / req.isSiws  → render "Login to <domain>"
+      //   - req.structuredData       → typed-data tree view
+      //   - req.messageText          → plain text fallback
+      //
+      final ok = await showMessageSheet(
+        host: req.host,
+        chain: req.chain,
+        method: req.method,
+        text: req.messageText,
+        bytes: req.messageBytes,
+        structured: req.structuredData,
+        primaryType: req.structuredPrimaryType,
+        domain: req.structuredDomain,
+        isSiwe: req.isSiwe,
+        isSiws: req.isSiws,
+        siweFields: req.siweFields,
+        warnings: req.warnings,
+      );
       ok
           ? await client.requests.approve(req.id, keys: await askKeys())
           : await client.requests.reject(req.id);

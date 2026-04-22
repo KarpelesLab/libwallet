@@ -73,18 +73,11 @@ sealed class PendingRequest {
     final type = (json['Type'] as String?) ?? (json['type'] as String?) ?? '';
     return switch (type) {
       'connect' => ConnectRequest._(json),
-      'sign' => SignRequest._(json),
-      'personal_sign' => PersonalSignRequest._(json),
-      'sign_typed_data' => SignTypedDataRequest._(json),
+      'transaction_sign' => TransactionSignRequest._(json),
+      'message_sign' => MessageSignRequest._(json),
       'add_network' => AddNetworkRequest._(json),
       'chain_switch' => ChainSwitchRequest._(json),
       'watch_asset' => WatchAssetRequest._(json),
-      'solana_sign_message' => SolanaSignMessageRequest._(json),
-      'solana_sign_transaction' => SolanaSignTransactionRequest._(json),
-      'solana_sign_send_transaction' =>
-        SolanaSignAndSendTransactionRequest._(json),
-      'mpurse_sign_message' => MpurseSignMessageRequest._(json),
-      'mpurse_sign_transaction' => MpurseSignTransactionRequest._(json),
       _ => UnknownPendingRequest._(type, json),
     };
   }
@@ -117,16 +110,6 @@ Transaction? _tx(Map<String, dynamic> j) {
   return null;
 }
 
-/// Decode a `0x`-prefixed hex string (as EVM uses for raw bytes) into bytes.
-Uint8List _hex(String s) {
-  var h = s.startsWith('0x') || s.startsWith('0X') ? s.substring(2) : s;
-  if (h.length.isOdd) h = '0$h';
-  final out = Uint8List(h.length ~/ 2);
-  for (var i = 0; i < out.length; i++) {
-    out[i] = int.parse(h.substring(i * 2, i * 2 + 2), radix: 16);
-  }
-  return out;
-}
 
 // ── Concrete request types ────────────────────────────────────────────────
 
@@ -151,10 +134,30 @@ class ConnectRequest extends PendingRequest {
   String get type => 'connect';
 }
 
-/// EVM `eth_sendTransaction` — a full transaction ready to be signed + sent.
-/// The typed transaction payload is on [transaction].
-class SignRequest extends PendingRequest {
-  SignRequest._(Map<String, dynamic> j)
+/// Unified on-chain transaction-signing request — covers
+/// `eth_sendTransaction`, `solana_signTransaction`,
+/// `solana_signAndSendTransaction`, `mpurse_signRawTransaction`.
+/// The chain family is on [chain]; the original RPC method on
+/// [method].
+///
+/// The payload carries pre-decoded data so the approval sheet can
+/// render rich content without a follow-up `Transaction:simulate`
+/// round-trip:
+/// - [decodedMethod] / [decodedArgs] — recognised top-level
+///   operation ("native_transfer", "erc20_transfer",
+///   "erc20_approve", …)
+/// - [effects] — every transfer / approve at any call depth
+/// - [balanceChanges] — signed native-balance deltas per address
+/// - [warnings] — stable-coded advisories (recipient_is_contract,
+///   erc20_approve_unlimited, …)
+/// - [willRevert] / [revertReason]
+/// - [feeAmount] / [feeDecimals] / [feeSymbol]
+/// - [networkName] for context
+/// - [sizeBytes] / [raw] for the developer view
+/// - chain-specific extras: [evmTransaction], [solanaUnitsConsumed],
+///   [solanaLogs], [bitcoinInputs], [bitcoinOutputs], [bitcoinFeeSats]
+class TransactionSignRequest extends PendingRequest {
+  TransactionSignRequest._(Map<String, dynamic> j)
       : super(
           id: _id(j),
           status: _status(j),
@@ -168,16 +171,174 @@ class SignRequest extends PendingRequest {
         );
 
   @override
-  String get type => 'sign';
+  String get type => 'transaction_sign';
 
-  /// Transaction hash set once the signed transaction has been broadcast.
-  /// Available via [transaction].hash after approval.
-  String? get txHash => transaction?.hash;
+  Map<String, dynamic>? get _v {
+    final v = rawValue;
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
+  /// `"evm"` / `"solana"` / `"bitcoin"`.
+  String get chain => _v?['chain'] as String? ?? '';
+
+  /// The original RPC method that triggered the prompt
+  /// (`"eth_sendTransaction"`, `"solana_signTransaction"`, …).
+  String get method => _v?['method'] as String? ?? '';
+
+  /// Signer's address in the chain's native format.
+  String get from => _v?['from'] as String? ?? '';
+
+  /// Network info for context (name, currency, etc.). Null if
+  /// the payload is malformed.
+  Network? get network {
+    final v = _v?['network'];
+    return v is Map ? Network.fromJson(Map<String, dynamic>.from(v)) : null;
+  }
+
+  /// Network identifier (`"<type>.<chainId>"`).
+  String get networkId => _v?['networkId'] as String? ?? '';
+
+  /// Network display name.
+  String get networkName => _v?['networkName'] as String? ?? '';
+
+  /// Approximate serialized tx size in bytes.
+  int get sizeBytes => (_v?['sizeBytes'] as num?)?.toInt() ?? 0;
+
+  /// Raw tx — hex on EVM/Bitcoin, base64 on Solana. For dev-mode
+  /// "see raw" panels.
+  String get raw => _v?['raw'] as String? ?? '';
+
+  /// Recognised top-level operation: `"native_transfer"` |
+  /// `"erc20_transfer"` | `"erc20_approve"` | `"spl_transfer"` |
+  /// `"bitcoin_transfer"` | `"unknown"` | `""` (no decoder ran).
+  String get decodedMethod => _v?['decodedMethod'] as String? ?? '';
+
+  /// Method-specific arguments (`{to, amount, ...}`).
+  Map<String, dynamic> get decodedArgs {
+    final v = _v?['decodedArgs'];
+    return v is Map ? Map<String, dynamic>.from(v) : const {};
+  }
+
+  /// Every transfer / approve effect this tx will cause, at any
+  /// call depth. Empty when the chain has no decoder.
+  List<TxSignEffect> get effects {
+    final list = _v?['effects'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignEffect.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Signed native-balance deltas per address.
+  List<TxSignBalanceChange> get balanceChanges {
+    final list = _v?['balanceChanges'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignBalanceChange.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Advisories the approval sheet should surface.
+  List<TxSignWarning> get warnings {
+    final list = _v?['warnings'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignWarning.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// True when simulate predicts the tx will revert / fail.
+  bool get willRevert => _v?['willRevert'] == true;
+
+  /// Human-readable revert reason, when [willRevert] is true.
+  String get revertReason => _v?['revertReason'] as String? ?? '';
+
+  /// Fee amount as a decimal-string in base units. Pair with
+  /// [feeDecimals] + [feeSymbol] for display.
+  String get feeAmount => _v?['feeAmount'] as String? ?? '';
+
+  /// Decimals for [feeAmount] (18 for ETH, 9 for SOL, 8 for BTC).
+  int get feeDecimals => (_v?['feeDecimals'] as num?)?.toInt() ?? 0;
+
+  /// Native currency symbol for the fee.
+  String get feeSymbol => _v?['feeSymbol'] as String? ?? '';
+
+  /// EVM-specific: full Transaction record (gas, nonce, data, etc.).
+  /// Null on non-EVM chains.
+  Transaction? get evmTransaction {
+    final v = _v?['evmTransaction'];
+    return v is Map ? Transaction.fromJson(Map<String, dynamic>.from(v)) : null;
+  }
+
+  /// Solana-specific: simulated compute-unit cost (0 when not run).
+  int get solanaUnitsConsumed =>
+      (_v?['solanaUnitsConsumed'] as num?)?.toInt() ?? 0;
+
+  /// Solana-specific: program log lines from simulateTransaction.
+  List<String> get solanaLogs {
+    final list = _v?['solanaLogs'];
+    if (list is! List) return const [];
+    return list.whereType<String>().toList();
+  }
+
+  /// Bitcoin-specific: decoded inputs.
+  List<TxSignBitcoinIO> get bitcoinInputs {
+    final list = _v?['bitcoinInputs'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignBitcoinIO.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Bitcoin-specific: decoded outputs.
+  List<TxSignBitcoinIO> get bitcoinOutputs {
+    final list = _v?['bitcoinOutputs'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignBitcoinIO.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Bitcoin-specific: fee in satoshi (sum(inputs) − sum(outputs)
+  /// when input amounts are known; 0 otherwise).
+  int get bitcoinFeeSats => (_v?['bitcoinFeeSats'] as num?)?.toInt() ?? 0;
+
+  /// Result hash / signature once the request has been approved.
+  /// Shape depends on [method]; see the result-getter helpers below
+  /// or fall back to the raw [result] field.
+  String? get resultHash {
+    if (transaction != null && transaction!.hash != null) {
+      return transaction!.hash;
+    }
+    final r = result;
+    if (r is String) return r;
+    if (r is Map) {
+      final s = r['signature'] ?? r['transaction'];
+      if (s is String) return s;
+    }
+    return null;
+  }
 }
 
-/// EVM `personal_sign` — sign a raw message as bytes with the EIP-191 prefix.
-class PersonalSignRequest extends PendingRequest {
-  PersonalSignRequest._(Map<String, dynamic> j)
+/// Unified arbitrary-data signature request — covers
+/// `personal_sign`, `eth_signTypedData*`, `solana_signMessage`,
+/// `mpurse_signMessage`. NOT a transaction; typically used for
+/// login (Sign-In With Ethereum/Solana) or off-chain attestations.
+///
+/// Decoded fields:
+/// - [messageBytes] / [messageText] — raw bytes + UTF-8 decode
+/// - [structuredData] / [structuredPrimaryType] /
+///   [structuredDomain] — for EIP-712 typed data
+/// - [isSiwe] / [isSiws] / [siweFields] — auto-detected
+///   Sign-In-With-Ethereum / Sign-In-With-Solana pattern
+/// - [warnings] — advisories (e.g. message contains a URL)
+class MessageSignRequest extends PendingRequest {
+  MessageSignRequest._(Map<String, dynamic> j)
       : super(
           id: _id(j),
           status: _status(j),
@@ -190,72 +351,208 @@ class PersonalSignRequest extends PendingRequest {
         );
 
   @override
-  String get type => 'personal_sign';
+  String get type => 'message_sign';
 
-  /// Raw message bytes to be signed (the dApp usually wants this rendered
-  /// as UTF-8 for user confirmation).
-  Uint8List get messageBytes {
+  Map<String, dynamic>? get _v {
     final v = rawValue;
-    if (v is String) return _hex(v);
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
+  /// `"evm"` / `"solana"` / `"bitcoin"`.
+  String get chain => _v?['chain'] as String? ?? '';
+
+  /// Original RPC method (`"personal_sign"`,
+  /// `"eth_signTypedData_v4"`, `"solana_signMessage"`,
+  /// `"mpurse_signMessage"`).
+  String get method => _v?['method'] as String? ?? '';
+
+  /// Signer's address in the chain's native format.
+  String get from => _v?['from'] as String? ?? '';
+
+  /// Raw message bytes (base64-decoded from the wire form).
+  Uint8List get messageBytes {
+    final s = _v?['messageBytes'];
+    if (s is String && s.isNotEmpty) {
+      try {
+        return base64.decode(s);
+      } catch (_) {}
+    }
     return Uint8List(0);
   }
 
-  /// Attempt to decode the message as UTF-8 text. Returns null if the bytes
-  /// aren't valid UTF-8 — the caller should then display the raw hex or
-  /// bytes instead.
-  String? get messageAsText {
-    try {
-      return utf8.decode(messageBytes);
-    } catch (_) {
-      return null;
-    }
+  /// UTF-8 decode of [messageBytes] when the bytes are valid
+  /// printable text. Empty otherwise — fall back to [messageBytes]
+  /// (hex-encoded display) for binary messages.
+  String get messageText => _v?['messageText'] as String? ?? '';
+
+  /// EIP-712 parsed object `{types, domain, primaryType, message}`.
+  /// Null for non-typed-data methods.
+  Map<String, dynamic>? get structuredData {
+    final v = _v?['structuredData'];
+    return v is Map ? Map<String, dynamic>.from(v) : null;
   }
 
-  /// `0x`-hex signature, populated after approval. Null while pending.
-  String? get signature {
-    final r = result;
-    if (r is String) return r;
-    return null;
+  /// EIP-712 primary type — the "main" struct the user is signing.
+  String get structuredPrimaryType =>
+      _v?['structuredPrimaryType'] as String? ?? '';
+
+  /// EIP-712 domain — `{name, version, chainId, verifyingContract}`.
+  Map<String, dynamic>? get structuredDomain {
+    final v = _v?['structuredDomain'];
+    return v is Map ? Map<String, dynamic>.from(v) : null;
   }
+
+  /// True when the message matches the EIP-4361 (Sign-In With
+  /// Ethereum) pattern. UI can render a friendlier "Login to
+  /// example.com" prompt with [siweFields] instead of the raw
+  /// message body.
+  bool get isSiwe => _v?['isSiwe'] == true;
+
+  /// True for Sign-In With Solana (same pattern as SIWE, different
+  /// chain family).
+  bool get isSiws => _v?['isSiws'] == true;
+
+  /// Parsed SIWE/SIWS fields when [isSiwe] / [isSiws] is true:
+  /// `domain`, `address`, `uri`, `version`, `chainid`, `nonce`,
+  /// `issuedat`, `expirationtime`, `notbefore`, `requestid`,
+  /// `resources`. Lowercase keys with no spaces.
+  Map<String, String> get siweFields {
+    final v = _v?['siweFields'];
+    if (v is Map) {
+      return v.map((k, val) => MapEntry(k.toString(), val.toString()));
+    }
+    return const {};
+  }
+
+  /// Advisories the approval sheet should surface.
+  List<TxSignWarning> get warnings {
+    final list = _v?['warnings'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => TxSignWarning.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// `0x`-hex signature for EVM, base64 for mpurse, or
+  /// `{signature, publicKey}` map for Solana — depends on [method].
+  /// Null while pending.
+  dynamic get signResult => result;
 }
 
-/// EVM `eth_signTypedData` (v4) — sign an EIP-712 structured message.
-class SignTypedDataRequest extends PendingRequest {
-  SignTypedDataRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
+/// One observable transfer or approval — a row in
+/// [TransactionSignRequest.effects].
+class TxSignEffect {
+  /// `native_transfer` | `erc20_transfer` | `erc20_approve` |
+  /// `spl_transfer` | `bitcoin_output`.
+  final String type;
 
-  @override
-  String get type => 'sign_typed_data';
+  /// Token contract / mint address. Empty for native transfers.
+  final String token;
 
-  /// Parsed EIP-712 typed-data object (`{types, domain, primaryType,
-  /// message}`). The dApp sends this as a JSON string; parse it lazily.
-  Map<String, dynamic>? get typedData {
-    final v = rawValue;
-    if (v is Map) return Map<String, dynamic>.from(v);
-    if (v is String && v.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(v);
-        if (decoded is Map) return Map<String, dynamic>.from(decoded);
-      } catch (_) {}
-    }
-    return null;
-  }
+  /// Sender address (chain-native format).
+  final String from;
 
-  /// `0x`-hex signature, populated after approval. Null while pending.
-  String? get signature {
-    final r = result;
-    if (r is String) return r;
-    return null;
-  }
+  /// Recipient address (chain-native format).
+  final String to;
+
+  /// Amount in token base units, as a decimal-integer string.
+  final String amount;
+
+  const TxSignEffect({
+    required this.type,
+    this.token = '',
+    this.from = '',
+    this.to = '',
+    this.amount = '',
+  });
+
+  factory TxSignEffect.fromJson(Map<String, dynamic> json) => TxSignEffect(
+        type: (json['type'] as String?) ?? '',
+        token: (json['token'] as String?) ?? '',
+        from: (json['from'] as String?) ?? '',
+        to: (json['to'] as String?) ?? '',
+        amount: (json['amount'] as String?) ?? '',
+      );
+
+  bool get isNative => type == 'native_transfer';
+  bool get isErc20Transfer => type == 'erc20_transfer';
+  bool get isErc20Approve => type == 'erc20_approve';
+  bool get isSplTransfer => type == 'spl_transfer';
+  bool get isBitcoinOutput => type == 'bitcoin_output';
+}
+
+/// Signed native-balance delta for one address — a row in
+/// [TransactionSignRequest.balanceChanges]. Negative = loss.
+class TxSignBalanceChange {
+  final String address;
+
+  /// Signed decimal integer string (wei / lamports / sats).
+  final String delta;
+
+  const TxSignBalanceChange({required this.address, required this.delta});
+
+  factory TxSignBalanceChange.fromJson(Map<String, dynamic> json) =>
+      TxSignBalanceChange(
+        address: (json['address'] as String?) ?? '',
+        delta: (json['delta'] as String?) ?? '0',
+      );
+
+  /// True if this address LOST balance.
+  bool get isLoss => delta.startsWith('-');
+}
+
+/// Advisory finding about a sign request. Stable [code] values
+/// drive UI copy; [severity] is `"info"` / `"warn"` / `"block"`.
+class TxSignWarning {
+  final String code;
+  final String severity;
+  final String message;
+  final String field;
+
+  const TxSignWarning({
+    required this.code,
+    required this.severity,
+    required this.message,
+    this.field = '',
+  });
+
+  factory TxSignWarning.fromJson(Map<String, dynamic> json) => TxSignWarning(
+        code: (json['code'] as String?) ?? '',
+        severity: (json['severity'] as String?) ?? 'warn',
+        message: (json['message'] as String?) ?? '',
+        field: (json['field'] as String?) ?? '',
+      );
+
+  bool get isInfo => severity == 'info';
+  bool get isWarn => severity == 'warn';
+  bool get isBlocking => severity == 'block';
+}
+
+/// One input or output of a Bitcoin-family tx.
+class TxSignBitcoinIO {
+  final String address;
+  final int amount;
+  final String script;
+  final String txid;
+  final int vout;
+
+  const TxSignBitcoinIO({
+    this.address = '',
+    this.amount = 0,
+    this.script = '',
+    this.txid = '',
+    this.vout = 0,
+  });
+
+  factory TxSignBitcoinIO.fromJson(Map<String, dynamic> json) =>
+      TxSignBitcoinIO(
+        address: (json['address'] as String?) ?? '',
+        amount: (json['amount'] as num?)?.toInt() ?? 0,
+        script: (json['script'] as String?) ?? '',
+        txid: (json['txid'] as String?) ?? '',
+        vout: (json['vout'] as num?)?.toInt() ?? 0,
+      );
 }
 
 /// dApp is asking to add a new network to the user's configuration
@@ -431,189 +728,6 @@ class WatchAssetRequest extends PendingRequest {
   }
 }
 
-/// Solana `signMessage` — sign a raw message with the account's Ed25519 key.
-class SolanaSignMessageRequest extends PendingRequest {
-  SolanaSignMessageRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'solana_sign_message';
-
-  /// Raw message bytes.
-  Uint8List get messageBytes {
-    final v = rawValue;
-    if (v is String) {
-      try {
-        return base64.decode(v);
-      } catch (_) {}
-    }
-    return Uint8List(0);
-  }
-
-  /// `{signature: base58, publicKey: base58}` after approval. Null while pending.
-  Map<String, String>? get signatureResult {
-    final r = result;
-    if (r is Map) return Map<String, String>.from(r);
-    return null;
-  }
-}
-
-/// Solana `signTransaction` — sign (but do not broadcast) a serialized tx.
-class SolanaSignTransactionRequest extends PendingRequest {
-  SolanaSignTransactionRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'solana_sign_transaction';
-
-  /// Unsigned / partially-signed transaction bytes (base64-decoded).
-  Uint8List get transactionBytes {
-    final v = rawValue;
-    if (v is String) {
-      try {
-        return base64.decode(v);
-      } catch (_) {}
-    }
-    return Uint8List(0);
-  }
-
-  /// Signed transaction bytes after approval (base64-decoded). Null while pending.
-  Uint8List? get signedTransaction {
-    final r = result;
-    if (r is Map) {
-      final s = r['transaction'];
-      if (s is String) {
-        try {
-          return base64.decode(s);
-        } catch (_) {}
-      }
-    }
-    return null;
-  }
-}
-
-/// Solana `signAndSendTransaction` — sign AND broadcast in one step.
-class SolanaSignAndSendTransactionRequest extends PendingRequest {
-  SolanaSignAndSendTransactionRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'solana_sign_send_transaction';
-
-  /// Unsigned / partially-signed transaction bytes (base64-decoded).
-  Uint8List get transactionBytes {
-    final v = rawValue;
-    if (v is String) {
-      try {
-        return base64.decode(v);
-      } catch (_) {}
-    }
-    return Uint8List(0);
-  }
-
-  /// Broadcast signature (base58) after approval. Null while pending.
-  String? get broadcastSignature {
-    final r = result;
-    if (r is Map) return r['signature'] as String?;
-    return null;
-  }
-}
-
-/// Monacoin (mpurse) `signMessage` — sign a Bitcoin-family message with
-/// the standard "\x19Monacoin Signed Message:\n" prefix. Works on any
-/// bitcoin-family chain libwallet has a signing prefix for (bitcoin,
-/// litecoin, dogecoin, bitcoincash, monacoin).
-class MpurseSignMessageRequest extends PendingRequest {
-  MpurseSignMessageRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'mpurse_sign_message';
-
-  /// Plain-text message to be signed.
-  String get message {
-    final v = rawValue;
-    return v is String ? v : '';
-  }
-
-  /// Base64-encoded 65-byte compact signature after approval. Null while
-  /// pending. Matches Bitcoin Core's `signmessage` output format.
-  String? get signature {
-    final r = result;
-    if (r is String) return r;
-    return null;
-  }
-}
-
-/// Monacoin (mpurse) `signRawTransaction` — sign the inputs of a pre-built
-/// raw Bitcoin-family transaction that belong to this account's xpub tree.
-/// Typical use: dApp built a Counterparty asset transfer, asks the wallet
-/// to sign its inputs.
-class MpurseSignTransactionRequest extends PendingRequest {
-  MpurseSignTransactionRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'mpurse_sign_transaction';
-
-  /// Unsigned transaction hex provided by the dApp.
-  String get unsignedTxHex {
-    final v = rawValue;
-    return v is String ? v : '';
-  }
-
-  /// Signed transaction hex after approval. Null while pending.
-  String? get signedTxHex {
-    final r = result;
-    if (r is String) return r;
-    return null;
-  }
-}
 
 /// Catch-all for request types the Dart layer doesn't know about yet — lets
 /// consumers switch exhaustively without losing forward-compatibility when
