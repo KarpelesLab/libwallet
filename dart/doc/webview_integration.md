@@ -187,6 +187,74 @@ client.pendingRequests.listen((req) async {
           ? await client.requests.approve(req.id, keys: await askKeys())
           : await client.requests.reject(req.id);
 
+    case AddNetworkRequest():
+      // dApp called wallet_addEthereumChain. Show the proposed
+      // network. On approve, libwallet saves the Network record
+      // and returns success — no host-side `networks.setCurrent`
+      // call needed (and it wouldn't make sense; "add" doesn't
+      // imply "switch").
+      final ok = await showAddNetworkSheet(req.host, req.network);
+      ok
+          ? await client.requests.approve(req.id)
+          : await client.requests.reject(req.id);
+
+    case ChangeNetworkRequest():
+      // dApp called wallet_switchEthereumChain for a chain that
+      // IS already in the wallet. On approve, libwallet calls
+      // SetCurrent on the target network itself — the host does
+      // NOT need to call `client.networks.setCurrent(...)`. A
+      // chainChanged event will fire over `client.jsEvents`
+      // automatically. (See "Network + permission semantics" below
+      // for why the work lands server-side.)
+      final ok = await showSwitchNetworkSheet(req.host, req.network);
+      ok
+          ? await client.requests.approve(req.id)
+          : await client.requests.reject(req.id);
+
+    case AddAndSwitchNetworkRequest():
+      // dApp called wallet_switchEthereumChain for a chain not
+      // yet registered, but libwallet recognised it from its
+      // static metadata. On approve, libwallet saves the network
+      // AND switches to it in one step. Same semantics as the
+      // two siblings above — host does the UI, libwallet does
+      // the state change.
+      final ok = await showAddAndSwitchSheet(req.host, req.network);
+      ok
+          ? await client.requests.approve(req.id)
+          : await client.requests.reject(req.id);
+
+    case ChainSwitchRequest():
+      // dApp called an action method (sign / send / connect) on
+      // a chain family different from the wallet's current
+      // network. The user picks BOTH a target network AND an
+      // account in one approval. On approve, libwallet switches
+      // current network AND saves a ConnectedSite for
+      // (host, account), so the original method (and any later
+      // calls) land on the right chain with the dApp already
+      // connected.
+      final pick = await showChainAccountPicker(
+        family: req.requestedFamily,         // "evm" / "solana" / "bitcoin"
+        method: req.requestedMethod,         // for UI copy
+        currentNetwork: req.currentNetwork,
+        networks: req.candidateNetworks,
+        accounts: req.candidateAccounts,
+      );
+      if (pick == null) {
+        await client.requests.reject(req.id);
+      } else {
+        await client.requests.approve(
+          req.id,
+          network: pick.network.id,
+          accounts: [pick.account.id],
+        );
+      }
+
+    case WatchAssetRequest():
+      final ok = await showWatchAssetSheet(req.host, req.token);
+      ok
+          ? await client.requests.approve(req.id)
+          : await client.requests.reject(req.id);
+
     default:
       // Forward-compat: reject anything the host doesn't understand.
       await client.requests.reject(req.id);
@@ -198,6 +266,91 @@ client.pendingRequests.listen((req) async {
 remote-key ceremony. Each `SigningKey` pairs a `wallet.keys[i].id` with
 its key material — the user's password-encrypted key share is
 decrypted server-side using the password the user just typed.
+
+## Network + permission semantics
+
+This section answers the three questions every host integrator hits
+once and never asks again. Before you build a workaround, check here.
+
+### Who actually switches the network on approval?
+
+**libwallet does — server-side, atomically with `approve()`.** Every
+network-changing approval (`change_network`,
+`add_and_switch_network`, `chain_switch`) calls `SetCurrent` on the
+target network the moment the user taps approve, before the original
+RPC handler returns to the dApp. A `chainChanged` event is then
+broadcast on `client.jsEvents` and the EIP-1193 provider re-emits it.
+
+The host should **not** call `client.networks.setCurrent(...)` after
+`requests.approve(...)`. Doing so is harmless (it's a no-op since
+SetCurrent already ran) but it's a red flag that something else is
+wrong: usually the "Current network" badge in the dApp staying on
+"not connected" because `eth_accounts` returned bad data, not because
+the switch didn't happen.
+
+### Who switches the connected account?
+
+For `ChainSwitchRequest`, libwallet **both** switches the current
+network AND saves a `ConnectedSite` for `(host, account)` on
+approval — the user's pick is treated as implicit consent for the
+dApp to use that account. The original action method then proceeds
+against the new state, with the dApp already considered connected.
+
+Apps may still see a follow-up `ConnectRequest` if the original
+method was `eth_requestAccounts` / `solana_connect` /
+`mpurse_getAddress` — the connect handlers don't (yet) skip the
+prompt when a ConnectedSite already exists. For now: render the
+second prompt; the user will see "Connect <dApp>?" and can confirm
+once more. Tracked as a follow-up.
+
+### EIP-2255 permissions wire shape
+
+`wallet_requestPermissions` and `wallet_getPermissions` return EIP-2255
+exactly:
+
+```json
+[
+  {
+    "id": "perm:https://app.example.com",
+    "parentCapability": "eth_accounts",
+    "invoker": "https://app.example.com",
+    "caveats": [
+      {
+        "type": "restrictReturnedAccounts",
+        "value": ["0xaddr1", "0xaddr2"]
+      }
+    ]
+  }
+]
+```
+
+Notes:
+
+- **One entry per permission**, not one per account. All authorised
+  EVM addresses go into the single `restrictReturnedAccounts` caveat
+  value array. (Pre-0.3.22 builds emitted one entry per account with
+  no `parentCapability` field — dApps reading `perm.parentCapability`
+  printed `undefined`.)
+- **`eth_accounts` returns only EVM addresses.** Solana / Monacoin
+  accounts that happen to be connected to the same host don't leak
+  through, and no `"N/A"` placeholders appear (those came from
+  ed25519 accounts re-derived for EVM during a chain switch).
+- **Empty result is `[]` not `null`.** A dApp that hasn't been granted
+  permissions sees an empty array, not a missing key.
+
+### `wallet_revokePermissions`
+
+Handled fully server-side — no `PendingRequest` fires. Per EIP-2255,
+revoking shouldn't require user confirmation (the dApp is asking the
+wallet to forget about it), so we just drop every `ConnectedSite`
+row for the host and return `null`. The next call to `eth_accounts`
+returns `[]`; a `chainChanged` / `accountsChanged` is NOT emitted
+since there's no signed-in account left to change.
+
+If you see `failed to decode response to wallet_revokePermissions:
+invalid character 'm' looking for beginning of value`, you're on a
+build older than 0.3.21 — that's the chain RPC relay returning a
+plain "method not found" string. Update libwallet.
 
 ## Step 5 — inject on every page load
 
@@ -356,3 +509,8 @@ class _WebWalletWebViewState extends State<WebWalletWebView> {
 | Accounts don't update when user switches | `jsEvents` listener not wired or WebView was disposed before the stream |
 | `could not find account` on approve | User switched network between the request and approve — refetch the account by ID, not by address |
 | `this input is not owned by this account` on mpurse_signRawTransaction | dApp sent a multi-party tx; v1 only signs fully-owned txs |
+| dApp shows "Current network: not connected" right after a network switch | dApp is reading `perm.parentCapability` / a malformed `eth_accounts`; pre-0.3.22 emitted the wrong shape. Update libwallet. |
+| dApp's "Request Permissions" prints `undefined, undefined` | Same root cause: missing `parentCapability` on each EIP-2255 perm entry. Fixed in 0.3.22+. |
+| `eth_accounts` returns `["N/A"]` or a base58 Solana address on an EVM dApp | A non-EVM account is connected to the host. Pre-0.3.22 didn't filter; 0.3.22+ returns only `0x…` addresses. |
+| `failed to decode response to wallet_revokePermissions: invalid character 'm'` | Pre-0.3.21 build — `wallet_revokePermissions` was unhandled and fell through to the chain RPC relay. Update libwallet. |
+| Host calls `client.networks.setCurrent(...)` after `requests.approve(...)` to "force" the switch | Not needed — libwallet does SetCurrent server-side as part of approve. The workaround was probably masking Bug 1 above; remove it once you're on 0.3.22+. |
