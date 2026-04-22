@@ -35,9 +35,10 @@ type eip2255caveat struct {
 }
 
 type eip2255perm struct {
-	Id      string           `json:"id"`
-	Invoker string           `json:"invoker"`
-	Caveats []*eip2255caveat `json:"caveats"`
+	Id               string           `json:"id"`
+	ParentCapability string           `json:"parentCapability"` // EIP-2255: required ("eth_accounts")
+	Invoker          string           `json:"invoker"`
+	Caveats          []*eip2255caveat `json:"caveats"`
 }
 
 func web3Req(ctx context.Context, in struct {
@@ -131,14 +132,14 @@ func web3Req(ctx context.Context, in struct {
 		}
 		fallthrough
 	case "eth_accounts":
-		res := make([]string, 0, len(conn))
-		for _, c := range conn {
-			a, err := wltacct.FindAccount(e, c.Account.String())
-			if err == nil {
-				res = append(res, a.Address)
-			}
-		}
-		return res, nil
+		// Only return EVM-compatible (secp256k1) account
+		// addresses. A wallet that holds a Solana account also
+		// connected to this dApp shouldn't surface its base58
+		// pubkey here, and an account that's been re-derived
+		// onto an EVM network where it has no address would
+		// show as "N/A" — both filtered out so the dApp sees
+		// only valid 0x addresses.
+		return collectEVMAccountAddresses(e, conn), nil
 	case "wallet_requestPermissions":
 		// params: [{ eth_accounts: {} }],
 		if len(in.Query.Params) != 1 {
@@ -177,24 +178,7 @@ func web3Req(ctx context.Context, in struct {
 		}
 		fallthrough
 	case "wallet_getPermissions":
-		res := make([]*eip2255perm, 0, len(conn))
-		for _, c := range conn {
-			a, err := wltacct.FindAccount(e, c.Account.String())
-			if err == nil {
-				tmp := &eip2255perm{
-					Id:      c.Id.String(),
-					Invoker: c.Host,
-					Caveats: []*eip2255caveat{
-						&eip2255caveat{
-							Type:  "restrictReturnedAccounts",
-							Value: []string{a.Address},
-						},
-					},
-				}
-				res = append(res, tmp)
-			}
-		}
-		return res, nil
+		return buildEthAccountsPermission(e, key, conn), nil
 	case "wallet_revokePermissions":
 		// EIP-2255: params = [{ <permName>: {} }]. The only
 		// permission libwallet currently grants is eth_accounts;
@@ -785,4 +769,67 @@ func buildNetworkFromChainInfo(chainId *big.Int) *wltnet.Network {
 		CurrencySymbol:   info.NativeCurrency.Symbol,
 		CurrencyDecimals: info.NativeCurrency.Decimals,
 	}
+}
+
+// collectEVMAccountAddresses returns the 0x-prefixed addresses of
+// every connected account whose key curve is secp256k1 (i.e. usable
+// on EVM). Filters out:
+//   - non-EVM accounts (ed25519 — Solana — leaks here when a Solana
+//     wallet is connected to an EVM dApp via chain_switch)
+//   - accounts whose Address field is "N/A" (set by
+//     UpdateAddressForNetwork when the account has no derivation
+//     for the active network type)
+//   - accounts whose Address doesn't look like 0x… (defensive last
+//     filter — anything that survived the curve check should already
+//     be 0x-prefixed but checking costs nothing)
+//
+// Always returns a non-nil slice so the JSON wire shape is `[]` and
+// not `null` when nothing matches; matches what dApps expect from
+// eth_accounts on a fresh connection.
+func collectEVMAccountAddresses(e *env, conn []*connectedSite) []string {
+	out := make([]string, 0, len(conn))
+	for _, c := range conn {
+		a, err := wltacct.FindAccount(e, c.Account.String())
+		if err != nil {
+			continue
+		}
+		if a.Curve != "" && a.Curve != "secp256k1" {
+			continue
+		}
+		if a.Address == "" || a.Address == "N/A" {
+			continue
+		}
+		if !strings.HasPrefix(a.Address, "0x") && !strings.HasPrefix(a.Address, "0X") {
+			continue
+		}
+		out = append(out, a.Address)
+	}
+	return out
+}
+
+// buildEthAccountsPermission assembles the EIP-2255 wire shape
+// for wallet_getPermissions / wallet_requestPermissions: a single
+// permission entry whose caveat carries every authorised EVM
+// address — NOT one entry per account, which is what 0.3.21 and
+// earlier emitted and which broke dApps that read
+// `perm.parentCapability` and the array-shaped caveat value.
+//
+// Returns an empty slice (not nil) when no EVM accounts are
+// connected so the JSON wire shape stays `[]`.
+func buildEthAccountsPermission(e *env, key string, conn []*connectedSite) []*eip2255perm {
+	addrs := collectEVMAccountAddresses(e, conn)
+	if len(addrs) == 0 {
+		return []*eip2255perm{}
+	}
+	// Stable id derived from the host so the dApp can recognise
+	// the same permission across calls.
+	return []*eip2255perm{{
+		Id:               "perm:" + key,
+		ParentCapability: "eth_accounts",
+		Invoker:          key,
+		Caveats: []*eip2255caveat{{
+			Type:  "restrictReturnedAccounts",
+			Value: addrs,
+		}},
+	}}
 }
