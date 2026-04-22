@@ -1,3 +1,34 @@
+## 0.3.23
+
+- **BREAKING: unified network-switch approval.** Every network
+  switch — `wallet_switchEthereumChain` (with or without an
+  unknown-but-recognized chain) AND cross-family action methods —
+  now flows through a single `ChainSwitchRequest` event. Two
+  shapes distinguished by which fields are populated:
+  - **Pre-specified target** (`req.targetNetwork != null`): dApp
+    named a specific chain. Render a confirm sheet. When
+    `req.isNewNetwork` is true, the chain isn't in the wallet yet
+    and approval implies Add + Switch. Approve with
+    `accounts: [accountId]` only — `network` is taken from the
+    request.
+  - **Picker** (`req.targetNetwork == null`,
+    `req.candidateNetworks` populated): dApp triggered a
+    cross-family action. Render a network + account picker.
+    Approve with both `network: pickedId` and
+    `accounts: [pickedId]`.
+
+  `ChangeNetworkRequest` and `AddAndSwitchNetworkRequest` are
+  removed. Hosts pattern-matching on those need to switch to
+  `ChainSwitchRequest` and branch on `req.targetNetwork != null`.
+  See `dart/doc/webview_integration.md` for the new example.
+
+  `AddNetworkRequest` is unchanged — pure add (no switch) is a
+  distinct intent from `wallet_addEthereumChain`.
+
+  On approval libwallet still does Save (when new) + SetCurrent +
+  implicit connect server-side. Hosts do **not** need a separate
+  `client.networks.setCurrent(...)` call.
+
 ## 0.3.22
 
 - **EIP-2255 wire shape fix.** `wallet_requestPermissions` and
