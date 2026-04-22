@@ -334,28 +334,65 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		}
 		str := "0x" + hex.EncodeToString(sig)
 		req.Result = &str
-	case "add_network", "change_network", "add_and_switch_network":
-		// Approval acknowledged; the actual network save/switch is done by the caller in web3.go.
-		// `add_and_switch_network` is emitted by wallet_switchEthereumChain when the target
-		// chain isn't yet registered but is recognized in the static chain metadata — the
-		// UI should surface both actions (add + switch) in a single approval prompt.
+	case "add_network":
+		// wallet_addEthereumChain — pure add, no switch. Approval
+		// acknowledged; the actual Save is done by the web3.go
+		// caller. Kept distinct from chain_switch because the
+		// intent is different (persist a new network without
+		// activating it).
 	case "chain_switch":
-		// Cross-chain handoff: the dApp called an action method on
-		// a chain family different from the current network. UI
-		// must return both the chosen network AND the chosen
-		// account. We stash the selection into req.Result so the
-		// caller (web3Req in web3.go) can drive the switch + the
-		// downstream method dispatch with the right context.
-		if in.Network == "" {
-			return nil, errors.New("chain_switch approval requires Network (the chosen network id)")
+		// Unified network-switching approval. Two shapes:
+		//
+		//  • Pre-specified target (wallet_switchEthereumChain
+		//    path): req.Value.TargetNetwork is set. Host only
+		//    needs to return Accounts[0]; the target comes from
+		//    the request, not the approve input.
+		//
+		//  • Picker (cross-family action method): req.Value.
+		//    TargetNetwork nil, CandidateNetworks populated. Host
+		//    returns both Network (picked id) and Accounts[0].
+		//
+		// We stash the full selection — including a marshalled
+		// copy of the chosen Network when it's newly proposed and
+		// not yet in the DB — into req.Result so the caller can
+		// drive Save / SetCurrent / ensureConnected uniformly.
+		v, err := decodeChainSwitchValue(req.Value)
+		if err != nil {
+			return nil, fmt.Errorf("chain_switch: malformed request value: %w", err)
 		}
 		if len(in.Accounts) != 1 {
 			return nil, errors.New("chain_switch approval requires exactly one Account (the chosen account id)")
 		}
-		req.Result = map[string]any{
-			"network": in.Network,
-			"account": in.Accounts[0],
+		var chosen *wltnet.Network
+		isNew := false
+		if v.TargetNetwork != nil {
+			chosen = v.TargetNetwork
+			isNew = v.IsNewNetwork
+		} else {
+			if in.Network == "" {
+				return nil, errors.New("chain_switch approval requires Network (the picker's chosen network id)")
+			}
+			for _, cand := range v.CandidateNetworks {
+				if cand.Id != nil && cand.Id.String() == in.Network {
+					chosen = cand
+					break
+				}
+			}
+			if chosen == nil {
+				return nil, errors.New("chain_switch: chosen Network is not in CandidateNetworks")
+			}
 		}
+		result := map[string]any{
+			"network": chosen.Id.String(),
+			"account": in.Accounts[0],
+			"isNew":   isNew,
+		}
+		if isNew {
+			// Pass the built Network object through so the
+			// caller can Save it without re-parsing chain metadata.
+			result["networkObj"] = chosen
+		}
+		req.Result = result
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
 	case "mpurse_sign_message":

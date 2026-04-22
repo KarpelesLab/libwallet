@@ -69,8 +69,6 @@ export 'src/models/request_event.dart'
         PersonalSignRequest,
         SignTypedDataRequest,
         AddNetworkRequest,
-        ChangeNetworkRequest,
-        AddAndSwitchNetworkRequest,
         ChainSwitchRequest,
         WatchAssetRequest,
         SolanaSignMessageRequest,

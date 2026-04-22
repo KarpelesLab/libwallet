@@ -11,6 +11,7 @@ package wltbase
 // + which account in the same approval.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -128,24 +129,101 @@ func hasChainSwitchCandidates(e *env, family string) bool {
 	return len(accts) > 0
 }
 
+// ChainSwitchValue is the request payload for a chain_switch
+// approval. Two shapes, picked by which field is populated:
+//
+//  1. Pre-specified target (wallet_switchEthereumChain case):
+//     TargetNetwork is set. UI renders a single-option confirm
+//     prompt. IsNewNetwork=true means the chain isn't in the
+//     wallet's DB yet and approval implies Add+Switch.
+//
+//  2. Cross-family picker (action method on different family):
+//     TargetNetwork nil, CandidateNetworks populated. UI renders a
+//     picker so the user chooses from the compatible networks.
+//
+// CandidateAccounts is always populated (compatible with
+// RequestedFamily) — the user always picks an account to bind to
+// this dApp on the chosen chain.
+type ChainSwitchValue struct {
+	RequestedFamily   string              `json:"requestedFamily"`
+	RequestedMethod   string              `json:"requestedMethod"`
+	CurrentNetwork    *wltnet.Network     `json:"currentNetwork,omitempty"`
+	TargetNetwork     *wltnet.Network     `json:"targetNetwork,omitempty"`
+	IsNewNetwork      bool                `json:"isNewNetwork,omitempty"`
+	CandidateNetworks []*wltnet.Network   `json:"candidateNetworks,omitempty"`
+	CandidateAccounts []*wltacct.Account  `json:"candidateAccounts"`
+}
+
+// decodeChainSwitchValue unmarshals a request's Value (persisted as
+// JSON via psql) into a typed ChainSwitchValue. Used by the
+// approve handler to read what shape the original request had
+// (target vs. picker) so it can validate + stash the selection.
+func decodeChainSwitchValue(v any) (*ChainSwitchValue, error) {
+	if v == nil {
+		return nil, errors.New("nil value")
+	}
+	buf, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	out := &ChainSwitchValue{}
+	if err := json.Unmarshal(buf, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // chainSwitchSelection is what comes back from the user's approval
 // of a chain_switch request — which specific network + account they
-// chose to use for this dApp interaction.
+// chose, plus whether the network needs to be saved before use.
 type chainSwitchSelection struct {
 	Network *wltnet.Network
 	Account *wltacct.Account
+	IsNew   bool
 }
 
-// requestChainSwitch emits a chain_switch approval request and
-// blocks until the user picks (network, account) or rejects. On
-// approval, also adds a ConnectedSite row so the dApp is treated
-// as connected to the chosen account afterwards (matches the
-// implicit consent the user just granted).
+// requestChainSwitchForTarget emits a chain_switch approval for a
+// specific target network the dApp asked for (the
+// wallet_switchEthereumChain flow). Used for both EVM-to-EVM
+// (target already in DB) and the add+switch case (target freshly
+// built from static chain metadata).
 //
-// Returns an EIP-1193-style 4001 user-rejected error if the user
-// declines, or 4901 (chain unavailable) when no candidate network
-// or account exists for this family in the user's wallet.
-func requestChainSwitch(e *env, host, family, method string, current *wltnet.Network) (*chainSwitchSelection, error) {
+// On approval the caller should apply the returned selection via
+// applyChainSwitchSelection, which handles Save (if isNew) +
+// SetCurrent + implicit connect.
+func requestChainSwitchForTarget(e *env, host, method string, current, target *wltnet.Network, isNew bool) (*chainSwitchSelection, error) {
+	accts, err := candidateAccountsForFamily(e, target.Type)
+	if err != nil {
+		return nil, err
+	}
+	if len(accts) == 0 {
+		return nil, &apirouter.Error{Code: 4901, Message: "no " + target.Type + " account available in this wallet"}
+	}
+	req := &request{
+		Type: "chain_switch",
+		Host: host,
+		Value: &ChainSwitchValue{
+			RequestedFamily:   target.Type,
+			RequestedMethod:   method,
+			CurrentNetwork:    current,
+			TargetNetwork:     target,
+			IsNewNetwork:      isNew,
+			CandidateAccounts: accts,
+		},
+	}
+	if err := req.run(e); err != nil {
+		return nil, err
+	}
+	return applySelectionFromResult(e, req.Result)
+}
+
+// requestChainSwitchPicker emits a chain_switch approval with a full
+// network+account picker (cross-family mismatch case). Returns the
+// user's selection; caller applies it via applyChainSwitchSelection.
+//
+// 4001 on user reject. 4901 when no candidate network or account
+// exists for this family in the wallet.
+func requestChainSwitchPicker(e *env, host, family, method string, current *wltnet.Network) (*chainSwitchSelection, error) {
 	nets, err := candidateNetworksForFamily(e, family)
 	if err != nil {
 		return nil, err
@@ -160,30 +238,35 @@ func requestChainSwitch(e *env, host, family, method string, current *wltnet.Net
 	if len(accts) == 0 {
 		return nil, &apirouter.Error{Code: 4901, Message: "no " + family + " account available in this wallet"}
 	}
-
 	req := &request{
 		Type: "chain_switch",
 		Host: host,
-		Value: map[string]any{
-			"requestedFamily":   family,
-			"requestedMethod":   method,
-			"currentNetwork":    current,
-			"candidateNetworks": nets,
-			"candidateAccounts": accts,
+		Value: &ChainSwitchValue{
+			RequestedFamily:   family,
+			RequestedMethod:   method,
+			CurrentNetwork:    current,
+			CandidateNetworks: nets,
+			CandidateAccounts: accts,
 		},
 	}
 	if err := req.run(e); err != nil {
 		return nil, err
 	}
+	return applySelectionFromResult(e, req.Result)
+}
 
-	// req.Result is the {network, account} the user selected
-	// (set by requestDoApprove for chain_switch type).
-	resMap, ok := req.Result.(map[string]any)
+// applySelectionFromResult parses the req.Result payload the
+// approve handler wrote and resolves it to real Network / Account
+// objects. Single helper so both target + picker paths share the
+// same result-unpacking logic.
+func applySelectionFromResult(e *env, result any) (*chainSwitchSelection, error) {
+	resMap, ok := result.(map[string]any)
 	if !ok {
 		return nil, errors.New("chain_switch approval did not include selection")
 	}
 	netIdStr, _ := resMap["network"].(string)
 	acctIdStr, _ := resMap["account"].(string)
+	isNew, _ := resMap["isNew"].(bool)
 	if netIdStr == "" || acctIdStr == "" {
 		return nil, errors.New("chain_switch selection missing network or account")
 	}
@@ -191,37 +274,63 @@ func requestChainSwitch(e *env, host, family, method string, current *wltnet.Net
 	if err != nil {
 		return nil, fmt.Errorf("invalid network id %q: %w", netIdStr, err)
 	}
-	n, err := wltnet.NetworkById(e, netXuid)
-	if err != nil {
-		return nil, fmt.Errorf("network not found: %w", err)
+
+	var n *wltnet.Network
+	if isNew {
+		// For the add+switch flow the approve handler stashed the
+		// full Network object (not yet in DB). Pull it from the
+		// result map rather than round-tripping through NetworkById.
+		rawNet, _ := resMap["networkObj"]
+		if rawNet != nil {
+			buf, mErr := json.Marshal(rawNet)
+			if mErr == nil {
+				n = &wltnet.Network{}
+				if uErr := json.Unmarshal(buf, n); uErr != nil {
+					n = nil
+				}
+			}
+		}
+		if n == nil {
+			return nil, errors.New("chain_switch add+switch: target network payload missing")
+		}
+	} else {
+		n, err = wltnet.NetworkById(e, netXuid)
+		if err != nil {
+			return nil, fmt.Errorf("network not found: %w", err)
+		}
 	}
+
 	acct, err := wltacct.FindAccount(e, acctIdStr)
 	if err != nil {
 		return nil, fmt.Errorf("account not found: %w", err)
 	}
+	return &chainSwitchSelection{Network: n, Account: acct, IsNew: isNew}, nil
+}
 
-	// Implicit connect — the user just consented to use this
-	// account for this dApp. Save a ConnectedSite if one doesn't
-	// already exist for (host, account) so subsequent calls to
-	// eth_accounts / solana_accounts return it.
+// applyChainSwitchSelection runs the post-approval side effects:
+// Save (if the network is freshly proposed), SetCurrent, and
+// implicit connect of (host, account). Callers (web3Req for
+// cross-family, wallet_switchEthereumChain for the target path)
+// share this so the behaviour stays consistent.
+func applyChainSwitchSelection(e *env, host string, sel *chainSwitchSelection) error {
+	if sel.IsNew {
+		if err := sel.Network.Save(e); err != nil {
+			return fmt.Errorf("save new network: %w", err)
+		}
+	}
+	if err := sel.Network.SetCurrent(e); err != nil {
+		return err
+	}
 	existing, _ := e.connectedAccounts(host)
-	already := false
 	for _, c := range existing {
-		if c.Account.String() == acct.Id.String() {
-			already = true
-			break
+		if c.Account.String() == sel.Account.Id.String() {
+			return nil
 		}
 	}
-	if !already {
-		conn := &connectedSite{
-			Host:        host,
-			Account:     acct.Id,
-			AccountInfo: acct,
-		}
-		if err := conn.save(e); err != nil {
-			return nil, fmt.Errorf("save connection: %w", err)
-		}
+	conn := &connectedSite{
+		Host:        host,
+		Account:     sel.Account.Id,
+		AccountInfo: sel.Account,
 	}
-
-	return &chainSwitchSelection{Network: n, Account: acct}, nil
+	return conn.save(e)
 }

@@ -77,8 +77,6 @@ sealed class PendingRequest {
       'personal_sign' => PersonalSignRequest._(json),
       'sign_typed_data' => SignTypedDataRequest._(json),
       'add_network' => AddNetworkRequest._(json),
-      'change_network' => ChangeNetworkRequest._(json),
-      'add_and_switch_network' => AddAndSwitchNetworkRequest._(json),
       'chain_switch' => ChainSwitchRequest._(json),
       'watch_asset' => WatchAssetRequest._(json),
       'solana_sign_message' => SolanaSignMessageRequest._(json),
@@ -286,79 +284,51 @@ class AddNetworkRequest extends PendingRequest {
   }
 }
 
-/// dApp is asking to switch to a different network
-/// (`wallet_switchEthereumChain`). Same shape as [AddNetworkRequest].
-class ChangeNetworkRequest extends PendingRequest {
-  ChangeNetworkRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
 
-  @override
-  String get type => 'change_network';
-
-  /// Target network descriptor.
-  Network? get network {
-    final v = rawValue;
-    if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));
-    return null;
-  }
-}
-
-/// dApp called `wallet_switchEthereumChain` for a chain the wallet
-/// hasn't seen yet, but which libwallet recognized from its static
-/// chain metadata (chainid.network). Approval means "add this chain
-/// AND switch to it" in one step; the UI should render both actions
-/// in a single approval sheet (e.g. "etherscan.io wants to add
-/// Polygon and switch to it"). Reject → the dApp gets user-rejected.
-class AddAndSwitchNetworkRequest extends PendingRequest {
-  AddAndSwitchNetworkRequest._(Map<String, dynamic> j)
-      : super(
-          id: _id(j),
-          status: _status(j),
-          host: _host(j),
-          account: _account(j),
-          rawValue: _value(j),
-          result: _result(j),
-          created: _parseTime(j['Created']),
-          updated: _parseTime(j['Updated']),
-        );
-
-  @override
-  String get type => 'add_and_switch_network';
-
-  /// Proposed network descriptor — same shape as
-  /// [AddNetworkRequest.network] / [ChangeNetworkRequest.network].
-  Network? get network {
-    final v = rawValue;
-    if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));
-    return null;
-  }
-}
-
-/// dApp called an action method (sign / send / connect) on a chain
-/// family that doesn't match the wallet's current network. The
-/// approval lets the user pick BOTH a target network from
-/// [candidateNetworks] AND an account from [candidateAccounts] in
-/// one prompt — on approval, libwallet switches the current network
-/// and connects the dApp to the chosen account in a single step.
+/// Every network switch comes through this single request type —
+/// whether the dApp explicitly asked for a specific chain
+/// (`wallet_switchEthereumChain`) or triggered it implicitly by
+/// calling an action method on a chain family that doesn't match
+/// the wallet's current network.
 ///
-/// Approve via:
+/// Two shapes distinguished by which fields are populated:
+///
+/// **Pre-specified target** (dApp named a chain):
+/// [targetNetwork] is non-null. Render a simple confirm sheet
+/// ("Switch to Polygon?"). When [isNewNetwork] is true, the target
+/// isn't in the wallet yet and approval implies Add + Switch —
+/// render "Add and switch to Polygon?" with appropriate warning
+/// copy. [candidateNetworks] is empty in this shape.
+///
+/// **Picker** (cross-family action method):
+/// [targetNetwork] null, [candidateNetworks] populated. Render a
+/// picker so the user chooses one.
+///
+/// [candidateAccounts] is always populated (accounts whose curve
+/// is compatible with [requestedFamily]); the user always picks an
+/// account to bind to the dApp on the chosen chain.
+///
+/// Approve:
 ///
 /// ```dart
+/// // Pre-specified target — Network can be omitted:
+/// await client.requests.approve(
+///   req.id,
+///   accounts: [accountId],
+/// );
+///
+/// // Picker — Network is required:
 /// await client.requests.approve(
 ///   req.id,
 ///   network: pickedNetwork.id,
 ///   accounts: [pickedAccount.id],
 /// );
 /// ```
+///
+/// On approval, libwallet atomically: saves the network if new,
+/// calls SetCurrent, and connects the dApp to the chosen account.
+/// Hosts do NOT need to call `client.networks.setCurrent(...)`
+/// separately.
 class ChainSwitchRequest extends PendingRequest {
   ChainSwitchRequest._(Map<String, dynamic> j)
       : super(
@@ -385,21 +355,33 @@ class ChainSwitchRequest extends PendingRequest {
   String get requestedFamily => _v?['requestedFamily'] as String? ?? '';
 
   /// The Web3 method that triggered the prompt (e.g.
-  /// `"eth_sendTransaction"`, `"solana_signTransaction"`). Useful
-  /// for UI copy ("Uniswap wants to send a transaction…").
+  /// `"eth_sendTransaction"`, `"wallet_switchEthereumChain"`,
+  /// `"solana_signTransaction"`). Useful for UI copy.
   String get requestedMethod => _v?['requestedMethod'] as String? ?? '';
 
-  /// The wallet's currently active network (the one the dApp
-  /// would mismatch with). Null when the request payload is
-  /// malformed.
+  /// The wallet's currently active network (context for the UI).
+  /// Null when the request payload is malformed.
   Network? get currentNetwork {
     final v = _v?['currentNetwork'];
     return v is Map ? Network.fromJson(Map<String, dynamic>.from(v)) : null;
   }
 
-  /// Networks of [requestedFamily] the user can choose from. UI
-  /// renders these as a picker. Pass the chosen network's `id` to
-  /// `requests.approve(... network: ...)`.
+  /// Set when the dApp named a specific chain
+  /// (`wallet_switchEthereumChain`). UI shows a single-option
+  /// confirm sheet against this network. Null in picker mode.
+  Network? get targetNetwork {
+    final v = _v?['targetNetwork'];
+    return v is Map ? Network.fromJson(Map<String, dynamic>.from(v)) : null;
+  }
+
+  /// True when [targetNetwork] is set and not yet saved in the
+  /// wallet — approval implies Add + Switch. Render with
+  /// appropriate warning copy (user is agreeing to both persist
+  /// AND switch to a brand-new chain).
+  bool get isNewNetwork => _v?['isNewNetwork'] == true;
+
+  /// Networks of [requestedFamily] the user can choose from when
+  /// [targetNetwork] is null (picker mode). Empty in confirm mode.
   List<Network> get candidateNetworks {
     final list = _v?['candidateNetworks'];
     if (list is! List) return const [];
@@ -410,9 +392,8 @@ class ChainSwitchRequest extends PendingRequest {
   }
 
   /// Accounts whose key curve is compatible with [requestedFamily]
-  /// (secp256k1 for EVM/Bitcoin, ed25519 for Solana). Pass the
-  /// chosen account's `id` as the single entry of
-  /// `requests.approve(... accounts: [id])`.
+  /// (secp256k1 for EVM/Bitcoin, ed25519 for Solana). Always
+  /// populated; the user picks one.
   List<Account> get candidateAccounts {
     final list = _v?['candidateAccounts'];
     if (list is! List) return const [];

@@ -188,65 +188,65 @@ client.pendingRequests.listen((req) async {
           : await client.requests.reject(req.id);
 
     case AddNetworkRequest():
-      // dApp called wallet_addEthereumChain. Show the proposed
-      // network. On approve, libwallet saves the Network record
-      // and returns success — no host-side `networks.setCurrent`
-      // call needed (and it wouldn't make sense; "add" doesn't
-      // imply "switch").
+      // dApp called wallet_addEthereumChain — pure add, no
+      // switch. Show the proposed network. On approve, libwallet
+      // saves the Network record without activating it (distinct
+      // from ChainSwitchRequest below which DOES switch). No
+      // host-side `networks.setCurrent` call needed.
       final ok = await showAddNetworkSheet(req.host, req.network);
       ok
           ? await client.requests.approve(req.id)
           : await client.requests.reject(req.id);
 
-    case ChangeNetworkRequest():
-      // dApp called wallet_switchEthereumChain for a chain that
-      // IS already in the wallet. On approve, libwallet calls
-      // SetCurrent on the target network itself — the host does
-      // NOT need to call `client.networks.setCurrent(...)`. A
-      // chainChanged event will fire over `client.jsEvents`
-      // automatically. (See "Network + permission semantics" below
-      // for why the work lands server-side.)
-      final ok = await showSwitchNetworkSheet(req.host, req.network);
-      ok
-          ? await client.requests.approve(req.id)
-          : await client.requests.reject(req.id);
-
-    case AddAndSwitchNetworkRequest():
-      // dApp called wallet_switchEthereumChain for a chain not
-      // yet registered, but libwallet recognised it from its
-      // static metadata. On approve, libwallet saves the network
-      // AND switches to it in one step. Same semantics as the
-      // two siblings above — host does the UI, libwallet does
-      // the state change.
-      final ok = await showAddAndSwitchSheet(req.host, req.network);
-      ok
-          ? await client.requests.approve(req.id)
-          : await client.requests.reject(req.id);
-
     case ChainSwitchRequest():
-      // dApp called an action method (sign / send / connect) on
-      // a chain family different from the wallet's current
-      // network. The user picks BOTH a target network AND an
-      // account in one approval. On approve, libwallet switches
-      // current network AND saves a ConnectedSite for
-      // (host, account), so the original method (and any later
-      // calls) land on the right chain with the dApp already
-      // connected.
-      final pick = await showChainAccountPicker(
-        family: req.requestedFamily,         // "evm" / "solana" / "bitcoin"
-        method: req.requestedMethod,         // for UI copy
-        currentNetwork: req.currentNetwork,
-        networks: req.candidateNetworks,
-        accounts: req.candidateAccounts,
-      );
-      if (pick == null) {
-        await client.requests.reject(req.id);
-      } else {
-        await client.requests.approve(
-          req.id,
-          network: pick.network.id,
-          accounts: [pick.account.id],
+      // Every network switch comes through this single request
+      // type. Two shapes:
+      //
+      //   • Pre-specified target (req.targetNetwork != null):
+      //     dApp explicitly asked for a specific chain via
+      //     wallet_switchEthereumChain. UI shows a confirm
+      //     sheet, user picks only an account. When
+      //     req.isNewNetwork is true, approval implies
+      //     Add + Switch — surface the added risk in the copy.
+      //
+      //   • Picker (req.targetNetwork == null): dApp triggered
+      //     a cross-family action (e.g. solana_signTransaction
+      //     while the wallet is on EVM). UI shows both a
+      //     network and an account picker.
+      //
+      // On approve libwallet atomically: Saves the network
+      // if new, calls SetCurrent, and connects the dApp to
+      // the chosen account. The host does NOT need a separate
+      // `networks.setCurrent(...)` call afterwards.
+      if (req.targetNetwork != null) {
+        final account = await showTargetSwitchSheet(
+          host: req.host,
+          target: req.targetNetwork!,
+          isNew: req.isNewNetwork,
+          accounts: req.candidateAccounts,
         );
+        if (account == null) {
+          await client.requests.reject(req.id);
+        } else {
+          await client.requests.approve(req.id, accounts: [account.id]);
+        }
+      } else {
+        final pick = await showChainAccountPicker(
+          family: req.requestedFamily, // "evm" / "solana" / "bitcoin"
+          method: req.requestedMethod, // for UI copy
+          currentNetwork: req.currentNetwork,
+          networks: req.candidateNetworks,
+          accounts: req.candidateAccounts,
+        );
+        if (pick == null) {
+          await client.requests.reject(req.id);
+        } else {
+          await client.requests.approve(
+            req.id,
+            network: pick.network.id,
+            accounts: [pick.account.id],
+          );
+        }
       }
 
     case WatchAssetRequest():
@@ -275,11 +275,13 @@ once and never asks again. Before you build a workaround, check here.
 ### Who actually switches the network on approval?
 
 **libwallet does — server-side, atomically with `approve()`.** Every
-network-changing approval (`change_network`,
-`add_and_switch_network`, `chain_switch`) calls `SetCurrent` on the
-target network the moment the user taps approve, before the original
-RPC handler returns to the dApp. A `chainChanged` event is then
-broadcast on `client.jsEvents` and the EIP-1193 provider re-emits it.
+network switch (whether from `wallet_switchEthereumChain` or an
+implicit cross-family action method) flows through a single
+`ChainSwitchRequest`. On approve libwallet calls `SetCurrent`
+(and `Save` first if the chain is freshly proposed) before the
+original RPC handler returns to the dApp. A `chainChanged` event is
+then broadcast on `client.jsEvents` and the EIP-1193 provider
+re-emits it.
 
 The host should **not** call `client.networks.setCurrent(...)` after
 `requests.approve(...)`. Doing so is harmless (it's a no-op since

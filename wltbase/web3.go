@@ -85,17 +85,14 @@ func web3Req(ctx context.Context, in struct {
 	// case. This also keeps the test suite's no-bitcoin-account
 	// fixtures hitting the mpurse_* handlers as before.
 	if family := methodChainFamily(in.Query.Method); family != "" && isActionMethod(in.Query.Method) && family != n.Type && hasChainSwitchCandidates(e, family) {
-		sel, err := requestChainSwitch(e, key, family, in.Query.Method, n)
+		sel, err := requestChainSwitchPicker(e, key, family, in.Query.Method, n)
 		if err != nil {
 			return nil, err
 		}
-		if err := sel.Network.SetCurrent(e); err != nil {
+		if err := applyChainSwitchSelection(e, key, sel); err != nil {
 			return nil, err
 		}
 		n = sel.Network
-		// requestChainSwitch already added a ConnectedSite for
-		// (host, sel.Account) if missing — refresh the local
-		// view so the existing handlers see it.
 		conn, _ = e.connectedAccounts(key)
 	}
 
@@ -427,54 +424,26 @@ func web3Req(ctx context.Context, in struct {
 			return nil, fmt.Errorf("failed to parse network param %s", s)
 		}
 		id := wltnet.NetworkIdForTypeAndChainId("evm", bigV.Text(10))
-		net, err := wltnet.NetworkById(e, id)
+		target, err := wltnet.NetworkById(e, id)
+		isNew := false
 		if err != nil {
 			// Chain isn't in the wallet yet. If we know it from
 			// the static chain list (chainid.network data via
-			// ethrpc/chains), offer to add+switch in one
-			// approval. Unknown-to-us chains keep returning 4902
-			// so dApps fall back to wallet_addEthereumChain with
-			// explicit parameters.
-			net = buildNetworkFromChainInfo(bigV)
-			if net == nil {
+			// ethrpc/chains), offer to add+switch in one unified
+			// chain_switch approval. Unknown-to-us chains keep
+			// returning 4902 so dApps can fall back to
+			// wallet_addEthereumChain with explicit parameters.
+			target = buildNetworkFromChainInfo(bigV)
+			if target == nil {
 				return nil, &apirouter.Error{Code: 4902, Message: "Unrecognized chain ID. Try adding the chain using wallet_addEthereumChain first."}
 			}
-			req := &request{
-				// New subtype: UI can render "dApp wants to add
-				// <Chain> and switch to it" in a single prompt
-				// instead of the back-to-back add+switch the
-				// spec nominally implies. Hosts that haven't
-				// updated their UI get the familiar add_network
-				// copy via the existing handler (request.go
-				// already groups them).
-				Type:  "add_and_switch_network",
-				Host:  key,
-				Value: net,
-			}
-			if err := req.run(e); err != nil {
-				return nil, err
-			}
-			if err := net.Save(e); err != nil {
-				return nil, err
-			}
-			if err := net.SetCurrent(e); err != nil {
-				return nil, err
-			}
-			return nil, nil
+			isNew = true
 		}
-
-		req := &request{
-			Type:  "change_network",
-			Host:  key,
-			Value: net,
-		}
-		err = req.run(e)
+		sel, err := requestChainSwitchForTarget(e, key, "wallet_switchEthereumChain", n, target, isNew)
 		if err != nil {
 			return nil, err
 		}
-		// approved
-		err = net.SetCurrent(e)
-		if err != nil {
+		if err := applyChainSwitchSelection(e, key, sel); err != nil {
 			return nil, err
 		}
 		return nil, nil
