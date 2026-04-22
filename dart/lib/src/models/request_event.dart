@@ -114,7 +114,17 @@ Transaction? _tx(Map<String, dynamic> j) {
 // ── Concrete request types ────────────────────────────────────────────────
 
 /// dApp is requesting access to one or more of the user's accounts
-/// (Web3 `eth_requestAccounts` / Solana connect / etc.).
+/// — `eth_requestAccounts`, `wallet_requestPermissions`,
+/// `solana_connect`, `solana_requestAccounts`, `mpurse_getAddress`.
+///
+/// The rich payload lets a host render the picker without a
+/// follow-up `accounts.list()`:
+/// - [method] / [family] — which RPC + chain family
+/// - [availableAccounts] — accounts curve-compatible with [family]
+/// - [alreadyConnectedIds] — account IDs already connected to this
+///   host (pre-check in the picker, or render "Reconnect")
+/// - [requestedPermissions] — EIP-2255 permission names (currently
+///   just `"eth_accounts"`)
 ///
 /// Approve via `client.requests.approve(req.id, accounts: [accountId, ...])`.
 class ConnectRequest extends PendingRequest {
@@ -132,6 +142,42 @@ class ConnectRequest extends PendingRequest {
 
   @override
   String get type => 'connect';
+
+  Map<String, dynamic>? get _v {
+    final v = rawValue;
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
+  /// Originating RPC method.
+  String get method => _v?['method'] as String? ?? '';
+
+  /// Chain family: `"evm"` / `"solana"` / `"bitcoin"`. Empty when
+  /// the connect isn't chain-scoped.
+  String get family => _v?['family'] as String? ?? '';
+
+  /// Accounts compatible with [family] — the picker's candidate set.
+  List<Account> get availableAccounts {
+    final list = _v?['availableAccounts'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => Account.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Account IDs already connected to this host.
+  List<String> get alreadyConnectedIds {
+    final list = _v?['alreadyConnected'];
+    if (list is! List) return const [];
+    return list.whereType<String>().toList();
+  }
+
+  /// EIP-2255 permission names the dApp asked for.
+  List<String> get requestedPermissions {
+    final list = _v?['requestedPermissions'];
+    if (list is! List) return const [];
+    return list.whereType<String>().toList();
+  }
 }
 
 /// Unified on-chain transaction-signing request — covers
@@ -556,7 +602,19 @@ class TxSignBitcoinIO {
 }
 
 /// dApp is asking to add a new network to the user's configuration
-/// (`wallet_addEthereumChain`).
+/// (`wallet_addEthereumChain`). Approval saves the Network without
+/// activating it — distinct from `ChainSwitchRequest` which also
+/// changes the active network.
+///
+/// Rich payload flags let the UI warn on suspicious proposals:
+/// - [network] — the proposed descriptor
+/// - [isKnown] — true when chainId is in libwallet's static chain
+///   registry (chainid.network). False = totally novel chain
+/// - [knownName] — the name the registry associates with this
+///   chainId. Mismatch vs. [network.name] is a phishing vector
+///   ("chain 1 with name MyMainnet" = definitely not Ethereum)
+/// - [alreadyExists] — true when the chain is already registered;
+///   approval is a no-op
 class AddNetworkRequest extends PendingRequest {
   AddNetworkRequest._(Map<String, dynamic> j)
       : super(
@@ -573,11 +631,41 @@ class AddNetworkRequest extends PendingRequest {
   @override
   String get type => 'add_network';
 
+  Map<String, dynamic>? get _v {
+    final v = rawValue;
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
   /// Proposed network descriptor.
   Network? get network {
-    final v = rawValue;
+    final v = _v?['network'];
     if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));
+    // Backward-compat: pre-rich shape stored the Network directly
+    // as rawValue.
+    if (rawValue is Map) {
+      return Network.fromJson(Map<String, dynamic>.from(rawValue as Map));
+    }
     return null;
+  }
+
+  /// True when the chainId appears in libwallet's static chain
+  /// metadata.
+  bool get isKnown => _v?['isKnown'] == true;
+
+  /// The registered name for this chainId, when [isKnown]. Compare
+  /// to [network.name] — a mismatch is suspicious.
+  String get knownName => _v?['knownName'] as String? ?? '';
+
+  /// True when the wallet already has this network registered.
+  bool get alreadyExists => _v?['alreadyExists'] == true;
+
+  /// True when [network.name] differs from [knownName] — the dApp
+  /// is proposing a different label for a well-known chainId.
+  /// Surface as a strong warning.
+  bool get nameMismatch {
+    if (!isKnown || knownName.isEmpty) return false;
+    final n = network?.name ?? '';
+    return n.isNotEmpty && n != knownName;
   }
 }
 
@@ -702,7 +790,16 @@ class ChainSwitchRequest extends PendingRequest {
 }
 
 /// dApp is asking the wallet to start tracking a custom token
-/// (`wallet_watchAsset`).
+/// (`wallet_watchAsset`, EIP-747).
+///
+/// Typed accessors for the standard EIP-747 fields plus wallet-side
+/// flags:
+/// - [assetType] — `"ERC20"` / `"ERC721"` / `"ERC1155"`
+/// - [address] / [symbol] / [decimals] / [image] — display metadata
+/// - [tokenId] — only for ERC-721 / ERC-1155 (empty for fungibles)
+/// - [addressLooksInvalid] — true when address doesn't parse as an
+///   EVM 20-byte hex; phishing heuristic
+/// - [raw] — the original params map, for forward-compat
 class WatchAssetRequest extends PendingRequest {
   WatchAssetRequest._(Map<String, dynamic> j)
       : super(
@@ -719,13 +816,47 @@ class WatchAssetRequest extends PendingRequest {
   @override
   String get type => 'watch_asset';
 
-  /// Asset descriptor as sent by the dApp. Shape is loose
-  /// (typically `{type, options: {address, symbol, decimals, image}}`).
-  Map<String, dynamic>? get asset {
+  Map<String, dynamic>? get _v {
     final v = rawValue;
-    if (v is Map) return Map<String, dynamic>.from(v);
-    return null;
+    return v is Map ? Map<String, dynamic>.from(v) : null;
   }
+
+  /// Asset type as sent by the dApp: `"ERC20"` / `"ERC721"` /
+  /// `"ERC1155"`. Defaults to `"ERC20"` per EIP-747.
+  String get assetType => _v?['type'] as String? ?? 'ERC20';
+
+  /// Token contract address (0x-prefixed on EVM).
+  String get address => _v?['address'] as String? ?? '';
+
+  /// Display symbol (e.g. `"USDC"`).
+  String get symbol => _v?['symbol'] as String? ?? '';
+
+  /// Token decimals (fungibles). 0 for NFTs.
+  int get decimals => (_v?['decimals'] as num?)?.toInt() ?? 0;
+
+  /// Image URL for the token icon. May be empty.
+  String get image => _v?['image'] as String? ?? '';
+
+  /// Token id — only set for ERC-721 / ERC-1155.
+  String get tokenId => _v?['tokenId'] as String? ?? '';
+
+  /// True when [address] doesn't parse as a valid EVM address.
+  /// Surface as a strong warning.
+  bool get addressLooksInvalid => _v?['addressLooksInvalid'] == true;
+
+  /// True when libwallet already tracks this (network, address).
+  /// Approval would be a no-op.
+  bool get isAlreadyTracked => _v?['isAlreadyTracked'] == true;
+
+  /// Original params object — preserved for fields EIP-747 adds
+  /// later. Most UIs won't need this.
+  Map<String, dynamic>? get raw {
+    final v = _v?['raw'];
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
+  /// Legacy asset getter — returns [raw] for backward-compat.
+  Map<String, dynamic>? get asset => raw ?? _v;
 }
 
 

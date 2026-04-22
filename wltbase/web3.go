@@ -122,8 +122,9 @@ func web3Req(ctx context.Context, in struct {
 		return "0x" + hex.EncodeToString(res), nil
 	case "eth_requestAccounts":
 		req := &request{
-			Type: "connect",
-			Host: key,
+			Type:  "connect",
+			Host:  key,
+			Value: buildConnectValue(e, key, "eth_requestAccounts", "evm", nil),
 		}
 		err := req.run(e)
 		if err != nil {
@@ -167,8 +168,9 @@ func web3Req(ctx context.Context, in struct {
 		if len(perms) > 0 {
 			// can only be eth_accounts
 			req := &request{
-				Type: "connect",
-				Host: key,
+				Type:  "connect",
+				Host:  key,
+				Value: buildConnectValue(e, key, "wallet_requestPermissions", "evm", perms),
 			}
 			err := req.run(e)
 			if err != nil {
@@ -330,7 +332,7 @@ func web3Req(ctx context.Context, in struct {
 		req := &request{
 			Type:  "watch_asset",
 			Host:  key,
-			Value: in.Query.Params[0],
+			Value: buildWatchAssetValue(in.Query.Params[0]),
 		}
 		err := req.run(e)
 		if err != nil {
@@ -384,7 +386,7 @@ func web3Req(ctx context.Context, in struct {
 		req := &request{
 			Type:  "add_network",
 			Host:  key,
-			Value: net,
+			Value: buildAddNetworkValue(e, net),
 		}
 		err = req.run(e)
 		if err != nil {
@@ -450,8 +452,9 @@ func web3Req(ctx context.Context, in struct {
 	// Solana Wallet Standard methods
 	case "solana_connect", "solana_requestAccounts":
 		req := &request{
-			Type: "connect",
-			Host: key,
+			Type:  "connect",
+			Host:  key,
+			Value: buildConnectValue(e, key, in.Query.Method, "solana", nil),
 		}
 		err := req.run(e)
 		if err != nil {
@@ -599,7 +602,11 @@ func web3Req(ctx context.Context, in struct {
 		// First call triggers a connect prompt, subsequent calls return
 		// the connected address without prompting.
 		if len(conn) == 0 {
-			req := &request{Type: "connect", Host: key}
+			req := &request{
+				Type:  "connect",
+				Host:  key,
+				Value: buildConnectValue(e, key, "mpurse_getAddress", "bitcoin", nil),
+			}
 			if err := req.run(e); err != nil {
 				return nil, err
 			}
