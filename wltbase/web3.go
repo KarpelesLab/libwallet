@@ -175,6 +175,40 @@ func web3Req(ctx context.Context, in struct {
 			}
 		}
 		return res, nil
+	case "wallet_revokePermissions":
+		// EIP-2255: params = [{ <permName>: {} }]. The only
+		// permission libwallet currently grants is eth_accounts;
+		// revoking it disconnects the dApp by removing every
+		// ConnectedSite row for this host (same semantics as
+		// solana_disconnect on the Solana side). Unknown
+		// permissions are silently ignored for forward-compat,
+		// matching MetaMask. Return `null`, which is what the
+		// EIP says wallets should return on success.
+		//
+		// Up through 0.3.20 this method was unhandled — it fell
+		// through to the chain-RPC relay which returned a non-
+		// JSON error and surfaced as "invalid character 'm'
+		// looking for beginning of value" on etherscan.io.
+		if len(in.Query.Params) != 1 {
+			return nil, errors.New("wallet_revokePermissions requires one param")
+		}
+		pmap, ok := in.Query.Params[0].(map[string]any)
+		if !ok {
+			return nil, errors.New("wallet_revokePermissions: param[0] must be an object")
+		}
+		for k := range pmap {
+			if k == "eth_accounts" {
+				for _, c := range conn {
+					psql.ForceDelete[connectedSite](e.sqlCtx, map[string]any{"Id": c.Id})
+				}
+				// Refresh the slice so any later case in this
+				// switch sees the new state. (Currently no
+				// fall-through, but keeps the invariant.)
+				conn = nil
+				break
+			}
+		}
+		return nil, nil
 	case "personal_sign":
 		if len(in.Query.Params) < 1 {
 			return nil, errors.New("personal_sign requires at least one parameter")
