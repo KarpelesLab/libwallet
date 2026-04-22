@@ -29,14 +29,22 @@ class RequestApi {
   ///   `mpurse_sign_message`, `solana_sign_*`, `sign`), pass [keys] — the
   ///   wallet key shares that unlock the TSS signer (typically the user's
   ///   password + remote key + store key).
+  /// - For `chain_switch` types, pass both [network] (the chosen network
+  ///   ID from `ChainSwitchRequest.candidateNetworks`) and [accounts]
+  ///   with exactly one account ID from
+  ///   `ChainSwitchRequest.candidateAccounts`. Approval switches the
+  ///   wallet's current network to that selection and connects the dApp
+  ///   to the chosen account in one step.
   Future<PendingRequest> approve(
     String id, {
     List<String>? accounts,
     List<SigningKey>? keys,
+    String? network,
   }) async {
     final params = <String, dynamic>{};
     if (accounts != null) params['Accounts'] = accounts;
     if (keys != null) params['Keys'] = keys.map((k) => k.toJson()).toList();
+    if (network != null) params['Network'] = network;
     final data = await _conn.request(
         'Request/$id:approve', 'POST', params.isNotEmpty ? params : null);
     return PendingRequest.fromJson(data as Map<String, dynamic>);

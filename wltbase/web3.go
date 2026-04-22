@@ -71,6 +71,26 @@ func web3Req(ctx context.Context, in struct {
 		return nil, err
 	}
 
+	// Cross-chain detection: if the dApp called an action method
+	// (sign / send / connect) on a chain family different from the
+	// active one, ask the user to switch + pick an account in one
+	// approval. After approval the rest of the handler proceeds
+	// against the chosen network.
+	if family := methodChainFamily(in.Query.Method); family != "" && isActionMethod(in.Query.Method) && family != n.Type {
+		sel, err := requestChainSwitch(e, key, family, in.Query.Method, n)
+		if err != nil {
+			return nil, err
+		}
+		if err := sel.Network.SetCurrent(e); err != nil {
+			return nil, err
+		}
+		n = sel.Network
+		// requestChainSwitch already added a ConnectedSite for
+		// (host, sel.Account) if missing — refresh the local
+		// view so the existing handlers see it.
+		conn, _ = e.connectedAccounts(key)
+	}
+
 	// See: https://docs.metamask.io/wallet/reference/wallet_addethereumchain/
 
 	switch in.Query.Method {

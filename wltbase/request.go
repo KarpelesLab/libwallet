@@ -210,6 +210,10 @@ func apiListRequest(ctx *apirouter.Context) (any, error) {
 func requestDoApprove(ctx *apirouter.Context, in struct {
 	Accounts []string
 	Keys     []*wltsign.KeyDescription
+	// Network is the user's chosen network ID for chain_switch
+	// approvals. Ignored by other request types. Pair with
+	// Accounts[0] which carries the chosen account ID.
+	Network string
 }) (any, error) {
 	e := apirouter.GetObject[env](ctx, "@env")
 	if e == nil {
@@ -335,6 +339,23 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		// `add_and_switch_network` is emitted by wallet_switchEthereumChain when the target
 		// chain isn't yet registered but is recognized in the static chain metadata — the
 		// UI should surface both actions (add + switch) in a single approval prompt.
+	case "chain_switch":
+		// Cross-chain handoff: the dApp called an action method on
+		// a chain family different from the current network. UI
+		// must return both the chosen network AND the chosen
+		// account. We stash the selection into req.Result so the
+		// caller (web3Req in web3.go) can drive the switch + the
+		// downstream method dispatch with the right context.
+		if in.Network == "" {
+			return nil, errors.New("chain_switch approval requires Network (the chosen network id)")
+		}
+		if len(in.Accounts) != 1 {
+			return nil, errors.New("chain_switch approval requires exactly one Account (the chosen account id)")
+		}
+		req.Result = map[string]any{
+			"network": in.Network,
+			"account": in.Accounts[0],
+		}
 	case "watch_asset":
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
 	case "mpurse_sign_message":

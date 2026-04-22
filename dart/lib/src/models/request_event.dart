@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'account.dart';
 import 'network.dart';
 import 'transaction.dart';
 
@@ -78,6 +79,7 @@ sealed class PendingRequest {
       'add_network' => AddNetworkRequest._(json),
       'change_network' => ChangeNetworkRequest._(json),
       'add_and_switch_network' => AddAndSwitchNetworkRequest._(json),
+      'chain_switch' => ChainSwitchRequest._(json),
       'watch_asset' => WatchAssetRequest._(json),
       'solana_sign_message' => SolanaSignMessageRequest._(json),
       'solana_sign_transaction' => SolanaSignTransactionRequest._(json),
@@ -338,6 +340,86 @@ class AddAndSwitchNetworkRequest extends PendingRequest {
     final v = rawValue;
     if (v is Map) return Network.fromJson(Map<String, dynamic>.from(v));
     return null;
+  }
+}
+
+/// dApp called an action method (sign / send / connect) on a chain
+/// family that doesn't match the wallet's current network. The
+/// approval lets the user pick BOTH a target network from
+/// [candidateNetworks] AND an account from [candidateAccounts] in
+/// one prompt — on approval, libwallet switches the current network
+/// and connects the dApp to the chosen account in a single step.
+///
+/// Approve via:
+///
+/// ```dart
+/// await client.requests.approve(
+///   req.id,
+///   network: pickedNetwork.id,
+///   accounts: [pickedAccount.id],
+/// );
+/// ```
+class ChainSwitchRequest extends PendingRequest {
+  ChainSwitchRequest._(Map<String, dynamic> j)
+      : super(
+          id: _id(j),
+          status: _status(j),
+          host: _host(j),
+          account: _account(j),
+          rawValue: _value(j),
+          result: _result(j),
+          created: _parseTime(j['Created']),
+          updated: _parseTime(j['Updated']),
+        );
+
+  @override
+  String get type => 'chain_switch';
+
+  Map<String, dynamic>? get _v {
+    final v = rawValue;
+    return v is Map ? Map<String, dynamic>.from(v) : null;
+  }
+
+  /// Which chain family the dApp's method requires:
+  /// `"evm"` / `"solana"` / `"bitcoin"`.
+  String get requestedFamily => _v?['requestedFamily'] as String? ?? '';
+
+  /// The Web3 method that triggered the prompt (e.g.
+  /// `"eth_sendTransaction"`, `"solana_signTransaction"`). Useful
+  /// for UI copy ("Uniswap wants to send a transaction…").
+  String get requestedMethod => _v?['requestedMethod'] as String? ?? '';
+
+  /// The wallet's currently active network (the one the dApp
+  /// would mismatch with). Null when the request payload is
+  /// malformed.
+  Network? get currentNetwork {
+    final v = _v?['currentNetwork'];
+    return v is Map ? Network.fromJson(Map<String, dynamic>.from(v)) : null;
+  }
+
+  /// Networks of [requestedFamily] the user can choose from. UI
+  /// renders these as a picker. Pass the chosen network's `id` to
+  /// `requests.approve(... network: ...)`.
+  List<Network> get candidateNetworks {
+    final list = _v?['candidateNetworks'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => Network.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+  }
+
+  /// Accounts whose key curve is compatible with [requestedFamily]
+  /// (secp256k1 for EVM/Bitcoin, ed25519 for Solana). Pass the
+  /// chosen account's `id` as the single entry of
+  /// `requests.approve(... accounts: [id])`.
+  List<Account> get candidateAccounts {
+    final list = _v?['candidateAccounts'];
+    if (list is! List) return const [];
+    return list
+        .whereType<Map>()
+        .map((e) => Account.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 }
 
