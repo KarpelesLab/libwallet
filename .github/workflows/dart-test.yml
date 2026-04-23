@@ -184,27 +184,45 @@ jobs:
         # do with libwallet (confirmed: setUpAll never starts on hung
         # runs).
         #
-        # Failure signature: Flutter's own internal timeout fires at
-        # ~7m43s with exit 1 and '0 tests passed' — LOOKS identical
-        # to a real test failure to any naive retry-on-nonzero-exit
-        # loop. We differentiate by scanning the captured output for
-        # 'Waiting for VM Service port to be available' AND '0 tests
-        # passed'; that conjunction only happens on the attach hang.
-        # Any other failure (a real test regression) is surfaced
-        # immediately so we never mask a real bug.
+        # Originally we relied on Flutter's internal ~7m43s timeout
+        # to fire with '0 tests passed', and our retry loop scanned
+        # the log for that signature. As of recent stable channels
+        # that timeout no longer fires — the process just hangs
+        # indefinitely until the GHA job-level 30-min cap kills the
+        # whole step (no chance for the retry to engage).
+        #
+        # Fix: a per-attempt watchdog (PER_ATTEMPT_TIMEOUT). Each
+        # attempt forks `flutter test` in the background and a
+        # sleep-then-kill subshell guards it. If the watchdog fires
+        # we treat the result identically to the old "0 tests
+        # passed" signature: assume attach hang, reboot sim, retry.
         run: |
           set +e
           LOG=$RUNNER_TEMP/flutter-test.log
+          PER_ATTEMPT_TIMEOUT=600   # 10 minutes per attempt → 2 attempts well under the 30-min job cap
           for attempt in 1 2; do
-            echo "::group::flutter test attempt $attempt"
-            flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID" 2>&1 | tee "$LOG"
-            EXIT=${PIPESTATUS[0]}
+            echo "::group::flutter test attempt $attempt (timeout ${PER_ATTEMPT_TIMEOUT}s)"
+            : > "$LOG"
+            ( flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID" 2>&1; echo "__EXIT__$?" ) | tee "$LOG" &
+            FLUTTER_PID=$!
+            ( sleep "$PER_ATTEMPT_TIMEOUT" && kill -TERM $FLUTTER_PID 2>/dev/null && sleep 5 && kill -KILL $FLUTTER_PID 2>/dev/null ) &
+            WATCHDOG_PID=$!
+            wait $FLUTTER_PID 2>/dev/null
+            kill $WATCHDOG_PID 2>/dev/null
             echo "::endgroup::"
-            if [ $EXIT -eq 0 ]; then
+
+            EXIT=$(grep -oE "__EXIT__[0-9]+" "$LOG" | tail -1 | sed 's/__EXIT__//')
+            if [ -z "$EXIT" ]; then
+              echo "Attempt $attempt: watchdog killed flutter test after ${PER_ATTEMPT_TIMEOUT}s (treated as VM Service attach hang)"
+              EXIT=124
+            fi
+
+            if [ "$EXIT" = "0" ]; then
               exit 0
             fi
-            if grep -q "Waiting for VM Service port to be available" "$LOG" \
-               && grep -q "0 tests passed" "$LOG"; then
+            if [ "$EXIT" = "124" ] || \
+               ( grep -q "Waiting for VM Service port to be available" "$LOG" \
+                 && grep -q "0 tests passed" "$LOG" ); then
               echo "Attempt $attempt: VM Service attach hang (flake); rebooting sim and retrying"
               xcrun simctl shutdown "$DEVICE_ID" || true
               xcrun simctl boot "$DEVICE_ID"
