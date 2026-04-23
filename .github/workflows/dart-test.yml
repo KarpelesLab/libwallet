@@ -147,7 +147,17 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          # Pinned to 3.35.5 (2024-11). Flutter 3.41.x moved the iOS
+          # simulator VM Service attach heavily onto mDNS-based
+          # discovery, which is unreliable on GHA macos-latest
+          # runners — symptom: every `flutter test` hangs ~8 min
+          # after "Waiting for VM Service port to be available"
+          # and bails with "0 tests passed" exit 1. Keeping one
+          # older stable here until the upstream regression is
+          # resolved; the host + Android legs remain on the
+          # default "stable" channel so we still exercise current
+          # Flutter through the Dart-side FFI surface.
+          flutter-version: "3.35.5"
 
       - name: Boot iOS simulator
         run: |
