@@ -1,3 +1,20 @@
+## 0.3.32
+
+- **iOS: ship as `.xcframework` (Apple's recommended format).** The
+  podspec's `prepare_command` now wraps the per-SDK static archives
+  into `libwallet.xcframework` via `xcodebuild -create-xcframework`,
+  and the spec switches from `vendored_libraries` to
+  `vendored_frameworks`. CocoaPods picks the right slice for the
+  active SDK at build time, eliminating the wrong-SDK
+  "ignoring file ... built for iOS [Simulator]" warning the previous
+  layout emitted on every link. `-force_load` is still required
+  because the FFI entry points are dlsym'd, but it now reaches into
+  the xcframework's source slice (which exists from `pod install`
+  onward) — Xcode's link-phase input validation runs before the
+  CocoaPods Copy XCFrameworks build phase, so referencing the
+  build-time copy path errored with "Build input file cannot be
+  found" even though the file would exist by link time.
+
 ## 0.3.31
 
 - **Fixed: `personal_sign` / `eth_signTypedData_v3` / `_v4` returned
