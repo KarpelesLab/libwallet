@@ -17,6 +17,16 @@ jobs:
         with:
           go-version: "1.26"
 
+      # Same dual-SDK setup as publish-dart.yml: Flutter is needed
+      # because pubspec.yaml declares a Flutter SDK lower bound (the
+      # ffiPlugin path-based pod requires it), so plain
+      # dart-lang/setup-dart fails `dart pub get` with
+      # "libwallet requires the Flutter SDK, version solving failed".
+      # Order matters: setup-dart runs second so its OIDC + pub
+      # credential plumbing wins on PATH for any test that publishes.
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
       - uses: dart-lang/setup-dart@v1
 
       - name: Build c-shared library for FFI tests

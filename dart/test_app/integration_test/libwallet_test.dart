@@ -68,9 +68,17 @@ void main() {
   });
 
   testWidgets('Info:version returns a string', (tester) async {
+    // version() may legitimately return '' on non-tag builds (CI on
+    // master, local dev) — the tagged release version is only set
+    // by ldflags during a `v*` tag build. Just verify it's a String.
     final version = await client.info.version();
     expect(version, isA<String>());
-    expect(version, isNotEmpty);
+
+    // versionInfo() exposes the full struct; gitTag is always set by
+    // CI's ldflag plumbing, so it's a more reliable presence check.
+    final info = await client.info.versionInfo();
+    expect(info.gitTag, isNotEmpty,
+        reason: 'gitTag should be set by ldflags on every CI build');
   });
 
   testWidgets('Info:onboarding returns state', (tester) async {
