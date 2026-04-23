@@ -95,13 +95,7 @@ jobs:
   # RPC calls are bounded by a 30 s timeout internally, so any real
   # hang fails fast rather than stalling the whole pipeline.
   test-ios:
-    # macos-15 is the current macos-latest; its Xcode 16.4 + iOS 18.5
-    # sim combination is where the "Waiting for VM Service port to be
-    # available" attach hang has gone from occasional flake to 100%.
-    # macos-14 (Xcode 15.4 / iOS 17.5 sim) was the previous latest
-    # and has been stable historically — use it until upstream
-    # Flutter / CoreSimulator fix the VM Service discovery issue.
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

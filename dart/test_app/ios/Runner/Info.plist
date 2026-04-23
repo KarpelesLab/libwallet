@@ -26,6 +26,29 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!--
+		Local-network access + Bonjour services required so debug
+		builds can advertise their Dart VM Service port via mDNS,
+		which is how `flutter test` / `flutter attach` discovers the
+		port on iOS simulators and devices. iOS 14+ required these
+		keys, but iOS 17 and earlier simulators enforced only loosely;
+		iOS 18 enforces strictly, so omitting these caused
+		"Waiting for VM Service port to be available" to hang
+		indefinitely on macos-15 / Xcode 16.4 GHA runners until
+		`flutter test` gave up with "0 tests passed". See
+		https://docs.flutter.dev/testing/integration-tests#3-run-the-test
+		— Apple requires the description even for debug builds.
+
+		Only affects debug / profile builds; release builds bundle no
+		VM Service and these keys are ignored by the OS in that case.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Allows Flutter tools on your computer to connect and debug the app over the local network. Debug / test builds only.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dartVmService._tcp</string>
+		<string>_dartobservatory._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
