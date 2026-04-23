@@ -1,3 +1,14 @@
+## 0.3.29
+
+- **CI publish workflow: install BOTH Flutter and Dart.** v0.3.28
+  switched from `dart-lang/setup-dart` to `subosito/flutter-action`
+  so the publish job had Flutter on PATH (needed once the package
+  pinned a Flutter SDK lower bound). But Flutter's bundled Dart does
+  not configure pub.dev OIDC credentials, so `dart pub publish --force`
+  hung indefinitely waiting for an interactive auth flow. Install the
+  Dart SDK action *after* Flutter so its credential plumbing is the
+  one in effect.
+
 ## 0.3.28
 
 - **CI publish workflow: install Flutter alongside Dart.** Once the

@@ -16,16 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # The package declares `flutter.plugin.platforms` and a Flutter
-      # SDK lower bound (required by pub.dev), so `dart pub get` and
-      # `dart pub publish` need a Flutter install on PATH — plain
-      # `dart-lang/setup-dart` would fail with
-      # "libwallet requires the Flutter SDK, version solving failed".
-      # Using `subosito/flutter-action` instead also brings the
-      # bundled Dart SDK along, so `dart pub publish` keeps working.
+      # Two SDKs needed:
+      # - subosito/flutter-action installs Flutter (required because
+      #   `flutter.plugin.platforms` in pubspec.yaml pulls in the
+      #   Flutter SDK as a hard dependency for `dart pub get`).
+      # - dart-lang/setup-dart wires the OIDC ↔ pub.dev credential
+      #   plumbing that `dart pub publish` reads from. Flutter's
+      #   bundled Dart does not do this, and without it `dart pub
+      #   publish --force` hangs indefinitely waiting for an interactive
+      #   auth flow that GitHub Actions has no terminal to provide.
+      # Order matters: setup-dart runs second so its Dart binary wins
+      # on PATH and the credentials it set up are the active ones.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - uses: dart-lang/setup-dart@v1
 
       - name: Verify tag matches pubspec version
         working-directory: dart
