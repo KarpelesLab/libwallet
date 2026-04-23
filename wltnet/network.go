@@ -394,13 +394,34 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 
 	var rpcList []string
 
-	switch info.ChainId {
-	case 1:
-		n.validRPC = ethrpc.New("https://rpc.modchain.net/api/" + ModChainApiKey + "/ethereum/rpc")
-		return n.validRPC, nil
-	case 137:
-		n.validRPC = ethrpc.New("https://rpc.modchain.net/api/" + ModChainApiKey + "/polygon/rpc")
-		return n.validRPC, nil
+	// Ethereum mainnet: prefer the dedicated modchain RPC, but fall
+	// back to the chain-info RPC pool whenever modchain is more than
+	// ~100 blocks behind the network head (≈20 min on Ethereum). A
+	// recent incident had modchain serving ~23 days stale data —
+	// returning 0x0 balances for accounts funded after its last sync
+	// — and the previous unconditional pin gave us no way to detect
+	// or escape that. The freshness-aware picker keeps modchain the
+	// preferred endpoint when healthy and routes around it otherwise.
+	//
+	// Polygon (chainId 137) used to pin modchain too; the modchain
+	// operator removed the polygon node, so polygon falls through to
+	// the standard chain-info Evaluate path below.
+	if info.ChainId == 1 {
+		modchainURL := "https://rpc.modchain.net/api/" + ModChainApiKey + "/ethereum/rpc"
+		candidates := []string{modchainURL}
+		for _, r := range info.RPC {
+			r = strings.ReplaceAll(r, "${INFURA_API_KEY}", infuraKey)
+			if strings.Contains(r, "${") {
+				continue
+			}
+			candidates = append(candidates, r)
+		}
+		picked, err := pickFreshestRPC(ctx, 100, candidates...)
+		if err != nil {
+			return nil, err
+		}
+		n.validRPC = picked
+		return picked, nil
 	}
 
 	for _, r := range info.RPC {
@@ -418,6 +439,87 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 
 	n.validRPC = list
 	return list, nil
+}
+
+// pickFreshestRPC returns the first RPC in `candidates` whose head
+// block is within `maxLag` of the highest head observed across all
+// candidates. The candidate order encodes preference — the caller
+// typically lists the favored endpoint first, and pickFreshestRPC
+// keeps using it as long as it stays "fresh enough", silently
+// routing around it when it falls behind.
+//
+// Why not just take the highest-block responder: a primary endpoint
+// might be marginally behind a CDN-fronted competitor by a block or
+// two during normal operation, and we don't want to flap between
+// them. The lag tolerance window absorbs that noise; only meaningful
+// staleness (the modchain "23 days behind" incident the existing
+// chainId 1 case was added to handle) trips the fallback.
+//
+// Returns the first responder if every candidate errored or none
+// passed the freshness check, falling back rather than failing the
+// whole call — at worst the caller sees a stale balance, the same
+// behavior the old unconditional pin produced.
+func pickFreshestRPC(ctx context.Context, maxLag uint64, candidates ...string) (ethrpc.Handler, error) {
+	if len(candidates) == 0 {
+		return nil, errors.New("pickFreshestRPC: no candidates")
+	}
+	if len(candidates) == 1 {
+		return ethrpc.New(candidates[0]), nil
+	}
+
+	type result struct {
+		rpc   ethrpc.Handler
+		block uint64
+		err   error
+	}
+	results := make([]result, len(candidates))
+	var wg sync.WaitGroup
+	for i, url := range candidates {
+		wg.Add(1)
+		go func(i int, url string) {
+			defer wg.Done()
+			r := ethrpc.New(url)
+			block, err := ethrpc.ReadUint64(r.DoCtx(ctx, "eth_blockNumber"))
+			results[i] = result{rpc: r, block: block, err: err}
+		}(i, url)
+	}
+	wg.Wait()
+
+	var head uint64
+	for _, r := range results {
+		if r.err == nil && r.block > head {
+			head = r.block
+		}
+	}
+	if head == 0 {
+		// Nothing responded — fall back to first candidate so the
+		// caller's next RPC attempt at least gets a real upstream
+		// error instead of an opaque selection failure.
+		return ethrpc.New(candidates[0]), nil
+	}
+	for i, r := range results {
+		if r.err == nil && head-r.block <= maxLag {
+			log.Printf("pickFreshestRPC: chose %s (head=%d, behind=%d)", candidates[i], r.block, head-r.block)
+			return r.rpc, nil
+		}
+	}
+	// All responders are stale by more than maxLag. Pick the freshest
+	// of them so we at least serve recent-ish data.
+	bestIdx := -1
+	for i, r := range results {
+		if r.err != nil {
+			continue
+		}
+		if bestIdx < 0 || results[bestIdx].block < r.block {
+			bestIdx = i
+		}
+	}
+	if bestIdx >= 0 {
+		log.Printf("pickFreshestRPC: ALL candidates >%d blocks behind (head=%d); using freshest %s at block %d",
+			maxLag, head, candidates[bestIdx], results[bestIdx].block)
+		return results[bestIdx].rpc, nil
+	}
+	return ethrpc.New(candidates[0]), nil
 }
 
 // defaultRPCTimeout bounds any call to DoRPC / DoRPCNamed that didn't
