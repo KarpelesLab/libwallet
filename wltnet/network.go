@@ -40,7 +40,8 @@ type Network struct {
 	ChainId          string         `sql:",type=VARCHAR,size=255,key=UNIQUE:typeChain"` // for Type=evm, the chain id from chainlist. For Type=bitcoin, chain key is included here
 	Name             string         `sql:",type=VARCHAR,size=255"`                      // name, automatic if empty
 	RPC              string         `sql:",type=TEXT"`                                  // rpc url, automatic if empty
-	validRPC         ethrpc.Handler `sql:"-"`                                           // valid RPC servers
+	validRPC         ethrpc.Handler `sql:"-"`                                           // general-purpose RPC (eth_*, etc.); freshness-picked on mainnet
+	modchainRPC      ethrpc.Handler `sql:"-"`                                           // direct modchain endpoint for `modchain_*` proprietary methods; nil when the chain has no modchain node
 	CurrencySymbol   string         `sql:",type=VARCHAR,size=255"`                      // currency symbol, automatic if empty
 	CurrencyDecimals int            `sql:",type=INT"`                                   // decimals, automatic if zero
 	BlockExplorer    string         `sql:",type=TEXT"`                                  // explorer, automatic if empty
@@ -373,7 +374,12 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 		if n.validRPC != nil {
 			return n.validRPC, nil
 		}
-		n.validRPC = ethrpc.New("https://rpc.modchain.net/api/" + ModChainApiKey + "/" + n.ChainId + "/rpc")
+		// Bitcoin family always goes through modchain — both standard
+		// (sendrawtransaction etc.) and proprietary modchain_* calls
+		// resolve against the same handle.
+		h := ethrpc.New("https://rpc.modchain.net/api/" + ModChainApiKey + "/" + n.ChainId + "/rpc")
+		n.validRPC = h
+		n.modchainRPC = h
 		return n.validRPC, nil
 	}
 	if n.RPC != "" && n.RPC != "auto" {
@@ -407,7 +413,20 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 	// operator removed the polygon node, so polygon falls through to
 	// the standard chain-info Evaluate path below.
 	if info.ChainId == 1 {
+		// Ethereum mainnet has TWO different needs:
+		//   - Standard methods (eth_getBalance etc.) want the freshest
+		//     responder — modchain when healthy, anything else when
+		//     modchain falls behind.
+		//   - Proprietary modchain_* methods (modchain_assets,
+		//     modchain_lookupTxoBIP32, modchain_historyByAddress)
+		//     ONLY work on the modchain endpoint, regardless of how
+		//     stale its general-purpose state is. Stale modchain_assets
+		//     just means "missing recently-acquired NFTs" which is
+		//     much less harmful than a stale balance.
+		// So we set both handles independently — DoRPCCtx routes by
+		// method prefix to the right one.
 		modchainURL := "https://rpc.modchain.net/api/" + ModChainApiKey + "/ethereum/rpc"
+		n.modchainRPC = ethrpc.New(modchainURL)
 		candidates := []string{modchainURL}
 		for _, r := range info.RPC {
 			r = strings.ReplaceAll(r, "${INFURA_API_KEY}", infuraKey)
@@ -538,10 +557,19 @@ func (n *Network) DoRPC(method string, args ...any) (json.RawMessage, error) {
 // DoRPCCtx lets the caller pass a context for timeout / cancellation. Use
 // this for RPC calls that could hang on a misbehaving upstream (simulate,
 // debug_trace*, long-polling etc).
+//
+// Routes `modchain_*` proprietary methods (modchain_assets,
+// modchain_lookupTxoBIP32, modchain_historyByAddress) to the dedicated
+// modchain endpoint when one is configured for this chain, regardless
+// of whatever freshness logic picked a different general-purpose RPC.
+// Standard methods use the freshness-picked handle.
 func (n *Network) DoRPCCtx(ctx context.Context, method string, args ...any) (json.RawMessage, error) {
-	e, err := n.getRPC()
-	if err != nil {
+	if _, err := n.getRPC(); err != nil {
 		return nil, err
+	}
+	e := n.validRPC
+	if n.modchainRPC != nil && strings.HasPrefix(method, "modchain_") {
+		e = n.modchainRPC
 	}
 	start := time.Now()
 	res, err := e.DoCtx(ctx, method, args...)
