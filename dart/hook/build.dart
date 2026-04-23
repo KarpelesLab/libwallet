@@ -54,8 +54,6 @@ void main(List<String> args) async {
         return;
     }
 
-    final fileName = 'liblibwallet-$dartName.$ext';
-
     // 1. Prefer a local dev binary at testserver/liblibwallet.<ext>
     //    (built via `go build -buildmode=c-shared` during development).
     final localFile =
@@ -72,18 +70,27 @@ void main(List<String> args) async {
       return;
     }
 
-    // 2. Otherwise, check the shared output cache
+    // 2. Otherwise, check the shared output cache.
+    //
+    // The cached filename embeds the package version so that bumping
+    // the Dart package forces a re-download of the matching binary.
+    // Without the version stamp, a previously cached file (e.g. from
+    // 0.3.23) silently keeps serving stale code after `dart pub upgrade`
+    // — root cause of the "events arriving with pre-unification type
+    // strings" class of bugs.
+    final pubspecFile = File.fromUri(input.packageRoot.resolve('pubspec.yaml'));
+    final pubspecContent = await pubspecFile.readAsString();
+    final versionMatch = RegExp(r'version:\s*(\S+)').firstMatch(pubspecContent);
+    final version = versionMatch?.group(1) ?? '0.0.0';
+
+    final remoteName = 'liblibwallet-$dartName.$ext';
+    final cachedName = 'liblibwallet-$dartName-v$version.$ext';
     final outputDir = input.outputDirectoryShared;
-    final cachedFile = outputDir.resolve(fileName);
+    final cachedFile = outputDir.resolve(cachedName);
 
     if (!File.fromUri(cachedFile).existsSync()) {
-      // Read the package version from pubspec.yaml
-      final pubspecFile = File.fromUri(input.packageRoot.resolve('pubspec.yaml'));
-      final pubspecContent = await pubspecFile.readAsString();
-      final versionMatch = RegExp(r'version:\s*(\S+)').firstMatch(pubspecContent);
-      final version = versionMatch?.group(1) ?? '0.0.0';
       final url = Uri.parse(
-        'https://github.com/$_repo/releases/download/v$version/$fileName',
+        'https://github.com/$_repo/releases/download/v$version/$remoteName',
       );
 
       stderr.writeln('Downloading $url ...');
@@ -97,17 +104,17 @@ void main(List<String> args) async {
           final file = File.fromUri(cachedFile);
           await file.create(recursive: true);
           await response.pipe(file.openWrite());
-          stderr.writeln('Downloaded $fileName (${file.lengthSync()} bytes)');
+          stderr.writeln('Downloaded $remoteName (${file.lengthSync()} bytes)');
         } else if (response.statusCode == 404) {
           stderr.writeln(
-            'WARNING: $fileName not found for v$version. '
+            'WARNING: $remoteName not found for v$version. '
             'Build the Go library manually or ensure the release has this asset.',
           );
           await response.drain<void>();
           return;
         } else {
           stderr.writeln(
-            'WARNING: Failed to download $fileName: HTTP ${response.statusCode}',
+            'WARNING: Failed to download $remoteName: HTTP ${response.statusCode}',
           );
           await response.drain<void>();
           return;

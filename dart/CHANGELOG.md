@@ -1,5 +1,17 @@
 ## 0.3.26
 
+- **Build hook: invalidate the binary cache on a Dart upgrade.**
+  The `hook/build.dart` cache filename was version-agnostic
+  (`liblibwallet-android-arm64.so`), so a previously cached binary kept
+  serving stale code after `dart pub upgrade` — the Dart layer would
+  decode events using the new shape while the loaded `.so` / `.dylib`
+  still emitted the old shape. Most visible failure: post-0.3.24
+  signing events arriving with pre-unification type strings like
+  `sign_typed_data` instead of `message_sign`, falling through to
+  `UnknownPendingRequest`. Cached filenames now embed the package
+  version (`liblibwallet-android-arm64-v0.3.26.so`); the next
+  `dart pub get` after this upgrade re-downloads the matching binary.
+
 - **iOS: ship as a Flutter FFI plugin (fixes external `dlsym` failure).**
   The build hook's `LinkMode = LookupInProcess()` for the iOS `.a`
   archive worked for the in-tree test app, but Flutter's iOS pipeline
