@@ -4,3 +4,4 @@ testserver/testserver
 testserver/liblibwallet.*
 native/
 ios/liblibwallet-*.a
+ios/libwallet.xcframework/

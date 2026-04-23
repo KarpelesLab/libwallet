@@ -12,13 +12,21 @@
 # it up automatically because the package's pubspec.yaml declares
 # `flutter.plugin.platforms.ios.ffiPlugin: true`. At pod install
 # time we download the per-SDK static archives from the matching
-# GitHub Release (so the `.pub-cache` doesn't carry tens of MB of
-# binaries), then `-force_load` them into the host app target so
-# the FFI symbols survive the linker's dead-strip pass.
+# GitHub Release, lipo the simulator slices together, then wrap
+# everything into a `libwallet.xcframework` via xcodebuild
+# -create-xcframework. CocoaPods knows how to handle xcframeworks
+# (it picks the right slice for the active SDK at build time),
+# which is Apple's recommended binary-distribution format and
+# eliminates the per-SDK link-time hacks the older vendored_
+# libraries approach required.
 #
-# Both device + simulator slices are downloaded and combined into
-# a single fat simulator `.a` via `lipo`; the per-SDK xcconfig
-# below picks the correct one for each Xcode build configuration.
+# We still need `-force_load` because every libwallet entry point
+# is resolved via dlsym from Dart, never statically referenced
+# from C, so without -force_load the linker dead-strips the whole
+# archive on dead-code elimination. The path is uniform across
+# SDKs because CocoaPods extracts the active xcframework slice
+# into a per-build-config dir (PODS_XCFRAMEWORKS_BUILD_DIR), so
+# OTHER_LDFLAGS no longer needs sdk-conditional variants.
 #
 
 require 'yaml'
@@ -52,7 +60,10 @@ Pod::Spec.new do |s|
   # Skip downloads when a pre-built .a is already present in the
   # pod source dir (CI / local-dev path). Otherwise pull from the
   # matching GitHub Release. The fat simulator archive is built
-  # locally via lipo to keep the per-SDK xcconfig below simple.
+  # locally via lipo, then everything gets wrapped into an
+  # .xcframework via xcodebuild — that's the format vendored_
+  # frameworks below expects and the standard Apple-blessed
+  # binary-distribution shape.
   s.prepare_command = <<-CMD
     set -e
     base="https://github.com/KarpelesLab/libwallet/releases/download/v#{package_version}"
@@ -83,34 +94,41 @@ Pod::Spec.new do |s|
         liblibwallet-iossimulator-x64.a \
         -output liblibwallet-iossimulator.a
     fi
+
+    # Stage the per-SDK archives with a uniform basename so the
+    # generated xcframework's slices both contain `libwallet.a` —
+    # then OTHER_LDFLAGS below can reference a single fixed path
+    # regardless of the active SDK.
+    if [ ! -d libwallet.xcframework ]; then
+      echo "[libwallet pod] building libwallet.xcframework"
+      stage="$(mktemp -d)"
+      mkdir -p "$stage/device" "$stage/sim" "$stage/headers"
+      cp liblibwallet-ios-arm64.a "$stage/device/libwallet.a"
+      cp liblibwallet-iossimulator.a "$stage/sim/libwallet.a"
+      xcodebuild -create-xcframework \
+        -library "$stage/device/libwallet.a" -headers "$stage/headers" \
+        -library "$stage/sim/libwallet.a"    -headers "$stage/headers" \
+        -output libwallet.xcframework
+      rm -rf "$stage"
+    fi
   CMD
 
-  # Both archives are listed under vendored_libraries so CocoaPods
-  # actually copies them into $(PODS_ROOT)/libwallet/ (preserve_paths
-  # alone doesn't copy for path-based pods, only for remote sources).
-  # vendored_libraries auto-emits `-llibwallet-ios-arm64 -llibwallet-iossimulator`
-  # on every link line — for the wrong-SDK slice the linker prints a
-  # benign "ignoring file ... built for iOS / iOS Simulator" warning
-  # and skips it, which is harmless. The per-SDK -force_load below is
-  # what actually pulls the FFI symbols in for the matching SDK.
-  s.ios.vendored_libraries =
-    'liblibwallet-ios-arm64.a',
-    'liblibwallet-iossimulator.a'
+  # vendored_frameworks with an .xcframework: CocoaPods picks the
+  # right slice for the active SDK at build time and copies it into
+  # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a, then
+  # adds the appropriate -L / -l flags automatically. No more
+  # per-SDK conditionals, no more wrong-SDK "ignoring file" warning.
+  s.ios.vendored_frameworks = 'libwallet.xcframework'
 
-  # The -force_load path has to point at where the .a actually lives
-  # in the consumer app's project, which is NOT PODS_ROOT/libwallet/
-  # for an ffiPlugin path-based pod — Flutter symlinks the plugin
-  # under <app>/ios/.symlinks/plugins/libwallet/ and CocoaPods does
-  # not copy vendored_libraries into PODS_ROOT/<pod>/ from there. The
-  # -L<symlinks/...> path is added automatically by CocoaPods (see
-  # the auto-emitted -llibwallet-ios-arm64 / -llibwallet-iossimulator
-  # flags), so the bare -l link works; force_load needs the explicit
-  # full path though, so reach into .symlinks/ via $(PODS_ROOT)/../.
+  # -force_load is still required because the FFI entry points are
+  # resolved entirely via dlsym from the Dart side — nothing in C
+  # statically references them, so without -force_load the linker
+  # dead-strips the entire archive. The xcframework copy script
+  # places the active slice at a single canonical path, so this
+  # entry has no sdk= variants.
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/liblibwallet-ios-arm64.a"',
-    'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/liblibwallet-iossimulator.a"',
+    'OTHER_LDFLAGS' =>
+      '$(inherited) -force_load "$(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a"',
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /
