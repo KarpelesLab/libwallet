@@ -1,3 +1,10 @@
+## 0.3.27
+
+- **pubspec: declare a Flutter SDK constraint.** Required by pub.dev
+  whenever `flutter.plugin.platforms` is set; published as a no-op
+  release after v0.3.26 was rejected at validation. v0.3.26's
+  GitHub Release assets remain valid for any pinned consumer.
+
 ## 0.3.26
 
 - **Build hook: invalidate the binary cache on a Dart upgrade.**
