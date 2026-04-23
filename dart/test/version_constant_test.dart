@@ -20,8 +20,10 @@ void main() {
     expect(libwalletPackageVersion, equals(pubspecVersion),
         reason:
             'lib/src/version.dart::libwalletPackageVersion drifted from '
-            'pubspec.yaml — bump them together so the runtime mismatch '
-            'check (LibwalletClient._verifyVersionMatch) compares against '
-            'the right value.');
+            'pubspec.yaml — they have to move in lockstep so the runtime '
+            'mismatch check (LibwalletClient._verifyVersionMatch) compares '
+            'against the right value.\n'
+            '\n'
+            'Run: dart run tools/bump_version.dart $pubspecVersion');
   });
 }

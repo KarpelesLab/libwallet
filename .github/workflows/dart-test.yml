@@ -43,6 +43,15 @@ jobs:
         working-directory: dart
         run: dart analyze lib test hook
 
+      # Belt-and-suspenders for the version-constant lockstep:
+      # version_constant_test.dart catches drift if you `dart test`,
+      # but if a release commit only updates pubspec.yaml without
+      # touching anything in test/, the test wouldn't run on PR. The
+      # CLI check covers that case.
+      - name: Verify pubspec ↔ lib/src/version.dart lockstep
+        working-directory: dart
+        run: dart run tools/bump_version.dart --check
+
       - name: Run Dart unit tests
         working-directory: dart
         run: dart test test/amount_test.dart test/models_test.dart test/response_test.dart test/version_constant_test.dart
