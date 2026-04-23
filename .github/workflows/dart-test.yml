@@ -240,17 +240,17 @@ jobs:
             # down. We get live console output via a background `tail
             # -f` of the same log.
             #
-            # --host-vmservice-port / --dds-port pin the debug ports
-            # so Flutter's host-side attach can target them directly
-            # instead of relying on Bonjour/mDNS discovery from the
-            # sim, which has been broken on macos-latest (macos-15 /
-            # Xcode 16.4 / iOS 18.5 sim) even after the Info.plist
-            # Bonjour-service declarations were added. If the flags
-            # aren't accepted by this Flutter version they error
-            # immediately — the retry loop surfaces that as a real
-            # failure rather than masking it as the attach hang.
+            # `flutter test --help` confirmed --dds-port is supported
+            # but --host-vmservice-port is `flutter run`-only; prior
+            # attempt errored fast with "Could not find an option named
+            # '--host-vmservice-port'". We still pass --dds-port so DDS
+            # doesn't fight over a random port, but VM Service discovery
+            # continues to rely on Bonjour/mDNS — which is the actual
+            # thing that breaks on macos-latest + iOS 18.5 sim. The
+            # SIMLOG capture above will tell us what the app actually
+            # prints on startup so we can see whether the VM Service is
+            # even coming up on the sim side.
             flutter test --verbose \
-              --host-vmservice-port=50300 \
               --dds-port=50301 \
               integration_test/libwallet_test.dart \
               -d "$DEVICE_ID" > "$LOG" 2>&1 &
