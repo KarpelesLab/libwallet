@@ -199,10 +199,37 @@ jobs:
         run: |
           set +e
           LOG=$RUNNER_TEMP/flutter-test.log
+          SIMLOG=$RUNNER_TEMP/sim-console.log
           PER_ATTEMPT_TIMEOUT=600   # 10 minutes per attempt → 2 attempts well under the 30-min job cap
+
+          # Dump what `flutter test` actually accepts so we can see
+          # if --host-vmservice-port / --dds-port are recognized
+          # (they're `flutter run` flags historically — some Flutter
+          # versions forward them through integration_test, others
+          # reject). Captured once; not fatal if it errors.
+          echo "::group::flutter test --help"
+          flutter test --help 2>&1 | head -80
+          echo "::endgroup::"
+
           for attempt in 1 2; do
             echo "::group::flutter test attempt $attempt (timeout ${PER_ATTEMPT_TIMEOUT}s)"
             : > "$LOG"
+            : > "$SIMLOG"
+
+            # Stream the sim's console in the background so we can see
+            # what the test app actually printed — crucial for the
+            # "VM Service never advertised" hang, where flutter's own
+            # logs go silent during the attach wait but the app may
+            # still be logging via os_log / print inside the sim.
+            # `log stream --predicate` filters to our app's process +
+            # the dartvm / DartWorker categories where the VM Service
+            # bootstrap prints "The Dart VM Service is listening on ..."
+            xcrun simctl spawn "$DEVICE_ID" log stream \
+              --style compact \
+              --level debug \
+              --predicate 'subsystem CONTAINS "flutter" OR processImagePath CONTAINS "Runner" OR eventMessage CONTAINS "Dart VM"' \
+              > "$SIMLOG" 2>&1 &
+            SIMLOG_PID=$!
 
             # Run flutter test with output going DIRECTLY to the log,
             # not through a tee pipeline. Putting tee in the pipeline
@@ -212,7 +239,21 @@ jobs:
             # genuinely the flutter PID and the watchdog can take it
             # down. We get live console output via a background `tail
             # -f` of the same log.
-            flutter test --verbose integration_test/libwallet_test.dart -d "$DEVICE_ID" > "$LOG" 2>&1 &
+            #
+            # --host-vmservice-port / --dds-port pin the debug ports
+            # so Flutter's host-side attach can target them directly
+            # instead of relying on Bonjour/mDNS discovery from the
+            # sim, which has been broken on macos-latest (macos-15 /
+            # Xcode 16.4 / iOS 18.5 sim) even after the Info.plist
+            # Bonjour-service declarations were added. If the flags
+            # aren't accepted by this Flutter version they error
+            # immediately — the retry loop surfaces that as a real
+            # failure rather than masking it as the attach hang.
+            flutter test --verbose \
+              --host-vmservice-port=50300 \
+              --dds-port=50301 \
+              integration_test/libwallet_test.dart \
+              -d "$DEVICE_ID" > "$LOG" 2>&1 &
             FLUTTER_PID=$!
             tail -f "$LOG" &
             TAIL_PID=$!
@@ -231,9 +272,20 @@ jobs:
             EXIT=$?
             kill $WATCHDOG_PID 2>/dev/null
             wait $WATCHDOG_PID 2>/dev/null
+            kill $SIMLOG_PID 2>/dev/null
+            wait $SIMLOG_PID 2>/dev/null
             kill $TAIL_PID 2>/dev/null
             wait $TAIL_PID 2>/dev/null
             echo "::endgroup::"
+
+            # Dump the captured sim console log so failures are
+            # diagnosable. Filtered on boot so we're not drowning
+            # in unrelated system-process output.
+            if [ "$EXIT" != "0" ]; then
+              echo "::group::iOS simulator console (last 200 lines)"
+              tail -200 "$SIMLOG" 2>/dev/null || echo "(no sim log captured)"
+              echo "::endgroup::"
+            fi
 
             # Exit codes 143 (SIGTERM) / 137 (SIGKILL) → watchdog fired.
             # Anything else came from flutter itself.
