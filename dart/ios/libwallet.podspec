@@ -97,11 +97,20 @@ Pod::Spec.new do |s|
     'liblibwallet-ios-arm64.a',
     'liblibwallet-iossimulator.a'
 
+  # The -force_load path has to point at where the .a actually lives
+  # in the consumer app's project, which is NOT PODS_ROOT/libwallet/
+  # for an ffiPlugin path-based pod — Flutter symlinks the plugin
+  # under <app>/ios/.symlinks/plugins/libwallet/ and CocoaPods does
+  # not copy vendored_libraries into PODS_ROOT/<pod>/ from there. The
+  # -L<symlinks/...> path is added automatically by CocoaPods (see
+  # the auto-emitted -llibwallet-ios-arm64 / -llibwallet-iossimulator
+  # flags), so the bare -l link works; force_load needs the explicit
+  # full path though, so reach into .symlinks/ via $(PODS_ROOT)/../.
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      '$(inherited) -force_load $(PODS_ROOT)/libwallet/liblibwallet-ios-arm64.a',
+      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/liblibwallet-ios-arm64.a"',
     'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      '$(inherited) -force_load $(PODS_ROOT)/libwallet/liblibwallet-iossimulator.a',
+      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/liblibwallet-iossimulator.a"',
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /
