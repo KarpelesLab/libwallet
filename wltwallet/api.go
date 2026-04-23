@@ -25,6 +25,8 @@ func init() {
 	)
 	pobj.RegisterStatic("Wallet:multiCreate", apiMultiCreateWallet)
 	pobj.RegisterStatic("Wallet:reshare", apiWalletReshare)
+	pobj.RegisterStatic("Wallet:importPrivateKey", apiImportPrivateKey)
+	pobj.RegisterStatic("Wallet:importMnemonic", apiImportMnemonic)
 }
 
 func WalletById(e wltintf.Env, id *xuid.XUID) (*Wallet, error) {

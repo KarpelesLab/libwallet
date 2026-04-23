@@ -25,17 +25,72 @@ import (
 	"github.com/portablesql/psql"
 )
 
+// WalletKey represents one share of a wallet's signing key.
+//
+// Two orthogonal axes:
+//
+//   - Type   — how the encrypted blob is wrapped (StoreKey / Plain /
+//     RemoteKey / Password). This is the "encryption mechanism".
+//   - Schema — what's INSIDE the encrypted blob. Empty (default for
+//     existing rows) means a tss-lib share — `*ecdsatss.Key` for
+//     secp256k1 wallets, `*eddsatss.Key` for ed25519 wallets, picked
+//     by parent Wallet.Curve. Non-empty schemas are used by the
+//     import flow:
+//       - "raw"      — `*RawKeyShare`, a 32-byte private key + chaincode.
+//       - "mnemonic" — `*MnemonicKeyShare`, a BIP39 mnemonic phrase.
+//     Wallets with a non-empty Schema are 1-of-1 (no TSS) and signable
+//     immediately after import via the raw sign path. They can be
+//     promoted to a normal multi-share TSS wallet via Wallet:promote.
 type WalletKey struct {
 	psql.Name `sql:"WalletKey"`
 	Id        *xuid.XUID `sql:",key=PRIMARY"`
 	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"`
 	Type      string     `sql:",type=VARCHAR,size=255"`
-	Key       string     `json:"Key,omitempty" sql:",type=TEXT"` // (public) key used for encryption
+	Schema    string     `sql:",type=VARCHAR,size=64,null=0,default=''"` // "" | "raw" | "mnemonic"
+	Key       string     `json:"Key,omitempty" sql:",type=TEXT"`         // (public) key used for encryption
 	Data      []byte     `json:",protect" sql:",type=BLOB"`
 	Gen       uint64     `sql:",type=BIGINT,null=0,default=0"` // key generation
 	pre       *ecdsatss.LocalPreParams
 	sdata     *ecdsatss.Key
 	eddata    *eddsatss.Key
+	rawData   *RawKeyShare      // populated when Schema == "raw"
+	mnemonic  *MnemonicKeyShare // populated when Schema == "mnemonic"
+}
+
+// RawKeyShare is the decrypted payload for a WalletKey with
+// Schema == "raw" — a single private key (hex / WIF import).
+type RawKeyShare struct {
+	Curve     string `json:"curve"`     // "secp256k1" | "ed25519"
+	Privkey   []byte `json:"privkey"`   // 32 bytes
+	Chaincode []byte `json:"chaincode"` // 32 bytes; random for hex/WIF imports, empty allowed
+}
+
+// MnemonicKeyShare is the decrypted payload for a WalletKey with
+// Schema == "mnemonic" — a BIP39 mnemonic stored as its decoded
+// entropy + the language wordlist it was imported in. The mnemonic
+// itself can be reconstructed (and re-rendered in any other BIP39
+// language by re-encoding the entropy against that language's
+// wordlist) for backup display.
+//
+// Why entropy + language instead of the raw mnemonic string:
+//   - Display: we can show the same backup in English / Japanese /
+//     French / etc. by re-encoding entropy. The user's preference
+//     is purely a UX choice.
+//   - Sign: BIP39 PBKDF2(mnemonic_string, "mnemonic"+passphrase)
+//     IS sensitive to which language's wordlist was used at import,
+//     so we always reconstruct using the stored Language to keep
+//     the derived seed (and therefore the wallet's address) stable.
+//
+// The privkey is re-derived on every sign (cacheable per session via
+// the caller), so the mnemonic remains the source of truth and the
+// wallet supports arbitrary BIP44 / SLIP-0010 derivation paths
+// including hardened components — matching MetaMask / Phantom
+// semantics.
+type MnemonicKeyShare struct {
+	Curve      string `json:"curve"`      // "secp256k1" | "ed25519"
+	Entropy    []byte `json:"entropy"`    // 16/20/24/28/32 bytes = 128/160/192/224/256 bits
+	Language   string `json:"language"`   // BIP39 wordlist used at import: "english" | "japanese" | ...
+	Passphrase string `json:"passphrase"` // optional BIP39 passphrase ("" when absent)
 }
 
 func (wk *WalletKey) save(e wltintf.Env) error {
@@ -74,13 +129,25 @@ func (w *Wallet) createWalletKey(ctx context.Context, typ string, scope progress
 	return final, nil
 }
 
-// encrypt stores wk.sdata or wk.eddata into wk.Data
+// encrypt stores the active in-memory share (sdata/eddata/rawData/mnemonic)
+// into wk.Data, encrypted per the given KeyDescription. Schema is set
+// based on which field is populated so decrypt knows what type to
+// unmarshal back into.
 func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	var dataToEncrypt any
-	if wk.eddata != nil {
+	switch {
+	case wk.mnemonic != nil:
+		dataToEncrypt = wk.mnemonic
+		wk.Schema = "mnemonic"
+	case wk.rawData != nil:
+		dataToEncrypt = wk.rawData
+		wk.Schema = "raw"
+	case wk.eddata != nil:
 		dataToEncrypt = wk.eddata
-	} else {
+		wk.Schema = ""
+	default:
 		dataToEncrypt = wk.sdata
+		wk.Schema = ""
 	}
 	res, err := cryptutil.MarshalJson(dataToEncrypt)
 	if err != nil {
@@ -246,6 +313,43 @@ func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePu
 		return nil, fmt.Errorf("while decrypting eddsa key %s: %w", wk.Id, err)
 	}
 	return final, err
+}
+
+// decryptRaw unwraps a Schema=="raw" WalletKey into the imported
+// RawKeyShare. Errors if the WalletKey isn't a raw import.
+func (wk *WalletKey) decryptRaw(kd *wltsign.KeyDescription) (*RawKeyShare, error) {
+	if wk.Schema != "raw" {
+		return nil, fmt.Errorf("walletkey %s is not a raw-key import (schema=%q)", wk.Id, wk.Schema)
+	}
+	bottle := cryptutil.AsCborBottle(wk.Data)
+	op, err := wk.opener(kd)
+	if err != nil {
+		return nil, err
+	}
+	var final *RawKeyShare
+	if _, err = op.Unmarshal(bottle, &final); err != nil {
+		return nil, fmt.Errorf("while decrypting raw key %s: %w", wk.Id, err)
+	}
+	return final, nil
+}
+
+// decryptMnemonic unwraps a Schema=="mnemonic" WalletKey into the
+// imported MnemonicKeyShare. Errors if the WalletKey isn't a mnemonic
+// import.
+func (wk *WalletKey) decryptMnemonic(kd *wltsign.KeyDescription) (*MnemonicKeyShare, error) {
+	if wk.Schema != "mnemonic" {
+		return nil, fmt.Errorf("walletkey %s is not a mnemonic import (schema=%q)", wk.Id, wk.Schema)
+	}
+	bottle := cryptutil.AsCborBottle(wk.Data)
+	op, err := wk.opener(kd)
+	if err != nil {
+		return nil, err
+	}
+	var final *MnemonicKeyShare
+	if _, err = op.Unmarshal(bottle, &final); err != nil {
+		return nil, fmt.Errorf("while decrypting mnemonic key %s: %w", wk.Id, err)
+	}
+	return final, nil
 }
 
 func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {

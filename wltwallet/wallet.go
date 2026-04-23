@@ -438,6 +438,15 @@ func (w *Wallet) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (da
 			}
 		}
 	}()
+	// Imported single-share wallets (RawKey / MnemonicKey) bypass the
+	// TSS signing protocol — there's only one party and it holds the
+	// full private key, so the 9-round MTA dance would be wasted work.
+	// Same DER output shape on the way out, so callers (Account.Sign,
+	// SignEthereumDigest, SignBitcoinMessage, etc.) don't branch.
+	if len(w.Keys) == 1 && (w.Keys[0].Schema == "raw" || w.Keys[0].Schema == "mnemonic") {
+		dat, err = w.signRaw(rand, digest, opts)
+		return
+	}
 	dat, err = w.subSign(rand, digest, opts)
 	return
 }
