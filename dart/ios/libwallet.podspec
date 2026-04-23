@@ -120,28 +120,57 @@ Pod::Spec.new do |s|
   # per-SDK conditionals, no more wrong-SDK "ignoring file" warning.
   s.ios.vendored_frameworks = 'libwallet.xcframework'
 
-  # -force_load is still required because the FFI entry points are
-  # resolved entirely via dlsym from the Dart side — nothing in C
-  # statically references them, so without -force_load the linker
-  # dead-strips the entire archive.
+  # Two flags are needed to make dlsym work on iOS release builds:
   #
-  # We *want* to point at $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/
-  # libwallet.a (where CocoaPods' [CP] Copy XCFrameworks phase places
-  # the active slice), but Xcode validates link-phase input files
-  # before respecting cross-target build order — Runner's link sees
-  # the path as missing because Pods_Runner's Copy XCFrameworks
-  # phase hasn't run yet at validation time.
+  # 1. -force_load pulls all object files from the static archive
+  #    into the binary — without it the linker dead-strips every
+  #    symbol the FFI entry points transitively depend on, since
+  #    nothing in C statically references them.
+  #
+  # 2. -exported_symbol _Libwallet* keeps those specific symbols
+  #    in the final binary's export trie. Release Xcode builds
+  #    drop the export trie for unreferenced symbols as part of
+  #    dead-code elimination, even when the code itself survives
+  #    via -force_load — dlsym(RTLD_DEFAULT, ...) searches the
+  #    export trie, not the full symbol table, so the code is
+  #    present but invisible. Debug builds work because the debug
+  #    dylib is linked with -rdynamic which exports everything.
+  #
+  # We want to point -force_load at
+  # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a (where
+  # CocoaPods' [CP] Copy XCFrameworks phase places the active
+  # slice), but Xcode validates link-phase input files before
+  # respecting cross-target build order — Runner's link sees the
+  # path as missing because Pods_Runner's Copy XCFrameworks phase
+  # hasn't run yet at validation time.
   #
   # Workaround: reach into the xcframework's source location, where
   # the slice already exists (prepare_command above wrote it there).
   # That brings back per-SDK conditionals because xcframework slices
   # are named after their SDK+arch combination — but the paths are
   # stable and present from pod install onward.
+  xcframework_slice_device = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"'
+  xcframework_slice_sim    = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"'
+
+  # Every FFI entry point declared with `//export` in cshared/ffi.go.
+  # Keep in sync with that file — if new exports are added there,
+  # they must be listed here too or dlsym will silently fail to find
+  # them on iOS release builds.
+  ffi_exports = %w[
+    _LibwalletInit
+    _LibwalletRequest
+    _LibwalletSetEventCallback
+    _LibwalletShowDebug
+    _LibwalletDestroy
+    _LibwalletFree
+  ]
+  ffi_export_flags = ffi_exports.map { |sym| "-Xlinker -exported_symbol -Xlinker #{sym}" }.join(' ')
+
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"',
+      "$(inherited) -force_load #{xcframework_slice_device} #{ffi_export_flags}",
     'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"',
+      "$(inherited) -force_load #{xcframework_slice_sim} #{ffi_export_flags}",
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /

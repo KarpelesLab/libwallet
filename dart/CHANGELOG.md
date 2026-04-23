@@ -1,3 +1,44 @@
+## 0.4.0
+
+- **Import existing wallets: raw private keys + BIP39 mnemonics, with
+  promote-to-MPC.** Three new endpoints on `client.wallets`:
+
+  - `importPrivateKey({privateKey, curve, name, keys})` — accepts
+    `0x`-prefixed hex, bare hex, or Bitcoin-family WIF (auto-sniffed;
+    WIF only for `secp256k1`). The imported wallet is stored as a
+    1-of-1 share with a new `RawKey` content type and is signable
+    immediately — no TSS rounds, just direct `crypto/ecdsa` /
+    `crypto/ed25519`.
+
+  - `importMnemonic({mnemonic, passphrase, curve, name, keys})` —
+    auto-detects the BIP39 wordlist (English, Japanese, Korean,
+    Spanish, Chinese Simplified / Traditional, French, Italian, Czech)
+    and stores the decoded entropy + the detected language tag, NOT
+    the raw mnemonic string. That lets the same backup be re-rendered
+    in any other language for display, while keeping the seed
+    derivation stable (BIP39's PBKDF2 is sensitive to the literal
+    mnemonic, so the original language must drive sign-time
+    derivation). Optional BIP39 passphrase supported.
+
+  - `promote(walletId, {oldKeys, newKeys, threshold})` — converts an
+    imported 1-of-1 wallet into a normal N-of-T TSS wallet via
+    tss-lib's resharing protocol. The master pubkey and chaincode
+    are preserved (the wallet's address does NOT change) — only the
+    storage of the signing key changes from "single share, full
+    privkey" to "M shares with T-threshold reconstruction". After
+    promote the imported share row is deleted; the wallet looks
+    identical to a freshly-created TSS wallet. **secp256k1 only**
+    in this release; ed25519 promote is a follow-up.
+
+  All three reuse the existing `KeyDescription` encryption layer
+  (`Password`, `StoreKey`, `RemoteKey`, `Plain`) — `RawKey` /
+  `Mnemonic` are *content* types, the encryption-at-rest mechanism
+  is orthogonal. So importing with `Keys: [Password(...)]` works
+  out of the box.
+
+  Both curves on day 1 for the import path: `secp256k1` (EVM /
+  Bitcoin family) + `ed25519` (Solana).
+
 ## 0.3.32
 
 - **iOS: ship as `.xcframework` (Apple's recommended format).** The
