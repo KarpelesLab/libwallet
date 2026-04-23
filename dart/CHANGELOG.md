@@ -36,6 +36,14 @@
   `Info:version`. Also propagated the ldflags to the c-shared /
   c-archive Dart-FFI builds, which had no version metadata at all.
 
+- **Release tooling: `dart/tools/bump_version.dart`.** One command
+  (`dart run tools/bump_version.dart --patch` / `--minor` / `--major`
+  / explicit `X.Y.Z`) rewrites both `pubspec.yaml` and
+  `lib/src/version.dart` — the two files that have to move in
+  lockstep for the runtime mismatch check to work. CI runs the
+  script's `--check` mode on every push so a release commit that only
+  touches `pubspec.yaml` fails fast.
+
 ## 0.3.29
 
 - **CI publish workflow: install BOTH Flutter and Dart.** v0.3.28
