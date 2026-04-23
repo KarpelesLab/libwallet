@@ -116,23 +116,30 @@ jobs:
           PKG=github.com/KarpelesLab/libwallet/wltbase
           echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
 
-      - name: Build c-archive slices for iOS (sim arm64 + device arm64)
+      - name: Build c-archive slices for iOS (device + both sim arches)
         run: |
-          # The ios/libwallet.podspec expects per-SDK archives in dart/ios/.
-          # If they're already present, prepare_command skips the GitHub
-          # Release download — that's the path we want for CI on master,
-          # since pre-release commits don't have a matching release yet.
+          # The ios/libwallet.podspec wraps these into a libwallet.xcframework
+          # at pod install time. If the per-SDK files exist in dart/ios/,
+          # prepare_command skips the GitHub Release download — that's the
+          # path we want for CI on master, since pre-release commits don't
+          # have a matching release yet.
           #
-          # CI only runs on the iOS simulator (apple silicon runner = arm64),
-          # so we build the sim-arm64 slice (needed for actual link) and a
-          # device-arm64 slice (needed only because the podspec preserves
-          # all per-SDK archives as preserve_paths). x64 simulator slice is
-          # not built — the sim-arm64 archive is dropped in as the "fat"
-          # simulator file directly (single-arch is a valid fat archive).
+          # We MUST build both sim arches (arm64 + x86_64) even though the
+          # CI runner only uses arm64: Xcode targets the iphonesimulator
+          # SDK for ALL its arches by default, and CocoaPods will reject
+          # an xcframework whose simulator slice doesn't cover x86_64 with
+          # "Unable to find matching slice for the current build
+          # architectures (arm64 x86_64)".
+          # prepare_command then lipo's the two sim slices into
+          # liblibwallet-iossimulator.a before invoking xcodebuild.
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator-arm64.a ./cshared/
+          CGO_ENABLED=1 GOOS=ios GOARCH=amd64 \
+            CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
+            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator-x64.a ./cshared/
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
