@@ -1,3 +1,19 @@
+## 0.3.31
+
+- **Fixed: `personal_sign` / `eth_signTypedData_v3` / `_v4` returned
+  DER, not Ethereum wire format.** ecrecover, viem.verifyTypedData,
+  ethers.verifyMessage, OpenSea, Snapshot, Permit2, MetaMask test-dapp's
+  Recover button — every off-chain Ethereum signature verifier — would
+  reject the output with "Invalid signature v value" or a silent
+  address mismatch. Now produces the canonical 65-byte form
+  R(32) || S(32) || V(1) where V ∈ {27, 28} via the new
+  `wltacct.SignEthereumDigest` helper, which post-processes the TSS
+  signer's DER output (parse → bruteforce recovery code → repack).
+  Same fix applied to the host-direct `Account:signMessage` flow with
+  `Mode: "evm"` / `"personal_sign"`. EIP-155 chain-id adjustment is
+  intentionally NOT applied — that lives in the on-chain transaction
+  signing path; off-chain flows always use legacy v.
+
 ## 0.3.30
 
 - **`Info:version` now exposes the release tag.** New `version` field

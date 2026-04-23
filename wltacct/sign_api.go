@@ -99,11 +99,14 @@ func accountSignMessage(ctx *apirouter.Context, in struct {
 			"publicKey": acct.Address,
 		}, nil
 	case "evm", "personal_sign":
-		// EIP-191 personal_sign
+		// EIP-191 personal_sign — wire format is R || S || V, V ∈ {27, 28}.
+		// SignEthereumDigest returns the 65-byte form ecrecover expects;
+		// `acct.Sign(...)` alone returns DER, which every off-chain
+		// verifier rejects.
 		prefix := []byte("\x19Ethereum Signed Message:\n" + strconv.Itoa(len(msgBytes)))
 		full := append(prefix, msgBytes...)
 		digest := cryptutil.Hash(full, sha3.NewLegacyKeccak256)
-		sig, err := acct.Sign(rand.Reader, digest, signOpt)
+		sig, err := acct.SignEthereumDigest(digest, signOpt)
 		if err != nil {
 			return nil, fmt.Errorf("evm sign failed: %w", err)
 		}

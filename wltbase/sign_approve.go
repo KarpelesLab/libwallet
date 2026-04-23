@@ -8,7 +8,6 @@ package wltbase
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -130,7 +129,11 @@ func approveEthPersonalSign(ctx context.Context, e *env, req *request, keys []*w
 		return fmt.Errorf("could not find account for signature: %w", err)
 	}
 	signOpt := &wltsign.Opts{Context: ctx, IL: a.IL, Keys: keys}
-	sig, err := a.Sign(rand.Reader, digest, signOpt)
+	// Ethereum wire format (R || S || V, V ∈ {27, 28}). The previous
+	// "hex(a.Sign(...))" path returned DER, which ecrecover and every
+	// off-chain verifier (viem, ethers, OpenSea, Snapshot, Permit2)
+	// rejected as an invalid signature.
+	sig, err := a.SignEthereumDigest(digest, signOpt)
 	if err != nil {
 		return fmt.Errorf("signature failed: %w", err)
 	}
@@ -160,7 +163,7 @@ func approveEthTypedDataSign(ctx context.Context, e *env, req *request, keys []*
 		return fmt.Errorf("could not find account for signature: %w", err)
 	}
 	signOpt := &wltsign.Opts{Context: ctx, IL: a.IL, Keys: keys}
-	sig, err := a.Sign(rand.Reader, digest, signOpt)
+	sig, err := a.SignEthereumDigest(digest, signOpt)
 	if err != nil {
 		return fmt.Errorf("EIP-712 signature failed: %w", err)
 	}
