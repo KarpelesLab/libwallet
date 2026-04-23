@@ -19,10 +19,12 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
+	"github.com/KarpelesLab/secp256k1/ecckd"
 	"github.com/tyler-smith/go-bip39"
 	"github.com/tyler-smith/go-bip39/wordlists"
 )
@@ -226,6 +228,157 @@ func masterFromSeed(seed []byte, curve string) ([]byte, []byte, error) {
 	copy(chainCopy, chaincode)
 	zero(out)
 	return privCopy, chainCopy, nil
+}
+
+// derivePrivkeyFromSeed walks the given BIP32-style path against a
+// BIP39 seed and returns the resulting 32-byte private key.
+//
+//   - secp256k1 with a non-empty path: full BIP32 derivation (via
+//     ecckd), hardened components supported. Path uses '-suffix
+//     notation, e.g. "m/44'/60'/0'/0/0".
+//   - secp256k1 with empty path (or just "m"): the BIP32 master
+//     privkey from the seed (HMAC-SHA512 "Bitcoin seed").
+//   - ed25519 with a non-empty path: SLIP-0010 hardened-only
+//     derivation, also '-suffix notation. Non-hardened components
+//     are a protocol error on Edwards curves; the helper rejects.
+//   - ed25519 with empty path (or "m"): the BIP39 PBKDF2 seed's
+//     first 32 bytes used directly as the ed25519 seed (the Sollet /
+//     Solana Mobile / Backpack convention). For Phantom-style
+//     derivation pass an explicit path "m/44'/501'/0'/0'".
+//
+// The returned byte slice is a fresh copy that the caller should
+// `zero` when done.
+func derivePrivkeyFromSeed(seed []byte, curve, path string) ([]byte, error) {
+	steps, err := parseBip32Path(path)
+	if err != nil {
+		return nil, err
+	}
+
+	switch curve {
+	case "secp256k1":
+		xk, err := ecckd.FromBitcoinSeed(seed)
+		if err != nil {
+			return nil, fmt.Errorf("bip32: master from seed: %w", err)
+		}
+		if len(steps) > 0 {
+			xk, err = xk.Derive(steps)
+			if err != nil {
+				return nil, fmt.Errorf("bip32: derive %q: %w", path, err)
+			}
+		}
+		if !xk.IsPrivate() || len(xk.KeyData) != 32 {
+			return nil, fmt.Errorf("bip32: derive %q produced non-private key data", path)
+		}
+		out := make([]byte, 32)
+		copy(out, xk.KeyData)
+		return out, nil
+
+	case "ed25519":
+		// Empty path / "m": no-derivation Sollet convention (seed[:32]).
+		if len(steps) == 0 {
+			if len(seed) < 32 {
+				return nil, errors.New("seed too short for ed25519 no-derivation mode")
+			}
+			out := make([]byte, 32)
+			copy(out, seed[:32])
+			return out, nil
+		}
+		return slip10DeriveEd25519(seed, steps)
+
+	default:
+		return nil, fmt.Errorf("derivePrivkeyFromSeed: unsupported curve %q", curve)
+	}
+}
+
+// parseBip32Path converts a string path like "m/44'/60'/0'/0/0" (or
+// "m/44h/60h/..." — both notations are accepted) into the []uint32
+// ecckd.Derive expects, with the hardened bit OR'd in where
+// appropriate. Empty string and bare "m" mean "master, no child
+// steps".
+func parseBip32Path(path string) ([]uint32, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "m" || path == "M" {
+		return nil, nil
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) == 0 || (parts[0] != "m" && parts[0] != "M") {
+		return nil, fmt.Errorf("bip32 path %q must start with m/", path)
+	}
+	out := make([]uint32, 0, len(parts)-1)
+	for _, p := range parts[1:] {
+		if p == "" {
+			return nil, fmt.Errorf("bip32 path %q has an empty component", path)
+		}
+		hardened := false
+		last := p[len(p)-1]
+		if last == '\'' || last == 'h' || last == 'H' {
+			hardened = true
+			p = p[:len(p)-1]
+		}
+		n, err := strconv.ParseUint(p, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("bip32 path %q component %q: %w", path, p, err)
+		}
+		if n >= 0x80000000 {
+			return nil, fmt.Errorf("bip32 path %q component %q: value overflows 31 bits (use ' for hardened)", path, p)
+		}
+		v := uint32(n)
+		if hardened {
+			v |= 0x80000000
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// slip10DeriveEd25519 walks the all-hardened path against a BIP39
+// seed using SLIP-0010 "ed25519 seed" master + hardened child
+// derivation. All components MUST be hardened; non-hardened child
+// derivation on Edwards curves would leak the private key.
+func slip10DeriveEd25519(seed []byte, path []uint32) ([]byte, error) {
+	h := hmac.New(sha512.New, []byte("ed25519 seed"))
+	h.Write(seed)
+	I := h.Sum(nil)
+	priv := I[:32]
+	chaincode := I[32:]
+	buf := make([]byte, 1+32+4)
+
+	for i, idx := range path {
+		if idx&0x80000000 == 0 {
+			return nil, fmt.Errorf("SLIP-0010 ed25519: path component %d=%d must be hardened", i, idx)
+		}
+		buf[0] = 0x00
+		copy(buf[1:33], priv)
+		buf[33] = byte(idx >> 24)
+		buf[34] = byte(idx >> 16)
+		buf[35] = byte(idx >> 8)
+		buf[36] = byte(idx)
+		hh := hmac.New(sha512.New, chaincode)
+		hh.Write(buf)
+		next := hh.Sum(nil)
+		priv = next[:32]
+		chaincode = next[32:]
+	}
+
+	out := make([]byte, 32)
+	copy(out, priv)
+	return out, nil
+}
+
+// derivePubkeyForPath returns the canonical public representation of
+// the privkey that derivePrivkeyFromSeed would produce for the given
+// seed + curve + path. Handy for the probe endpoint which needs the
+// address without actually touching the signing path.
+//
+//   - secp256k1 → 33-byte compressed SEC1 pubkey
+//   - ed25519    → 32-byte raw pubkey
+func derivePubkeyForPath(seed []byte, curve, path string) ([]byte, error) {
+	priv, err := derivePrivkeyFromSeed(seed, curve, path)
+	if err != nil {
+		return nil, err
+	}
+	defer zero(priv)
+	return derivePub(curve, priv)
 }
 
 // zero best-effort wipes a byte slice in place so a decrypted private

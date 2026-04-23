@@ -1,3 +1,43 @@
+## 0.4.1
+
+- **`Wallet:probeActivity`** — new endpoint for mnemonic-backed
+  wallets. Walks the BIP44 standard derivation paths for every
+  supported chain (BTC BIP44 + BIP84, LTC BIP84, MONA BIP44 + BIP84,
+  BCH BIP44, DOGE BIP44, EVM mainnet, Solana Sollet + Phantom
+  conventions) and probes each candidate's RPC in parallel for
+  on-chain activity. Returns one row per candidate with the derived
+  address, pubkey, raw balance, and a `hasActivity` flag. Host UI
+  uses this to auto-select which chains to migrate; per-candidate
+  RPC errors land on `row.error` so one upstream failure doesn't
+  fail the whole scan.
+- **`Wallet:promoteMnemonic`** — new endpoint. Migrates a mnemonic
+  wallet into N fresh MPC wallets, one per chain the caller picked
+  from the probe output. Each migration derives the mnemonic at the
+  chain's BIP32 path (full hardened BIP32 for secp256k1 via
+  `ecckd.Derive`; Sollet seed[:32] / SLIP-0010 for ed25519) and
+  runs TSS resharing on the resulting privkey. The source mnemonic
+  wallet is NOT modified — the caller validates each migrated
+  wallet, then deletes the source separately. secp256k1 source
+  only in this release; ed25519 mnemonic migration is a follow-up.
+- **Dart models added**: `ProbeActivityRow`, `ChainMigration`.
+  `ChainMigration.fromProbeRow(row, stripAddressSuffix: true)`
+  drops the trailing `/0/0` address-suffix so migration lands at the
+  BIP44 account level (`m/44'/60'/0'`) instead of a specific
+  leaf address — preserves the ability to derive child receive /
+  change addresses from the new MPC wallet.
+- **Test vectors locked in** (`wltwallet/bip44_vectors_test.go`,
+  `derivation_test.go`): the user-supplied BTC / EVM / BTC-segwit /
+  Solana addresses for two reference mnemonics pin the derivation
+  math so a future change can't silently land imports on the wrong
+  address and lose user funds.
+- **Existing mnemonic import sign path unchanged** in this release —
+  the mnemonic wallet still signs at the BIP32 master, so direct
+  signing from a mnemonic wallet won't match MetaMask / Phantom
+  addresses. Users hitting that: run `Wallet:probeActivity` then
+  `Wallet:promoteMnemonic` to get proper per-chain MPC wallets, and
+  sign from those. The direct-sign path will be rewritten to use
+  Account-level derivation paths in a follow-up.
+
 ## 0.4.0
 
 - **Import existing wallets: raw private keys + BIP39 mnemonics, with

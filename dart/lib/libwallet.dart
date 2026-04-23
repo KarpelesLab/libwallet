@@ -129,6 +129,7 @@ export 'src/api/name_api.dart' show NameApi;
 export 'src/api/store_key_api.dart' show StoreKeyApi, StoreKeyPair;
 export 'src/api/remote_key_api.dart' show RemoteKeyApi;
 export 'src/api/wallet_api.dart' show WalletApi;
+export 'src/models/probe_activity.dart' show ProbeActivityRow, ChainMigration;
 export 'src/api/wallet_key_api.dart' show WalletKeyApi;
 export 'src/api/network_api.dart' show NetworkApi;
 export 'src/api/account_api.dart'

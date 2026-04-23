@@ -1,8 +1,11 @@
 import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
+import '../models/probe_activity.dart';
 import '../models/wallet.dart';
 import '../models/wallet_backup.dart';
+
+export '../models/probe_activity.dart';
 
 /// Wallet CRUD, backup, restore, reshare, and multi-create operations.
 class WalletApi {
@@ -162,6 +165,75 @@ class WalletApi {
       'Keys': keys.map((k) => k.toJson()).toList(),
     });
     return Wallet.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Probe on-chain activity for every BIP44 standard derivation path
+  /// under a mnemonic-backed wallet. Returns one row per
+  /// (chain, BIP variant) candidate with the derived address and a
+  /// `hasActivity` flag; the host UI uses the result to decide which
+  /// chains to migrate to MPC (see [promoteMnemonic]) or to surface to
+  /// the user for manual selection when nothing has activity yet.
+  ///
+  /// - [walletId]: the mnemonic-backed wallet's ID.
+  /// - [keys]: length 1 — decrypts the mnemonic share. Typically the
+  ///   Password used at import time.
+  /// - [networks]: optional filter; pass e.g. `['ethereum','solana']`
+  ///   to limit probing to those chains. Empty/null probes all
+  ///   supported chains (Bitcoin, Litecoin, Monacoin, Bitcoin Cash,
+  ///   Dogecoin, Ethereum, Solana).
+  /// - [timeoutSeconds]: per-probe timeout budget; default 10 s.
+  ///   RPC failures land on `row.error` rather than failing the
+  ///   whole request.
+  Future<List<ProbeActivityRow>> probeActivity(
+    String walletId, {
+    required List<KeyDescription> keys,
+    List<String>? networks,
+    int timeoutSeconds = 10,
+  }) async {
+    final data = await _conn.request('Wallet/$walletId:probeActivity', 'POST', {
+      'Keys': keys.map((k) => k.toJson()).toList(),
+      if (networks != null) 'Networks': networks,
+      'Timeout': timeoutSeconds,
+    });
+    if (data == null) return [];
+    return (data as List)
+        .map((e) => ProbeActivityRow.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+  }
+
+  /// Migrate a mnemonic-backed wallet into N fresh MPC wallets, one
+  /// per chain in [chains]. Each migration derives the mnemonic at the
+  /// chain's BIP32 path and reshares the resulting privkey into a new
+  /// TSS committee; the source mnemonic wallet is NOT modified, so the
+  /// caller keeps it until every migrated wallet is validated.
+  ///
+  /// secp256k1 source wallets only in this release; ed25519 mnemonic
+  /// migration is a follow-up.
+  ///
+  /// - [walletId]: the source mnemonic wallet's ID.
+  /// - [oldKeys]: length 1, decrypts the source mnemonic.
+  /// - [chains]: 1+ entries, typically built from [probeActivity]
+  ///   rows the user selected.
+  /// - [newKeys]: the TSS committee shape applied to EACH new
+  ///   wallet (same committee, independent shares).
+  /// - [threshold]: TSS threshold for the new committee.
+  Future<List<Wallet>> promoteMnemonic(
+    String walletId, {
+    required List<KeyDescription> oldKeys,
+    required List<ChainMigration> chains,
+    required List<KeyDescription> newKeys,
+    required int threshold,
+  }) async {
+    final data = await _conn.request('Wallet/$walletId:promoteMnemonic', 'POST', {
+      'Old': oldKeys.map((k) => k.toJson()).toList(),
+      'Chains': chains.map((c) => c.toJson()).toList(),
+      'New': newKeys.map((k) => k.toJson()).toList(),
+      'Threshold': threshold,
+    });
+    if (data == null) return [];
+    return (data as List)
+        .map((e) => Wallet.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   /// Promote an imported 1-of-1 wallet (RawKey / Mnemonic) to a normal

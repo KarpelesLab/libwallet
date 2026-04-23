@@ -28,6 +28,8 @@ func init() {
 	pobj.RegisterStatic("Wallet:importPrivateKey", apiImportPrivateKey)
 	pobj.RegisterStatic("Wallet:importMnemonic", apiImportMnemonic)
 	pobj.RegisterStatic("Wallet:promote", apiWalletPromote)
+	pobj.RegisterStatic("Wallet:probeActivity", apiWalletProbeActivity)
+	pobj.RegisterStatic("Wallet:promoteMnemonic", apiWalletPromoteMnemonic)
 }
 
 func WalletById(e wltintf.Env, id *xuid.XUID) (*Wallet, error) {
