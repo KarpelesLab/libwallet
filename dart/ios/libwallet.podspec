@@ -127,14 +127,25 @@ Pod::Spec.new do |s|
   #    symbol the FFI entry points transitively depend on, since
   #    nothing in C statically references them.
   #
-  # 2. -exported_symbol _Libwallet* keeps those specific symbols
-  #    in the final binary's export trie. Release Xcode builds
-  #    drop the export trie for unreferenced symbols as part of
-  #    dead-code elimination, even when the code itself survives
-  #    via -force_load — dlsym(RTLD_DEFAULT, ...) searches the
-  #    export trie, not the full symbol table, so the code is
-  #    present but invisible. Debug builds work because the debug
-  #    dylib is linked with -rdynamic which exports everything.
+  # 2. -u _Libwallet* (one per FFI entry point) adds each symbol
+  #    to the linker's root set so it isn't dead-stripped. This is
+  #    the minimum needed to keep dlsym working on release builds
+  #    — Xcode release builds would otherwise drop unreferenced
+  #    symbols from the export trie even when the code itself
+  #    survives via -force_load. Debug builds work because the
+  #    debug dylib is linked with -rdynamic which exports
+  #    everything.
+  #
+  #    We previously used `-exported_symbol` instead; that's an
+  #    EXCLUSIVE allowlist — only listed symbols end up exported,
+  #    everything else (including `_main`) is stripped. On Xcode
+  #    16's debug-dylib stub executor model the host Runner app's
+  #    `_main` needs to remain exported or the stub can't dlsym it
+  #    at launch and the app dies with SIGTERM before the Dart VM
+  #    Service ever comes up → `flutter test` hangs at
+  #    "Waiting for VM Service port to be available" for the full
+  #    10-min watchdog window. `-u` keeps the FFI symbols without
+  #    touching export visibility for anything else.
   #
   # We want to point -force_load at
   # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a (where
@@ -164,7 +175,22 @@ Pod::Spec.new do |s|
     _LibwalletDestroy
     _LibwalletFree
   ]
-  ffi_export_flags = ffi_exports.map { |sym| "-Xlinker -exported_symbol -Xlinker #{sym}" }.join(' ')
+  # `-u <sym>` (a.k.a. "undefined symbol") tells ld to add the symbol
+  # to the root set for dead-strip analysis without making the export
+  # set exclusive. We previously used `-exported_symbol <sym>`, which
+  # IS exclusive: it only keeps the listed symbols in the final
+  # binary's export trie. That had the side effect of stripping EVERY
+  # OTHER symbol — including `_main` — from the host Runner app's
+  # exports. Xcode 16's debug-dylib stub executor model dlsym's
+  # `main` from Runner.debug.dylib at launch and bailed with
+  # "No entry point found. Checked '(null)'" → SIGTERM → no VM
+  # Service → `flutter test` hung forever.
+  #
+  # `-u` forces each FFI symbol to be reachable (so it isn't dead-
+  # stripped) without touching the export-visibility of anything
+  # else. dlsym on `_LibwalletInit` and friends continues to work in
+  # release builds; `_main` stays exported for the debug launcher.
+  ffi_export_flags = ffi_exports.map { |sym| "-Xlinker -u -Xlinker #{sym}" }.join(' ')
 
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
