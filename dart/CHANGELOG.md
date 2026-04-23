@@ -1,3 +1,14 @@
+## 0.3.28
+
+- **CI publish workflow: install Flutter alongside Dart.** Once the
+  package declares a Flutter SDK lower bound (added in 0.3.27), plain
+  `dart-lang/setup-dart` rejects `dart pub get` with "libwallet
+  requires the Flutter SDK, version solving failed". Switch the publish
+  step to `subosito/flutter-action` so the Flutter+Dart SDK pair is
+  available on PATH. Cuts a no-op release after v0.3.27 because the
+  workflow file used at publish time is the one snapshot-bound to the
+  triggering tag, so the fix only takes effect on a fresh tag push.
+
 ## 0.3.27
 
 - **pubspec: declare a Flutter SDK constraint.** Required by pub.dev
