@@ -67,15 +67,39 @@ class LibwalletClient {
   late final CrashApi crashes = CrashApi(_transport);
 
   LibwalletClient._(this._transport) {
-    // Fire-and-forget: detect a Dart-vs-native version mismatch (the
-    // post-upgrade footgun where pubspec moved but the loaded binary
-    // didn't — common on iOS without a fresh `pod install`, and on
-    // any platform if the build hook's binary cache is stale). Logs
-    // an actionable warning to dart:developer; doesn't throw, since
-    // the wallet may still work for the calls whose wire shape didn't
-    // change between the two versions.
-    unawaited(_verifyVersionMatch());
+    ready = _verifyVersionMatch();
+    // Swallow the unawaited rejection so callers that don't await
+    // [ready] don't crash the isolate (Dart's "unhandled async error"
+    // path). The error is still surfaced two ways: via dart:developer
+    // log (for live debugging) and via the [ready] Future itself
+    // (for apps that gate their startup on `await client.ready`).
+    ready.then((_) {}, onError: (Object _, StackTrace __) {});
   }
+
+  /// Completes once the post-`initialize` runtime check has finished.
+  /// In **release** Dart builds (`-Ddart.vm.product=true`, AOT
+  /// compilation), this future **rejects** with a [StateError] if the
+  /// loaded native binary's release tag does not match the Dart
+  /// package's [libwalletPackageVersion] — the post-upgrade footgun
+  /// where the .a / .so / .dylib stayed pinned to the previous version.
+  /// In debug builds the same condition logs a warning via
+  /// `dart:developer` but the future completes normally, so debug
+  /// runs of the in-tree test app can iterate against a locally-built
+  /// binary without ceremony.
+  ///
+  /// Release apps should gate their startup on this:
+  ///
+  /// ```dart
+  /// final client = LibwalletClient.initialize(dataDir);
+  /// try {
+  ///   await client.ready;
+  /// } on StateError catch (e) {
+  ///   showFatalDialog(e.message); // unrecoverable: rebuild needed
+  ///   return;
+  /// }
+  /// runApp(MyApp(client));
+  /// ```
+  late final Future<void> ready;
 
   /// Initialize the Go library via FFI.
   ///
@@ -85,6 +109,11 @@ class LibwalletClient {
   /// If [library] is provided, uses that DynamicLibrary. Otherwise loads
   /// the default platform library (`liblibwallet.so` / `.dylib` /
   /// `libwallet.framework` depending on OS).
+  ///
+  /// Release apps should `await client.ready` after `initialize` —
+  /// it rejects on a version mismatch between the Dart package and
+  /// the loaded native binary, which would otherwise corrupt every
+  /// wire-shape-sensitive call further down.
   static LibwalletClient initialize(
     String dataDir, {
     DynamicLibrary? library,
@@ -95,9 +124,10 @@ class LibwalletClient {
 
   /// Compare the loaded native binary's release tag (set by ldflags
   /// at build time) against the Dart package's `libwalletPackageVersion`
-  /// constant. Same release → silent. Mismatch with a populated native
-  /// version → log the actionable fix. Native version empty → dev/CI
+  /// constant. Same release → silent. Native version empty → dev/CI
   /// build, skip the check (the developer knows what they're loading).
+  /// Mismatch → log the actionable fix; on release Dart builds also
+  /// throw a StateError so [ready] rejects.
   Future<void> _verifyVersionMatch() async {
     String nativeVersion;
     try {
@@ -111,18 +141,32 @@ class LibwalletClient {
     if (nativeVersion == libwalletPackageVersion) {
       return;
     }
+    final message =
+        'libwallet version mismatch — loaded native binary is $nativeVersion '
+        'but the Dart package is $libwalletPackageVersion. The wire shape may '
+        'have changed between releases (events arriving as UnknownPendingRequest, '
+        'requests.approve rejecting "keys are required", etc.). Fix: on iOS '
+        'run `cd ios && pod install --repo-update`; on Android/macOS/Linux '
+        'run `dart pub get` (the cached binary is now version-stamped per '
+        'release as of 0.3.26).';
     developer.log(
-      'libwallet version mismatch — loaded native binary is $nativeVersion '
-      'but the Dart package is $libwalletPackageVersion. The wire shape may '
-      'have changed between releases (events arriving as UnknownPendingRequest, '
-      'requests.approve rejecting "keys are required", etc.). Fix: on iOS '
-      'run `cd ios && pod install --repo-update`; on Android/macOS/Linux '
-      'run `dart pub get` (the cached binary is now version-stamped per '
-      'release as of 0.3.26).',
+      message,
       name: 'libwallet',
-      level: 900, // SEVERE in dart:developer's mapping
+      // SEVERE in dart:developer mapping for debug, SHOUT for release.
+      level: _isReleaseBuild ? 1200 : 900,
     );
+    if (_isReleaseBuild) {
+      throw StateError(message);
+    }
   }
+
+  /// True when the Dart VM was started with `-Ddart.vm.product=true`,
+  /// which is set by AOT release builds (`flutter build` / `dart compile
+  /// exe --release`). False under `dart test`, `dart run`, debug
+  /// `flutter run`, etc. — the loose "is this code running in a
+  /// shipped binary?" signal.
+  static const bool _isReleaseBuild =
+      bool.fromEnvironment('dart.vm.product', defaultValue: false);
 
   /// Stream of all server-pushed events.
   Stream<LibwalletEvent> get events => _transport.events;

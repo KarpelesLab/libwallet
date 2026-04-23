@@ -8,15 +8,23 @@
   long-broken `client.info.version()` now correctly returns the
   release-tag string instead of the toString'd map.
 
-- **Runtime version-mismatch detection.** `LibwalletClient.initialize`
-  asynchronously calls `Info:version` and compares it against the
-  hardcoded `libwalletPackageVersion` constant. If the loaded native
-  binary is from a different release (the post-upgrade footgun:
-  pubspec moved but the linked `.a` / `.so` / `.dylib` didn't), an
-  actionable warning is logged via `dart:developer` telling the host
-  to run `pod install --repo-update` (iOS) or `dart pub get` (all
-  other platforms — caches are version-stamped since 0.3.26). Works
-  on every platform, not just iOS.
+- **Runtime version-mismatch detection (with release-mode rejection).**
+  `LibwalletClient.initialize` asynchronously calls `Info:version` and
+  compares it against the hardcoded `libwalletPackageVersion` constant.
+  Result is exposed as `client.ready` (a `Future<void>`):
+  - **Debug/test Dart VM** (`dart.vm.product=false`): mismatch logs an
+    actionable warning via `dart:developer` and `ready` completes
+    normally — debug runs of the in-tree test app can iterate against a
+    locally-built binary without ceremony.
+  - **Release Dart VM** (AOT, `dart.vm.product=true`): `ready` rejects
+    with a `StateError` carrying the same message. Apps should
+    `await client.ready` after `initialize` and surface a fatal-error
+    UI on failure — operating with mismatched wire shapes is what
+    causes events to arrive as `UnknownPendingRequest`, sign approvals
+    to error with "keys are required", etc.
+
+  Catches the same class of bug across iOS (skipped `pod install`),
+  Android (stale build-hook cache), and macOS/Linux/Windows.
 
 - **Fixed: build-time `-X` ldflags targeted the wrong package.** The
   `Makefile` and `build.yml` had been passing `-X main.dateTag=...` /
