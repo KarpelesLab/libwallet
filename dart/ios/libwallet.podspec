@@ -123,12 +123,25 @@ Pod::Spec.new do |s|
   # -force_load is still required because the FFI entry points are
   # resolved entirely via dlsym from the Dart side — nothing in C
   # statically references them, so without -force_load the linker
-  # dead-strips the entire archive. The xcframework copy script
-  # places the active slice at a single canonical path, so this
-  # entry has no sdk= variants.
+  # dead-strips the entire archive.
+  #
+  # We *want* to point at $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/
+  # libwallet.a (where CocoaPods' [CP] Copy XCFrameworks phase places
+  # the active slice), but Xcode validates link-phase input files
+  # before respecting cross-target build order — Runner's link sees
+  # the path as missing because Pods_Runner's Copy XCFrameworks
+  # phase hasn't run yet at validation time.
+  #
+  # Workaround: reach into the xcframework's source location, where
+  # the slice already exists (prepare_command above wrote it there).
+  # That brings back per-SDK conditionals because xcframework slices
+  # are named after their SDK+arch combination — but the paths are
+  # stable and present from pod install onward.
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS' =>
-      '$(inherited) -force_load "$(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a"',
+    'OTHER_LDFLAGS[sdk=iphoneos*]' =>
+      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"',
+    'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
+      '$(inherited) -force_load "$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"',
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /
