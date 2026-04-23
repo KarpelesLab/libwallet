@@ -13,12 +13,34 @@ class InfoApi {
     return data as String? ?? '';
   }
 
-  /// Get the library version.
+  /// Tagged release the loaded native binary was built from
+  /// (e.g. `"0.3.30"`). Empty string when the binary was built from a
+  /// non-tagged commit (local dev / master CI mid-merge).
+  ///
+  /// Use [LibwalletClient]'s startup mismatch check to detect when this
+  /// disagrees with the Dart package version — the symptom you'd see is
+  /// post-upgrade events arriving in the previous release's wire shape.
   Future<String> version() async {
     final data = await _conn.request('Info:version', 'GET');
     if (data is String) return data;
-    if (data is Map) return data['version'] as String? ?? data.toString();
-    return data.toString();
+    if (data is Map) return (data['version'] as String?) ?? '';
+    return '';
+  }
+
+  /// Full version metadata (release version + commit SHA + commit
+  /// timestamp). Useful for support diagnostics; most apps just want
+  /// [version].
+  Future<VersionInfo> versionInfo() async {
+    final data = await _conn.request('Info:version', 'GET');
+    if (data is Map) {
+      final m = Map<String, dynamic>.from(data);
+      return VersionInfo(
+        version: (m['version'] as String?) ?? '',
+        gitTag: (m['gitTag'] as String?) ?? '',
+        dateTag: (m['dateTag'] as String?) ?? '',
+      );
+    }
+    return const VersionInfo(version: '', gitTag: '', dateTag: '');
   }
 
   /// Get system paths information.
@@ -117,4 +139,27 @@ class WalletInfo {
         logLevel: (json['logLevel'] as String?) ?? '',
         effectiveLogLevel: (json['effectiveLogLevel'] as String?) ?? '',
       );
+}
+
+/// Full version metadata returned by [InfoApi.versionInfo].
+class VersionInfo {
+  /// Tagged release (e.g. `"0.3.30"`). Empty for non-tagged builds.
+  final String version;
+
+  /// Short git SHA the binary was built from (e.g. `"a1b2c3d"`).
+  final String gitTag;
+
+  /// UTC commit timestamp of [gitTag], formatted YYYYMMDDhhmmss.
+  final String dateTag;
+
+  const VersionInfo({
+    required this.version,
+    required this.gitTag,
+    required this.dateTag,
+  });
+
+  @override
+  String toString() => version.isNotEmpty
+      ? 'libwallet $version ($gitTag, $dateTag)'
+      : 'libwallet dev ($gitTag, $dateTag)';
 }

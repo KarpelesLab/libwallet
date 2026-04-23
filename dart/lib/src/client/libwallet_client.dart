@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'dart:ffi';
 
 import '../api/account_api.dart';
@@ -24,6 +25,7 @@ import '../api/web3_connection_api.dart';
 import '../models/wc_session.dart';
 import '../events/events.dart';
 import '../models/request_event.dart';
+import '../version.dart';
 import 'ffi_transport.dart';
 import 'transport.dart';
 
@@ -64,7 +66,16 @@ class LibwalletClient {
   late final WalletConnectApi walletConnect = WalletConnectApi(_transport);
   late final CrashApi crashes = CrashApi(_transport);
 
-  LibwalletClient._(this._transport);
+  LibwalletClient._(this._transport) {
+    // Fire-and-forget: detect a Dart-vs-native version mismatch (the
+    // post-upgrade footgun where pubspec moved but the loaded binary
+    // didn't — common on iOS without a fresh `pod install`, and on
+    // any platform if the build hook's binary cache is stale). Logs
+    // an actionable warning to dart:developer; doesn't throw, since
+    // the wallet may still work for the calls whose wire shape didn't
+    // change between the two versions.
+    unawaited(_verifyVersionMatch());
+  }
 
   /// Initialize the Go library via FFI.
   ///
@@ -80,6 +91,37 @@ class LibwalletClient {
   }) {
     final transport = FfiTransport.initialize(dataDir, library: library);
     return LibwalletClient._(transport);
+  }
+
+  /// Compare the loaded native binary's release tag (set by ldflags
+  /// at build time) against the Dart package's `libwalletPackageVersion`
+  /// constant. Same release → silent. Mismatch with a populated native
+  /// version → log the actionable fix. Native version empty → dev/CI
+  /// build, skip the check (the developer knows what they're loading).
+  Future<void> _verifyVersionMatch() async {
+    String nativeVersion;
+    try {
+      nativeVersion = await info.version();
+    } catch (_) {
+      return;
+    }
+    if (nativeVersion.isEmpty) {
+      return;
+    }
+    if (nativeVersion == libwalletPackageVersion) {
+      return;
+    }
+    developer.log(
+      'libwallet version mismatch — loaded native binary is $nativeVersion '
+      'but the Dart package is $libwalletPackageVersion. The wire shape may '
+      'have changed between releases (events arriving as UnknownPendingRequest, '
+      'requests.approve rejecting "keys are required", etc.). Fix: on iOS '
+      'run `cd ios && pod install --repo-update`; on Android/macOS/Linux '
+      'run `dart pub get` (the cached binary is now version-stamped per '
+      'release as of 0.3.26).',
+      name: 'libwallet',
+      level: 900, // SEVERE in dart:developer's mapping
+    );
   }
 
   /// Stream of all server-pushed events.

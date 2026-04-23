@@ -1,3 +1,33 @@
+## 0.3.30
+
+- **`Info:version` now exposes the release tag.** New `version` field
+  alongside `dateTag` / `gitTag`, populated from the `v*` tag the
+  binary was built from (empty on dev / non-tagged builds). The Dart
+  wrapper got a typed `client.info.versionInfo()` returning a
+  `VersionInfo` (version + gitTag + dateTag) for diagnostics; the
+  long-broken `client.info.version()` now correctly returns the
+  release-tag string instead of the toString'd map.
+
+- **Runtime version-mismatch detection.** `LibwalletClient.initialize`
+  asynchronously calls `Info:version` and compares it against the
+  hardcoded `libwalletPackageVersion` constant. If the loaded native
+  binary is from a different release (the post-upgrade footgun:
+  pubspec moved but the linked `.a` / `.so` / `.dylib` didn't), an
+  actionable warning is logged via `dart:developer` telling the host
+  to run `pod install --repo-update` (iOS) or `dart pub get` (all
+  other platforms — caches are version-stamped since 0.3.26). Works
+  on every platform, not just iOS.
+
+- **Fixed: build-time `-X` ldflags targeted the wrong package.** The
+  `Makefile` and `build.yml` had been passing `-X main.dateTag=...` /
+  `-X main.gitTag=...` for the entire history of the project, but
+  those variables live in `wltbase`. The `-X` was a silent no-op —
+  every release binary shipped with empty `dateTag` / `gitTag`.
+  Corrected to use the fully qualified package path; release binaries
+  built on or after this commit return populated values from
+  `Info:version`. Also propagated the ldflags to the c-shared /
+  c-archive Dart-FFI builds, which had no version metadata at all.
+
 ## 0.3.29
 
 - **CI publish workflow: install BOTH Flutter and Dart.** v0.3.28

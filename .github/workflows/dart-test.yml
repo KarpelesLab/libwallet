@@ -35,7 +35,7 @@ jobs:
 
       - name: Run Dart unit tests
         working-directory: dart
-        run: dart test test/amount_test.dart test/models_test.dart test/response_test.dart
+        run: dart test test/amount_test.dart test/models_test.dart test/response_test.dart test/version_constant_test.dart
 
       - name: Run FFI integration tests
         working-directory: dart

@@ -9,10 +9,10 @@
 // Info:setWalletInfo's LogLevel field. An empty LogLevel means
 // "auto" — libwallet picks a sensible default for the build type:
 //
-//   - release binaries (when gitTag is set via -ldflags at build
+//   - release binaries (when version is set via -ldflags at build
 //     time): "info" — only routine state changes and errors. No
 //     per-RPC or per-sign chatter.
-//   - dev binaries (gitTag empty): "debug" — everything, useful
+//   - dev binaries (version empty): "debug" — everything, useful
 //     when reproducing a user-reported issue locally.
 //
 // Valid values (case-insensitive): "debug", "info", "warn", "error",
@@ -88,7 +88,7 @@ func init() {
 }
 
 // SetAutoDefault changes what "" resolves to. Called once at startup
-// by wltbase, using gitTag presence as the signal for release vs dev.
+// by wltbase, using version presence as the signal for release vs dev.
 // Passing LevelOff disables auto-logging in release builds; passing
 // LevelDebug makes a dev build chatty out of the box.
 func SetAutoDefault(l Level) {

@@ -26,6 +26,23 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      # Compute the linker flags once and stash them in $GITHUB_ENV so
+      # every build step in the job uses identical version metadata.
+      # TAG_VERSION is empty unless the workflow was triggered by a
+      # `v*` tag — wltbase reads it as the "release vs dev" signal and
+      # exposes it via Info:version for runtime mismatch detection.
+      - name: Compute libwallet ldflags
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
       - name: Build Android AAR
         # -Wl,-z,max-page-size=16384 is required on Android 15+: the OS
         # now supports 16 KB page devices (Pixel 8+ etc.) and refuses to
@@ -35,11 +52,9 @@ jobs:
         env:
           CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
         run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
           gomobile bind -v -target android -androidapi 21 \
             -javapkg com.karpeleslabs.libwallet \
-            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -ldflags="$LIBWALLET_LDFLAGS" \
             -o libwallet.aar .
 
       - name: Build c-shared libraries for Android (Dart FFI)
@@ -51,7 +66,7 @@ jobs:
             IFS=: read -r GOARCH CC_PREFIX NAME <<< "$arch_go_abi"
             CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${CC_PREFIX}-clang"
             CGO_ENABLED=1 GOOS=android GOARCH=$GOARCH CC=$CC \
-              go build -buildmode=c-shared -o "liblibwallet-${NAME}.so" ./cshared/
+              go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o "liblibwallet-${NAME}.so" ./cshared/
           done
 
       - name: Verify Android .so files are 16 KB aligned
@@ -117,12 +132,22 @@ jobs:
           go get golang.org/x/mobile/bind
           gomobile init
 
-      - name: Build iOS xcframework
+      - name: Compute libwallet ldflags
         run: |
           GIT_TAG=$(git rev-parse --short HEAD)
           DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
+      - name: Build iOS xcframework
+        run: |
           gomobile bind -v --target ios,iossimulator \
-            -ldflags=all="-X main.dateTag=${DATE_TAG} -X main.gitTag=${GIT_TAG}" \
+            -ldflags="$LIBWALLET_LDFLAGS" \
             -o libwallet.xcframework .
 
       - name: Build c-archive for iOS device (Dart FFI)
@@ -130,7 +155,7 @@ jobs:
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -o liblibwallet-ios-arm64.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-ios-arm64.a ./cshared/
 
       - name: Build c-archive for iOS simulator (Dart FFI)
         run: |
@@ -138,12 +163,12 @@ jobs:
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -o liblibwallet-iossimulator-arm64.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-iossimulator-arm64.a ./cshared/
           # Simulator on Intel Macs (x64)
           CGO_ENABLED=1 GOOS=ios GOARCH=amd64 \
             CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
-            go build -buildmode=c-archive -o liblibwallet-iossimulator-x64.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-iossimulator-x64.a ./cshared/
 
       - name: Build c-shared for macOS (Dart FFI)
         run: |
@@ -152,10 +177,10 @@ jobs:
           # Dart's native_assets pipeline does exactly this on bundling.
           CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
             CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared -o liblibwallet-macos-arm64.dylib ./cshared/
+            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-macos-arm64.dylib ./cshared/
           CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
             CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared -o liblibwallet-macos-x64.dylib ./cshared/
+            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-macos-x64.dylib ./cshared/
 
       - name: Upload iOS artifact
         uses: actions/upload-artifact@v7
@@ -178,10 +203,22 @@ jobs:
         with:
           go-version: "1.26"
 
+      - name: Compute libwallet ldflags
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
       - name: Build c-shared for Linux (Dart FFI)
         run: |
           CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -buildmode=c-shared -o liblibwallet-linux-x64.so ./cshared/
+            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-linux-x64.so ./cshared/
 
       - name: Upload Dart FFI artifacts (Linux)
         uses: actions/upload-artifact@v7

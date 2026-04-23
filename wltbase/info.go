@@ -17,6 +17,12 @@ import (
 var (
 	dateTag string
 	gitTag  string
+	// version is the tagged release this binary was built from
+	// (e.g. "0.3.29"). Empty for dev/master builds where no tag is
+	// pointing at HEAD. Hosts compare it to their own package
+	// version to detect a stale-binary mismatch (a common iOS pitfall
+	// when `pod install` was skipped after a Dart upgrade).
+	version string
 )
 
 func init() {
@@ -28,13 +34,13 @@ func init() {
 	pobj.RegisterStatic("Info:setWalletInfo", infoSetWalletInfo)
 	pobj.RegisterStatic("Info:getWalletInfo", infoGetWalletInfo)
 
-	// gitTag is populated by -ldflags in release builds (see the
-	// Build workflow). An empty gitTag means this binary was built
-	// from source without a release tag — usually a dev/CI build,
-	// so default to "debug" logging. Release binaries default to
-	// "info" so end users don't see per-RPC chatter but still get
-	// the state-change lines that matter for support diagnosis.
-	if gitTag == "" {
+	// version is populated by -ldflags only on tag-triggered release
+	// builds. An empty version means this binary was built from a
+	// non-tagged commit (master push, local dev, CI mid-merge), so
+	// default to "debug" logging. Release binaries default to "info"
+	// so end users don't see per-RPC chatter but still get the
+	// state-change lines that matter for support diagnosis.
+	if version == "" {
 		wltlog.SetAutoDefault(wltlog.LevelDebug)
 	} else {
 		wltlog.SetAutoDefault(wltlog.LevelInfo)
@@ -100,6 +106,7 @@ func infoPing() (any, error) {
 
 func infoVersion() (any, error) {
 	return map[string]any{
+		"version": version,
 		"dateTag": dateTag,
 		"gitTag":  gitTag,
 	}, nil

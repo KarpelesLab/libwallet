@@ -7,6 +7,10 @@ SOURCES:=$(shell find . -name '*.go' -o -name '*.h' -o -name '*.m')
 ifeq ($(DATE_TAG),)
 DATE_TAG:=$(shell TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
 endif
+# When HEAD is exactly a v* tag, capture it as the release version
+# (with the leading "v" stripped). Otherwise empty — wltbase reads
+# this to differentiate release vs dev binaries.
+TAG_VERSION:=$(shell git describe --exact-match --tags --match 'v*' 2>/dev/null | sed 's/^v//')
 
 DIST_FILES=dist/android/libwallet.aar
 
@@ -15,7 +19,12 @@ ifeq ($(GOOS),darwin)
 DIST_FILES:=$(DIST_FILES) dist/ios/Libwallet.xcframework
 endif
 
-GOFLAGS=-ldflags=all="-X main.dateTag=$(DATE_TAG) -X main.gitTag=$(GIT_TAG)"
+# Note: -X needs the FULLY QUALIFIED package path for non-main vars.
+# Previous "-X main.dateTag=..." was a silent no-op because dateTag
+# lives in wltbase, not main — release binaries shipped with empty
+# dateTag/gitTag for years.
+LDFLAGS_PKG=github.com/KarpelesLab/libwallet/wltbase
+GOFLAGS=-ldflags="-X $(LDFLAGS_PKG).dateTag=$(DATE_TAG) -X $(LDFLAGS_PKG).gitTag=$(GIT_TAG) -X $(LDFLAGS_PKG).version=$(TAG_VERSION)"
 
 .PHONY: ios android dist test deps dart-native dart-native-macos dart-native-linux
 
