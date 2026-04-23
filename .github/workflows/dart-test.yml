@@ -29,10 +29,27 @@ jobs:
           channel: stable
       - uses: dart-lang/setup-dart@v1
 
+      # Same ldflag plumbing as build.yml so CI test binaries also
+      # carry populated dateTag/gitTag in Info:version. Lets the
+      # integration test assert that the ldflag mechanism works at
+      # all, instead of silently regressing the way the broken
+      # `-X main.dateTag=...` did for years.
+      - name: Compute libwallet ldflags
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
       - name: Build c-shared library for FFI tests
         run: |
           CGO_ENABLED=1 CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared \
+            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" \
             -o dart/testserver/liblibwallet.dylib ./cshared/
 
       - name: Install Dart dependencies
@@ -87,6 +104,18 @@ jobs:
         with:
           go-version: "1.26"
 
+      - name: Compute libwallet ldflags
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
       - name: Build c-archive slices for iOS (sim arm64 + device arm64)
         run: |
           # The ios/libwallet.podspec expects per-SDK archives in dart/ios/.
@@ -103,11 +132,11 @@ jobs:
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -o dart/ios/liblibwallet-iossimulator.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator.a ./cshared/
           CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
             CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
             CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -o dart/ios/liblibwallet-ios-arm64.a ./cshared/
+            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-ios-arm64.a ./cshared/
 
       - uses: subosito/flutter-action@v2
         with:
@@ -197,6 +226,18 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      - name: Compute libwallet ldflags
+        run: |
+          GIT_TAG=$(git rev-parse --short HEAD)
+          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+          else
+            TAG_VERSION=""
+          fi
+          PKG=github.com/KarpelesLab/libwallet/wltbase
+          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+
       - name: Build c-shared library for Android x86_64
         run: |
           # The emulator is x86_64, so we only need that ABI
@@ -204,7 +245,7 @@ jobs:
           export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
           export CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
           CGO_ENABLED=1 GOOS=android GOARCH=amd64 \
-            go build -buildmode=c-shared \
+            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" \
             -o dart/test_app/android/app/src/main/jniLibs/x86_64/liblibwallet.so \
             ./cshared/
 
