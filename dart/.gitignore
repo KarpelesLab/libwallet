@@ -3,3 +3,4 @@ pubspec.lock
 testserver/testserver
 testserver/liblibwallet.*
 native/
+ios/liblibwallet-*.a

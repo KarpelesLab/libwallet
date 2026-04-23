@@ -17,3 +17,15 @@ dependencies:
 dev_dependencies:
   test: ^1.24.0
   lints: ^5.0.0
+
+# Declared as an FFI plugin for iOS so Flutter picks up
+# `ios/libwallet.podspec` automatically. The podspec downloads the
+# matching per-SDK static archives from the GitHub Release at
+# pod install time and force-loads them into the host app target.
+# Other platforms (Android, macOS, Linux, Windows) continue to be
+# served by the build hook + code_assets path in `hook/build.dart`.
+flutter:
+  plugin:
+    platforms:
+      ios:
+        ffiPlugin: true

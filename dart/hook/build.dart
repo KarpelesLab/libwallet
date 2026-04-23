@@ -37,14 +37,15 @@ void main(List<String> args) async {
         ext = 'so';
         linkMode = DynamicLoadingBundled();
       case OS.iOS:
-        // Distinguish iOS device (iphoneos) from simulator (iphonesimulator).
-        // The binaries are NOT interchangeable: simulator builds link against
-        // different frameworks than on-device builds.
-        final iosSdk = codeConfig.iOS.targetSdk;
-        final prefix = iosSdk == IOSSdk.iPhoneSimulator ? 'iossimulator' : 'ios';
-        dartName = '$prefix-${_archName(arch)}';
-        ext = 'a';
-        linkMode = LookupInProcess();
+        // iOS is handled by `ios/libwallet.podspec` (Flutter FFI plugin
+        // auto-include). The build hook would emit a `LookupInProcess` code
+        // asset for the .a archive, but Flutter's iOS pipeline does not
+        // reliably link static archives from code_assets through to Xcode —
+        // the symbols get dead-stripped and dlsym fails at runtime. The
+        // podspec's per-SDK `-force_load` is the working path. Returning
+        // here means the hook emits no iOS asset and the podspec is the
+        // sole source of truth for iOS linking.
+        return;
       case OS.windows:
         dartName = 'windows-${_archName(arch)}';
         ext = 'dll';

@@ -1,3 +1,21 @@
+## 0.3.26
+
+- **iOS: ship as a Flutter FFI plugin (fixes external `dlsym` failure).**
+  The build hook's `LinkMode = LookupInProcess()` for the iOS `.a`
+  archive worked for the in-tree test app, but Flutter's iOS pipeline
+  did not reliably pass the static archive through to Xcode's linker
+  for *external* consumers — the FFI symbols (`LibwalletInit`, …) got
+  dead-stripped and `dlsym` failed at runtime with "symbol not found".
+  This release adds `flutter.plugin.platforms.ios.ffiPlugin: true` to
+  `pubspec.yaml` and ships `ios/libwallet.podspec`, which downloads
+  the matching per-SDK static archives from the GitHub Release at
+  `pod install` time and force-loads them into the host app target via
+  per-SDK `OTHER_LDFLAGS`. Both device + simulator slices are pulled,
+  combined into a single fat simulator archive via `lipo`, and the
+  per-SDK xcconfig picks the correct one per build configuration.
+  No code changes for app authors — `flutter pub upgrade` then a
+  fresh `pod install` is enough.
+
 ## 0.3.25
 
 - **Rich payloads on the remaining approval events.** Same

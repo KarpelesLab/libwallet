@@ -30,10 +30,11 @@ target 'Runner' do
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 
-  # Link the c-archive static library (built by CI before running tests)
-  if File.exist?(File.join(__dir__, 'liblibwallet.a'))
-    pod 'Libwallet', :path => __dir__
-  end
+  # The libwallet pod is auto-included via the parent package's
+  # `flutter.plugin.platforms.ios.ffiPlugin: true` declaration; its
+  # podspec lives at ../libwallet/ios/libwallet.podspec and handles
+  # downloading + force-loading the per-SDK static archives. Nothing
+  # to wire here.
 
   target 'RunnerTests' do
     inherit! :search_paths
