@@ -27,6 +27,7 @@ func init() {
 	pobj.RegisterStatic("Wallet:reshare", apiWalletReshare)
 	pobj.RegisterStatic("Wallet:importPrivateKey", apiImportPrivateKey)
 	pobj.RegisterStatic("Wallet:importMnemonic", apiImportMnemonic)
+	pobj.RegisterStatic("Wallet:promote", apiWalletPromote)
 }
 
 func WalletById(e wltintf.Env, id *xuid.XUID) (*Wallet, error) {
