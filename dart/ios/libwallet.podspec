@@ -85,13 +85,17 @@ Pod::Spec.new do |s|
     fi
   CMD
 
-  # Use preserve_paths (not vendored_libraries) so CocoaPods copies the
-  # archives into PODS_ROOT/libwallet/ without auto-emitting -l flags.
-  # vendored_libraries would add `-llibwallet-ios-arm64 -llibwallet-iossimulator`
-  # to *every* sdk's link line, and the wrong-SDK slice would trigger
-  # "ignoring file ... built for iOS" warnings or linker errors.
-  # Per-SDK -force_load below picks the correct archive at link time.
-  s.preserve_paths = 'liblibwallet-*.a'
+  # Both archives are listed under vendored_libraries so CocoaPods
+  # actually copies them into $(PODS_ROOT)/libwallet/ (preserve_paths
+  # alone doesn't copy for path-based pods, only for remote sources).
+  # vendored_libraries auto-emits `-llibwallet-ios-arm64 -llibwallet-iossimulator`
+  # on every link line — for the wrong-SDK slice the linker prints a
+  # benign "ignoring file ... built for iOS / iOS Simulator" warning
+  # and skips it, which is harmless. The per-SDK -force_load below is
+  # what actually pulls the FFI symbols in for the matching SDK.
+  s.ios.vendored_libraries =
+    'liblibwallet-ios-arm64.a',
+    'liblibwallet-iossimulator.a'
 
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
