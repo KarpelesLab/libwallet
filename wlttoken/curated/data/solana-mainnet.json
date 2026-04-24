@@ -1,0 +1,61 @@
+[
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "symbol": "USDC",
+    "name": "USD Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+    "coingeckoId": "usd-coin",
+    "cmcId": 3408,
+    "tags": ["stablecoin"]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "symbol": "USDT",
+    "name": "USDT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg",
+    "coingeckoId": "tether",
+    "cmcId": 825,
+    "tags": ["stablecoin"]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "So11111111111111111111111111111111111111112",
+    "symbol": "SOL",
+    "name": "Wrapped SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+    "coingeckoId": "wrapped-solana",
+    "tags": ["wrapped"]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    "symbol": "mSOL",
+    "name": "Marinade staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
+    "coingeckoId": "msol",
+    "cmcId": 11461,
+    "tags": ["lst"]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    "symbol": "JUP",
+    "name": "Jupiter",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static.jup.ag/jup/icon.png",
+    "coingeckoId": "jupiter-exchange-solana",
+    "cmcId": 29210,
+    "tags": ["governance"]
+  }
+]
