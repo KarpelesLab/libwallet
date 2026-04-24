@@ -277,6 +277,36 @@ func web3Req(ctx context.Context, in struct {
 		}
 		// approved
 		return req.Result, nil
+	case "personal_ecRecover":
+		// Inverse of personal_sign. Pure cryptographic op (recover
+		// signer address from message + signature) — no wallet
+		// state needed and no JSON-RPC server implements it
+		// (most return -32601), so we always handle locally.
+		// Spec: params = [message: 0xhex, signature: 0xhex(65)]
+		if len(in.Query.Params) < 2 {
+			return nil, errors.New("personal_ecRecover requires [message, signature]")
+		}
+		msgHex, ok := in.Query.Params[0].(string)
+		if !ok {
+			return nil, errors.New("personal_ecRecover: message must be a 0x-hex string")
+		}
+		sigHex, ok := in.Query.Params[1].(string)
+		if !ok {
+			return nil, errors.New("personal_ecRecover: signature must be a 0x-hex string")
+		}
+		msgBin := web3HexValue(msgHex)
+		if msgBin == nil {
+			return nil, errors.New("personal_ecRecover: invalid message hex")
+		}
+		sigBin := web3HexValue(sigHex)
+		if sigBin == nil {
+			return nil, errors.New("personal_ecRecover: invalid signature hex")
+		}
+		addr, err := wltacct.EthPersonalEcRecover(msgBin, sigBin)
+		if err != nil {
+			return nil, err
+		}
+		return addr, nil
 	case "eth_signTypedData_v4", "eth_signTypedData_v3", "eth_signTypedData":
 		if len(in.Query.Params) < 2 {
 			return nil, errors.New("eth_signTypedData_v4 requires [address, typedData]")
