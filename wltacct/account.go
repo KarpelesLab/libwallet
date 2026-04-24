@@ -244,9 +244,26 @@ func (a *Account) UpdateAddressForNetwork(net *wltnet.Network) error {
 		}
 		return nil
 	case "solana":
+		// Solana pubkeys are raw 32-byte ed25519 points. A secp256k1
+		// account stores a 33-byte compressed pubkey (or an ethereum
+		// account's key material); base58-encoding that gives a
+		// string that Solana RPC rejects with "Invalid param:
+		// WrongSize". Treat anything that isn't a valid 32-byte
+		// ed25519 pubkey as "no Solana address" and let the caller
+		// skip it the same way EVM / Bitcoin skip ed25519 accounts.
+		if a.Curve != "ed25519" {
+			a.Address = "N/A"
+			a.URI = ""
+			return nil
+		}
 		pubBytes, err := base64.RawURLEncoding.DecodeString(a.Pubkey)
 		if err != nil {
 			return err
+		}
+		if len(pubBytes) != 32 {
+			a.Address = "N/A"
+			a.URI = ""
+			return nil
 		}
 		a.Address = base58.Bitcoin.Encode(pubBytes)
 		a.URI = "solana:" + a.Address
