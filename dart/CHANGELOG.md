@@ -1,3 +1,20 @@
+## 0.4.3
+
+- **Fixed: `Asset:list` crashed with `-32602 Invalid param: WrongSize`
+  on Solana** for any wallet whose account is secp256k1
+  (EVM-flavoured). `Account.UpdateAddressForNetwork` was blindly
+  base58-encoding the 33-byte compressed secp256k1 pubkey as if it
+  were a 32-byte ed25519 point; Solana's `getBalance` then rejected
+  the oversized pubkey. Non-ed25519 accounts on a Solana network
+  now resolve to `Address="N/A"` (same convention EVM / Bitcoin
+  use for ed25519 accounts) and the balance call is skipped.
+- **Fixed: `Swap:availability` reported every Solana wallet as
+  `unsupported_chain`.** The live Solana network row uses
+  `ChainId="mainnet"` (set by `wltnet/api.go`), but the
+  availability gate only accepted Solana's internal cluster name
+  `"mainnet-beta"`. The Swap button was hidden on Solana as a
+  result. Gate now matches the real stored ChainId.
+
 ## 0.4.2
 
 - **Fixed: `eth_sendTransaction` approval crashed with "failed to get
