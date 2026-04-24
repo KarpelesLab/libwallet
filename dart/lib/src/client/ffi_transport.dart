@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:io' show Platform;
 
 import 'package:ffi/ffi.dart';
 
@@ -106,16 +107,39 @@ class FfiTransport implements Transport {
   static FfiTransport initialize(String dataDir, {DynamicLibrary? library}) {
     final lib = library ?? _loadDefaultLibrary();
 
+    // Symbol names: on iOS we look up the snake_case bridges defined
+    // in dart/ios/Classes/LibwalletBridge.m, which statically forward
+    // to the underlying Go-exported `Libwallet*` symbols. The bridge
+    // gives the linker a real static reference from app source code,
+    // which is what keeps the symbols in the host binary's export
+    // trie under default visibility — Apple's new linker (ld-prime,
+    // Xcode 15+) drops force-loaded symbols from the export trie
+    // unless something app-side references them, and dart:ffi has
+    // no way to look up symbols outside the export trie. See the
+    // bridge file for the full background.
+    //
+    // On every other platform the Go-exported names are reachable
+    // directly: macOS / Linux / Windows ship as a c-shared dylib
+    // that we dlopen (its export trie is whatever Go emits), and
+    // Android's c-shared .so is bundled by Gradle the same way.
+    final initSym = Platform.isIOS ? 'libwallet_init' : 'LibwalletInit';
+    final requestSym = Platform.isIOS ? 'libwallet_request' : 'LibwalletRequest';
+    final setEventCbSym = Platform.isIOS
+        ? 'libwallet_set_event_callback'
+        : 'LibwalletSetEventCallback';
+    final destroySym = Platform.isIOS ? 'libwallet_destroy' : 'LibwalletDestroy';
+    final freeSym = Platform.isIOS ? 'libwallet_free' : 'LibwalletFree';
+
     final init =
-        lib.lookupFunction<_LibwalletInitC, _LibwalletInitDart>('LibwalletInit');
+        lib.lookupFunction<_LibwalletInitC, _LibwalletInitDart>(initSym);
     final request = lib
-        .lookupFunction<_LibwalletRequestC, _LibwalletRequestDart>('LibwalletRequest');
+        .lookupFunction<_LibwalletRequestC, _LibwalletRequestDart>(requestSym);
     final setEventCb = lib.lookupFunction<_LibwalletSetEventCallbackC,
-        _LibwalletSetEventCallbackDart>('LibwalletSetEventCallback');
+        _LibwalletSetEventCallbackDart>(setEventCbSym);
     final destroy = lib
-        .lookupFunction<_LibwalletDestroyC, _LibwalletDestroyDart>('LibwalletDestroy');
+        .lookupFunction<_LibwalletDestroyC, _LibwalletDestroyDart>(destroySym);
     final free =
-        lib.lookupFunction<_LibwalletFreeC, _LibwalletFreeDart>('LibwalletFree');
+        lib.lookupFunction<_LibwalletFreeC, _LibwalletFreeDart>(freeSym);
 
     final dataDirPtr = dataDir.toNativeUtf8();
     final handle = init(dataDirPtr);

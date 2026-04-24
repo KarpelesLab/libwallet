@@ -57,6 +57,16 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
   s.ios.deployment_target = '13.0'
 
+  # Compile the Objective-C bridge into the libwallet pod target.
+  # The bridge gives the linker a real static reference from app
+  # source code to each Go-exported FFI symbol, which is what
+  # makes them survive into the host binary's export trie under
+  # default visibility — see Classes/LibwalletBridge.m for the
+  # full rationale. Required for dart:ffi's dlsym lookups to
+  # work on iOS release builds.
+  s.source_files = 'Classes/**/*.{m,h}'
+  s.requires_arc = true
+
   # Skip downloads when a pre-built .a is already present in the
   # pod source dir (CI / local-dev path). Otherwise pull from the
   # matching GitHub Release. The fat simulator archive is built
@@ -120,32 +130,14 @@ Pod::Spec.new do |s|
   # per-SDK conditionals, no more wrong-SDK "ignoring file" warning.
   s.ios.vendored_frameworks = 'libwallet.xcframework'
 
-  # Two flags are needed to make dlsym work on iOS release builds:
-  #
-  # 1. -force_load pulls all object files from the static archive
-  #    into the binary — without it the linker dead-strips every
-  #    symbol the FFI entry points transitively depend on, since
-  #    nothing in C statically references them.
-  #
-  # 2. -u _Libwallet* (one per FFI entry point) adds each symbol
-  #    to the linker's root set so it isn't dead-stripped. This is
-  #    the minimum needed to keep dlsym working on release builds
-  #    — Xcode release builds would otherwise drop unreferenced
-  #    symbols from the export trie even when the code itself
-  #    survives via -force_load. Debug builds work because the
-  #    debug dylib is linked with -rdynamic which exports
-  #    everything.
-  #
-  #    We previously used `-exported_symbol` instead; that's an
-  #    EXCLUSIVE allowlist — only listed symbols end up exported,
-  #    everything else (including `_main`) is stripped. On Xcode
-  #    16's debug-dylib stub executor model the host Runner app's
-  #    `_main` needs to remain exported or the stub can't dlsym it
-  #    at launch and the app dies with SIGTERM before the Dart VM
-  #    Service ever comes up → `flutter test` hangs at
-  #    "Waiting for VM Service port to be available" for the full
-  #    10-min watchdog window. `-u` keeps the FFI symbols without
-  #    touching export visibility for anything else.
+  # `-force_load` pulls every object file from the static archive
+  # into the binary. The bridge in Classes/LibwalletBridge.m gives
+  # the linker static references from app source to each FFI entry
+  # point, which keeps both the bridge AND the underlying Go
+  # symbols in the host binary's export trie under default
+  # visibility — no `-u` / `-exported_symbol` escape hatches needed.
+  # Dart-side dart:ffi looks up the snake_case bridge names
+  # (`libwallet_init`, …) which are defined in the bridge.
   #
   # We want to point -force_load at
   # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a (where
@@ -163,40 +155,11 @@ Pod::Spec.new do |s|
   xcframework_slice_device = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"'
   xcframework_slice_sim    = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"'
 
-  # Every FFI entry point declared with `//export` in cshared/ffi.go.
-  # Keep in sync with that file — if new exports are added there,
-  # they must be listed here too or dlsym will silently fail to find
-  # them on iOS release builds.
-  ffi_exports = %w[
-    _LibwalletInit
-    _LibwalletRequest
-    _LibwalletSetEventCallback
-    _LibwalletShowDebug
-    _LibwalletDestroy
-    _LibwalletFree
-  ]
-  # `-u <sym>` (a.k.a. "undefined symbol") tells ld to add the symbol
-  # to the root set for dead-strip analysis without making the export
-  # set exclusive. We previously used `-exported_symbol <sym>`, which
-  # IS exclusive: it only keeps the listed symbols in the final
-  # binary's export trie. That had the side effect of stripping EVERY
-  # OTHER symbol — including `_main` — from the host Runner app's
-  # exports. Xcode 16's debug-dylib stub executor model dlsym's
-  # `main` from Runner.debug.dylib at launch and bailed with
-  # "No entry point found. Checked '(null)'" → SIGTERM → no VM
-  # Service → `flutter test` hung forever.
-  #
-  # `-u` forces each FFI symbol to be reachable (so it isn't dead-
-  # stripped) without touching the export-visibility of anything
-  # else. dlsym on `_LibwalletInit` and friends continues to work in
-  # release builds; `_main` stays exported for the debug launcher.
-  ffi_export_flags = ffi_exports.map { |sym| "-Xlinker -u -Xlinker #{sym}" }.join(' ')
-
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      "$(inherited) -force_load #{xcframework_slice_device} #{ffi_export_flags}",
+      "$(inherited) -force_load #{xcframework_slice_device}",
     'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      "$(inherited) -force_load #{xcframework_slice_sim} #{ffi_export_flags}",
+      "$(inherited) -force_load #{xcframework_slice_sim}",
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /
