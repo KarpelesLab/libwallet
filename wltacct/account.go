@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"math/big"
@@ -47,6 +49,87 @@ type Account struct {
 	IL        *big.Int   `json:"IL,string" sql:",type=JSON,format=json"` // Intermediate value used in derivation
 	Created   time.Time  `sql:",type=DATETIME"`                          // Creation timestamp
 	Updated   time.Time  `sql:",type=DATETIME"`                          // Last update timestamp
+}
+
+// accountJSONAlias is the field-shadowing trick that lets us reuse
+// every other field's tag/encoding while overriding IL's serializer.
+type accountJSONAlias Account
+
+// MarshalJSON emits Account with the IL field as an explicit JSON
+// string (decimal text of the bigint) instead of as a JSON number.
+//
+// Why this exists: Go's encoding/json silently IGNORES the
+// `,string` struct tag for fields whose type provides a custom
+// MarshalJSON — *big.Int falls in that bucket. So the `IL,string`
+// tag on the struct field is a no-op on the encode side, and IL
+// gets serialized as a raw JSON number. That's fine for direct
+// Account ↔ Account roundtrips (the decoder is lenient), but it
+// breaks anywhere Account passes through `any`: psql loads any
+// JSON values into map[string]any, where JSON numbers become
+// float64 (15-17 digits of precision). A 254-bit IL turns into
+// scientific notation like "1.74e+76", and the eventual
+// big.Int.UnmarshalText errors with
+//
+//	math/big: cannot unmarshal "1.74...e+76" into a *big.Int
+//
+// Reproduced specifically by wallet_switchEthereumChain: the
+// chain_switch request stashes CandidateAccounts in
+// request.Value (typed `any`), which roundtrips through the
+// float64 lossy path on approval load.
+//
+// By emitting IL as a JSON string here, we keep precision through
+// arbitrary `any` roundtrips: a Go string survives map[string]any
+// faithfully and re-marshals as the same JSON string.
+func (a Account) MarshalJSON() ([]byte, error) {
+	aux := struct {
+		IL string `json:"IL,omitempty"`
+		*accountJSONAlias
+	}{accountJSONAlias: (*accountJSONAlias)(&a)}
+	if a.IL != nil {
+		aux.IL = a.IL.Text(10)
+	}
+	return json.Marshal(aux)
+}
+
+// UnmarshalJSON accepts IL as a JSON string (the new encoding
+// produced by MarshalJSON above), a JSON number (older data and
+// the standard-lib decode of the legacy field), or scientific
+// notation (recovery for already-corrupted data — best-effort,
+// precision IS lost in this path).
+func (a *Account) UnmarshalJSON(b []byte) error {
+	aux := struct {
+		IL json.RawMessage `json:"IL,omitempty"`
+		*accountJSONAlias
+	}{accountJSONAlias: (*accountJSONAlias)(a)}
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	a.IL = nil
+	raw := strings.TrimSpace(string(aux.IL))
+	if raw == "" || raw == "null" {
+		return nil
+	}
+	// Strip surrounding quotes if it's a JSON string.
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		raw = raw[1 : len(raw)-1]
+	}
+	v, ok := new(big.Int).SetString(raw, 10)
+	if ok {
+		a.IL = v
+		return nil
+	}
+	// Last-ditch recovery for scientific-notation input — pre-fix
+	// data that was rounded through float64. We can't recover the
+	// original integer (precision was lost upstream), but we can
+	// at least produce a *big.Int that doesn't error out so the
+	// approval flow can continue. Caller is responsible for
+	// surfacing the precision loss to the user if it matters.
+	if f, _, err := big.ParseFloat(raw, 10, 256, big.ToNearestEven); err == nil {
+		v, _ := f.Int(nil)
+		a.IL = v
+		return nil
+	}
+	return fmt.Errorf("Account.IL: cannot parse %q as integer", raw)
 }
 
 // save persists the account to the database
