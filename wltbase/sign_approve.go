@@ -46,7 +46,13 @@ func approveTransactionSign(ctx context.Context, e *env, req *request, keys []*w
 		if req.Transaction == nil {
 			return errors.New("eth_sendTransaction approval missing transaction")
 		}
-		return req.Transaction.SignAndSend(e, keys)
+		// Pass the apirouter context, not *env: SignAndSend calls
+		// wltintf.GetEnv(ctx) which walks the context chain looking
+		// for *apirouter.Context. *env has no apirouter context in
+		// its parent chain (it wraps the psql-plugged sqlCtx), so
+		// passing it here returns nil and fails with "failed to get
+		// env" before any signing happens.
+		return req.Transaction.SignAndSend(ctx, keys)
 	case "solana_signTransaction":
 		return approveSolanaSignTx(ctx, e, req, keys, v.Raw, false)
 	case "solana_signAndSendTransaction":
