@@ -1,3 +1,29 @@
+## 0.4.2
+
+- **Fixed: `eth_sendTransaction` approval crashed with "failed to get
+  env"** before signing. The transaction-sign approval handler was
+  passing `*env` (whose embedded context is the bare psql sqlCtx) to
+  `Transaction.SignAndSend`, which expects an apirouter context so it
+  can extract the env. Now passes the original apirouter context.
+  This also clears the cascading "unexpected end of JSON input" the
+  dApp side reported — that was the dApp's parser choking on the
+  stringified upstream error.
+- **Fixed: `personal_ecRecover` returned RPC error -32601** ("method
+  does not exist"). The previous default-relay path forwarded it to
+  the chain's JSON-RPC node, but `personal_ecRecover` is a wallet-
+  side operation and most public nodes don't implement it. Now
+  handled locally: applies the EIP-191 prefix, runs ECDSA recovery,
+  returns the EIP-55 address. Accepts both `{27, 28}` and `{0, 1}`
+  v bytes, matching MetaMask / ethers / viem tolerance.
+- **Fixed: `wallet_switchEthereumChain` crashed loading the approval
+  back out of psql** with `math/big: cannot unmarshal "1.74…e+76"
+  into a *big.Int`. `Account.IL` (the BIP32 intermediate value) was
+  emitted as a raw JSON number, lost precision through float64 in
+  the `any` roundtrip the request loader does, then failed to
+  unmarshal. `Account` now has custom `MarshalJSON` /
+  `UnmarshalJSON` that emit IL as a JSON string and parse the
+  string-or-number / scientific-notation forms on the way back in.
+
 ## 0.4.1
 
 - **`Wallet:probeActivity`** — new endpoint for mnemonic-backed
