@@ -10,6 +10,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wlttoken/curated"
 )
 
 // Solana RPC response types
@@ -86,10 +87,19 @@ func (n *Network) SolanaTokenBalances(ctx context.Context, e wltintf.Env, acct A
 			continue
 		}
 
+		// Enrich Name / Symbol from the embedded curated registry
+		// when the mint is well-known. Falls back to a truncated
+		// mint so unlisted tokens still have something non-empty
+		// to display. ChainId here matches wltnet/api.go's Solana
+		// registration (ChainId="mainnet").
+		name, symbol := info.Mint[:8]+"...", info.Mint[:6]
+		if ct := curated.Lookup(n.Type, n.ChainId, info.Mint); ct != nil {
+			name, symbol = ct.Name, ct.Symbol
+		}
 		asset := &wltasset.Asset{
 			Key:     n.String() + "." + info.Mint,
-			Name:    info.Mint[:8] + "...", // short name, could be enriched with token metadata
-			Symbol:  info.Mint[:6],
+			Name:    name,
+			Symbol:  symbol,
 			Amount:  wltobj.NewAmountRaw(amt, info.TokenAmount.Decimals),
 			Network: n.Id,
 			Type:    "fungible",
