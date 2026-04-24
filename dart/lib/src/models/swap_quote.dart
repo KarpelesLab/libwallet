@@ -305,7 +305,7 @@ class SwapAvailability {
 
   /// Canonical network identifier matching the format Asset:list
   /// uses — `"<type>.<chainId>"`, e.g. `"evm.1"`, `"evm.137"`,
-  /// `"solana.mainnet-beta"`, `"bitcoin.dogecoin"`. Split on `.` to
+  /// `"solana.mainnet"`, `"bitcoin.dogecoin"`. Split on `.` to
   /// get the chain family.
   final String network;
 
@@ -345,7 +345,7 @@ class SwapAvailability {
   }
 
   /// Convenience: the chain id portion of [network] (`"1"`, `"137"`,
-  /// `"mainnet-beta"`, `"dogecoin"`).
+  /// `"mainnet"`, `"dogecoin"`).
   String get chainId {
     final i = network.indexOf('.');
     return i < 0 ? '' : network.substring(i + 1);

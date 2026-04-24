@@ -44,7 +44,7 @@ type MaxSendableRequest struct {
 	To string `json:"to,omitempty"`
 	// Asset is the asset key to compute max against. Canonical
 	// form is "<type>.<chainId>.<suffix>" (e.g. "evm.1.NATIVE",
-	// "solana.mainnet-beta.<mint>") — identical to the keys
+	// "solana.mainnet.<mint>") — identical to the keys
 	// Asset:list returns. The network is inferred from the
 	// "<type>.<chainId>." prefix; empty or bare "NATIVE" falls
 	// back to the current network's native currency. Non-native

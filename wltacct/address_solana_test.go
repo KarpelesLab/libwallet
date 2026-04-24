@@ -24,7 +24,7 @@ func TestUpdateAddressForNetwork_SolanaWithSecp256k1(t *testing.T) {
 		Curve:  "secp256k1",
 		Pubkey: base64.RawURLEncoding.EncodeToString(raw),
 	}
-	net := &wltnet.Network{Type: "solana", ChainId: "mainnet-beta"}
+	net := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
 	if err := a.UpdateAddressForNetwork(net); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestUpdateAddressForNetwork_SolanaWithEd25519(t *testing.T) {
 		Curve:  "ed25519",
 		Pubkey: base64.RawURLEncoding.EncodeToString(raw),
 	}
-	net := &wltnet.Network{Type: "solana", ChainId: "mainnet-beta"}
+	net := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
 	if err := a.UpdateAddressForNetwork(net); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestUpdateAddressForNetwork_SolanaWrongPubkeyLength(t *testing.T) {
 		Curve:  "ed25519",
 		Pubkey: base64.RawURLEncoding.EncodeToString(raw),
 	}
-	net := &wltnet.Network{Type: "solana", ChainId: "mainnet-beta"}
+	net := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
 	if err := a.UpdateAddressForNetwork(net); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

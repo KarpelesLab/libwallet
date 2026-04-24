@@ -23,7 +23,7 @@ type AvailabilityResult struct {
 	Available bool `json:"available"`
 	// Network is the canonical network identifier matching the
 	// format Asset:list uses — "<type>.<chainId>", e.g.
-	// "evm.1" / "evm.137" / "solana.mainnet-beta" /
+	// "evm.1" / "evm.137" / "solana.mainnet" /
 	// "bitcoin.dogecoin". Apps that need just the chain family
 	// can split on ".".
 	Network string `json:"network"`
@@ -80,8 +80,9 @@ func swapAvailability(ctx context.Context) (any, error) {
 // unit-tested without setting up a temp env per case.
 //
 // Decisions per family:
-//   - solana: only mainnet-beta routes through Jupiter/dFlow.
-//     Devnet / testnet clusters return unsupported_chain.
+//   - solana: only mainnet routes through Jupiter/dFlow. Devnet /
+//     testnet clusters return unsupported_chain. The stored
+//     Network.ChainId for Solana is "mainnet" (see wltnet/api.go).
 //   - evm: per-chainId gate via oneInchSupportedChains. API key
 //     missing → reason=missing_api_key. Chain not in 1inch's
 //     coverage → unsupported_chain even with a valid key.
@@ -91,7 +92,7 @@ func computeAvailability(netType, chainId string, reg map[string]Provider, oneIn
 
 	switch netType {
 	case "solana":
-		if chainId != "mainnet-beta" {
+		if chainId != "mainnet" {
 			res.Reason = "unsupported_chain"
 			return res
 		}

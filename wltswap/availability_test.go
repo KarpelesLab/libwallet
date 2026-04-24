@@ -28,10 +28,10 @@ func TestComputeAvailability(t *testing.T) {
 		{
 			name:          "solana mainnet — available",
 			netType:       "solana",
-			chainId:       "mainnet-beta",
+			chainId:       "mainnet",
 			reg:           fullReg(),
 			wantAvailable: true,
-			wantNetwork:   "solana.mainnet-beta",
+			wantNetwork:   "solana.mainnet",
 			wantProviders: []string{"jupiter_ultra", "dflow"},
 		},
 		{
@@ -53,9 +53,9 @@ func TestComputeAvailability(t *testing.T) {
 		{
 			name:        "solana mainnet — no providers registered",
 			netType:     "solana",
-			chainId:     "mainnet-beta",
+			chainId:     "mainnet",
 			reg:         map[string]Provider{},
-			wantNetwork: "solana.mainnet-beta",
+			wantNetwork: "solana.mainnet",
 			wantReason:  "unsupported_chain",
 		},
 

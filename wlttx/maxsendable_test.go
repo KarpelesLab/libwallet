@@ -147,8 +147,8 @@ func TestNetworkFromAssetPrefix(t *testing.T) {
 		"NATIVE":                    "",
 		"evm.1.NATIVE":              "evm.1",
 		"evm.137.NATIVE":            "evm.137",
-		"solana.mainnet-beta.NATIVE": "solana.mainnet-beta",
-		"solana.mainnet-beta.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "solana.mainnet-beta",
+		"solana.mainnet.NATIVE": "solana.mainnet",
+		"solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "solana.mainnet",
 		"evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48":                 "evm.1",
 		// Malformed — not in canonical form, no prefix derivable.
 		"bare":                           "",
@@ -169,7 +169,7 @@ func TestDerivedTypeChain(t *testing.T) {
 		wantChain string
 	}{
 		{"evm.1", "evm", "1"},
-		{"solana.mainnet-beta", "solana", "mainnet-beta"},
+		{"solana.mainnet", "solana", "mainnet"},
 		{"bitcoin.bitcoin", "bitcoin", "bitcoin"},
 		{"", "", ""},
 		{"no-dot", "", ""},
@@ -192,9 +192,9 @@ func TestIsNativeAsset(t *testing.T) {
 		{"", true},
 		{"NATIVE", true},
 		{"evm.1.NATIVE", true},
-		{"solana.mainnet-beta.NATIVE", true},
+		{"solana.mainnet.NATIVE", true},
 		{"evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48", false},
-		{"solana.mainnet-beta.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", false},
+		{"solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", false},
 	}
 	for _, c := range cases {
 		t.Run(c.in, func(t *testing.T) {

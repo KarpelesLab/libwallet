@@ -121,7 +121,7 @@ class TransactionApi {
   /// must receive.
   ///
   /// [asset] is the canonical asset key returned by `Asset:list`
-  /// (e.g. `"evm.1.NATIVE"`, `"solana.mainnet-beta.<mint>"`). The
+  /// (e.g. `"evm.1.NATIVE"`, `"solana.mainnet.<mint>"`). The
   /// network is derived from the `"<type>.<chainId>."` prefix; when
   /// [asset] is omitted or bare `"NATIVE"`, the current network's
   /// native currency is used. Token assets (ERC-20, SPL) return an
