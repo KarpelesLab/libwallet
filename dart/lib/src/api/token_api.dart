@@ -1,4 +1,5 @@
 import '../client/transport.dart';
+import '../models/curated_token.dart';
 import '../models/token.dart';
 
 /// Token CRUD and discovery.
@@ -85,5 +86,33 @@ class TokenApi {
       'Address': address,
     });
     return DiscoveredToken.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Returns the vetted list of well-known tokens for [network], the
+  /// canonical `"<type>.<chainId>"` form used by `Asset.network`
+  /// (e.g. `"evm.1"`, `"solana.mainnet"`).
+  ///
+  /// Purely local — no RPC. Backed by an embedded per-chain list
+  /// (Uniswap default list for EVM, Jupiter verified list for
+  /// Solana, plus hand-curated overlays like $ChiefPussy) refreshed
+  /// at libwallet release time.
+  ///
+  /// Use this to:
+  /// - populate a "swap to X" dropdown without making the user
+  ///   paste a contract address,
+  /// - map an unrecognized SPL mint / ERC-20 contract in the user's
+  ///   balances back to its `symbol` + `logoURI` + `tags`.
+  ///
+  /// Sorted by the libwallet side: stablecoins first, then wrapped
+  /// natives, then alphabetical by symbol — same default grouping
+  /// most wallet UIs use.
+  Future<List<CuratedToken>> listCurated(String network) async {
+    final data = await _conn.request('Token:listCurated', 'POST', {
+      'Network': network,
+    });
+    if (data is! List) return const [];
+    return data
+        .map((e) => CuratedToken.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 }

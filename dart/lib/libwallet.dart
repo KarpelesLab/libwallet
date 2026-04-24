@@ -57,6 +57,7 @@ export 'src/models/asset.dart' show Asset, FiatQuote;
 export 'src/models/transaction.dart' show Transaction;
 export 'src/models/contact.dart' show Contact;
 export 'src/models/token.dart' show Token, DiscoveredToken;
+export 'src/models/curated_token.dart' show CuratedToken;
 export 'src/models/nft.dart' show Nft, NftAttribute;
 export 'src/models/crash.dart' show Crash;
 export 'src/models/key_description.dart' show KeyDescription, SigningKey;
