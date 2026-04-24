@@ -1,15 +1,3008 @@
 [
   {
     "chainKey": "solana.mainnet",
+    "address": "123mYEnRLM2LLYsJW3K6oyYh8uP1fngj732iG638ondo",
+    "symbol": "AAPLon",
+    "name": "Apple (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/aaplon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "128qNYovdGv2YqayErcJgU7gDwbNVX1VuoxbtWz8ondo",
+    "symbol": "ABNBon",
+    "name": "Airbnb (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/abnbon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "129gRoHKhVg7CvPMrqVsEB4uYZo6zV4yDZX6NBg9ondo",
+    "symbol": "ABTon",
+    "name": "Abbott (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/abton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "13qTjKx53y6LKGGStiKeieGbnVx3fx1bbwopKFb3ondo",
+    "symbol": "AGGon",
+    "name": "iShares Core US Aggregate Bond ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/aggon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "14diAn5z8kjrKwSC8WLqvBqqe5YmihJhjxRxd8Z6ondo",
+    "symbol": "AMDon",
+    "name": "AMD (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/amdon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "14Tqdo8V1FhzKsE3W2pFsZCzYPQxxupXRcqw9jv6ondo",
+    "symbol": "AMZNon",
+    "name": "Amazon (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/amznon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "14W1itEkV7k1W819mLSknFTaMmkCtPokbF2tRkPUondo",
+    "symbol": "TQQQon",
+    "name": "ProShares UltraPro QQQ (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tqqqon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "15SsCZqCsM9fZGhTmP4rdJTPT9WGZKazDSsgeQ8ondo",
+    "symbol": "ARMon",
+    "name": "Arm Holdings plc (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/armon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1eLZPRsn8bAKmoxsqDMH9Q2m2k7GMNp6RLSQGm8ondo",
+    "symbol": "ASMLon",
+    "name": "ASML Holding NV (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/asmlon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1FWZtdWN7y38BSXGzbs8D6Shk88oL9atDNgbVz9ondo",
+    "symbol": "AVGOon",
+    "name": "Broadcom (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/avgoon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1GNFMryQ6c9ZpMhgNimmsbtgYM21qnBJgRAFoNiondo",
+    "symbol": "OXYon",
+    "name": "Occidental Petroleum (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/oxyon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1Qf8gESP4i6CFNWerUSDdLKJ9U1LpqTYvjJ2MM4pain",
+    "symbol": "PAIN",
+    "name": "PAIN",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/i2vyrA50OCT5LtfZqZSctKNaFztsEJ6djFDmW4Vp3vU"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1YVZ4LGpq8CAhpdpm3mgy7GgPb83gJczCpxLUQ3ondo",
+    "symbol": "BAon",
+    "name": "Boeing (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/baon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1zJX5gRnjLgmTpq5sVwkq69mNDQkCemqoasyjaPW6jm",
+    "symbol": "KLED",
+    "name": "KLEDAI",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreicxgl43yyi3xg3zvi4hxsqmsobwxm7kto7i4qrbk75i2ff7w4jebe"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "1zvb9ELBFShBCWKEk5jRTJAaPAwtVt7quEXx1X4ondo",
+    "symbol": "BABAon",
+    "name": "Alibaba (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/babaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "25hAyBQfoDhfWx9ay6rarbgvWGwDdNqcHsXS3jQ3mTDJ",
+    "symbol": "MANEKI",
+    "name": "MANEKI",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/yBysTpZQFiBI6AI9cy5lRJi7_6k1VQv7rF1vh9WnhsA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "27G8MtK7VtTcCHkpASjSDdkWWYfoqT6ggEuKidVJidD4",
+    "symbol": "JLP",
+    "name": "Jupiter Perps",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static.jup.ag/jlp/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "29CWsqH84TykHDDwA6DtETUtXQPuKbVgKCmxtkBsbrrr",
+    "symbol": "BELIEF",
+    "name": "BELIEF",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.printr.money/t/0x33079a3ab4c84e683ce5809fadc8e8eb80ebae331dd49aec53ee3c236d1b9b17/media/image"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo",
+    "symbol": "PYUSD",
+    "name": "PayPal USD",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://424565.fs1.hubspotusercontent-na1.net/hubfs/424565/PYUSDLOGO.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2bpT3ksMdwdZ6DuHyq3FDUr7HDwvZ5DRZoT1fUPALJaH",
+    "symbol": "RIV",
+    "name": "RIV Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmT5HvpmQmXqyvtxfu68hYmHSY467s3pd22pGejCXdnA43"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2Bwbeh361ywi1PpypDHabDb8VphNKCQt9ht2CRzFsYAE",
+    "symbol": "HABITAT",
+    "name": "Habitat",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://s3.habitat.foundation/habitat-token-icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2FPyTwcZLUg1MDrwsyoP4D6s1tM7hAkHYRjkNb5w6Pxk",
+    "symbol": "soETH",
+    "name": "Wrapped Ethereum (Sollet)",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/2FPyTwcZLUg1MDrwsyoP4D6s1tM7hAkHYRjkNb5w6Pxk/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2JcXacFwt9mVAwBQ5nZkYwCyXQkRcdsYrDXn6hj22SbP",
+    "symbol": "mini",
+    "name": "mini",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXoj9Jp29JNYLMWQ4Z4AZASVPZXnJjJjSCcYsyaTqZj4v"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2nP9yKQNSGQy851iyawDvBkzkK2R2aqKArQCKc2gpump",
+    "symbol": "PsyopAnime",
+    "name": "PsyopAnime",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiallp55sjjfnqdy2njxnyhljygk5hiltpjdfeub3vjsc7zz6tl4qy"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2ocYd9f3564zUL1j6zUi8FR6Rn4Yo76BvXoZwLYASYFR",
+    "symbol": "SYFR",
+    "name": "SYFR AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.lighthouse.storage/ipfs/bafkreicceq37rwdoxbbszja5g7k4yxpf22ckxpice5uudtyrjyd6murmny"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2oGLxYuNBJRcepT1mEV6KnETaLD7Bf6qq3CM6skasBfe",
+    "symbol": "PUPS",
+    "name": "PUPS WORLD PEACE",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://metadata.runemine.com/pupsworldpeace.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2oQNkePakuPbHzrVVkQ875WHeewLHCd2cAwfwiLQbonk",
+    "symbol": "AOL",
+    "name": "AOL (America's Official Launchpad)",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://teal-solid-parrot-20.mypinata.cloud/ipfs/bafkreig6z7vwyg4h5aih5gdt6hfdfmmpx6v5ke4ge3uoeenru6dadeusou"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2qEHjDLDLbuBgRYvsxhc5D6uDWAivNFZGan56P1tpump",
+    "symbol": "Pnut",
+    "name": "Peanut the Squirrel",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmNdTtJauw39u4DzGyTaZ35rRx4VgAxqb91wE89zjyHWd2"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2u1tszSeqZ3qBWF3uNGPFc8TzMk2tdiwknnRMWGWjGWH",
+    "symbol": "USDG",
+    "name": "Global Dollar",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://424565.fs1.hubspotusercontent-na1.net/hubfs/424565/GDN-USDG-Token-512x512.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2uQsyo1fXXQkDtcpXnLofWy88PxcvnfH2L8FPSE62FVU",
+    "symbol": "jlWSOL",
+    "name": "jupiter lend WSOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/sol.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2Wu1g2ft7qZHfTpfzP3wLdfPeV1is4EwQ3CXBfRYAciD",
+    "symbol": "GOHOME",
+    "name": "GOHOME",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmVayc8gZNYY95Ke1JKkz2RsDxcYkiRxN4wAzcQ1raQm7U"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2zMMhcVQEXDtdE6vsFS7S7D5oUodfJHE8vd1gnBouauv",
+    "symbol": "PENGU",
+    "name": "Pudgy Penguins",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/BW67hICaKGd2_wamSB0IQq-x7Xwtmr2oJj1WnWGJRHU"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "31k88G5Mq7ptbRDf3AM13HAq6wRQHXHikR8hik7wPygk",
+    "symbol": "GP",
+    "name": "Graphite",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/ALLzymnuIihFPhoNUJpPxQzbGI8LodXKhNzXzbRMPbA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "32CdQdBUxbCsLy5AUHWmyidfwhgGUr9N573NBUrDpump",
+    "symbol": "maxxing",
+    "name": "maxxing",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://desperate-moccasin-minnow.myfilebase.com/ipfs/QmabBSPLgCqxCEEzpU85Jjc9NNu7JrbTrEhnwU6rr9oXEW"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "34q2KmCvapecJgR6ZrtbCTrzZVtkt3a5mHEA3TuEsWYb",
+    "symbol": "LOL",
+    "name": "LOL",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmQnnzc4F7q8jE6NhCBJ4VqJu88GBwnZszq7oYgBDmmaHP"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "375aiUqZERLrB9sHtsArKr4nuWCgBrtqibUDBMGeLvZC",
+    "symbol": "EAT",
+    "name": "375ai",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://assets.375static.com/tokens/eat/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "38PgzpJYu2HkiYvV8qePFakB8tuobPdGm2FFEn7Dpump",
+    "symbol": "gork",
+    "name": "New XAI gork",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXkHvTBRFMyY5ozYHXcF7JHqqLBTorca3dXAdF3ooD5e3"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3AdhVEX6k85yNivHVXDEiY3WyP2WgFQTUZCahGaeC2qm",
+    "symbol": "MOVEUSD",
+    "name": "MoveUSD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://public.coinfx.network/token-logos/MOVEUSD.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3AJYCjrhKitmBd8tRUurPA5dGHCAQh6A8L9DkuSC37Rm",
+    "symbol": "USD*-J",
+    "name": "Junior USD*",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "http://arweave.net/u7Dq0g77_indw2vAzA2nQJGrzBYp_DQRBtdTSUMuUpc"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3B1ijcocM5EDga6XxQ7JLW7weocQPWWjuhBYG8Vepump",
+    "symbol": "BP",
+    "name": "Barking Puppy",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmRuUy7EJMXgB6wC4b84RjYF8dr4csqHU8vvD3oeyNqJ5r"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3b8X44fLF9ooXaUm3hhSgjpmVs6rZZ3pPoGnGahc3Uu7",
+    "symbol": "PRIME",
+    "name": "",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://storage.googleapis.com/hastra-cdn-prod/spl/primetoken.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3DFnwGLJUfxc4eMxDgQwW6oWaeKBrJ1iwA26YjTfpump",
+    "symbol": "stkr",
+    "name": "Skill Stacker",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXYrcMKEyaXzPAmDbogMsft3UJfiiNwqcW6Y36teLdgXF"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3dQTr7ror2QPKQ3GbBCokJUmjErGg8kTJzdnYjNfvi3Z",
+    "symbol": "BORG",
+    "name": "SwissBorg Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafybeiaxwonn35jbb7xexmlmguibskmbg5vlv7wzabht3prfespwde6e6u.ipfs.dweb.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3Gdx9LmKZJyciSz3mbge3YKLqskiMG71m1iDMPAwpump",
+    "symbol": "ARMY",
+    "name": "ARMY",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dwcmn67d9/image/upload/v1757280461/Gz2XOtZXoAA1rYg_tt9icz.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3iC63FgnB7EhcPaiSaC51UkVweeBDkqu17SaRyy2pump",
+    "symbol": "RAIN",
+    "name": "Rainmaker",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmPbw5kFTGYjF2afki7gpRfymAhhLkgxgTZhJceu9J9Mnu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3iQL8BFS2vE7mww4ehAqQHAsbmRNCrPxizWAT2Zfyr9y",
+    "symbol": "VIRTUAL",
+    "name": "Virtual Protocol",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreifbjxsikdmuhk5qi6krg3sqk2fcqvqlcffrc44kg7ecfkmwhz6s5i"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3JgFwoYV74f6LwWjQWnr3YDPFnmBdwQfNyubv99jqUoq",
+    "symbol": "wPOND",
+    "name": "POND COIN - WARPED",
+    "decimals": 3,
+    "type": "spl-token",
+    "logoURI": "https://tokens.debridge.finance/0xa1ce54b7a0543a9d569676a3ebf988f4704d8f7cd30206d078848ee5a4dfc29d.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh",
+    "symbol": "WBTC",
+    "name": "Wrapped BTC (Portal)",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh/logo.png",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3ThdFZQKM6kRyVGLG48kaPg5TRMhYMKY1iCRa9xop1WC",
+    "symbol": "eUSX",
+    "name": "eUSX",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/Solstice-Labs-Official/eusx-metadata/refs/heads/main/eusx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3TYgKwkE2Y3rxdw9osLRSpxpXmSC1C1oo19W9KHspump",
+    "symbol": "BULL",
+    "name": "Bull",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/bafybeicq7egtukmyil3m4cdx2culfw6evrsb4fj4p37fyxkiysqdnnsbpu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3vgopg7xm3EWkXfxmWPUpcf7g939hecfqg18sLuXDzVt",
+    "symbol": "HAROLD",
+    "name": "Harold",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/QmckbMgM3EAGxSKHnpFbUAc4cgfrnGwXic1ixWWxCR9abD"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3wtGGWZ8wLWW6BqtC5rxmkHdqvM62atUcGTH4cw3pump",
+    "symbol": "ALPHA",
+    "name": "AlphaBlock AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeiendt6mzu453gjngx7rnlhyr2gis7zjekqxmgy7e5tdhnn5ojtu7m"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3xvLSHrLcM7246X1vu34cM9gNX741kQrzqj6T2HhLvXp",
+    "symbol": "COIN",
+    "name": "8-Bit Coin",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/Y2b9XB0VQmaL9J2ArpLafcB9keQnzCO6uPn8jPTmYHI"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3z2tRjNuQjoq6UDcw4zyEPD1Eb5KXMPYb4GWFzVT1DPg",
+    "symbol": "SURGE",
+    "name": "SURGE",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://tokens.debridge.finance/0xaa9984487dacdc008d6bcd2adf21988388cc20d08b7594a1a96d812dab7f6605.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3ZLekZYq2qkZiSpnSvabjit34tUkjSwD1JFuW9as9wBG",
+    "symbol": "wNEAR",
+    "name": "Wrapped NEAR fungible token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafkreiekxdv4uxm7ctijvj7wql6bto3cokws6xvfdbg7ylrvt2vtimnqri.ipfs.w3s.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "43VWkd99HjqkhFTZbWBpMpRhjG469nWa7x7uEsgSH7We",
+    "symbol": "STNK",
+    "name": "Stonks",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/43VWkd99HjqkhFTZbWBpMpRhjG469nWa7x7uEsgSH7We/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "43YakhC3TcSuTgSXnxFgw8uKL8VkuLuFa4M6Bninpump",
+    "symbol": "LC",
+    "name": "LC SHIB",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmcEtA2jyaKQeWcdtVPspcL1DXYoChME83Dad3djZowAox"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "463SK47VkB7uE7XenTHKiVcMtxRsfNE2X4Q9wByaURVA",
+    "symbol": "TSUKI",
+    "name": "Tsuki",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmV4hWeYKtfHXRpqqo2vHsr8tns5yTLpMyjGCKGjW3Xjp4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4Cnk9EPnW5ixfLZatCPJjDB1PUtcRpVVgTQukm9epump",
+    "symbol": "DADDY",
+    "name": "DADDY TATE",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXQ2NFebNVS1GQGvdXpj8PLM8H1P96A7pRVXF6geMtrnJ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4eDf52YYzL6i6gbZ6FXqrLUPXbtP61f1gPSFM66M4XHe",
+    "symbol": "SOON",
+    "name": "SOON Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmSA6CbLwJL5uoAntBqT2CxD14C6u9Mr5fT2LLTAH77E9K"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4G86CMxGsMdLETrYnavMFKPhQzKTvDBYGMRAdVtr72nu",
+    "symbol": "$NAP",
+    "name": "SNAP",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafkreibmmrxk72fmcp3pxcrusm5hot44mwawyfhny4tp2jwc2sgjtjfa2y.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4h49hPGphLNJNDRyiBwzvKoasR3rw1WJCEv19PhUbSS4",
+    "symbol": "HELLO",
+    "name": "Hello Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/q-qAaW4lVGbdP1C7VMgIKwqdDVUsnQXaFPnAEkWPRHM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4ikwYoNvoGEwtMbziUyYBTz1zRM6nmxspsfw9G7Bpump",
+    "symbol": "crypto",
+    "name": "Cryptocurrency Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/crypto0nsolana/Crypto0nSolana/refs/heads/main/resized_transparent_coin.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+    "symbol": "RAY",
+    "name": "Raydium",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4LLbsb5ReP3yEtYzmXewyGjcir5uXtKFURtaEUVC2AHs",
+    "symbol": "PRCL",
+    "name": "Parcl",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://delicate-amaranth-badger.myfilebase.com/ipfs/QmXPfhVt6BiuyrK5Va7y3GNqDqBDwms3uW75CknNxDHGS7"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4SoQ8UkWfeDH47T56PA53CZCeW4KytYCiU65CwBWoJUt",
+    "symbol": "MNT",
+    "name": "Mantle",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://token-list.mantle.xyz/data/Mantle/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4sWNB8zGWHkh6UnmwiEtzNxL4XrN7uK9tosbESbJFfVs",
+    "symbol": "xSOL",
+    "name": "xSOL",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://hylo-token-metadata.s3.us-east-2.amazonaws.com/xSOL/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4TyZGqRLG3VcHTGMcLBoPUmqYitMVojXinAmkL8xpump",
+    "symbol": "testicle",
+    "name": "testicle",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibgbrk7arsnth4mqreco5v3xwicfew4dju2hew3jkz6li5gnwivwa"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4UeLCRqARmfb6e6KQijtiktqqXUxbfk6jZng7DhuBAGS",
+    "symbol": "ASTEROID",
+    "name": "Asteroid The Space Shiba Inu",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://thumbnails.padre.gg/SOLANA-9Wxf7ssZdJfjr4ArFJ5pW9VkhkiSNkWv85FrhxbSBAGS"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "4vMsoUT2BWatFweudnQM1xedRLfJgJ7hswhcpz4xgBTy",
+    "symbol": "HONEY",
+    "name": "HONEY",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://hivemapper-marketing-public.s3.us-west-2.amazonaws.com/Hivemapper_HONEY_token.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "54CoRF2FYMZNJg9tS36xq5BUcLZ7rju1r59jGc2ondo",
+    "symbol": "BIDUon",
+    "name": "Baidu (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/biduon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "57dYAUq7Y4hiCSdAB7iBDg4gcYFq7HeUaEs3XnNkbrrr",
+    "symbol": "发财",
+    "name": "fat choi",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.printr.money/t/0x0c08242ec884ba4d132cdca230c225f7e3e5caf2687589fc2b55b6c2daf5918c/media/image"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "59obFNBzyTBGowrkif5uK7ojS58vsuWz3ZCvg6tfZAGw",
+    "symbol": "PST",
+    "name": "PayFi Strategy Token USDC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://meta.huma.finance/pst.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5a6LTLwdMJBY2JDLjw8B1w4JwFRdZszGF9W56ZzrriS1",
+    "symbol": "VDR",
+    "name": "Vodra",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/oLx6REJKINpc5iDx1kKFbfeFUuul_S0Vaztb9VmpvIY"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5aLhp9VnUEKcsdtkfsf2DUgpJfomx7GmYVny24dHUZoB",
+    "symbol": "XAUM",
+    "name": "Matrixdock Gold",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://app.matrixdock.com/images/xaum/xaum-100x100-icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5csfa95Xf8ebiCwP9joQ7mtC8KwFvnnejnYx5FbYpump",
+    "symbol": "XMONEY",
+    "name": "XMONEY",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://moneyoneth.com/wp-content/uploads/2026/04/Animation-GIF-1.gif"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5H1VpMzRuoNtRbPTRCz35ETtEUtnkt8hJuQb9v7ondo",
+    "symbol": "BLKon",
+    "name": "Blackrock, Inc. (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/blkon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5LafQUrVco6o7KMz42eqVEJ9LW31StPyGjeeu5sKoMtA",
+    "symbol": "MUMU",
+    "name": "Mumu the Bull",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafkreihszutctvdmdlyjtzfmj7rgvdorpc7jchj2td3feypc7veidbkpsu.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5MAYDfq5yxtudAhtfyuMBuHZjgAbaS9tbEyEQYAhDS5y",
+    "symbol": "ACS",
+    "name": "Access Protocol",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ap-staging.fra1.digitaloceanspaces.com/1663691449945"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm",
+    "symbol": "INF",
+    "name": "Infinity",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/CtPUchyfybiHymdCNAA_cDkPZ7p0xZDLmBYvHWOsAkE",
+    "tags": [
+      "lst"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5owVsVFSHACQuippFYdLp3qWRobp2EGcwxMmsr6ondo",
+    "symbol": "CMGon",
+    "name": "Chipotle (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/cmgon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5SVG3T9CNQsm2kEwzbRq6hASqh1oGfjqTtLXYUibpump",
+    "symbol": "SIGMA",
+    "name": "SIGMA",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmSZuPFTgLfpP16zgCZxQfhroFnfsyH6rKczzwxEeDL72M"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5u6KDiNJXxX4rGMfYT4BApZQC5CuDNrG6MHkwp1ondo",
+    "symbol": "COINon",
+    "name": "Coinbase (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/coinon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5UUH9RTDiSpq6HKS6bp4NdU9PNJpXRXuiw6ShBTBhgH2",
+    "symbol": "TROLL",
+    "name": "TROLL",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmWV8QgmH1gSw41yapzsFwkC8yPbzoSreAcJbzqfvo2sVq"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5XZw2LKTyrfvfiskJ78AMpackRjPcyCif1WhUsPDuVqQ",
+    "symbol": "WBTC",
+    "name": "Wrapped BTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://j73gp4w27ucraqtyzsqa5th4fwldfvqgq576cnceekfactgk4fla.arweave.net/T_Zn8tr9BRBCeMygDsz8LZYy1gaHf-E0RCKKAUzK4VY\n",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5Y8NV33Vv7WbnLfq3zBcKSdYPrk7g2KoiQoe7M2tcxp5",
+    "symbol": "ONyc",
+    "name": "Onchain Yield Coin",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/PyZzfGP-CqzaVlxTU3sb-I5uv4ZZKwnY8aCjcWn9S1A"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5YMkXAYccHSGnHn9nob9xEvv6Pvka9DZWH7nTbotTu9E",
+    "symbol": "hyUSD",
+    "name": "hyUSD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://hylo-token-metadata.s3.us-east-2.amazonaws.com/hyUSD/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5z3EqYQo9HiCEs3R84RCDMu2n7anpDMxRhdK8PSWmrRC",
+    "symbol": "PONKE",
+    "name": "PONKE",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/YBMDVBvnfgO1gXCSmmc8p0RQhc69WWe8_kOkoT8w7nE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "61V8vBaqAGMpgDQi4JcAwo1dmBGHsyhzodcPqnEVpump",
+    "symbol": "arc",
+    "name": "AI Rig Complex",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmPDJuEobBcLZihjFCvkWA8c1FiW7UzM2ctFdiffSLxf1d"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "61Wj56QgGyyB966T7YsMzEAKRLcMvJpDbPzjkrCZc4Bi",
+    "symbol": "COPPERINU",
+    "name": "copper inu",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://axiomtrading.sfo3.cdn.digitaloceanspaces.com/6wtjDnHeHrxVvsbsURTiUn44NEQX4jh2FRmyARJubonk.webp"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "63LfDmNb3MQ8mw9MtZ2To9bEA2M71kZUUGq5tiJxcqj9",
+    "symbol": "GIGA",
+    "name": "GIGACHAD",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://bafybeifiyvpbr3kd6wepax4qxdlxbjrpz2de4lqsuwwuihirvaal6kqwba.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "69kdRLyP5DTRkpHraaSZAQbWmAwzF9guKjZfzMXzcbAs",
+    "symbol": "USA",
+    "name": "American Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dtscqyai6/image/upload/v1757384415/usacoin_ey7b3d.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "69LjZUUzxj3Cb3Fxeo1X4QpYEQTboApkhXTysPpbpump",
+    "symbol": "CODEC",
+    "name": "Codec Flow",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXibCaGQdyqPrec5TUhv47awcY7pk5v5bBqe4Ez7QNeES"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6AJcP7wuLwmRYLBNbi825wgguaPsWzPBEHcHndpRpump",
+    "symbol": "VINE",
+    "name": "Vine Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmRtFJu3ZospaS4EAk17iNXZGAJp7gMxzvsZckZxbqZa5r"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6btaz134wjHkR8sqhAYrtSM6tavftfxnRvnyMd8ondo",
+    "symbol": "COSTon",
+    "name": "Costco (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/coston_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6dKCoWjpj5MFU5gWDEFdpUUeBasBLK3wLEwhUzQPAa1e",
+    "symbol": "CHEX",
+    "name": "Chintai",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://chintai.io/images/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6DNSN2BJsaPFdFFc1zP37kkeNe4Usc1Sqkzr9C9vPWcU",
+    "symbol": "TBTC",
+    "name": "Threshold Bitcoin",
+    "decimals": 8,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG",
+    "symbol": "USX",
+    "name": "USX",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/Thomas-Solstice/usx-metadata/refs/heads/main/usx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6FVyLVhQsShWVUsCq2FJRr1MrECGShc3QxBwWtgiVFwK",
+    "symbol": "BWB",
+    "name": "Bitget Wallet Token (Wormhole)",
+    "decimals": 8,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6HHzBVkxtoz86Bjy2duaUw77hVfJzQkuoLizWeEMBLEM",
+    "symbol": "EMBLEM",
+    "name": "Emblem Vault",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://pbs.twimg.com/profile_images/2044056404978499584/HbpM22gt_400x400.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6iA73gWCKkLWKbVr8rgibV57MMRxzsaqS9cWpgKBpump",
+    "symbol": "我的刀盾",
+    "name": "what the dog doing?",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://image.solanatracker.io/proxy?url=https%3A%2F%2Fipfs-forward.solanatracker.io%2Fipfs%2Fbafkreihmczeyqifcom4n7ohsn3pkj5dbgurub5c3isednzzjryp6mkqbbm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6JLG8iUkAuqiBhL3j2ckDMDf5oWAa6awmyaWezKondo",
+    "symbol": "IBITon",
+    "name": "iShares Bitcoin Trust (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/ibiton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6MQpbiTC2YcogidTmKqMLK82qvE9z5QEm7EP3AEDpump",
+    "symbol": "MASK",
+    "name": "catwifmask",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://image2url.com/r2/default/images/1772012611932-19f5a6ac-7b20-478c-8dfd-637045f7923f.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6nR8wBnfsmXfcdDr1hovJKjvFQxNSidN6XFyfAFZpump",
+    "symbol": "Clash",
+    "name": "GeorgePlaysClashRoyale",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeidcnencwhveq7w56f6az47edmnuqfzk5qeecnjc77owwvnu3mlhne"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6ogzHhzdrQr9Pgv6hZ2MNze7UrzBMAFyBBWUYp1Fhitx",
+    "symbol": "RETARDIO",
+    "name": "RETARDIO",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.filebase.io/ipfs/QmTWd41E9u7f6aUjUnucP4S88TCZLJ9sJRM1Kj5EAKfivt"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN",
+    "symbol": "TRUMP",
+    "name": "OFFICIAL TRUMP",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/VQrPjACwnQRmxdKBTqNwPiyo65x7LAT773t8Kd7YBzw"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6s1bPNpuZko7V1Egp2XBwwExWPcMGyuuxE4nesH2cJSS",
+    "symbol": "CATI",
+    "name": "Catizen",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmPhSXEdE8JTK4ZEdH1ZjcNHBkDSrsyJKUyDxkFgvB4jCk"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6Tk3uHQpLDtd4Qob5fduLjfhXxAasWgvdo8hYeswxMiL",
+    "symbol": "MIL",
+    "name": "MIL",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQZhwF6Rseyk3zkashyGig9A3R5ra8mNC8smVMJAAbuuF"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6UpQcMAb5xMzxc7ZfPaVMgx3KqsvKZdT5U718BzD5We2",
+    "symbol": "wXRP",
+    "name": "Wrapped XRP",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.prod.website-files.com/61a0a50381fdccb6c37927e5/692521b55b7c02a5da964dc3_wXRP-token-logo.svg",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6xHEyem9hmkGtVq6XGCiQUGpPsHBaoYuYdFNZa5ondo",
+    "symbol": "CRCLon",
+    "name": "Circle Internet Group (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/crclon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "6yjNqPzTSanBWSa6dxVEgTjePXBrZ2FoHLDQwYwEsyM6",
+    "symbol": "Chud",
+    "name": "Chudjak",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXRB5ujAAVNERmTPcmPT5aZaySVgNeAWVuXQNShWW2d37"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "71S9cppWipeUEQDFngYwxjoxB6Sz1MUqX72byLsVYJqy",
+    "symbol": "XSGD",
+    "name": "StraitsX SGD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.prod.website-files.com/6119d1f2b05f8e85e873971a/696ef3a03f0b38f2317c9665_XSGD%20Logo_Full%20Colour_1.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "739dnZEG4yaBWFsY8L8ZwrfhGG6dhtCSercW8Umspump",
+    "symbol": "CLAW",
+    "name": "clawpump.tech",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmfN6XKWnb2bJizSoaZwNqwpDLT5iZRgkitCvDjNkkDo8g"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "73xsLcBnLnc9bh81cqVKqj8uEyiarXng5ZwJuTbnVebG",
+    "symbol": "WUF",
+    "name": "Wuffi",
+    "decimals": 4,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmPyfiqUWpeb2VpuKAoJph7mfoeJ3uoGVt6KgRZdUwoncA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "74SBV4zDXxTRgv1pEMoECskKBkZHc2yGPnc7GYVepump",
+    "symbol": "swarms",
+    "name": "swarms",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmYhYx1r94b8apSJpRjUujCE5xXhzLXzXaR3ZmdGfUkvGb"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "76VxJbMFoCXBcn2rqPQX2UsUfpupq2gVwGSq5LyYMhr2",
+    "symbol": "GMRX",
+    "name": "Gaimin Token (Wormhole)",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/du2uctdqr/image/upload/v1757071099/GMRX_Token_khqo23.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7atgF8KQo4wJrD5ATGX7t1V2zVvykPJbFfNeVf1icFv1",
+    "symbol": "$CWIF",
+    "name": "catwifhat",
+    "decimals": 2,
+    "type": "spl-token-2022",
+    "logoURI": "https://bafkreigmg552j5o5qv5ra6hvg4by4qzjjichzsyaljhmyvwe5qkjphgxoi.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7BgBvyjrZX1YKz4oh9mjb8ZScatkkwb8DzFx7LoiVkM3",
+    "symbol": "Old Slerf",
+    "name": "Unmigrated Slerf",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cdn.dexscreener.com/cms/images/6f43abd0ed3d46732e02f2a5f15610beed2b25d0d25fac7aa4ca113d6f45012f?width=64\u0026height=64\u0026fit=crop\u0026quality=95\u0026format=auto"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj",
+    "symbol": "stSOL",
+    "name": "Lido Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7DWcZE1uVc8m2mf9pV8KNov28ET7HsvHkhrhgr9ondo",
+    "symbol": "CSCOon",
+    "name": "Cisco Systems (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/cscoon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr",
+    "symbol": "POPCAT",
+    "name": "Popcat",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/A1etRNMKxhlNGTf-gNBtJ75QJJ4NJtbKh_UXQTlLXzI"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7GxATsNMnaC88vdwd2t3mwrFuQwwGvmYPrUQ4D6FotXk",
+    "symbol": "JUICED",
+    "name": "JUICED",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/jupusd.png?v=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7i5KKsX2weiTkry7jA4ZwSuXGhs5eJBEjY8vVxR4pfRx",
+    "symbol": "GMT",
+    "name": "GMT",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7i5KKsX2weiTkry7jA4ZwSuXGhs5eJBEjY8vVxR4pfRx/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7JA5eZdCzztSfQbJvS8aVVxMFfd81Rs9VvwnocV1mKHu",
+    "symbol": "GEOD",
+    "name": "Geodnet Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://www.geodnet.com/metadataimg/GEODNET.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7oBYdEhV4GkXC19ZfgAvXpJWp2Rn9pm1Bx2cVNxFpump",
+    "symbol": "CAR",
+    "name": "Central African Republic Meme",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmbwDLvzQA1DB9ZY7vfRSCogwdvAj3zCDuB9XN5pcmuawz"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7Q2afV64in6N6SeZsAAB81TJzwDoD6zpqmHkzi9Dcavn",
+    "symbol": "JSOL",
+    "name": "JPOOL Solana Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7Q2afV64in6N6SeZsAAB81TJzwDoD6zpqmHkzi9Dcavn/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7qy1j4Mechfyr6uAST3djH4vk4kiEYC2cjEytXdondo",
+    "symbol": "ONDSon",
+    "name": "Ondas Holdings (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/ondson_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7s9MoSt7VV1J3jVNnw2AyocsQDBdCkPYz5apQDPKy9i5",
+    "symbol": "PIPE",
+    "name": "Pipe",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/PipeNetwork/metadata/main/pipe.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7tgKziACteG26VjV5xKufojKxwTgCFyTwmWUmz5ondo",
+    "symbol": "CVXon",
+    "name": "Chevron (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/cvxon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+    "symbol": "ETH",
+    "name": "Ether (Portal)",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+    "symbol": "SAMO",
+    "name": "Samoyed Coin",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "85cQsFgbi8mBZxiPppbpPXuV7j1hA8tBwhjF4gKW6mHg",
+    "symbol": "Rizzmas",
+    "name": "Rizzmas",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/4KejFFTPvFjxc0NkqOCADL7BVZ9xzgh2FNPunMadZrQ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ",
+    "symbol": "W",
+    "name": "Wormhole Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://wormhole.com/token.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8Aq4fWMgPqJbF3w8w8PnLDRVUAFe4mzsCvPKxAArbonk",
+    "symbol": "Real",
+    "name": "Real",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreidy5dk5l24nfg5khrfzrhet74khpylnghfnvwzwf6ck532iv7arry"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8avjtjHAHFqp4g2RR9ALAGBpSTqKPZR8nRbzSTwZERA",
+    "symbol": "ZERA",
+    "name": "ZERA",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://api.zeralabs.org/image/1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8f62NyJGo7He5uWeveTA2JJQf4xzf8aqxkmzxRQ3mxfU",
+    "symbol": "FIGHT",
+    "name": "Fight",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://assets.fight.foundation/FIGHT_Token_Icon/white_orange_bg/FightCoin1024.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8fr7WGTVFszfyNWRMXj6fRjZZAnDwmXwEpCrtzmUkdih",
+    "symbol": "wYLDS",
+    "name": "",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://storage.googleapis.com/hastra-cdn-prod/spl/wyldstoken.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8J69rbLTzWWgUJziFY8jeu5tDwEPBwUz4pKBMr5rpump",
+    "symbol": "WOJAK",
+    "name": "Wojak ",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreighazhzw7kijsyhff77vvjgwbeonhq7fua7lpic4df7qjcajiykcm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8Jx8AAHj86wbQgUTjGuj6GTTL5Ps3cqxKRTvpaJApump",
+    "symbol": "PENGUIN",
+    "name": "Nietzschean Penguin",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeieukfwe5dz5m7d7pocyogm2sd3bzr6ajxefav7mcvpbf53yl3cn6u"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8Ki8DpuWNxu9VsS3kQbarsCWMcFGWkzzA8pUPto9zBd5",
+    "symbol": "LOCKIN",
+    "name": "LOCK IN",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/Qmc2SJQW4K7UYYVLdoKSf4cGVZbuFGTF4dZiAdRtivNkpX"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8SkfuQkYNTskoQUbbjr2JbZQeqQV9egnJXgfMXf5bonk",
+    "symbol": "fih",
+    "name": "fih",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/judink/topics/main/151225_Fih1.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8wXtPeU6557ETkp9WHFY1n1EcU6NxDvbAggHGsMYiHsB",
+    "symbol": "GME",
+    "name": "GameStop",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://nftstorage.link/ipfs/bafybeiddrzeyne4n2hi7qkhyhqorc4jbs4565pset7fc3ifwvhvxfdrt7q/gamestop-logo.jpeg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8x5VqbHA8D7NkD52uNuS5nnt3PwA8pLD34ymskeSo2Wn",
+    "symbol": "ZEREBRO",
+    "name": "zerebro",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmZ1HDSibY2LdEmC1tPHK36ApGCQACJENqsbPsT2nc29AD"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8XtRWb4uAAJFMP4QQhoYYCWR6XXb7ybcCdiqPwz9s5WS",
+    "symbol": "ALON",
+    "name": "alon",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmavnBN2FbwW8o43KYBEQSnjYyGrRZKXbEN6N598dkFCLz"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8ZHE4ow1a2jjxuoMfyExuNamQNALv5ekZhsBn5nMDf5e",
+    "symbol": "MORI",
+    "name": "MORI COIN",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/QmZQm2EV6bhd8ekP999pqdYDtzqc7CGSPizu7G8gzTMSLM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "916SDKz7y5ZcEZC9CtnQ5Djs1Y8Yv3UAPb6bak8ondo",
+    "symbol": "EEMon",
+    "name": "iShares MSCI Emerging Markets ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/eemon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "98sMhvDwXj1RQi5c5Mndm3vPe9cBqPrbLaufMXFNMh5g",
+    "symbol": "HYPE",
+    "name": "HYPE",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/QBRdRop8wI4PpScSRTKyibv-fQuYBua-WOvC7tuJyJo"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9999FVbjHioTcoJpoBiSjpxHW6xEn3witVuXKqBh2RFQ",
+    "symbol": "SLERF",
+    "name": "SLERF",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmYNtzsupdxbzduBkLNjjeE18itRUpj78hW3WTZuNHojEK"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9AvytnUKsLxPxFHFqS6VLxaxt5p6BhYNr53SD2Chpump",
+    "symbol": "67",
+    "name": "The Official 67 Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/docckv172/image/upload/v1769120594/photo_2026-01-08_16-58-47_msfbpr.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump",
+    "symbol": "Fartcoin",
+    "name": "Fartcoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQr3Fz4h1etNsF7oLGMRHiCzhB5y9a7GjyodnF7zLHK1g"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9BEcn9aPEmhSPbPQeFGjidRiEKki46fVQDyPpSQXPA2D",
+    "symbol": "jlUSDC",
+    "name": "jupiter lend USDC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/usdc.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9ckR7pPPvyPadACDTzLwK2ZAEeUJ3qGSnzPs8bVaHrSy",
+    "symbol": "USDu",
+    "name": "USDu",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://gateway.irys.xyz/Hg7LLjvsm2KKRu9Br33gZ6veVhxAby57iXDRgtwH3DCo"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9doRRAik5gvhbEwjbZDbZR6GxXSAfdoomyJR57xKpump",
+    "symbol": "GRPH",
+    "name": "Soul Graph",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmeP9LiYLXJSmCr1zqcQVuDEK8WSRqFT21g3E23DnAxtyk"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9EaLkQrbjmbbuZG9Wdpo8qfNUEjHATJFSycEmw6f1rGX",
+    "symbol": "pSOL",
+    "name": "pSOL (Parrot SOL)",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/9EaLkQrbjmbbuZG9Wdpo8qfNUEjHATJFSycEmw6f1rGX/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9ezFthWrDUpSSeMdpLW6SDD9TJigHdc4AuQ5QN5bpump",
+    "symbol": "XERIS",
+    "name": "XerisCoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreidtxxdreb4wvmz3kn232xdiciqpfaa52hgezfuyjujpt5qd2ei3pm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9f52wiW2zrt2497HroMHtZtuj7VzWu4AsEusmW3pump",
+    "symbol": "$NRG",
+    "name": "Energy",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreigkfv2yeporxidsqelmmr64n3cx43gvpjtve5k3bywsaut76vzz24"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9fvHrYNw1A8Evpcj7X2yy4k4fT7nNHcA9L6UsamNHAif",
+    "symbol": "jlUSDG",
+    "name": "jupiter lend USDG",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/usdg.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9Fzv4s5t2bNwwJoeeywMwypop3JegsuDb1eDbMnPr4TX",
+    "symbol": "sFLP.1",
+    "name": "Flash Pool 1*",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://73quez5cbtumh2yabuatncokwtjt766ffvbfaj4kgdvdifvqqgaq.arweave.net/_uFCZ6IM6MPrAA0BNonKtNM_-8UtQlAnijDqNBawgYE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9hX59xHHnaZXLU6quvm5uGY2iDiT3jczaReHy6A6TYKw",
+    "symbol": "zenBTC",
+    "name": "Zenrock BTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://zenrock-public-images.s3.eu-west-1.amazonaws.com/zenBTC-logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9iq5Q33RSiz1WcupHAQKbHBZkpn92UxBG2HfPWAZhMCa",
+    "symbol": "sUSDu",
+    "name": "Staked USDu",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://gateway.irys.xyz/AMNsb3FHyXBA4PfpLDaS71rZKhy62gvM2xMsjjUnSXAe"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9McvH6w97oewLmPxqQEoHUAv3u5iYMyQ9AeZZhguYf1T",
+    "symbol": "Anon",
+    "name": "HeyAnon",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmZDXjdV3fDssQeXVhgUFWi8Uv7FBSCUzZHnfupgTGsi27"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+    "symbol": "soBTC",
+    "name": "Wrapped Bitcoin (Sollet)",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9PR7nCP9DpcUotnDPVLUBUZKu5WAYkwrCUx9wDnSpump",
+    "symbol": "Ban",
+    "name": "Comedian",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmfKEGFPjMhtMdc6Nud7yvbPS8tiXfbFu2jGMvSUTejF9V"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9se6kma7LeGcQWyRBNcYzyxZPE3r9t9qWZ8SnjnN3jJ7",
+    "symbol": "LUNA",
+    "name": "Luna by Virtuals (Wormhole)",
+    "decimals": 8,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9TPL8droGJ7jThsq4momaoz6uhTcvX2SeMqipoPmNa8R",
+    "symbol": "VNXAU",
+    "name": "VNX Gold",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://vnx.li/wp-content/uploads/2025/04/VNXAU-256x256-1.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9Ttyez3xiruyj6cqaR495hbBkJU6SUWdV6AmQ9MvbyyS",
+    "symbol": "smole",
+    "name": "smolecoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmcXAf2KasPyu8UtLnafsj3MR3YSjPH4huRc4NQ8YSanoX"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9UNqoPEXXxEnEphmyYsZYdL5dnmAUtdiKRUchpnUF5Ph",
+    "symbol": "$WHISKEY",
+    "name": "WHISKEY",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmcXf4RN3JWw54rjTBwrvxTpnJNAd3ZoRwSdN5XKxppDic"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9zNQRsGLjNKwCUU5Gq5LR8beUCPzQMVMqKAi3SSZh54u",
+    "symbol": "FDUSD",
+    "name": "First Digital USD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.1stdigital.com/icon/fdusd.svg",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9zqre5sRRdFvKqyTyvEd1jcKDRF4g47s7mZSGUnQpump",
+    "symbol": "boob",
+    "name": "boob",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://i.imgur.com/AhGXlgP.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "a11bdAAuV8iB2fu7X6AxAvDTo1QZ8FXB3kk5eecdasp",
+    "symbol": "ABR",
+    "name": "Allbridge",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/allbridge-io/media/main/token.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "A1KLoBrKBde8Ty9qtNQUtq3C2ortoC3u7twggz7sEto6",
+    "symbol": "USDY",
+    "name": "Ondo US Dollar Yield",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://hq3wjgefwtje2kue7bvqlevhns2udaharnibucrgui3lhgy4aniq.arweave.net/PDdkmIW00k0qhPhrBZKnbLVBgOCLUBoKJqI2s5scA1E",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "a3W4qutoEJA4232T2gwZUfgYJTetr96pU4SJMwppump",
+    "symbol": "WhiteWhale",
+    "name": "The White Whale",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreid36cgjpa6wm7rvczq2odx4i3y45cqj3nmq5fecxzsaetjumwxaqi"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS",
+    "symbol": "ZEC",
+    "name": "Zcash",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/QSYqnmB7NYlB7n1R6rz935Y07dlRK0tIuKe2mof5Sho"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "A8C3xuqscfmyLrte3VmTqrAq8kgMASius9AFNANwpump",
+    "symbol": "FWOG",
+    "name": "FWOG",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQ4H6Y23dSEjn9LKB85M7KpVFiDu6KfDNZAcrqiCwFQQH"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AAASV2sCaykNGdEQzJ1mMVNfJMsgEtR7PJaqrCuk4bq6",
+    "symbol": "deJAAA",
+    "name": "DeFi JAAA Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.centrifuge.io/ipfs/bafkreifp5ww5lpbgrny36oxgzg2kjw2226lmj2vmekp4nqemm5ewhhtmwi"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AAqZ6CECabwnYLm3FDqPrVQotXLPGQ3BJSfecYmXeJU5",
+    "symbol": "GOTM",
+    "name": "GOTM",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/m2wRxofX6nJXAb8QWQfTKb2THJ_dCT6RsGCNWTpPeSM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AbvryMGnaba9oADMZk8Vp2Av6MtczsncGyfWaC4ondo",
+    "symbol": "EFAon",
+    "name": "iShares MSCI EAFE ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/efaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ACtfUWtgvaXrQGNMiohTusi5jcx5RJf5zwu9aAxkpump",
+    "symbol": "unc",
+    "name": "unc",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibm2rehj36ekplu7ilfmu5npmpmn5vdl3izlat2dkobhthzvfo2fm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AdsLPtW1KvKAw3QQLDST3M9cm57TeXZpbAhiKS27xbt",
+    "symbol": "XBT",
+    "name": "XBT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/9AjyAuyBnCokwTyAspp7D5AHUgNsr6gtBqxpG4KgziqW"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "aeroXvCT6tjGVNyTvZy86tFDwE4sYsKCh7FbNDcrcxF",
+    "symbol": "pdSOL",
+    "name": "Phase Delegation Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://uploader.irys.xyz/FouZryx1hPxt59BQBxT3TznE1EqZz6i2nF4aSnCB8d3B"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AFbX8oGjGpmVFywbVouvhQSRmiW2aR1mohfahi4Y2AdB",
+    "symbol": "GST",
+    "name": "GST",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/AFbX8oGjGpmVFywbVouvhQSRmiW2aR1mohfahi4Y2AdB/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AGdGTQa8iRnSx4fQJehWo4Xwbh1bzTazs55R6Jwupump",
+    "symbol": "114514",
+    "name": "114514",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeiaglqleiv6xn3m7mpuud7akhvmnld3rbp3mxdonztka7aqajoeefm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "aheEdmuryJU8ymy8LjYheZH5i2BW1UMsfuWQKD2ondo",
+    "symbol": "EQIXon",
+    "name": "Equinix (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/eqixon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AhhdRu5YZdjVkKR3wbnUDaymVQL2ucjMQ63sZ3LFHsch",
+    "symbol": "VCHF",
+    "name": "VNX Swiss Franc",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://vnx.li/wp-content/uploads/2025/04/VCHF-256x256-1.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AMjzRn1TBQwQfNAjHFeBb7uGbbqbJB7FzXAnGgdFPk6K",
+    "symbol": "SOLCEX",
+    "name": "SolCex ",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://i.imgur.com/YN1yUMM.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ao5rKFRQ54W3DKSAtqfhBRPNHewwWRLNLao2JL9ondo",
+    "symbol": "FUTUon",
+    "name": "Futu Holdings (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/futuon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AT13ipG8K4HDyEJm3H1ZVQV2Bw8sihewoLQReSMsYo3o",
+    "symbol": "AU79",
+    "name": "AU79",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/QmSE92ZJNDG3wPgMPMGLXfJvYrvFreHDEJ3uZyGeLxdxMV"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AT79ReYU9XtHUTF5vM6Q4oa9K8w7918Fp5SU7G1MDMQY",
+    "symbol": "SPDR",
+    "name": "SpiderSwap",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/PAVQPYRQzq2g4O2X7hDzOniW4aBE9PJ19U56MRVpIfA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "aTBfDuLRqYHBiG82bHA7DzwjSDTFre2dRtGH3S5ondo",
+    "symbol": "GEon",
+    "name": "General Electric (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/geon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ATLASXmbPQxBUYbxPsV97usA3fPQYEqzQBUHgiFCUsXx",
+    "symbol": "ATLAS",
+    "name": "Star Atlas",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/ATLASXmbPQxBUYbxPsV97usA3fPQYEqzQBUHgiFCUsXx/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AuQaustGiaqxRvj2gtCdrd22PBzTn8kM3kEPEkZCtuDw",
+    "symbol": "ADX",
+    "name": "Adrena Governance Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/8HohRjBW7P5uMUR0Cz9eHxLfOO2PcnLzciyvhhgNkck"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AURYydfxJib1ZkTir1Jn1J9ECYUtjb6rKQVmtYaixWPP",
+    "symbol": "AURY",
+    "name": "Aurory",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://images.cdn.aurory.io/logo/ico_blanc_small.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AUSD1jCcCyPLybk1YnvPWsHQSrZ46dxwoMniN4N2UEB9",
+    "symbol": "AUSD",
+    "name": "AUSD",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://raw.githubusercontent.com/agora-finance/public-assets/refs/heads/master/src/token-icon/AUSD_1024px.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AUuCEHQ7sm2i5GmaHrpE961voWcTY8U6mgrkhcV7pump",
+    "symbol": "QST",
+    "name": "QuStream",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmTYzpthzgxnEPyHXPqKSNHHDemBE3cqeMdgTZm4nqKPS4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AVF9F4C4j8b1Kh4BmNHqybDaHgnZpJ7W7yLvL7hUpump",
+    "symbol": "Lobstar",
+    "name": "Lobstar",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://metadata.rapidlaunch.io/images/42bed0d1-a27d-4598-905d-9dc7fa55e47d.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AvZZF1YaZDziPY2RCK4oJrRVrbN3mTD9NL24hPeaZeUj",
+    "symbol": "syrupUSDC",
+    "name": "Syrup USDC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/maple-labs/maple-metadata/refs/heads/main/assets/syrupUSDC.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ax8PSfCXxmxb8C8kYTzN5CPpTe6PyeZfFf8rrXNCjupx",
+    "symbol": "MM",
+    "name": "Milk Money",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/images/Ax8PSfCXxmxb8C8kYTzN5CPpTe6PyeZfFf8rrXNCjupx-1dae54be-2a7e-47d1-bb34-6d914d39438b.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AxaTJdRuuc3626FtPWdQCMcWPH6yzgxXKWbFCZN3TMgy",
+    "symbol": "ASV",
+    "name": "Asvoria",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://bafybeiap2jgce7xki7m6ei2ctkkdwczxgllo3gnueia63c6aipbka3opmu.ipfs.nftstorage.link/asvoria.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "axiom1dWfDXKn6r4pn3jjaYuLTExG5TdLuAqXQohNuG",
+    "symbol": "axiSOL",
+    "name": "Axiom Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://i.imgur.com/2vGTGMo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AxriehR6Xw3adzHopnvMn7GcpRFcD41ddpiTWMg6pump",
+    "symbol": "jailstool",
+    "name": "Stool Prisondente",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmeLJyTUjKbU6E47DqZGaPHdktRQi8HyJynmcSyghUbLjw"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AY1Ww6MxwC3cCiyrandHqLrp4FXvzgcwQTZpJ2FEpump",
+    "symbol": "Amiko",
+    "name": "Amiko",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmdbCJFBDh2qBCU5c9iRUxnRAbwRPAMd4YJaSPhUU36Vpz"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AymATz4TCL9sWNEEV9Kvyz45CHVhDZ6kUgjTJPzLpU9P",
+    "symbol": "XAUt0",
+    "name": "Tether Gold",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibth2yh4jlehmf5nmfgy763z4yvwxlz7zmuohmhp53un6wrho5t2q"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AyrQpt5xsVYiN4BqgZdd2tZJAWswT9yLUZmP1jKqpump",
+    "symbol": "jobcoin",
+    "name": "buy instead of getting a job",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/Qmeu35hXZM66AbATWZW5x5dc9nWRUrGkq9ucvZATicSxLF"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AywAYdNJnSLSXwKWYxDciPjqGRnwp4iZdQptuuQTpump",
+    "symbol": "MICHI",
+    "name": "michi",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmNzwuJnJrtyp77CdwGJH9dS3SauuiA6yFn7ZDTBon2RtN"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AZbem4s8iLJE5eniDZJ7c8q1ahbfMwWgCA8TxVW2tDUB",
+    "symbol": "VIBECOIN",
+    "name": "Vibing Cat Coin",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cdn.anoncoin.it/VIBECOIN/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "B1rGc4HM4Q6q4nU78ADM7fGguxqiasH53fh6ViDXpump",
+    "symbol": "BLOXX",
+    "name": "BloxAPI",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeibrcsit5xgta5wzi4rfiiqmopkfiwrqr5aicvjxbvnnjiaqhujlza"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BANKJmvhT8tiJRsBSS1n2HryMBPvT5Ze4HU95DUAmeta",
+    "symbol": "AVICI",
+    "name": "Avici",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/AVICI/AVICI.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Bb4jR951QtVjeFAYFLBYXDSMKjbTDroCLPbFLdd7pump",
+    "symbol": "memecoin",
+    "name": "just a memecoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmY4TEhFkcjANCQP92qHwsLjLU7dKzRM7msFNgFjYVDyvF"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "bbahNA5vT9WJeYft8tALrH1LXWffjwqVoUbqYa1ondo",
+    "symbol": "GOOGLon",
+    "name": "Alphabet Class A (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/googlon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BBKPiLM9KjdJW7oQSKt99RVWcZdhF6sEHRKnwqeBGHST",
+    "symbol": "GHOST",
+    "name": "GhostwareOS",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/Ku6pbA57kzk-tyxlZP9NEOaA2SYAZtYl8bCSYTRlxjU"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BchJRy2snmhJZf3rQ9LJ3ePs2BGfYgfvQNo31d2ondo",
+    "symbol": "GSon",
+    "name": "Goldman Sachs (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/gson_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BDCs2xEqzXyRpp9P6uPDnAvERpLKBfzHPEzbe3BfCxDY",
+    "symbol": "BDC",
+    "name": "Billion Dollar Cat Rune",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/w94NX6IXE04HouWezdo3Immorhv-wAWgtdTaLmOn2PE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "bdh3njeo19d2TBLAKTGvCWdSoArfVw8uZBAJHY4ondo",
+    "symbol": "HIMSon",
+    "name": "Hims \u0026 Hers Health (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/himson_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BdMLRC2gKyFu8FRBErazzpEaKmB1jcVB9Eq1rXXFm4EV",
+    "symbol": "BdMLRsol",
+    "name": "",
+    "decimals": 9,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BFgdzMkTPdKKJeTipv2njtDEwhKxkgFueJQfJGt1jups",
+    "symbol": "URANUS",
+    "name": "Uranus",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://pbs.twimg.com/profile_images/1957748374339272704/qQwzXYmw_400x400.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BFiGUxnidogqcZAPVPDZRCfhx3nXnFLYqpQUaUGpump",
+    "symbol": "SPIKE",
+    "name": "SPIKE ",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmWQbrb8AMX4NrDbLfLwqK8QZrjKB3bmuyKMqcXV8BNntb"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BHvPQ9dFAiZJUSYJFpEmdfMmgz48iLohyxyixBfZjups",
+    "symbol": "SHACK",
+    "name": "Shack Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/images/BHvPQ9dFAiZJUSYJFpEmdfMmgz48iLohyxyixBfZjups"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "bioJ9JTqW62MLz7UKHU69gtKhPpGi1BQhccj2kmSvUJ",
+    "symbol": "BIO",
+    "name": "BIO",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://crimson-fantastic-mouse-567.mypinata.cloud/ipfs/bafkreih3c2fcuob3h3vvv6s7sdvgglqgyc6tqu6tphaceciuonz2h4cagi"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BktHEAc2WS8TQi2vmavn1rA4L1WJuwF3Vkk3DnwwARti",
+    "symbol": "ENRON",
+    "name": "Enron",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreicmup7d7ybcqpq5gpquv7jhrr2ss44tzgtnevtvghtqgbf37fdrnu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BLiUhfaUFbSoMVeRqq3QYTA1eJsTsB3ZDEYtUsGGQ9em",
+    "symbol": "SFG",
+    "name": "SolForge Fusion",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmaY3UbjCMVeGKgzKVUQgzkzMX6goUgbR7qYrzmvdK3FS1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BMBtwz6LFDJVJd2aZvL5F64fdvWP3RPn4NP5q9Xe15UD",
+    "symbol": "BMB",
+    "name": "Beamable Network Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/AZjAySDMqY8Y65DSQ9QMxdpNVdoF7UWJzrVq9SekG8ed"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BNso1VUJnh4zcfpZa6986Ea66P6TCp59hvtNJ8b1X85",
+    "symbol": "BNSOL",
+    "name": "Binance Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/LepI-hea-JrbLMb4L_HpMzaq9k0aHY2-lVSGiBtwvFM?ext=png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BonK1YhkXEGLZzwtcvRTip3gAL9nCeQD7ppZBLXhtTs",
+    "symbol": "bonkSOL",
+    "name": "Bonk SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/ms-FdIyJ8TxEJOb2SAYhfyrLop7TDrCEjD-I-oIl5u4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "boopkpWqe68MSxLqBGogs8ZbUDN4GXaLhFwNP7mpP1i",
+    "symbol": "BOOP",
+    "name": "BOOP",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://dd.dexscreener.com/ds-data/tokens/solana/boopkpWqe68MSxLqBGogs8ZbUDN4GXaLhFwNP7mpP1i.png?size=lg\u0026key=5b7ae9"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BorGY4ub2Fz4RLboGxnuxWdZts7EKhUTB624AFmfCgX",
+    "symbol": "BORGY",
+    "name": "Borgy",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://bafybeidakxizcbtirp3evkpuadcapojwag6ymggm5y5bfc7p7dceg5gpeu.ipfs.dweb.link/"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BpdHpqznEgYPXZNrJVRZvBhdWoafYLVVuLxTQo34pump",
+    "symbol": "SSR",
+    "name": "Strategic Super Reserve",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmVtoYscVNzsH1rLX4rTBWWCGfAtmtiKSXFdhHsExjehbj"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BPSoLzmLQn47EP5aa7jmFngRL8KC3TWAeAwXwZD8ip3P",
+    "symbol": "bpSOL",
+    "name": "Backpack Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bpsol.s3.us-west-1.amazonaws.com/bpSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BPxxfRCXkUVhig4HS1Lh7kZqV6SPJhzfEk4x6fVBjPCy",
+    "symbol": "BP",
+    "name": "Backpack",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://trek-labs.github.io/heart-metadata/bp/bp.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1",
+    "symbol": "bSOL",
+    "name": "BlazeStake Staked SOL (bSOL)",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1/logo.png",
+    "tags": [
+      "lst"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BULKoNSGzxtCqzwTvg5hFJg8fx6dqZRScyXe5LYMfxrn",
+    "symbol": "BulkSOL",
+    "name": "BULK Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/tBlyAYsdhdXFdAUO7OeEZdcZ-KYXYgR8DAEPjx7akig"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BVdXGvmgi6A9oAiwWvBvP76fyTqcCNRJMM7zMN6ondo",
+    "symbol": "HOODon",
+    "name": "Robinhood Markets (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/hoodon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Bybit2vBJGhPF52GBdNaQfUJ6ZpThSgHBobjWZpLPb4B",
+    "symbol": "bbSOL",
+    "name": "BybitSOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://static.bymj.io/web3/staking/bbsol/bbsol2.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BZLbGTNCSFfoth2GYDtwr7e4imWzpR5jqcUuGEwr646K",
+    "symbol": "IO",
+    "name": "IO",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://bafkreicnqsbhpzxiasdm5esr7fqi3vcjvcbfefo4sq4y3ff747rfqf7w7i.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C29ebrgYjYoJPMGPnPSGY1q3mMGk4iDSqnQeQQA7moon",
+    "symbol": "NOBODY",
+    "name": "Nobody Sausage",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://imagedelivery.net/TKv7KPMH2OHcr6ck7xjakw/122470db-2978-4620-8242-549349e82100/public"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C2omVhcvt3DDY77S2KZzawFJQeETZofgZ4eNWWkXpump",
+    "symbol": "BULLISH",
+    "name": "Bullish Degen",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeicmplvwizbeaoijncqhvftkmh575vz364govjx6sgvmuighvx5vb4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C7heQqfNzdMbUFQwcHkL9FvdwsFsDRBnfwZDDyWYCLTZ",
+    "symbol": "$COLLAT",
+    "name": "Collaterize",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmSjmKW7is3qdpbev4TUyiquJWXahKekyzrSGq4fsxWdoi"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C8bZkgSxXkyT1RgxByp2teJ24hgimPLoyEYoNa9ondo",
+    "symbol": "IBMon",
+    "name": "IBM (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/ibmon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C9dJfTGUzhuqPWxh9mcDr66JZN4uzXh2gh9EWnEdpump",
+    "symbol": "WAR",
+    "name": "WAR",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmTvrRzsoa9KWA7unTFkc9cyPCAjXpoBeEGooS7yUYvdcZ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "C9J9vZ8N79GzzxFoRkPWCkGtMKU8akg4FhUk4r9ondo",
+    "symbol": "IEFAon",
+    "name": "iShares Core MSCI EAFE ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iefaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CARDSccUMFKoPRZxt5vt3ksUbxEFEcnZ3H2pd3dKxYjp",
+    "symbol": "CARDS",
+    "name": "Collector Crypt",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/2wrjAk4pYAACF3siDHAxt7yJY7kHgt57TZAkbgecKHMR"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CASHx9KJUStyftLFWGvEVf59SGeG9sh5FfcnZMVPCASH",
+    "symbol": "CASH",
+    "name": "CASH",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://token-metadata.bridge.xyz/images/cash.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CB9dDufT3ZuQXqqSfa1c5kY935TEreyBw9XJXxHKpump",
+    "symbol": "USDUC",
+    "name": "unstable coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQw4DQjdWp3G8TuMCykG8SVSwtFwkxvTyxEWNMuAVYU4q"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij",
+    "symbol": "cbBTC",
+    "name": "Coinbase Wrapped BTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmZ7L8yd5j36oXXydUiYFiFsRHbi3EdgC4RuFwvM7dcqge"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CDCSoLckzozyktpAp9FWT3w92KFJVEUxAU7cNu2Jn3aX",
+    "symbol": "CDCSOL",
+    "name": "Crypto.com Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/12xEvVVvGFM5n5U6ILXdShlLtUJOT1gUQTlSy8sGybg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "cdVNL7wK8mf1UCDqM6zdrziRv4hmvqWhXeTcck2ondo",
+    "symbol": "IEMGon",
+    "name": "iShares Core MSCI Emerging Markets ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iemgon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ce2gx9KGXJ6C9Mp5b5x1sn9Mg87JwEbrQby4Zqo3pump",
+    "symbol": "neet",
+    "name": "NotInEmploymentEducationTraining",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXVKWN3i56vyh4Xot9sTb3XsCu92ihypcArFJLujuwzoS"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "cfPLN9WXD2BTkbZhRZMVXPmVSiRo44hJWRtnaC8ondo",
+    "symbol": "IJHon",
+    "name": "iShares Core S\u0026P MidCap ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/ijhon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CGEDT9QZDvvH5GmVkWJH2BXiMJqMJySC9ihWyr7Spump",
+    "symbol": "BURNIE",
+    "name": "Burnie Senders",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeiet7ko4w3nk2aeh2m7bsrbnlgs6tqz3vmmfgxu7ieesq75e2pup44"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CgnTSoL3DgY9SFHxcLj6CgCgKKoTBr6tp4CPAEWy25DE",
+    "symbol": "cgntSOL",
+    "name": "Cogent SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cogent-cogs.s3.us-west-2.amazonaws.com/cgntSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ch7rTovcUK7C1zNFM7F93kXU2CByYUsJT4pwYx7pump",
+    "symbol": "PP",
+    "name": "Official PPshow ",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmUTy2cPwyQFfKcVbNZgef78GhadJ5L7MxCcgbdstrKvBu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "cJpUMp5R7rZ6fGeLHbHhrRuJzK9mkyKDjZqNpT3ondo",
+    "symbol": "INTCon",
+    "name": "Intel (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/intcon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CLoUDKc4Ane7HeQcPpE3YHnznRxhMimJ4MyaUqyHFzAu",
+    "symbol": "CLOUD",
+    "name": "Cloud",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/N7vCgQdgQ-fab28zEB4m8QRLMwI91_KcXI-Gtr151gg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Cm6fNnMk7NfzStP9CZpsQA2v3jjzbcYGAxdJySmHpump",
+    "symbol": "Buttcoin",
+    "name": "Buttcoin",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiftg7kl6h2aflu3i6je2vdsdnrtbxiyuxr6n6pk6txpkigbz7cmvq"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Cmn4v2wipYV41dkakDvCgFJpxhtaaKt11NyWV8pjSE8A",
+    "symbol": "jlUSDT",
+    "name": "jupiter lend USDT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/usdt.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CmVUoJUt7hMGc9ze7s8zYdnA7enMfCAFdQCggxcbACWU",
+    "symbol": "CWU",
+    "name": "Commonwealth",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/QmYyipbcnuhr9R28C5PvnWiigScG6fxMAZUxG4fGGbTJPu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CniPCE4b3s8gSUPhUiyMjXnytrEqUrMfSsnbBjLCpump",
+    "symbol": "pwease",
+    "name": "PWEASE",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmboNoCSu87DLgnqqf3LVWCUF2zZtzpSE5LtAa3tx8hUUG"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CoRAitPvr9seu5F9Hk39vbjqA1o1XuoryHjSk1Z1q2mo",
+    "symbol": "CORAL",
+    "name": "Coral Protocol",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dheu4qhln/image/upload/v1754143993/Coral_400x400_fntqdq.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CorvuSSoLxPKLoXWXSfn8pFSMhCRHhe7Uwqe874cmwvg",
+    "symbol": "corvusSOL",
+    "name": "Corvus SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://pub-ca023c3462be43ae907f450320832e8b.r2.dev/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CozoH5HBTyyeYSQxHcWpGzd4Sq5XBaKzBzvTtN3ondo",
+    "symbol": "INTUon",
+    "name": "Intuit (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/intuon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "cPQPBN7WubB3zyQDpzTK2ormx1BMdAym9xkrYUJsctm",
+    "symbol": "fwdSOL",
+    "name": "Forward Industries Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/sCrxsrKza0FmAjP5ijzBGyLasIK9mYJFNUy04fNNAeA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CPWkMURVvcnX8hGjqCTb8i5LkzV3VSvyk7SeJi8ondo",
+    "symbol": "ITOTon",
+    "name": "iShares Core S\u0026P Total US Stock Market ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/itoton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CqW2pd6dCPG9xKZfAsTovzDsMmAGKJSDBNcwM96ondo",
+    "symbol": "IVVon",
+    "name": "iShares Core S\u0026P 500 ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/ivvon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CRAMvzDsSpXYsFpcoDr6vFLJMBeftez1E7277xwPpump",
+    "symbol": "PEPECAT",
+    "name": "PEPECAT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/7jQGuq2qUI27A4Ba5DaDDx0MCjIHL8SZI2dsGK0a_ss"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CrAr4RRJMBVwRsZtT62pEhfA9H5utymC2mVx8e7FreP2",
+    "symbol": "MON",
+    "name": "Monad",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://imagedelivery.net/cBNDGgkrsEA-b_ixIp9SkQ/I_t8rg_V_400x400.jpg/public"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CrdMPbjooMmz6RoVgUnczWoeZka2QF14pikcCTpzRMxz",
+    "symbol": "sFLP.2",
+    "name": "Flash Pool 2*",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://yyz22ty24gytpmxii66fiq2cgkpcdvm5szivbjry77o34zukc2gq.arweave.net/xjOtTxrhsTey6Ee8VENCMp4h1Z2WUVCmOP_dvmaKFo0"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CreiuhfwdWCN5mJbMJtA9bBpYQrQF2tCBuZwSPWfpump",
+    "symbol": "PYTHIA",
+    "name": "PYTHIA",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmTXDtsVTaSTFpsAGVUmjFqSzbgo44YesssfmDxs2xTyQs"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CRTx1JouZhzSU6XytsE42UQraoGqiHgxabocVfARTy2s",
+    "symbol": "CRT",
+    "name": "Carrot",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://carrot-public-assets-production.s3.us-east-2.amazonaws.com/carrot.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CRWNYkqdgvhGGae9CKfNka58j6QQkaD5bLhKXvUYqnc1",
+    "symbol": "CRWNY",
+    "name": "Crowny token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.crowny.dev/app-icon-min.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CRXvgCjV3RTmm3nu6gJr9SgJ3X7DBXarM8GNVTj4fCRX",
+    "symbol": "CRX",
+    "name": "Creator",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://creator.mypinata.cloud/ipfs/QmW9kX3MmTbY2o7SMXQED4BLKCQmi3Kde3VpFMwTFvVRaD"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CTAyri1T4d1QRfnmtSRpEsPS5tyH6shA1WTskhybmrMT",
+    "symbol": "CTA",
+    "name": "Cross The Ages",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.crosstheages.com/cta-token/icon-512.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CtzPWv73Sn1dMGVU3ZtLv9yWSyUAanBni19YWDaznnkn",
+    "symbol": "xBTC",
+    "name": "OKX Wrapped BTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://static.coinall.ltd/cdn/oksupport/common/20250512-095503.72e1f41d9b9a06.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CudisfkgWvMKnZ3TWf6iCuHm8pN2ikXhDcWytwz6f6RN",
+    "symbol": "CUDIS",
+    "name": "CUDIS",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cudisipfs.mypinata.cloud/ipfs/bafkreif4y2qj6hlxiuv77is2sgkjkolctehzqz7eqlypfi5sormcvf6ei4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CvB1ztJvpYQPvdPBePtRzjL4aQidjydtUz61NWgcgQtP",
+    "symbol": "EPCT",
+    "name": "Epics Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafybeibal7k2hz6frznyjbl4qcnzcwlsuzxmquatrsaly6ttmuppgmdvwe.ipfs.dweb.link/EpicsCoin.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Cy1GS2FqefgaMbi45UunrUzin1rfEmTUYnomddzBpump",
+    "symbol": "MOBY",
+    "name": "Moby AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmdyG2c35DTLen5Etr77cmgYQ8qH8yXZSzDQY6koymp8Ux"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Cz7LGKdZPpAxonXx23ZYPW3RtDQvjcf17ZDCZEzFpump",
+    "symbol": "401jk",
+    "name": "401jk",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreihn37farfsk6jfaxsf6adnyfoopwla3fvpmcer4mfjyljbr47226u"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CzLSujWBLFsSjncfkh59rUFqvafWcY5tzedWJSuypump",
+    "symbol": "GOAT",
+    "name": "Goatseus Maximus",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmapAq9WtNrtyaDtjZPAHHNYmpSZAQU6HywwvfSWq4dQVV"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "D1tu7Fnm3cCpKyyPXrqm5GXShPqMj7a2SEjjq9fondo",
+    "symbol": "SQQQon",
+    "name": "ProShares UltraPro Short QQQ (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/sqqqon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "D1wZHkfk8d6QsCjF3NTiYHLzsZJ2Qb4Q7WBFFbGuzBLV",
+    "symbol": "INFRA",
+    "name": "Infraxa",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://dpiknhejtrohakoouanp.supabase.co/storage/v1/object/public/token-media/clout/56a864ef-e55d-4bb1-afb9-0ef2d02bf8f5-infraxa.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "D25bi7oHQjqkVrzbfuM6k2gzVNHTSpBLhtakDCzCCDUB",
+    "symbol": "ANONCOIN",
+    "name": "Anoncoin",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cdn.anoncoin.it/ANONCOIN/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DBRiDgJAMsM95moTzJs7M9LnkGErpbv9v6CUR1DXnUu5",
+    "symbol": "DBR",
+    "name": "deBridge",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.debridge.foundation/images/DBR.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DBTNHU51SBFi3dsoGGCRfKbno4teZXqsDSL37s4jgRKv",
+    "symbol": "$DBT",
+    "name": "Dabba Network",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://dabba-nft-metadata.s3.ap-south-1.amazonaws.com/images/dbt-token-icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DeaKMzAeZja3Mh5okZE6WUvygLP3Lfuvm6Rg78HqXTz9",
+    "symbol": "SOLNIC",
+    "name": "Solnic",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/y0Hlgi1BbUfWCfJ2a407UrlViwN0Fa3cjLikgrVCpWI"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DEF1NXSZ8Th9n28hYBayrFtx9bj1EwwTiy3mhHEB9oyA",
+    "symbol": "definSOL",
+    "name": "Definity Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://hv4gxzchk24cqfezebn3ujjz6oy2kbtztv5vghn6kpbkjc3vg4rq.arweave.net/n3W2lUNPCJpX9WXjXEl0Tx0hB57BvioKUG8pixx1A4o"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "degod39zqQWzpG6h4b7SJLLTCFE6FeZnZD8BwHBFxaN",
+    "symbol": "degod",
+    "name": "degod",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/OBR6-KUTIPPZRGf9mQupi-vCie8hB5Gw_3hYRs5Jtjc"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DEkqHyPN7GMRJ5cArtQFAWefqbZb33Hyf6s5iCwjEonT",
+    "symbol": "USDe",
+    "name": "USDe",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/qeSnRm_FIyp_khPfmg8o1zQeGO4AczDaEKe8jEUOzL4",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "symbol": "Bonk",
+    "name": "Bonk",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Df6yfrKC8kZE3KNkrHERKzAetSxbrWeniQfyJY4Jpump",
+    "symbol": "CHILLGUY",
+    "name": "Just a chill guy",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmaFy59TMnLb4jGgL6LpquyXSxTRXKR4mEfSobUSsPoR46"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Dfh5DzRgSvvCFDoYc2ciTkMrbDfRKybA4SoFbPmApump",
+    "symbol": "pippin",
+    "name": "Pippin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmdcvSSBg7gWD4tvfXv3PuLtAiPyDZ5Z9w4LQVeRJKL3Lz"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DgNsbf4wFQJNss6MKfdr5sSAb3Mn7m9HmYwemgXFjupx",
+    "symbol": "CFG",
+    "name": "Crypto Fight Game",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/images/DgNsbf4wFQJNss6MKfdr5sSAb3Mn7m9HmYwemgXFjupx"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DitHyRMQiSDhn5cnKMJV2CDDt6sVct96YrECiM49pump",
+    "symbol": "House",
+    "name": "Housecoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/durc13eeg/image/upload/v1756713170/housecoin_logo_cy7q2d.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DKu9kykSfbN5LBfFXtNNDPaX35o4Fv6vJ9FKk7pZpump",
+    "symbol": "AVA",
+    "name": "Ava AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQdYxGMCLEZqWpgKo8BREBa5YSUbxFu6qaWiVXUW1yUhg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DLUNTKRQt7CrpqSX1naHUYoBznJ9pvMP65uCeWQgYnRK",
+    "symbol": "SOLC",
+    "name": "SolCard",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafybeidyzyh3wmstgqsdyhbz4a2im4dx3qw6sveet2tvd2vch62vonnb2y.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "dmfunVbjA71VZu2L1h74Exji6Avs9tsL63uneCDLocX",
+    "symbol": "fun",
+    "name": "dm.fun",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/ESkTaWguEhpZ8xim5HLhrHPZdp4ZHwn7EfAZcAFbAcja"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DNhQZ1CE9qZ2FNrVhsCXwQJ2vZG8ufZkcYakTS5Jpump",
+    "symbol": "ZAUTH",
+    "name": "zauthx402",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreib23vtffeavvpg4uelnkzyhafga66kd7i3lrjw2ork6abxyptnkg4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "dog1viwbb2vWDpER5FrJ4YFG6gq6XuyFohUe9TXN65u",
+    "symbol": "DOG",
+    "name": "DOG (Bitcoin)",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://metadata.runemine.com/doggotothemoon.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DpBzjtgGLF7QA9Ug3eUVGbnqa6j3jvYBn1XuQuktvfhm",
+    "symbol": "DOGE-1",
+    "name": "DOGE-1 Satellite",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://file.dexlab.space/file/63ab9878bf314357af89468c45b91416"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DQnkBM4eYYMnVE8Qy2K3BB7uts1fh2EwBVktEz6jpump",
+    "symbol": "DJI6930",
+    "name": "DOWGE",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeic4lupxyxjdzqr5vdvq6j4f3toceacxw2tovubvyiqzevnzyr6uhu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",
+    "symbol": "DRIFT",
+    "name": "Drift",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://metadata.drift.foundation/drift.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DrZ26cKJDksVRWib3DVVsjo9eeXccc7hKhDJviiYEEZY",
+    "symbol": "YZY",
+    "name": "YZY",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/8AKeunEmIMk-UfVUnSR1SK0LKL2pGzlpQdDMBkbu5HM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "dSHPFuMMjZqt7xDYGWrexXTSkdEZAiZngqymQF2ondo",
+    "symbol": "IWFon",
+    "name": "iShares Russell 1000 Growth ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iwfon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Dso1bDeDjCQxTrWHqUUi63oBvV7Mdm6WaobLbQ7gnPQ",
+    "symbol": "dSOL",
+    "name": "Drift Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://drift-public.s3.eu-central-1.amazonaws.com/dSOL.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DtR4D9FtVoTX2569gaL837ZgrB6wNjj6tkmnX9Rdk9B2",
+    "symbol": "aura",
+    "name": "aura",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmSBgFtpXnxLMeyU1Czs1PW5Zv7nFjy8ZXe5ZDhA8fyyPD"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DuMbhu7mvQvqQHGcnikDgb4XegXJRyhUBfdU22uELiZA",
+    "symbol": "elizaOS",
+    "name": "elizaOS",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmdGdHmnxytA7GxWKXCxUMweuUCiaJSFYX9GMPJvAQLtDU/elizaOS.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DUSDt4AeLZHWYmcXnVGYdgAzjtzU5mXUVnTMdnSzAttM",
+    "symbol": "DUSD",
+    "name": "DUSD",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://raw.githubusercontent.com/standcoin/stdc_assets/refs/heads/main/images/dusd.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "dvj2kKFSyjpnyYSYppgFdAEVfgjMEoQGi9VaV23ondo",
+    "symbol": "IWMon",
+    "name": "iShares Russell 2000 ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iwmon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DvjbEsdca43oQcw2h3HW1CT7N3x5vRcr3QrvTUHnXvgV",
+    "symbol": "DOOD",
+    "name": "Doodles",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/OqHnpGf36DiprL5YIC4xJHG8zRsWFV2FsZcNTfVgAPg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Dx2bQe2UPv4k3BmcW8G2KhaL5oKsxduM5XxLSV3Sbonk",
+    "symbol": "Hosico",
+    "name": "Hosico",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmYherhSQLsHQiguCzHM5Li4tG49hZ8eJYkmar8gvttP9W"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DX7g7WNjDpVzNK9CG81v7wb6ZbiNzYfkdzH2Xs5ondo",
+    "symbol": "IWNon",
+    "name": "iShares Russell 2000 Value ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iwnon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Dxg9cLvssqb1WEMpyynjf17kGRc4UTNyUqjzNj99opus",
+    "symbol": "OPUS",
+    "name": "Opus Genesis",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmVPhDBya4eh2PFSCbDR7HYhVjdHs4xBuKuLFDDsuV3Xzn"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DYNoyS3x5qgbccZg7RPXagm4xQzfnm5iwd9o8pMyJtdE",
+    "symbol": "dynoSOL",
+    "name": "dynoSOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ycfcqd4kivi3yuj7dy6djscn2a7mql24ntvvufef7ltbqri5fila.arweave.net/wIooD4pFUbxRPx48NMhN0D7IL1xs61oUhfrmGEUdKhY"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Dz9mQ9NzkBcCsuGPFJ3r1bS4wgqKMHBPiVuniW8Mbonk",
+    "symbol": "USELESS",
+    "name": "USELESS COIN",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://i.imgur.com/S17YRd3.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "E1aUS5nyv7kaBzdQzPVJW5zfaMgoUJpKYzdnFS2ondo",
+    "symbol": "JDon",
+    "name": "JD.com (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/jdon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "E5Gczsavxcomqf6Cw1sGCKLabL1xYD2FzKxVoB4ondo",
+    "symbol": "JPMon",
+    "name": "JPMorgan Chase (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/jpmon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "e6G4pfFcrdKxJuZ4YXixRFfMbpMvgXG2Mjcus71ondo",
+    "symbol": "KOon",
+    "name": "Coca-Cola (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/koon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ea5SjE2Y6yvCeW5dYTn7PYMuW5ikXkvbGdcmSnXeaLjS",
+    "symbol": "PAI",
+    "name": "PAI (Parrot USD)",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Ea5SjE2Y6yvCeW5dYTn7PYMuW5ikXkvbGdcmSnXeaLjS/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EchesyfXePKdLtoiZSL8pBe8Myagyy8ZRqsACNCFGnvp",
+    "symbol": "FIDA",
+    "name": "Bonfida",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EchesyfXePKdLtoiZSL8pBe8Myagyy8ZRqsACNCFGnvp/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ED5nyyWEzpPPiWimP8vYm7sD7TD3LAt3Q3gRTWHzPJBY",
+    "symbol": "MOODENG",
+    "name": "Moo Deng",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/Qmf1g7dJZNDJHRQru7E7ENwDjcvu7swMUB6x9ZqPXr4RV2"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "edge86g9cVz87xcpKpy3J77vbp4wYd9idEV562CCntt",
+    "symbol": "edgeSOL",
+    "name": "Edgevana Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://srv.edgevana.com/img/edgesol.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Edik9MoFp8LAXS9HNu2gRFyihwYqDqv4ZmNmVT9ondo",
+    "symbol": "LINon",
+    "name": "Linde plc (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/linon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ee4ooSk6GMC34T1Gbh8rRY2XLyuk2FsyiWtq3jrHUcPR",
+    "symbol": "VNX",
+    "name": "VNX",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/pwHLXdCWdcZCKJ-SQaE3l1-hDM1bDjE8BXKs9D9Kdls"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EFFECT1A1R3Dz8Hg4q5SXKjkiPc6KDRUWQ7Czjvy4H7E",
+    "symbol": "EFFECT",
+    "name": "Effect AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/HFC0qRAU3IjEKfQ5xBG8ryIgt-zhp9FzbP9F7EEEqIg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Eg2ymQ2aQqjMcibnmTt8erC6Tvk9PVpJZCxvVPJz2agu",
+    "symbol": "PUMPCADE",
+    "name": "PUMPCADE",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreidzq3j3vg6grhoqx2ejfwk6tkordeickhbe5uqlcgfo3suj5d5iny"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "eGGxZwNSfuNKRqQLKaz2hc4QkA2mau7skyxPdj7ondo",
+    "symbol": "LLYon",
+    "name": "Eli Lilly (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/llyon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Eh6XEPhSwoLv5wFApukmnaVSHQ6sAnoD9BmgmwQoN2sN",
+    "symbol": "sUSDe",
+    "name": "Staked USDe",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/iY7Aj5iwHKDIDL0m7QxeQN2URRrphWRpdKPJjE8fcaQ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EJmUVvDqAdfH5zEohkdS4234bi3c6iunqEMobjmondo",
+    "symbol": "SNDKon",
+    "name": "SanDisk (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/sndkon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EkDGB5fbPXiRmDDjxKcC7dFjzvFZj2KT9t7oeyyPx4SX",
+    "symbol": "PIXEL",
+    "name": "Pixel Coin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmeUiWuqt5ofuCcuBdNfSgtsdpftu7ufaJNngsLBYYA6nJ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+    "symbol": "$WIF",
+    "name": "dogwifhat",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafkreibk3covs5ltyqxa272uodhculbr6kea6betidfwy3ajsav2vjzyum.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "eL5fUxj2J4CiQsmW85k5FG9DvuQjjUoBHoQBi2Kpump",
+    "symbol": "UFD",
+    "name": "Unicorn Fart Dust",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/djdxgh1ib/image/upload/v1766089232/UFD_PFP_-_Token_Image_js4ayd.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ENcwYGVhRsEqKpH4SzRH4mcYSGc9Cb6s4WJGS9ojpump",
+    "symbol": "KOKOP",
+    "name": "Kokopi Koalas",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiebhyxfkwmlojie7nlezhcxsfqwhmpidlugzoldndo2gxbbzqxny4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EoReHwUnGGekbXFHLj5rbCVKiwWqu32GrETMfw4ondo",
+    "symbol": "LMTon",
+    "name": "Lockheed (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/lmton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     "symbol": "USDC",
     "name": "USD Coin",
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
-    "coingeckoId": "usd-coin",
-    "cmcId": 3408,
-    "tags": ["stablecoin"]
+    "tags": [
+      "stablecoin"
+    ]
   },
   {
     "chainKey": "solana.mainnet",
@@ -19,32 +3012,1057 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg",
-    "coingeckoId": "tether",
-    "cmcId": 825,
-    "tags": ["stablecoin"]
+    "tags": [
+      "stablecoin"
+    ]
   },
   {
     "chainKey": "solana.mainnet",
-    "address": "So11111111111111111111111111111111111111112",
-    "symbol": "SOL",
-    "name": "Wrapped SOL",
+    "address": "EsVHcyRxXFJCLMiuYLWhoDygrNe1BJGpYeZ17X7ondo",
+    "symbol": "MAon",
+    "name": "Mastercard (Ondo Tokenized)",
     "decimals": 9,
-    "type": "spl-token",
-    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
-    "coingeckoId": "wrapped-solana",
-    "tags": ["wrapped"]
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/maon_160x160.png"
   },
   {
     "chainKey": "solana.mainnet",
-    "address": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
-    "symbol": "mSOL",
-    "name": "Marinade staked SOL",
+    "address": "EswgBj2hZKdgovX2ihWSUDnuBg9VNbGmSGoH5yjNsPRa",
+    "symbol": "PHY",
+    "name": "Physis",
     "decimals": 9,
     "type": "spl-token",
-    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
-    "coingeckoId": "msol",
-    "cmcId": 11461,
-    "tags": ["lst"]
+    "logoURI": "https://cdn.jsdelivr.net/gh/PhysisVerse/metadata@main/phy/orb-ti-trans-256.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ETAtLmCmsoiEEKfNrHKJ2kYy3MoABhU6NQvpSfij5tDs",
+    "symbol": "MEDIA",
+    "name": "Media Network",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/ETAtLmCmsoiEEKfNrHKJ2kYy3MoABhU6NQvpSfij5tDs/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EUbJjmDt8JA222M91bVLZs211siZ2jzbFArH9N3ondo",
+    "symbol": "MCDon",
+    "name": "McDonald's (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/mcdon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ex5DaKYMCN6QWFA4n67TmMwsH8MJV68RX6YXTmVM532C",
+    "symbol": "USDv",
+    "name": "USDv",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://solomonlabs.org/assets/usdv.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EXoMAHnw2Gw5fXJTektedLJDVn9vn8tLTEQX7gHccQKR",
+    "symbol": "EXO",
+    "name": "Exotic Markets",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/GnuNWcwVR9EGSEtScneEJWNhu1JeS7t3o18Xq7vhFR3F"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ezSoL6fY1PVdJcJsUpe5CM3xkfmy3zoVCABybm5WtiC",
+    "symbol": "ezSOL",
+    "name": "Renzo Restaked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://nhjibgkrkpvjc4pzb3bk3v2ocom53mu3ruaslsclskqbteianmea.arweave.net/adKAmVFT6pFx-Q7CrddOE5ndspuNASXIS5KgGZEAawg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "F35yYmTR6PqkbTx449P1eGhB57mRhWAdYs93eCo2dMZR",
+    "symbol": "pbUSDC",
+    "name": "PiggyBank USDC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://app.piggybank.fi/asset_icons/pbUSDC.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "F3nefJBcejYbtdREjui1T9DPh5dBgpkKq7u2GAAMXs5B",
+    "symbol": "AART",
+    "name": "ALL ART",
+    "decimals": 6,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF",
+    "symbol": "FAF",
+    "name": "Flash.Trade",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dxj5wwzxe/image/upload/v1758549077/FAF_CIRCLE_ckdiww.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "fDxs5y12E7x7jBwCKBXGqt71uJmCWsAQ3Srkte6ondo",
+    "symbol": "METAon",
+    "name": "Meta Platforms (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/metaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FeR8VBqNRSUD5NtXAj2n3j1dAHkZHfyDktKuLXD4pump",
+    "symbol": "jellyjelly",
+    "name": "jelly-my-jelly",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmWT4jA2ipuevUfBi1a2LW2gfnPJyvHn1JayAe2qz5kRQJ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FFvp48WygUSxCCNP3n9Zu5G7F2yatwXQHbpD2Mkkpump",
+    "symbol": "Skibidi",
+    "name": "Skibidi Toilet",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreieqzpszov5424ovstllhxcrx5iym2iqlaxrl2qsyii25nce5innrm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FgQ3sxj54SmVzttkxuK4bdiEnUNi6kF9Hyx3ezKW72hn",
+    "symbol": "ROVR",
+    "name": "ROVR Network",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://rovr.network/resource/rovr.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Fh7mLxtPAysdvHcMcJ37A3vc6WvBVh7JVDwxmwk6pump",
+    "symbol": "GBACK",
+    "name": "GIVEBACK",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmZMeRUskLubJuwREjyd9qa67dZo3WEmKRoJphaVV8PjfN"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FLUXBmPhT3Fd1EDVFdg46YREqHBeNypn1h4EbnTzWERX",
+    "symbol": "FLUXB",
+    "name": "FluxBot",
+    "decimals": 5,
+    "type": "spl-token-2022",
+    "logoURI": "https://bafybeiakyhwwesdvxpikjn4kyqddira3hjpjfcn26ycrrezt65bfa7r3gm.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FovBwhoV5KQjZCdhoM6jgXYwXLX3F8vgAfvmLH7ondo",
+    "symbol": "MRVLon",
+    "name": "Marvell Technology (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/mrvlon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FoXyMu5xwXre7zEoSvzViRk3nGawHUp9kUh97y2NDhcq",
+    "symbol": "FOXY",
+    "name": "Famous Fox Federation",
+    "decimals": 0,
+    "type": "spl-token",
+    "logoURI": "https://dens.famousfoxes.com/foxy.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FQgtfugBdpFN7PZ6NdPrZpVLDBrPGxXesi4gVu3vErhY",
+    "symbol": "BMT",
+    "name": "Bubblemaps",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://storage.googleapis.com/bubblemaps-metadata/bmt/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FqGxVMsvqxchQWRD5CyQpPK1aW13Db8EvC7PvxwVpk3w",
+    "symbol": "LOVE",
+    "name": "LoveAI",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/Vt7JRwIgMrpIygSWcq-ykNYPoCLFVFuXZa7Coi44h-s/love.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FRAGMEWj2z65qM62zqKhNtwNFskdfKs4ekDUDX3b4VD5",
+    "symbol": "FRAG",
+    "name": "Fragmetric",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://fragmetric-assets.s3.ap-northeast-2.amazonaws.com/frag.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "fRfKGCriduzDwSudCwpL7ySCEiboNuryhZDVJtr1a1C",
+    "symbol": "DUPE",
+    "name": "Dupe",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiaobt2ookhhoslvvard6oyjc6fw4askhg232yh22aqcgdddhrbcdy"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FRmH6iRkMr33DLG6zVLR7EM4LojBFAuq6NtFzG6ondo",
+    "symbol": "MSFTon",
+    "name": "Microsoft (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/msfton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FRySi8LPkuByB7VPSCCggxpewFUeeJiwEGRKKuhwpKcX",
+    "symbol": "NATIX",
+    "name": "NATIX Network",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/W_syfUW9S-nKlssn1CMgZ4_r3tLsIsa2FRSeGxCSu9E"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FSz4ouiqXpHuGPcpacZfTzbMjScoj5FfzHkiyu2ondo",
+    "symbol": "MSTRon",
+    "name": "MicroStrategy (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/mstron_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FtgGSFADXBtroxq8VCausXRr2of47QBf5AS1NtZCu4GD",
+    "symbol": "BRZ",
+    "name": "BRZ",
+    "decimals": 4,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/FtgGSFADXBtroxq8VCausXRr2of47QBf5AS1NtZCu4GD/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FUAfBo2jgks6gB4Z4LfZkqSZgzNucisEHqnNebaRxM1P",
+    "symbol": "MELANIA",
+    "name": "Melania Meme",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/bafkreiduq5c43xdbcbhzx3plcdtz2jwkjpzlm2hwkoxhjgmnmqbl6otyfu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Fz9edBpaURPPzpKVRR1A8PENYDEgHqwx5D5th28ondo",
+    "symbol": "MUon",
+    "name": "Micron Technology (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/muon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G4uJcvo5UAJ3fU1gj96e5DjBJU2RDDPx9Txzbjw6Y3LA",
+    "symbol": "CAESAR",
+    "name": "Caesar",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/2PCWNl9Jn5rpi3NtNOmqPgyhJIzJCcRU3Mnq7eOmA6k"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G4zwEA9NSd3nMBbEj31MMPq2853Brx2oGsKzex3ebonk",
+    "symbol": "MOMO",
+    "name": "Momo",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreigoagft6p6xdnlacny4yyas7gcbe4wufh25kwyivbqmdb5q5ovuz4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "g646pcdG2Rt5DH9WZzL7VVnVDWCCMTTrnktwE74ondo",
+    "symbol": "NKEon",
+    "name": "Nike (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/nkeon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G6mNZN8o16QBcTqfuEx6FzjiWa94B1XWhfyDxjDibrrr",
+    "symbol": "ooo",
+    "name": "Flat Eric",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.printr.money/t/0xda97f29a4c137298ed138194b39b8b81eb7889018cd9ae4ab4a053fe0bfb7ed5/media/image"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G7iK3prSzAA4vzcJWvsLUEsdCqzR7PnMzJV61vSdFSNW",
+    "symbol": "NST",
+    "name": "Ninja Squad Token (Wormhole)",
+    "decimals": 8,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G7vQWurMkMMm2dU3iZpXYFTHT9Biio4F4gZCrwFpKNwG",
+    "symbol": "BIRB",
+    "name": "Moonbirds",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static.datapi.jup.ag/images/asset-icon/G7vQWurMkMMm2dU3iZpXYFTHT9Biio4F4gZCrwFpKNwG.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "G85CQEBqwsoe3qkb5oXXpdZFh7uhYXhDRsQAM4aJuBLV",
+    "symbol": "ORGO",
+    "name": "Orgo",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreie65sb7xumgxryemkspdwupbjgz6pf4hyl7yoizdwhamolcu7lznu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "gateMurAxe4YFoUR6J63gXGKtkbTfdkMdLjZrCmThFP",
+    "symbol": "gtSOL",
+    "name": "Gate Wrapped SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/3h5EhmHcesVLbtqkAkGP3DzxNaW8Zde7RyKEvI4Atm0"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GbbesPbaYh5uiAZSYNXTc7w9jty1rpg3P9L4JeN4LkKc",
+    "symbol": "TRX",
+    "name": "TRON",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/aO9owy2SUH92KGJ2CH3BFowep6XFAoYjjpRyDKObkww"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GcV9tEj62VncGithz4o4N9x6HWXARxuRgEAYk9zahNA8",
+    "symbol": "jlEURC",
+    "name": "jupiter lend EURC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/eurc.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GDfnEsia2WLAW5t8yx2X5j2mkfA74i5kwGdDuZHt7XmG",
+    "symbol": "CROWN",
+    "name": "CROWN Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/AwJ6W2rRaYCGXimceFuLm5td14fhN1VFEfSYg566RxMD/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GdZ9rwHyKcriLdbSzhtEFLe5MLs7Vk6AY1aE5ei7nsmP",
+    "symbol": "AVO",
+    "name": "avo",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiftjfmmkkoowryrsly6vo332smtyryx73mlqgvwhgntqxhqrrp4k4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "gEGtLTPNQ7jcg25zTetkbmF7teoDLcrfTnQfmn2ondo",
+    "symbol": "NVDAon",
+    "name": "NVIDIA (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/nvdaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Gekfj7SL2fVpTDxJZmeC46cTYxinjB6gkAnb6EGT6mnn",
+    "symbol": "dzSOL",
+    "name": "DoubleZero Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://doublezero.xyz/dzSOL/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GeV7S8vjP8qdYZpdGv2Xi6e7MUMCk8NAAp2z7g5ondo",
+    "symbol": "NVOon",
+    "name": "Novo Nordisk (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/nvoon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Gj4TowizfdkRJNsTgBEkj2WpBZZmGE7o9nN8q6RhBAGS",
+    "symbol": "LORIA",
+    "name": "Upward Spiral",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmTYaMfxooYRKpULveZKcfywrRHzDc9BWd85D4iahL6Q5U"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GJAFwWjJ3vnTsrQVabjBVK2TYB1YtRCQXRDfDgUnpump",
+    "symbol": "ACT",
+    "name": "Act I : The AI Prophecy",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmUfrHNLqia7NmqgbzHYGF4rtX75nEwukPFFU1YscKKquL"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GkyPYa7NnCFbduLknCfBfP7p8564X1VZhwZYJ6CZpump",
+    "symbol": "CHILLHOUSE",
+    "name": "Chill House",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmU5D2LBjkriYD4wqL5cEVwv1x1xqj2LCQAPKC79cVGd34"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GMai1NvHreNe135cvxya1gHaUJZiT1NAvbJkF4hPHQJ9",
+    "symbol": "GM",
+    "name": "gmAI Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/_0kXu92JN5uU9ELquLgSnp-XukP3D-YDTkXj-QBYS58"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GmDADFpfwjfzZq9MfCafMDTS69MgVjtzD7Fd9a4ondo",
+    "symbol": "ORCLon",
+    "name": "Oracle (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/orclon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GMvCfcZg8YvkkQmwDaAzCtHDrrEtgE74nQpQ7xNabonk",
+    "symbol": "1",
+    "name": "1 coin can change your life",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreieuq6tf4rlyrwsn6t5kls47upegkmyhdobgoiq7i7u3yemws2znpm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GMzuntWYJLpNuCizrSR7ZXggiMdDzTNiEmSNHHunpump",
+    "symbol": "dreams",
+    "name": "Daydreams",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmPfRkbzpiBtH34ooJLPKGHsUtc6kswBy1owqbF5Hmn6uf"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GnM6XZ7DN9KSPW2ZVMNqCggsxjnxHMGb2t4kiWrUpump",
+    "symbol": "WAGMI",
+    "name": "WAGMI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://assets.coingecko.com/coins/images/55910/standard/HBzEY-hakAA75zS.jpg?1771994289"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GoATEDLwYeDQXyzcFxAgeiQd5Amu4mewU4KmbjvUWGvH",
+    "symbol": "GOATED",
+    "name": "GOATED",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/FsDo2WFaweYVwZUD73ZPuBrtDfa6dw4yLhWEBhtc3AuV"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GodL6KZ9uuUoQwELggtVzQkKmU1LfqmDokPibPeDKkhF",
+    "symbol": "GODL",
+    "name": "GODL",
+    "decimals": 11,
+    "type": "spl-token",
+    "logoURI": "https://www.godl.supply/icons/godl.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A",
+    "symbol": "GOLD",
+    "name": "GOLD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/oroweb3/gold/de58e6cdc6531d2a65fba2a3f5c708a5c0d5c777/GOLD.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GpdRNotihwXZJ3z3y6yCRAhecFrALc4J8SX92pxnbonk",
+    "symbol": "Aircoin",
+    "name": "Aircoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://beige-elderly-grasshopper-997.mypinata.cloud/ipfs/bafybeiboo32oftjbgfg67a47olwu7oey44nf4nxde5qkatqwk5meu5psvu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GpmmQBjXxoppbELykD2PGQ4wwVR74o5sSZXVW6hVpump",
+    "symbol": "EYED",
+    "name": "Eyed Exchange",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreifbuiobjti6lynsgssocoixysgbvvgd36jojl6mfwmu3th2socxqe"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Grass7B4RdKfBCjTKgSqnXkqjwiGvQyFbuSCUJr3XXjs",
+    "symbol": "GRASS",
+    "name": "Grass",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://static.grassfoundation.io/grass-logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GRciFCqJ5y2hbiD6U5mGkohY65BZTXGuGUrCqf7ondo",
+    "symbol": "PBRon",
+    "name": "Petrobras (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pbron_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GtDZKAqvMZMnti46ZewMiXCa4oXF4bZxwQPoKzXPFxZn",
+    "symbol": "nub",
+    "name": "nubcat",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafkreieny7bfqv76t3pgaaktrrux6j2iflefncegqxmezqsqrzy7kjhhy4.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GTH3wG3NErjwcf7VGCoXEXkgXSHvYhx5gtATeeM5JAS1",
+    "symbol": "WHALES",
+    "name": "Whales Market",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://nftstorage.link/ipfs/bafkreic6gboxk4nlhhzzuoqakj55s23y37qzwb7yzykczfxbwj7kafy75i"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "gud6b3fYekjhMG5F818BALwbg2vt4JKoow59Md9ondo",
+    "symbol": "PEPon",
+    "name": "PepsiCo (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pepon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Gwh9fPsX1qWATXy63vNaJnAFfwebWQtZaVmPko6ondo",
+    "symbol": "PFEon",
+    "name": "Pfizer (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pfeon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GZ8v4NdSG7CTRZqHMgNsTPRULeVi8CpdWd9wZY8ondo",
+    "symbol": "PGon",
+    "name": "Procter \u0026 Gamble (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pgon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "H74CYmXgMkYHYuSRsZt6RJb4NYp2u72Vw8BS5huApump",
+    "symbol": "LMAO!",
+    "name": "LMAO!",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreic2k6vq5rorto4kll3gtpux6yfllmioipbrt3uebwaovghmjajr5m"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "H8xQ6poBjB9DTPMDTKWzWPrnxu4bDEhybxiouF8Ppump",
+    "symbol": "Tokabu",
+    "name": "The Spirit of Gambling",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreicrdi3icewusvj5ff53uwnlzng53dmkk3llrmdbn35eb2ozamnhpq"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HALALGvdNJ8u1J3uFFSsba1tyYPRF3vnYfCQ3CpJasfD",
+    "symbol": "iASOL",
+    "name": "inshAllah SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://xuc3mbv42u5h53lqxv3dmanqs7rexotek3jedpy6wb2yjhgadsvq.arweave.net/vQW2BrzVOn7tcL12NgGwl-JLumRW0kG_HrB1hJzAHKs"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "haSo1Vz5aTsqEnz8nisfnEsipvbAAWpgzRDh2WhhMEh",
+    "symbol": "haSOL",
+    "name": "haSOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/HjUWneFfxDo1WLdTSi8cngmyZMJHbGqt68iQ1LXJitES/firework_solana_512px.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Hax9LTgsQkze1YFychnBLtFH8gYbQKtKfWKKg2SP6gdD",
+    "symbol": "TAI",
+    "name": "TARS AI",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://coffee-important-lizard-419.mypinata.cloud/ipfs/Qmf19J2Teszt5ZgqrzQFuWk64xvQzfZFfEEn8ntzpbz36W"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HBoNJ5v8g71s2boRivrHnfSB5MVPLDHHyVjruPfhGkvL",
+    "symbol": "PURPE",
+    "name": "Purple Pepe",
+    "decimals": 1,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/WEugkglBC5LeA8TAuvOv8x2_7wSGDUN2I81_nYp2B-A"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HCgvbV9Qcf9TVGPGKMGbVEj8WwwVD6HhTt5E2i3qkeN9",
+    "symbol": "METAV",
+    "name": "METAVERSE",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmdLLkyZhtWpm1GgsofX3D2sHSj5E7WDmaYBgNPEBNdu45"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A",
+    "symbol": "hSOL",
+    "name": "Helius Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/igneous-labs/lst-offchain-metadata/master/hSOL/hSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HfsnTS5qtdStwec9DfBrunRqnAMYMMz1kjv9Hu9ondo",
+    "symbol": "PLTRon",
+    "name": "Palantir Technologies (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pltron_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HgBRWfYxEfvPhtqkaeymCQtHCrKE46qQ43pKe8HCpump",
+    "symbol": "Bert",
+    "name": "Bertram The Pomeranian",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://i.imgur.com/lcUxetM.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Hh3oTaqDCKKfdBgsQEvxp9sUwyNf8x9qmKqEMLBWpump",
+    "symbol": "HODL",
+    "name": "HODL",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmWZy1zRNaV3B6Vg637yVZ5Hm7aWq2CERhi4wqxczPmP6w"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HhJpBhRRn4g56VsyLuT8DL5Bv31HkXqsrahTTUCZeZg4",
+    "symbol": "$MYRO",
+    "name": "Myro",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://i.ibb.co/9nr3xFp/MYRO-200x200.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HKJHsYJHMVK5VRyHHk5GhvzY9tBAAtPvDkZfDH6RLDTd",
+    "symbol": "READY",
+    "name": "READY!",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://cdn.bravoready.com/token/READY!-coin-logo-256x256.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "hM7B3UQTTR81mS27SxDDPzBbjejmo8fnpFjzgv9ondo",
+    "symbol": "PYPLon",
+    "name": "PayPal (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pyplon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HMaJxXp3Ja81jSwigF6zGaMt79hNZuczrw6i7LjTbonk",
+    "symbol": "🎒",
+    "name": "🎒",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmefHqJk3uEhKMyKE24jdfWZojAG4dr3VR5j9SZZaqVkSd"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HmBdm8vbisABUjkxms6ZUnoaXbfwFM6ymxShWfAENaoi",
+    "symbol": "EITHER",
+    "name": "Eitherway",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://i.ibb.co/rGJfJSWK/photo-2026-03-20-15-25-06.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HmMubgKx91Tpq3jmfcKQwsv5HrErqnCTTRJMB6afFR2u",
+    "symbol": "9bit",
+    "name": "The9bit",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreihmjn2iiyc4ptnevgeu3le5ev7p2evco3lbyc5e7gglhlslixnuja"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HNg5PYJmtqcmzXrv6S9zP1CDKk5BgDuyFBxbvNApump",
+    "symbol": "ALCH",
+    "name": "Alchemist AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmYqwkPV1p4DraqN5TfLZVhyrAusSkHfvFDZMJAWALZJxj"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HnnGv3HrSqjRpgdFmx7vQGjntNEoex1SU4e9Lxcxuihz",
+    "symbol": "sHYUSD",
+    "name": "sHYUSD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://hylo-token-metadata.s3.us-east-2.amazonaws.com/Staked-hyUSD/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux",
+    "symbol": "HNT",
+    "name": "Helium Network Token",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://entities.nft.helium.io/v2/assets/hnt.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Hon2rHAiqkcDtUzL5gA2vjXPr7T1MPCK2UT2AHKCpump",
+    "symbol": "MAGA",
+    "name": "Make Aliens Great Again ",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.makealiensgreatagain.com/maga-alien.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HrYNm6jTQ71LoFphjVKBTdAE4uja7WsmLG8VxB8ondo",
+    "symbol": "QQQon",
+    "name": "Invesco QQQ (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/qqqon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HUMA1821qVDKta3u2ovmfDQeW2fSQouSKE8fkF44wvGw",
+    "symbol": "HUMA",
+    "name": "Huma Finance",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://meta.huma.finance/huma.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HUPfpnsaJtJGpJxAPNX1vXah7BgYiQYt1c2JMgMumvPs",
+    "symbol": "mPST",
+    "name": "Maxi PayFi Strategy Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://meta.huma.finance/mpst.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HVbpJAQGNpkgBaYBZQBR1t7yFdvaYVp2vCQQfKKEN4tM",
+    "symbol": "USDP",
+    "name": "Pax Dollar",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://424565.fs1.hubspotusercontent-na1.net/hubfs/424565/USDPLOGO.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HxhWkVpk5NS4Ltg5nij2G671CKXFRKPK8vy271Ub4uEK",
+    "symbol": "HXRO",
+    "name": "Hxro (Portal)",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/HxhWkVpk5NS4Ltg5nij2G671CKXFRKPK8vy271Ub4uEK/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "hy1opf2bqRDwAxoktyWAj6f3UpeHcLydzEdKjMYGs2u",
+    "symbol": "hyloSOL+",
+    "name": "Hylo SOL Plus",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://i.ibb.co/GfsbDVQK/hylo-SOLPlus.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "hy1oXYgrBW6PVcJ4s6s2FKavRdwgWTXdfE69AxT7kPT",
+    "symbol": "hyloSOL",
+    "name": "Hylo Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://i.ibb.co/bgScQbGF/hyloSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HyLXondhNhGkvWPXr8z4EPSgZNRRs4j8BHdyqMdVpump",
+    "symbol": "MOLT",
+    "name": "Monkey Cult",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.lighthouse.storage/ipfs/bafkreidta6fywenlz76c6kexxy56sri64vn52ysqqfcicuagmcaax6j3au"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3",
+    "symbol": "PYTH",
+    "name": "Pyth Network",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://pyth.network/token.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HZG1RVn4zcRM7zEFEVGYPGoPzPAWAj2AAdvQivfmLYNK",
+    "symbol": "LYNK",
+    "name": "LYNK",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiahosvkieg63b26f3oqe3mbvf63455u3pdlxc4qrkpfbpue7sjvvm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr",
+    "symbol": "EURC",
+    "name": "EURC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://www.circle.com/eurc-icon",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ibRLJrmgVuZh3tdDpjGgU5CQCCxpxuer7B7ckjGdLsv",
+    "symbol": "IBRL",
+    "name": "IBRL",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/pW_eTwewK3LUetYlIIWgP8LBgAThvIxhw3iUc1-egKQ"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "iotEVVZLEywoTn1QdwNPddxPWszn3zFhEot3MfL9fns",
+    "symbol": "IOT",
+    "name": "Helium IOT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://entities.nft.helium.io/v2/assets/iot.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "iPFqjcZQTNMNXA4kbShbMhfAVD8yr8Uq9UtXMV6ondo",
+    "symbol": "SBUXon",
+    "name": "Starbucks (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/sbuxon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "iy11ytbSGcUnrjE6Lfv78TFqxKyUESfku1FugS9ondo",
+    "symbol": "SLVon",
+    "name": "iShares Silver Trust (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/slvon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "j14XLJZSVMcUYpAfajdZRpnfHUpJieZHS4aPektLWvh",
+    "symbol": "jlUSDS",
+    "name": "jupiter lend USDS",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.instadapp.io/solana/tokens/icons/usds.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn",
+    "symbol": "JitoSOL",
+    "name": "Jito Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://storage.googleapis.com/token-metadata/JitoSOL-256.png",
+    "tags": [
+      "lst"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J1wnHdKvP34fg7TtYdX63UPJMTdXNzJGEqfNJB22vKjU",
+    "symbol": "RTX",
+    "name": "RateX",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://img.rate-x.io/img/RTX.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J1Wpmugrooj1yMyQKrdZ2vwRXG5rhfx3vTnYE39gpump",
+    "symbol": "WOULD",
+    "name": "would",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmXJR6Q2zkqpotTY2nMP6k76LykKW7z4tgfQfH1ZUo57Dt"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J3NKxxXZcnNiMjKw9hYb2K4LUxgwB6t1FtPtQVsv3KFr",
+    "symbol": "SPX",
+    "name": "SPX6900 (Wormhole)",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://i.imgur.com/fLpAyY4.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J3umBWqhSjd13sag1E1aUojViWvPYA5dFNyqpKuX3WXj",
+    "symbol": "HOME",
+    "name": "Home",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/defi-app/assets/refs/heads/main/logo/Logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J6pQQ3FAcJQeWPPGppWRb4nM8jU3wLyYbRrLh7feMfvd",
+    "symbol": "2Z",
+    "name": "DoubleZero",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://i.ibb.co/CpkQG6C1/img.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J8PSdNP3QewKq2Z1JJJFDMaqF7KcaiJhR7gbr5KZpump",
+    "symbol": "TripleT",
+    "name": "Tung Tung Tung Sahur",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreicawa6mpcpotae2va2b5ru43kssdaxoaiildlovfrhaxh7dd67t4e"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "J9BcrQfX4p9D1bvLzRNCbMDv8f44a9LFdeqNE4Yk2WMD",
+    "symbol": "ISC",
+    "name": "International Stable Currency",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/theISCTeam/isc_meta/master/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "jag58eRBC1c88LaAsRPspTMvoKJPbnzw9p9fREzHqyV",
+    "symbol": "jagSOL",
+    "name": "JagPool Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://www.jagpool.xyz/images/jagSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Jambjx1oJoZNBZiqbiF9TqgatEZPdyfvYa9WVsKNzUh",
+    "symbol": "J",
+    "name": "Jambo",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/hZjFjNJ7Pe2huQHi4k19Bu2qMqNnI0cgqB39pdDFXeI"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL",
+    "symbol": "JTO",
+    "name": "JITO",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://metadata.jito.network/token/jto/image"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "jucy5XJ76pHVvtPZb5TKRcGQExkwit2P5s4vY8UzmpC",
+    "symbol": "jucySOL",
+    "name": "Juicy SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/5ohvXVJ7f3HxnwYGnXKdECWC3KFcU95dHu7S7x69Y1sA/logo_rev.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "jUpa2aDCzvdR9EF4fqDXmuyMUkonPTohphABLmRkRFj",
+    "symbol": "RIFT",
+    "name": "RIFT AI",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/Dr21m1SfmAWwq4UEmp6VvfmJtmis4MH48xbfZBDsnGMs"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD",
+    "symbol": "JupUSD",
+    "name": "Jupiter USD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static.jup.ag/jupUSD/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",
+    "symbol": "JupSOL",
+    "name": "Jupiter Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://static.jup.ag/jupSOL/icon.png",
+    "tags": [
+      "lst"
+    ]
   },
   {
     "chainKey": "solana.mainnet",
@@ -53,9 +4071,1854 @@
     "name": "Jupiter",
     "decimals": 6,
     "type": "spl-token",
-    "logoURI": "https://static.jup.ag/jup/icon.png",
-    "coingeckoId": "jupiter-exchange-solana",
-    "cmcId": 29210,
-    "tags": ["governance"]
+    "logoURI": "https://static.jup.ag/jup/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "k18WJUULWheRkSpSquYGdNNmtuE2Vbw1hpuUi92ondo",
+    "symbol": "SPYon",
+    "name": "SPDR S\u0026P 500 ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/spyon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "k6BPp2Xmf2TYgrZiUyWfUoZBKeqaDbvPoAVgSx2ondo",
+    "symbol": "TIPon",
+    "name": "iShares TIPS Bond ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tipon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "KaSLSWByKy6b9FrCYXPEJoHmLpuFZtTCJk1F1Z9ondo",
+    "symbol": "TLTon",
+    "name": "iShares 20+ Year Treasury Bond ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tlton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kbmF7ERJWMaaDswMprrH9gHSLya5D2RMBNgKqg3ondo",
+    "symbol": "TMon",
+    "name": "Toyota (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tmon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kedoobK2qe2f1V8ee5vDXFr3H7gKnhQVNJXA3Ltcyai",
+    "symbol": "U1",
+    "name": "Umbra",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.erebrus.io/ipfs/bafybeib5ilegywnn7weexyx474gx7yjmpjx2kzz6tltnfhxcgyoih4v4gy"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "KeGv7bsfR4MheC1CkmnAVceoApjrkvBhHYjWb67ondo",
+    "symbol": "TSLAon",
+    "name": "Tesla (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tslaon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "KENJSUYLASHUMfHyy5o4Hp2FdNqZg1AsUPhfH2kYvEP",
+    "symbol": "GRIFFAIN",
+    "name": "test griffain.com",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://griffain.com/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "keybg184d4vyXeQdFqs4o99YsMg7xBthxTJ6Ky3ondo",
+    "symbol": "TSMon",
+    "name": "Taiwan Semiconductor Manufacturing (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/tsmon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kinXdEcpDQeHPEuQnqmUgtYykqKGVFq6CeVX5iAHJq6",
+    "symbol": "KIN",
+    "name": "KIN",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/kinXdEcpDQeHPEuQnqmUgtYykqKGVFq6CeVX5iAHJq6/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kLqMvUm1p4pRbxU4r8kWCTVAuWMJLtcTJqGb4b5pump",
+    "symbol": "BRENT",
+    "name": "Brent Crude",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmWwJR5KdXyNoeFqubw3bWnZiXKHFWvf1iJ6VuMH1mmHmH"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kMKX8hBaj3BTRBbeYix9c16EieBP5dih8DTSSwCpump",
+    "symbol": "afk",
+    "name": "afk",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreig5zbdwuzqz5ihlklw2duycx3kherizwzvnnjos7o6aa74uwjlzni"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS",
+    "symbol": "KMNO",
+    "name": "Kamino",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://cdn.kamino.finance/kamino.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kPBGL8vAwKN3UGmr9cjkM2dU79SC3nzTC9yu7F8ondo",
+    "symbol": "UNHon",
+    "name": "UnitedHealth (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/unhon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kxEW4oJL75K37VeXaZF1ynbHQATQwhECQKN1374ondo",
+    "symbol": "Von",
+    "name": "Visa (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/von_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "kySo1nETpsZE2NWe5vj2C64mPSciH1SppmHb4XieQ7B",
+    "symbol": "kySOL",
+    "name": "Kyros Restaked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafybeif3jzrcvwktu5bi7wcuxzr36fygo4vqctatapy7zqxawojxrnexwi.ipfs.dweb.link/"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "L6ZE5qCpVVSqLePz64CrwkgyWoPF9M7tB8BeFH4ondo",
+    "symbol": "WFCon",
+    "name": "Wells Fargo (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/wfcon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZQti1xfWMLy6X",
+    "symbol": "laineSOL",
+    "name": "Laine Stake",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://vvmbtadq63n53sdsqhlzbnzhvj5tdfp7moqixyv7rgkk6frqhqqq.arweave.net/rVgZgHD2293IcoHXkLcnqnsxlf9joIviv4mUrxYwPCE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LAYER4xPpTCb3QL8S9u41EAhAX7mhBn8Q6xMTwY2Yzc",
+    "symbol": "LAYER",
+    "name": "Solayer",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://metadata.solayer.org/layer/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LBTCgU4b3wsFKsPwBn1rRZDx5DoFutM6RPiEt1TPDsY",
+    "symbol": "LBTC",
+    "name": "Lombard Staked BTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://www.lombard.finance/lbtc/LBTC.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LFNTYraetVioAPnGJht4yNg2aUZFXR776cMeN9VMjXp",
+    "symbol": "LFNTY",
+    "name": "Lifinity",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/LFNTYraetVioAPnGJht4yNg2aUZFXR776cMeN9VMjXp/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LiGHtkg3uTa9836RaNkKLLriqTNRcMdRAhqjGWNv777",
+    "symbol": "LIGHT",
+    "name": "Light",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreiaupojw5korcvnen7tuiniuk4n4tsaykx6qncceikzsuwq3c4kz6e"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LnTRntk2kTfWEY6cVB8K9649pgJbt6dJLS1Ns1GZCWg",
+    "symbol": "lanternSOL",
+    "name": "Lantern Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/juI8rxciTff6pljaDiXMEq5klSOngQol_8lvyokGGwY"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LSTxxxnJzKDFSLr4dUkPcmCf5VyryEqzPLz5j4bpxFp",
+    "symbol": "LST",
+    "name": "Liquid Staking Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://storage.googleapis.com/static-marginfi/lst.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LYLikzBQtpa9ZgVrJsqYGQpR3cC1WMJrBHaXGrQmeta",
+    "symbol": "LOYAL",
+    "name": "Loyal",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/LOYAL/LOYAL.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "LZddqAqKqJW9oMZSjTxCUmbmzBRQtv9gMkD9hZ3ondo",
+    "symbol": "WMTon",
+    "name": "Walmart (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/wmton_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "M1M6sdffCs3ozzhpRveweRCWdZhxth4mvVujPtYEC3h",
+    "symbol": "MIM",
+    "name": "MAGIC INTERNET MONEY (Bitcoin)",
+    "decimals": 2,
+    "type": "spl-token",
+    "logoURI": "https://metadata.runemine.com/magicinternetmoney.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "M77ZvkZ8zW5udRbuJCbuwSwavRa7bGAZYMTwru8ondo",
+    "symbol": "IAUon",
+    "name": "iShares Gold Trust (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/iauon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "M7hVQomhw4Q2D2op3HvBrZjHu9SryjNvD5haEZ1ondo",
+    "symbol": "PANWon",
+    "name": "Palo Alto Networks (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/panwon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MangmsBgFqJhW4cLUR9LxfVgMboY1xAoP8UUBiWwwuY",
+    "symbol": "mangoSOL",
+    "name": "Mango SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://mango.markets/images/tokens/mangoSOL.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MangoCzJ36AjZyKwVj3VnYU4GTonjfVEnJmvvWaxLac",
+    "symbol": "MNGO",
+    "name": "Mango",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/MangoCzJ36AjZyKwVj3VnYU4GTonjfVEnJmvvWaxLac/token.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MAPS41MDahZ9QdKXhVa4dWB9RuyfV4XqhyAZ8XcYepb",
+    "symbol": "MAPS",
+    "name": "MAPS",
+    "decimals": 6,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mb1eu7TzEc71KxDpsmsKoucSSuuoGLv1drys1oP2jh6",
+    "symbol": "MOBILE",
+    "name": "Helium Mobile",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/6tcnBSybPG7piEDShBcrVtYJDPSvGrDbVvXmXKpzBvWP/mobile.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MEFNBXixkEbait3xn9bkm8WsJzXtVsaJEn4c8Sam21u",
+    "symbol": "ME",
+    "name": "Magic Eden",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/hhifTzaEDnPKnYNi4aAhkZTUkNLoK6d3nMiQPAjByn4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "METADDFL6wWMWEoKTFJwcThTbUmtarRJZjRpzUvkxhr",
+    "symbol": "META",
+    "name": "META",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://6hgaiayuroxlfrn3djpb7mx4ocwielgo2ovpj4ka4v47jsxj2p2a.arweave.net/8cwEAxSLrrLFuxpeH7L8cKyCLM7TqvTxQOV59Mrp0_Q?ext=png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "METAewgxyPbgwsseH8T16a39CQ5VyVxZi9zXiDPY18m",
+    "symbol": "MPLX",
+    "name": "Metaplex Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/VRKOcXIvCxqp35RZ9I0-bDGk5qNfT46OTho-2oP9iGc"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "METAwkXcqyXKy1AtsSgJ8JiUHwGCafnZL38n3vYmeta",
+    "symbol": "META",
+    "name": "MetaDAO",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/META/META.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "METvsvVRapdj9cFLzq4Tr43xK4tAjQfwX76z3n6mWQL",
+    "symbol": "MET",
+    "name": "Meteora",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://assets.meteora.ag/met-token.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5",
+    "symbol": "MEW",
+    "name": "cat in a dogs world",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://bafkreidlwyr565dxtao2ipsze6bmzpszqzybz7sqi2zaet5fs7k53henju.ipfs.nftstorage.link/"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MNDEFzGvMt87ueuHvVU9VcTqsAP5b3fTGPsHuuPA5ey",
+    "symbol": "MNDE",
+    "name": "Marinade",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dfsfiedf9/image/upload/v1755612757/c1_enn0xo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mntAk89WGn1YacVFxzU84tVbn3zFYf1LVXMxMjhpTjC",
+    "symbol": "BERRIE",
+    "name": "Berrie Token",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://bronze-quickest-slug-953.mypinata.cloud/ipfs/bafybeifmh7iolniofspbunq3wusxjubhqytkoxg7z5qha7ng2yzrds337i"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "moonThZEkkTVoNB7v6YVCQiT56JYDZ1oN185ba3WizL",
+    "symbol": "MF",
+    "name": "Moonwalk Fitness",
+    "decimals": 4,
+    "type": "spl-token",
+    "logoURI": "https://mdubpub.s3.us-east-1.amazonaws.com/mw.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mpoxP5wyoR3eRW8L9bZjGPFtCsmX8WcqU5BHxFW1xkn",
+    "symbol": "POX",
+    "name": "Monkey Pox",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/6wy3x5koMcHyAGYzUHwgkgnXpoAPScMFAwp6uGeWtEe9/tokenImage.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MpsoLp1YBDqeiuSrVrYH4DoAGJ3myAMmMy6crYNVSTo",
+    "symbol": "mpSOL",
+    "name": "MoonPay Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ih7bjzvm63tikcihhsjs62gsckvvivnp6sqzrcb5ch7aqjvwsycq.arweave.net/Qf4U5qz25oUJBzyTL2jSEqtUVa_0oZiIPRH-CCa2lgU"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So",
+    "symbol": "mSOL",
+    "name": "Marinade staked SOL (mSOL)",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png",
+    "tags": [
+      "lst"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "mtnc7NNSpAJuvYNmayXU63WhWZGgFzwQ2yeYWqemeta",
+    "symbol": "MTN",
+    "name": "mtnCapital",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/MTN/MTN.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "MYXqkDYbzr7vjXAz2BapR4AiYRXzoikGirrLoRzondo",
+    "symbol": "BMNRon",
+    "name": "BitMine Immersion Technologies (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/bmnron_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "NeonTjSjsuo3rexg9o6vHuMXw62f9V7zvmu8M8Zut44",
+    "symbol": "NEON",
+    "name": "Neon EVM",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://neonevm.org/neon_token/neon_token.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "NomuBwKJEvJ8d4dsaq7NZoHaXWXzKcfke1c7Y8ruFYL",
+    "symbol": "NOMU",
+    "name": "Nomu",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://borgpad.mypinata.cloud/ipfs/bafkreiaj4wggk6jtfwhnhldun7ew25xokf24ft4sezck2jy3wykgxjupm4"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7",
+    "symbol": "NOS",
+    "name": "Nosana",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "NUZ3FDWTtN5SP72BsefbsqpnbAY5oe21LE8bCSkqsEK",
+    "symbol": "FLP.1",
+    "name": "FLP.1",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://aumeoe72oxpna6qfjdggqkwosngfgzc4mwb4hhmtzgnz4h2fjymq.arweave.net/BRhHE_p13tB6BUjMaCrOk0xTZFxlg8Odk8mbnh9FThk"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "NV2RYH954cTJ3ckFUpvfqaQXU4ARqqDH3562nFSpump",
+    "symbol": "Punch",
+    "name": "パンチ",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://metadata.rapidlaunch.io/images/5058a272-31c9-4244-8670-31e9094ad1a2.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "NX8DuAWprqWAYDvpkkuhKnPfGRXQQhgiw85pCkgvFYk",
+    "symbol": "NX8",
+    "name": "The Future Of Finance Index",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.prod.opendelta.com/token-images/1761917875252-697263699-The Future Of Finance Index-NX8.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "omfgRBnxHsNJh6YeGbGAmWenNkenzsXyBXm3WDhmeta",
+    "symbol": "OMFG",
+    "name": "Omnipair",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/OMFG/OMFG.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE",
+    "symbol": "ORCA",
+    "name": "Orca",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "oreoU2P8bN6jkk3jbaiVxYnG1dCXcYxwhwyK9jSybcp",
+    "symbol": "ORE",
+    "name": "ORE",
+    "decimals": 11,
+    "type": "spl-token",
+    "logoURI": "https://ore.supply/assets/icon.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "P2PXup1ZvMpCDkJn3PQxtBYgxeCSfH39SFeurGSmeta",
+    "symbol": "P2P",
+    "name": "P2P Protocol",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/programs/refs/heads/develop/scripts/assets/P2P/P2P.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PAYmo6moDF3Ro3X6bU2jwe2UdBnBhv8YjLgL1j4DxGu",
+    "symbol": "PAYAI",
+    "name": "PayAI",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreigzy6bogqrsipcde76i6piyri2esm6ci2dfxa6ttuxxysqczgal5u"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PERLEQKUNUp1dgFZ8EvyXHdN9d6ZQqfGxALDvfs6pDs",
+    "symbol": "PRL",
+    "name": "Perle",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://arweave.net/W2LToY13A7UAOCMyPGdIY0I0ZWNtMaTkO05DZf5gy0w"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "picobAEvs6w7QEknPce34wAE4gknZA9v5tTonnmHYdX",
+    "symbol": "picoSOL",
+    "name": "picoSOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/zR2ZKXpwmG4hMpqhGXlvz-B7PMs34cXxVb2gC1DmlDo"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PLAYs3GSSadH2q2JLS7djp7yzeT75NK78XgrE5YLrfq",
+    "symbol": "PLAY",
+    "name": "Play Solana",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/EWNndd493mibFDhQ9RrQnjWNbPU8krpXhYNDDAczv2Rj"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PnjETBCLC318DRejo9cMQKAmET9PvW8AEFGWMNtondo",
+    "symbol": "PDDon",
+    "name": "PDD Holdings (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/pddon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "poLisWXnNRwC6oBu1vHiuKQzFjGL4XDSu4g9qjz9qVk",
+    "symbol": "POLIS",
+    "name": "Star Atlas DAO",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/poLisWXnNRwC6oBu1vHiuKQzFjGL4XDSu4g9qjz9qVk/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PreANxuXjsy2pvisWWMNB6YaJNzr7681wJJr2rHsfTh",
+    "symbol": "SPACEX",
+    "name": "SpaceX PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/spacex.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PreC1KtJ1sBPPqaeeqL6Qb15GTLCYVvyYEwxhdfTwfx",
+    "symbol": "XAI",
+    "name": "xAI PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/xai.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PrekqLJvJ3qVdXmBGDiexvwUTF4rLFDa6HWS4HJbw9S",
+    "symbol": "NEURALINK",
+    "name": "Neuralink PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/neuralink.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Pren1FvFX6J3E4kXhJuCiAD5aDmGEb7qJRncwA8Lkhw",
+    "symbol": "ANTHROPIC",
+    "name": "Anthropic PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/anthropic.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PresTj4Yc2bAR197Er7wz4UUKSfqt6FryBEdAriBoQB",
+    "symbol": "ANDURIL",
+    "name": "Anduril PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/anduril.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PreweJYECqtQwBtpxHL171nL2K6umo692gTm7Q3rpgF",
+    "symbol": "OPENAI",
+    "name": "OpenAI PreStocks",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://www.prestocks.com/logos/openai.png?cachebust=1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PRTLSwfLzpVGSAQiUfXEenJkq1cwTsEcsn1hPL9zwwg",
+    "symbol": "PORTALS",
+    "name": "Portals",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/CGPj5pQGCPBr291pmpiQdxeYZJKH48po7VKNG9hKttn9"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "PRVT6TB7uss3FrUd2D9xs2zqDBsa3GbMJMwCQsgmeta",
+    "symbol": "UMBRA",
+    "name": "Umbra",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/metaDAOproject/futarchy/refs/heads/develop/scripts/assets/UMBRA/UMBRA.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "pSo1f9nQXWgXibFtKf7NWYxb5enAM4qfP6UJSiXRQfL",
+    "symbol": "PSOL",
+    "name": "Phantom Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://assets.phantom.app/assets/metadata/PSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn",
+    "symbol": "PUMP",
+    "name": "Pump",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibyb3hcn7gglvdqpmklfev3fut3eqv3kje54l3to3xzxxbgpt5wjm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "QdyjMr627PR7NtWdcEcgFmDm5haBVUWEcj4jdM4boop",
+    "symbol": "KUMA",
+    "name": "Captain KUMA",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/duit2oax2/image/upload/fl_preserve_transparency/v1763531408/Captain_KUMA_Icon_1_lvusn3.jpg?_s=public-apps"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Ra1so1sTkvX3PorAM9ewqrsUMz9sPSbfFZ5oZUjN4oc",
+    "symbol": "raiSOL",
+    "name": "Rakurai Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/rakurai-io/token-metadata/master/assets/RaiSOL-Logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof",
+    "symbol": "RENDER",
+    "name": "Render Token",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/5zseP54TGrcz9C8HdjZwJJsZ6f3VbP11p1abwKWGykZH/rndr.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "RoamA1USA8xjvpTJZ6RvvxyDRzNh6GCA1zVGKSiMVkn",
+    "symbol": "ROAM",
+    "name": "Roam Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.pinata.cloud/ipfs/bafkreiechz2it363d4xsalz3u6heyxe6hlx7u53j7skc4xcw2t5qg7emiy"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "rpydAzWdCy85HEmoQkH5PVxYtDYQWjmLxgHHadxondo",
+    "symbol": "USOon",
+    "name": "United States Oil Fund (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/usoon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Saber2gLauYim4Mvftnrasomsv6NvAuncvMEZwcLpD1",
+    "symbol": "SBR",
+    "name": "Saber Protocol Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Saber2gLauYim4Mvftnrasomsv6NvAuncvMEZwcLpD1/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SarosY6Vscao718M4A778z4CGtvcwcGef5M9MEH1LGL",
+    "symbol": "SAROS",
+    "name": "Saros",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://rapid.coin98.com/Currency/saros.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SAVEaeeqeXNKYb4Lyx28DkUms5gyZ76vGa6fCfdzWfK",
+    "symbol": "SAVE",
+    "name": "Save Finance",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://suilend-assets.s3.us-east-2.amazonaws.com/save/save_logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sc1dNAxRBj5CNWaGC26AR7PEW75R36Umzt1V8vuP8kZ",
+    "symbol": "sCLOUD",
+    "name": "Staked CLOUD",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/f7kfqymfvR1hYWtC-G_-3NlMMpayaQBMsxC2yXSkYGw"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SCSuPPNUSypLBsV4darsrYNg4ANPgaGhKhsA3GmMyjz",
+    "symbol": "SCS",
+    "name": "Solcasino Token",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://files.solcasino.io/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sctmAy9zFfZznZUWxEMgGtF6PHZ3gwoiCGcfwRua1AZ",
+    "symbol": "sctmSOL",
+    "name": "Sanctum Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://solana-validator-website-italo-casas.vercel.app/sanctum.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sctmB7GPi5L2Q5G9tUSzXvhZ4YiDMEGcRov9KfArQpx",
+    "symbol": "dfdvSOL",
+    "name": "DeFi Development Corp Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://pbs.twimg.com/profile_images/1897064824317861888/I02i5oX3_400x400.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sctmTAsDn4tLUcemqoqYijfuRkiEfAMPi84PNq2EueR",
+    "symbol": "nxSOL",
+    "name": "Nansen Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/stakewithus/public-goods/main/nansen.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SHDWyBxihqiCj6YekG2GUr7wqKLeLAMK1gHZck9pL6y",
+    "symbol": "SHDW",
+    "name": "Shadow Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/FDcC9gn12fFkSU2KuQYH4TUjihrZxiTodFRWNF4ns9Kt/250x250_with_padding.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3",
+    "symbol": "SKR",
+    "name": "Seeker",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/uP1dFvCofZQT26m3SKOCttXrir3ORBR1B8wPhP6tv7M?ext=png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SNS8DJbHc34nKySHVhLGMUUE72ho6igvJaxtq9T3cX3",
+    "symbol": "SNS",
+    "name": "Solana Name Service",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://www.sns.id/token/image.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "So11111111111111111111111111111111111111112",
+    "symbol": "SOL",
+    "name": "Wrapped SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "soKqZS9pASwBNS46G388nhK7XVtPaTyReffXEd3zora",
+    "symbol": "ZORA",
+    "name": "ZORA",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreigqw7mtfgq6t6tuznl6gl2mv6qiz6ysjow5cgsr3p56wvgf2kw5sa"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SoLiDMWBct5TurG1LNcocemBK7QmTn4P33GSrRrcd2n",
+    "symbol": "SOLID",
+    "name": "Solana ID",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/DoW2h0aZyuFn-riGH_2LwXl-CX9qEnPbV3pKpA6nGsg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SoLo9oxzLDpcq1dpqAgMwgce5WqkRDtNXK7EPnbmeta",
+    "symbol": "SOLO",
+    "name": "Solomon",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://solomonlabs.org/assets/solo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sonickAJFiVLcYXx25X9vpF293udaWqDMUCiGtk7dg2",
+    "symbol": "sonicSOL",
+    "name": "Sonic",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/mirrorworld-universe/solayer-token-metadata/refs/heads/main/endoavs/sonic/sonicSOL-logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SonicxvLud67EceaEzCLRnMTBqzYUUYNr93DBkBdDES",
+    "symbol": "SONIC",
+    "name": "SONIC",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/599UDQd5YAUfesAJCTNZ-4ELWLHX5pbid-ahpoJ-w1A"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "spinezMPKxkBpf4Q9xET2587fehM3LuKe4xoAoXtSjR",
+    "symbol": "SPINE",
+    "name": "SpineDAO Token",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://crimson-fantastic-mouse-567.mypinata.cloud/ipfs/bafkreie76olsrr2wj3kicvd3qd2u6x34a5vtunaeujmw6l4g26l4kgskqm"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt",
+    "symbol": "SRM",
+    "name": "Serum",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/SRMuApVNdxXokk5GT7XD5cUUgXMBCoAz2LHeuAoKWRt/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sSo14endRuUbvQaJS3dq36Q829a3A6BEfoeeRGJywEh",
+    "symbol": "sSOL",
+    "name": "Solayer SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solayer-labs/token-metadata/main/logo.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sSo1wxKKr6zW2hqf5hZrp2CawLibcwi1pMBqk5bg2G4",
+    "symbol": "LP-SOLAYER",
+    "name": "Solayer Stake Pool LP Token",
+    "decimals": 9,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "star9agSpjiFe3M49B3RniVU4CMBBEK3Qnaqn3RGiFM",
+    "symbol": "USD*",
+    "name": "USD Star",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/rn2JGVw61GimeOX64KHOsURjvsXi-qUlrYMc0E9v_pE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "stke7uu3fXHsGqKVVjKnkmj65LRPVrqr4bLG2SJg7rh",
+    "symbol": "STKESOL",
+    "name": "STKE SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://img.solstrategies.io/stkesol.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "sTorERYB6xAZ1SSbwpK3zoK2EEwbBrc7TZAzg1uCGiH",
+    "symbol": "stORE",
+    "name": "Staked ORE",
+    "decimals": 11,
+    "type": "spl-token",
+    "logoURI": "https://ore.supply/assets/icon-lst.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "STREAMribRwybYpMmSYoCsQUdr6MZNXEqHgm7p1gu9M",
+    "symbol": "STREAM",
+    "name": "Streamflow",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/oSDKVyoiP2eE4TNT_MrfJFGjFCkm1tCbkkEaFTJwBNE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "strng7mqqc1MBJJV6vMzYbEqnwVGvKKGKedeCvtktWA",
+    "symbol": "strongSOL",
+    "name": "Stronghold LST",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/CqCTE2k6ext17JLE7EFk6pXAznS7m1rLJaN9nHxUAwpc/stronghold.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "susdabGDNbhrnCa6ncrYo81u4s9GM8ecK2UwMyZiq4X",
+    "symbol": "sUSD",
+    "name": "Solayer USD",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://raw.githubusercontent.com/solayer-labs/token-metadata/main/susd/image.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "svy5ErijNYy9hEVzxknCdwWdZ3NeXJTdpb9Ndnso17f",
+    "symbol": "GBOY",
+    "name": "G*BOY",
+    "decimals": 10,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/obdXGdw_XAD8_iPg-yjPAZ0DaAjLUH451k5rUBZxAuk"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "SW1TCHLmRGTfW5xZknqQdpdarB8PD95sJYWpNp9TbFx",
+    "symbol": "SWTCH",
+    "name": "Switchboard",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/7PAOvgkl02Js0atoWK1cwRNHK_A7UzGhtJwMubo2BMA"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "TNSRxcUxoT9xBG3de7PiJyTDYu7kskLqcpddxnEJAS6",
+    "symbol": "TNSR",
+    "name": "Tensor",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/beGAyeIzjV_UkyjFtxbkZyi_YqfOBWayiQ0B6wqWygY"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "tSATdGGSLYBVCrm3pXiib8NmzKcB1iUdjRRseNGssxu",
+    "symbol": "tSAT",
+    "name": "Satoshi a BTC Stablecoin",
+    "decimals": 2,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.filebase.io/ipfs/QmWsGc6JULhuvjkgJdMFVHQLnJzPv7nSwhL7G3zeVh9VuM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "TUNAfXDZEdQizTMTh3uEvNvYqJmqFHZbEJt8joP4cyx",
+    "symbol": "TUNA",
+    "name": "DefiTuna",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://metadata.defituna.com/tuna.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82",
+    "symbol": "BOME",
+    "name": "BOOK OF MEME",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://bafkreihztk5poge7f2lz6logfjmhc7h7u6shvgacoktnuezks5oblmieue.ipfs.nftstorage.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "UPTx1d24aBWuRgwxVnFmX4gNraj3QGFzL3QqBgxtWQG",
+    "symbol": "UPT",
+    "name": "UPROCK",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/uprockcom/token/main/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB",
+    "symbol": "USD1",
+    "name": "World Liberty Financial USD",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/worldliberty/usd1-metadata/refs/heads/main/logo.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX",
+    "symbol": "USDH",
+    "name": "USDH Hubble Stablecoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX/usdh.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "usdsfJbX78ktZUnoRC7dwvvQz7xH3WdkpGne76gdUia",
+    "symbol": "USD+",
+    "name": "USD+",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/M-EFuE6mkpvER_YhP0mWPPIKp03fPeepHh2Wyb5dprw"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "USDSwr9ApdHk5bvJKMjzff41FfuX8bSxdKcR81vTwcA",
+    "symbol": "USDS",
+    "name": "USDS",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmTW9HWfb2wsQqEVJiixkQ73Nsfp2Rx4ESaDSiQ7ThwnFM",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "VAULTVXqi93aaq9FsyPKgdgp6Ge1H1HoSvNC4ZbqFDs",
+    "symbol": "V",
+    "name": "Vault",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/rpDbzdubbKbRaVpny3o1UYJGq7OI7e5rOmxyGrd2xAM"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "vRseBFqTy9QLmmo5qGiwo74AVpdqqMTnxPqWoWMpump",
+    "symbol": "Verse",
+    "name": "Verse World",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmVDRQKxtuLH5TEogrbQ9R1CL2VvmXohbkdcX4kaGVqPmt"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "vSoLxydx6akxyMD9XEcPvGYNGq6Nn66oqVb3UkGkei7",
+    "symbol": "vSOL",
+    "name": "The Vault",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafkreig55mf3lazzbgndiqyqvdmchdsykvvebww7cqlws6ywgog5xfdzta.ipfs.nftstorage.link/"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk",
+    "symbol": "WEN",
+    "name": "Wen",
+    "decimals": 5,
+    "type": "spl-token",
+    "logoURI": "https://dd.dexscreener.com/ds-data/tokens/solana/WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk.png?size=lg\u0026key=ad6a9a"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "WETZjtprkDMCcUxPi9PfWnowMRZkiGGHDb9rABuRZ2U",
+    "symbol": "WET",
+    "name": "HumidiFi Token",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://pbs.twimg.com/profile_images/1968501292847771648/720oatTU_400x400.jpg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "WFRGSWjaz8tbAxsJitmbfRuFV2mSNwy7BMWcCwaA28U",
+    "symbol": "wfragSOL",
+    "name": "Wrapped Fragmetric Restaked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://fragmetric-assets.s3.ap-northeast-2.amazonaws.com/wfragsol.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "WingsAYbfs4qnEgcw8jpSvetqp8XHM3GkKvow54WLcd",
+    "symbol": "WINGS",
+    "name": "Wingbits",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://prod-token-metadata.s3.eu-west-1.amazonaws.com/icon2.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "WLFinEv6ypjkczcS83FZqFpgFZYwQXutRbxGe7oC16g",
+    "symbol": "WLFI",
+    "name": "World Liberty Financial",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/worldliberty/usd1-metadata/refs/heads/main/wlfi-logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "X7j77hTmjZJbepkXXBcsEapM8qNgdfihkFj6CZ5ondo",
+    "symbol": "COPXon",
+    "name": "Global X Copper Miners ETF (Ondo Tokenized)",
+    "decimals": 9,
+    "type": "spl-token-2022",
+    "logoURI": "https://cdn.ondo.finance/tokens/logos/copxon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "x95HN3DWvbfCBtTjGm587z8suK3ec6cwQwgZNLbWKyp",
+    "symbol": "$HACHI",
+    "name": "Hachiko",
+    "decimals": 4,
+    "type": "spl-token",
+    "logoURI": "https://res.cloudinary.com/dpbxw0qbd/image/upload/v1764259420/Hachiko.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XAnDeUmMcqFyCdef9jzpNgtZPjTj3xUMj9eXKn2reFN",
+    "symbol": "xandSOL",
+    "name": "Xandeum SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/bernieblume/XAND-meta-2024/main/xandSOL.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XANDuUoVoUqniKkpcKhrxmvYJybpJvUxJLr21Gaj3Hx",
+    "symbol": "XAND",
+    "name": "Xandeum",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/bernieblume/XAND-meta-2024/main/XandToken.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XBGdqJ9P175hCC1LangCEyXWNeCPHaKWA17tymz2PrY",
+    "symbol": "XBG",
+    "name": "XBorg",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://bafybeiemq2qpk3fahebltwzbdsugrzhxuono3ugxa25imywc7mbfhwl2lm.ipfs.dweb.link/"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "xLfNTYy76B8Tiix3hA51Jyvc1kMSFV4sPdR7szTZsRu",
+    "symbol": "xLFNTY",
+    "name": "xLifinity",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/xLfNTYy76B8Tiix3hA51Jyvc1kMSFV4sPdR7szTZsRu/logo.svg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "xNETbUB7cRb3AAu2pNG2pUwQcJ2BHcktfvSB8x1Pq6L",
+    "symbol": "XNET",
+    "name": "XNET Mobile",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://maroon-defiant-tiglon-394.mypinata.cloud/ipfs/QmadGjeUFWxw4eFUoRLNApXZBxN72JL9veCUQXgdcupfnN"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "xorcaYqbXUNz3474ubUMJAdu2xgPsew3rUCe5ughT3N",
+    "symbol": "xORCA",
+    "name": "Staked Orca",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/TGump0186eqvyY4mElWqwOam932fQaU9TJKnydx9AYI"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs151QeqTCiuKtinzfRATnUESM2xTU6V9Wy8Vy538ci",
+    "symbol": "WMTx",
+    "name": "Walmart xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/WMTx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs2yquAgsHByNzx68WJC55WHjHBvG9JsMB7CWjTLyPy",
+    "symbol": "DFDVx",
+    "name": "DFDV xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/DFDVx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg",
+    "symbol": "AMZNx",
+    "name": "Amazon xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AMZNx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs3ZFkPYT2BN7qBMqf1j1bfTeTm1rFzEFSsQ1z3wAKU",
+    "symbol": "AZNx",
+    "name": "AstraZeneca xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AZNx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs5UJzmCRQ8DWZjskExdSQDnbE6iLkRu2jjrRAB1JSU",
+    "symbol": "ACNx",
+    "name": "Accenture xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/ACNx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs6B6zawENwAbWVi7w92rjazLuAr5Az59qgWKcNb45x",
+    "symbol": "BRK.Bx",
+    "name": "Berkshire Hathaway xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/BRK.Bx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs78JED6PFZxWc2wCEPspZW9kL3Se5J7L5TChKgsidH",
+    "symbol": "STRCx",
+    "name": "Strategy PP Variable xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/STRCx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs7xXqkcK7K8urEqGg52SECi79dRp2cEKKuYjUePYDw",
+    "symbol": "CRWDx",
+    "name": "CrowdStrike xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CRWDx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu",
+    "symbol": "COINx",
+    "name": "Coinbase xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/COINx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs8drBWy3Sd5QY3aifG9kt9KFs2K3PGZmx7jWrsrk57",
+    "symbol": "TMOx",
+    "name": "Thermo Fisher xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/TMOx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ",
+    "symbol": "QQQx",
+    "name": "Nasdaq xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/QQQx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu",
+    "symbol": "METAx",
+    "name": "Meta xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/METAx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsaBXg8dU5cPM6ehmVctMkVqoiRG2ZjMo1cyBJ3AykQ",
+    "symbol": "KOx",
+    "name": "Coca-Cola xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/KOx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsaHND8sHyfMfsWPj6kSdd5VwvCayZvjYgKmmcNL5qh",
+    "symbol": "XOMx",
+    "name": "Exxon Mobil xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/XOMx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsApJFV9MAktqnAc6jqzsHVujxkGm9xcSUffaBoYLKC",
+    "symbol": "MAx",
+    "name": "Mastercard xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MAx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsaQTCgebC2KPbf27KUhdv5JFvHhQ4GDAPURwrEhAzb",
+    "symbol": "AMBRx",
+    "name": "AMBRx xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AMBRx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsAtbqkAP1HJxy7hFDeq7ok6yM43DQ9mQ1Rh861X8rw",
+    "symbol": "PFEx",
+    "name": "Pfizer xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/PFEx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+    "symbol": "AAPLx",
+    "name": "Apple xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AAPLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
+    "symbol": "NVDAx",
+    "name": "NVIDIA xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/NVDAx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN",
+    "symbol": "GOOGLx",
+    "name": "Alphabet xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/GOOGLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsczbcQ3zfcgAEt9qHQES8pxKAVG5rujPSHQEXi4kaN",
+    "symbol": "CRMx",
+    "name": "Salesforce xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CRMx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
+    "symbol": "TSLAx",
+    "name": "Tesla xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/TSLAx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsEdDDTcVGJU6nvdRdVnj53eKTrsCkvtrVfXGmUK68V",
+    "symbol": "VTx",
+    "name": "Vanguard Total World xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/VTx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL",
+    "symbol": "NFLXx",
+    "name": "Netflix xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/NFLXx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsf9mBktVB9BSU5kf4nHxPq5hCBJ2j2ui3ecFGxPRGc",
+    "symbol": "GMEx",
+    "name": "Gamestop xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/GMEx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsfAzPzYrYjd4Dpa9BU3cusBsvWfVB9gBcyGC87S57n",
+    "symbol": "NVOx",
+    "name": "Novo Nordisk xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/NVOx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsFnZawJdLdXfBSEt5Vw29K5vdBiHotdPLjUPafpfHs",
+    "symbol": "IEMGx",
+    "name": "Core MSCI Emerging Markets xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/IEMGx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo",
+    "symbol": "AVGOx",
+    "name": "Broadcom xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AVGOx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsGVi5eo1Dh2zUpic4qACcjuWGjNv8GCt3dm5XcX6Dn",
+    "symbol": "JNJx",
+    "name": "Johnson \u0026 Johnson xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/JNJx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XshPgPdXFRWB8tP1j82rebb2Q9rPgGX37RuqzohmArM",
+    "symbol": "INTCx",
+    "name": "Intel xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/INTCx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsHtf5RpxsQ7jeJ9ivNewouZKJHbPxhPoEy6yYvULr7",
+    "symbol": "ABTx",
+    "name": "Abbott xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/ABTx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsjFwUPiLofddX5cWFHW35GCbXcSu1BCUGfxoQAQjeL",
+    "symbol": "ORCLx",
+    "name": "Oracle xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/ORCLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsjQP3iMAaQ3kQScQKthQpx9ALRbjKAjQtHg6TFomoc",
+    "symbol": "TQQQx",
+    "name": "TQQQ xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/TQQQx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsMAqkcKsUewDrzVkait4e5u4y8REgtyS7jWgCpLV2C",
+    "symbol": "JPMx",
+    "name": "JPMorgan Chase xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/JPMx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsNNMt7WTNA2sV3jrb1NNfNgapxRF5i4i6GcnTRRHts",
+    "symbol": "CVXx",
+    "name": "Chevron xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CVXx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsnQnU7AdbRZYe2akqqpibDdXjkieGFfSkbkjX1Sd1X",
+    "symbol": "MRKx",
+    "name": "Merck xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MRKx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsnuv4omNoHozR6EEW5mXkw8Nrny5rB3jVfLqi6gKMH",
+    "symbol": "LLYx",
+    "name": "Eli Lilly xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/LLYx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4",
+    "symbol": "PLTRx",
+    "name": "Palantir xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/PLTRx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
+    "symbol": "SPYx",
+    "name": "SP500 xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/SPYx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "xSoL18r4U1k2ALa4yF857VDZJqCKecLtty92nscre3o",
+    "symbol": "xSHIN",
+    "name": "Shinobi Performance Pool Token",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://xshin.fi/icons/xSHIN_3d.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ",
+    "symbol": "MSTRx",
+    "name": "MicroStrategy xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MSTRx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsPdAVBi8Zc1xvv53k4JcMrQaEDTgkGqKYeh7AYgPHV",
+    "symbol": "APPx",
+    "name": "AppLovin xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/APPx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XspwhyYPdWVM8XBHZnpS9hgyag9MKjLRyE3tVfmCbSr",
+    "symbol": "IBMx",
+    "name": "International Business Machines xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/IBMx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX",
+    "symbol": "MSFTx",
+    "name": "Microsoft xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MSFTx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp",
+    "symbol": "TBLLx",
+    "name": "TBLL xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/TBLLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsqE9cRRpzxcGKDXj1BJ7Xmg4GRhZoyY1KpmGSxAWT2",
+    "symbol": "MCDx",
+    "name": "McDonald's xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MCDx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsqgsbXwWogGJsNcVZ3TyVouy2MbTkfCFhCGGGcQZ2p",
+    "symbol": "Vx",
+    "name": "Visa xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/Vx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsr3pdLQyXvDJBFgpR5nexCEZwXvigb8wbPYp4YoNFf",
+    "symbol": "CSCOx",
+    "name": "Cisco xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CSCOx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsSr8anD1hkvNMu8XQiVcmiaTP7XGvYu7Q58LdmtE8Z",
+    "symbol": "LINx",
+    "name": "Linde xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/LINx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsssYEQjzxBCFgvYFFNuhJFBeHNdLWYeUSP8F45cDr9",
+    "symbol": "VTIx",
+    "name": "Vanguard xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/VTIx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1",
+    "symbol": "CRCLx",
+    "name": "Circle xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CRCLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsuxRGDzbLjnJ72v74b7p9VY6N66uYgTCyfwwRjVCJA",
+    "symbol": "MRVLx",
+    "name": "Marvell xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/MRVLx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsv99frTRUeornyvCfvhnDesQDWuvns1M852Pez91vF",
+    "symbol": "PEPx",
+    "name": "PepsiCo xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/PEPx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re",
+    "symbol": "GLDx",
+    "name": "Gold xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/GLDx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsvKCaNsxg2GN8jjUmq71qukMJr7Q1c5R2Mk9P8kcS8",
+    "symbol": "CMCSAx",
+    "name": "Comcast xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/CMCSAx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg",
+    "symbol": "HOODx",
+    "name": "Robinhood xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/HOODx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XswbinNKyPmzTa5CskMbCPvMW6G5CMnZXZEeQSSQoie",
+    "symbol": "ABBVx",
+    "name": "AbbVie xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/ABBVx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XswsQk4duEQmCbGzfqUUWYmi7pV7xpJ9eEmLHXCaEQP",
+    "symbol": "BACx",
+    "name": "Bank of America xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/BACx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsXcJ6GZ9kVnjqGsjBnktRcuwMBmvKWh8S93RefZ1rF",
+    "symbol": "AMDx",
+    "name": "AMD xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/AMDx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XsYdjDjNUygZ7yGKfQaB6TxLh2gC6RRjzLtLAGJrhzV",
+    "symbol": "PGx",
+    "name": "Procter \u0026 Gamble xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/PGx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "XszvaiXGPwvk2nwb3o9C1CX4K6zH8sez11E6uyup6fe",
+    "symbol": "UNHx",
+    "name": "UnitedHealth xStock",
+    "decimals": 8,
+    "type": "spl-token-2022",
+    "logoURI": "https://xstocks-metadata.backed.fi/logos/tokens/UNHx.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "YAFAJvjUv9MVAKcTE7Y8ouo45QNKVK6fCMzdxt2tjPs",
+    "symbol": "YAFA",
+    "name": "Free Palestine",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmVssLHH3qbQi8UinLV1nnJvwVe5qh47K8VLhvgk3tidLj"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "yLdBrBJAYYkNMNSE48BAXYLTXhZsbHWtmWEFHgHSD6a",
+    "symbol": "yieldSOL",
+    "name": "Yield SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://arweave.app/tx/TZferu00LMEEmXe9iCHQYu9OGDzw5LmU0leiwP3FQLk"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "yso11zxLbHA3wBJ9HAtVu6wnesqz9A2qxnhxanasZ4N",
+    "symbol": "ySOL",
+    "name": "Synatra Staked SOL",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/76HCWYyF9Sps1TnRdZB1CtHbj5Ji7trzqi4tnxfCabXE/ysol-logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "yUSDX7W89jXWn4zzDPLnhykDymSjQSmpaJ8e4fjC1fg",
+    "symbol": "yUSD",
+    "name": "Synatra Staked USDC",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://shdw-drive.genesysgo.net/HahVMG4mRpRAia2DuUtJi68ngrhHxGHonXchiYDLv67a/yusd.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "YUYAiJo8KVbnc6Fb6h3MnH2VGND4uGWDH4iLnw7DLEu",
+    "symbol": "YU",
+    "name": "Yala stablecoin",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://arweave.net/fy1UKY3u-u21ceXyR5NWbcx_jepJy3ci_Ue3hGO7urg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "z3dn17yLaGMKffVogeFHQ9zWVcXgqgf3PQnDsNs2g6M",
+    "symbol": "OXY",
+    "name": "Oxygen Protocol",
+    "decimals": 6,
+    "type": "spl-token"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ZBCNpuD7YMXzTHB2fhGkGi78MNsHGLRXUhRewNRm9RU",
+    "symbol": "ZBCN",
+    "name": "Zebec Network",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://blznujiyxatc2qyysynmwqqqoreckcg2aolugfgoflsqqaiztuiq.arweave.net/CvLaJRi4Ji1DGJYay0IQdEglCNoDl0MUzirlCAEZnRE"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "zBTCug3er3tLyffELcvDNrKkCymbPWysGcWihESYfLg",
+    "symbol": "zBTC",
+    "name": "zBTC",
+    "decimals": 8,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/ZeusNetworkHQ/zbtc-metadata/refs/heads/main/lgoo-v2.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ZDaUDL4XFdEct7UgeztrFQAptsvh4ZdhyZDZ1RpxYAK",
+    "symbol": "YAK",
+    "name": "YAK",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://gateway.irys.xyz/FRdFgDGxVZC9HsdRkWQ3CKCyi6icxvxT1ENWgnk1By4y"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ZEUS1aR7aX8DFFJf5QjWj2ftDDdNTroMNGo8YoQm3Gq",
+    "symbol": "ZEUS",
+    "name": "ZEUS",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/ZeusNetworkHQ/zeus-metadata/master/logo-v2.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "ZEXy1pqteRu3n13kdyh4LwPQknkFk3GzmMYMuNadWPo",
+    "symbol": "ZEX",
+    "name": "Zeta",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/zetamarkets/brand/master/assets/zeta.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "zGh48JtNHVBb5evgoZLXwgPD2Qu4MhkWdJLGDAupump",
+    "symbol": "retire",
+    "name": "The Last Play",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmYG14Rrj2STV4ww9jKWierD2QVndSvDLEFkEyufBAxNC2"
   }
 ]
