@@ -1,3 +1,40 @@
+## 0.4.4
+
+- **New: `Token:listCurated` endpoint + `tokens.listCurated(network)`
+  Dart method.** Returns a vetted list of well-known tokens per
+  chain (USDT / USDC / DAI / WBTC / WETH / LINK / UNI on EVM
+  mainnet, USDC / USDT / SOL / mSOL / JUP and ~650 other Jupiter-
+  verified mints above $1M mcap on Solana mainnet, plus
+  hand-curated entries upstream feeds don't carry — notably
+  `DRtvTCzfiKGhCVREmBbZdN9sB8PHeq9KdRZ3VmFhpump` ("Tibane Thecat",
+  $ChiefPussy)). Frontend use cases:
+  - "Swap to X" dropdown without asking the user to paste a
+    contract address.
+  - Map an unrecognized mint / contract in the user's balances to
+    its `symbol` + `logoURI` + `tags`.
+  - Pass `"<type>.<chainId>"` form (same shape `Asset.network`
+    returns — e.g. `"evm.1"`, `"solana.mainnet"`).
+- **New Dart model `CuratedToken`** with `chainKey`, `address`,
+  `symbol`, `name`, `decimals`, `type`, `logoUri`, `coingeckoId`,
+  `cmcId`, `tags` + `isStablecoin` / `isWrapped` convenience
+  getters. Exported from the top-level barrel.
+- **Data source**: embedded JSON per chain (go:embed), refreshed at
+  release time via `go generate ./wlttoken/curated/...` which pulls
+  Uniswap's default list for EVM and Jupiter's verified feed for
+  Solana. No runtime external fetch, no API keys. Hand-curated
+  overlays merge on top of the generated base.
+- **SPL balance enrichment**: on Solana, `Asset:list` now reads
+  `name` / `symbol` from the curated registry when the mint is
+  well-known. USDC on Solana used to surface as
+  `Symbol="EPjFWd"` / `Name="EPjFWdd5..."`; now surfaces as
+  `Symbol="USDC"` / `Name="USD Coin"`. Unlisted mints keep the
+  previous truncated display.
+- **Chains seeded on day 1**: EVM 1 / 10 / 56 / 137 / 324 / 8453
+  / 42161 / 43114 + Solana mainnet. Gnosis (100), Fantom (250),
+  Linea (59144) are registered with empty lists — Uniswap doesn't
+  cover them; to be filled by an alternative feed or overlay in a
+  follow-up.
+
 ## 0.4.3
 
 - **Fixed: `Asset:list` crashed with `-32602 Invalid param: WrongSize`
