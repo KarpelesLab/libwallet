@@ -15,9 +15,10 @@ package wltswap
 import (
 	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -25,6 +26,10 @@ import (
 // TestJupiterAdapter_QuoteParse validates that a recorded Jupiter
 // /order response flows through the adapter and produces a Quote
 // with the expected amounts, route, and cached provider blob.
+//
+// Pinned to GET (not POST): the live Jupiter Ultra /order endpoint
+// returns HTTP 404 on POST. If anyone refactors this back to a POST
+// the test fires loudly.
 func TestJupiterAdapter_QuoteParse(t *testing.T) {
 	// Minimal /order response with the fields the adapter reads.
 	// outAmount is 12_345_000 (e.g. 12.345 USDC at 6 decimals);
@@ -44,16 +49,15 @@ func TestJupiterAdapter_QuoteParse(t *testing.T) {
 		"swapType": "aggregator",
 	}
 
-	var gotBody map[string]any
+	var gotQuery url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Errorf("expected POST, got %s", r.Method)
+		if r.Method != http.MethodGet {
+			t.Errorf("expected GET, got %s", r.Method)
 		}
 		if got := r.Header.Get("x-api-key"); got != JupiterAPIKey {
 			t.Errorf("x-api-key = %q, want %q", got, JupiterAPIKey)
 		}
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &gotBody)
+		gotQuery = r.URL.Query()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
 	}))
@@ -63,34 +67,33 @@ func TestJupiterAdapter_QuoteParse(t *testing.T) {
 	JupiterOrderURL = srv.URL
 	defer func() { JupiterOrderURL = origURL }()
 
-	// Call the low-level HTTP path directly so we don't need the
-	// full Env / Account stack. The adapter's Quote() wraps the
-	// same call.
-	body := jupiterOrderRequest{
-		InputMint:       "So11111111111111111111111111111111111111112",
-		OutputMint:      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-		Amount:          "10000000",
-		Taker:           "SenderPublicKeyHere",
-		ReferralAccount: JupiterReferralAccount,
-		ReferralFee:     "50",
-		SlippageBps:     50,
-	}
+	// Drive the same query-building logic Quote() uses.
+	qs := url.Values{}
+	qs.Set("inputMint", "So11111111111111111111111111111111111111112")
+	qs.Set("outputMint", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+	qs.Set("amount", "10000000")
+	qs.Set("taker", "SenderPublicKeyHere")
+	qs.Set("referralAccount", JupiterReferralAccount)
+	qs.Set("referralFee", "50")
+	qs.Set("slippageBps", strconv.Itoa(50))
+
 	var resp jupiterOrderResponse
-	err := httpPostJSON(t.Context(), JupiterOrderURL, body, jupiterHeader(), &resp)
+	err := httpGetJSON(t.Context(), JupiterOrderURL, qs, jupiterHeader(), &resp)
 	if err != nil {
-		t.Fatalf("httpPostJSON failed: %v", err)
+		t.Fatalf("httpGetJSON failed: %v", err)
 	}
 
-	// Verify what we sent was shaped correctly for Jupiter.
-	for _, k := range []string{"inputMint", "outputMint", "amount", "taker", "referralAccount", "referralFee"} {
-		if _, ok := gotBody[k]; !ok {
-			t.Errorf("request missing field %q — full body: %v", k, gotBody)
+	// Verify the query string Jupiter received carries every
+	// parameter — Jupiter rejects requests with missing fields.
+	for _, k := range []string{"inputMint", "outputMint", "amount", "taker", "referralAccount", "referralFee", "slippageBps"} {
+		if gotQuery.Get(k) == "" {
+			t.Errorf("query missing %q — full query: %v", k, gotQuery)
 		}
 	}
-	if got, _ := gotBody["referralAccount"].(string); got != JupiterReferralAccount {
+	if got := gotQuery.Get("referralAccount"); got != JupiterReferralAccount {
 		t.Errorf("referralAccount = %q, want %q", got, JupiterReferralAccount)
 	}
-	if got, _ := gotBody["referralFee"].(string); got != "50" {
+	if got := gotQuery.Get("referralFee"); got != "50" {
 		t.Errorf("referralFee = %q, want 50", got)
 	}
 
@@ -116,6 +119,39 @@ func TestJupiterAdapter_QuoteParse(t *testing.T) {
 	}
 	if len(decoded) < 64 {
 		t.Errorf("decoded tx too short: %d bytes", len(decoded))
+	}
+}
+
+// TestJupiterAdapter_OrderError surfaces upstream "Insufficient funds"
+// (HTTP 200 with errorMessage and empty transaction) instead of the
+// generic "empty order" we used to emit.
+func TestJupiterAdapter_OrderError(t *testing.T) {
+	response := map[string]any{
+		"transaction":  "",
+		"requestId":    "errored-request",
+		"errorCode":    1,
+		"errorMessage": "Insufficient funds",
+		"error":        "Insufficient funds",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer srv.Close()
+
+	origURL := JupiterOrderURL
+	JupiterOrderURL = srv.URL
+	defer func() { JupiterOrderURL = origURL }()
+
+	var resp jupiterOrderResponse
+	if err := httpGetJSON(t.Context(), JupiterOrderURL, url.Values{}, jupiterHeader(), &resp); err != nil {
+		t.Fatalf("httpGetJSON: %v", err)
+	}
+	if resp.ErrorMessage != "Insufficient funds" {
+		t.Errorf("expected errorMessage carried, got %q", resp.ErrorMessage)
+	}
+	if resp.Transaction != "" {
+		t.Errorf("expected empty transaction, got %q", resp.Transaction)
 	}
 }
 

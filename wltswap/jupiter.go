@@ -3,7 +3,7 @@ package wltswap
 // Jupiter Ultra adapter.
 //
 // Flow:
-//  POST /ultra/v1/order  → { transaction (b64), requestId, ... }
+//  GET  /ultra/v1/order   → { transaction (b64), requestId, ... }
 //  (we sign the transaction's message locally)
 //  POST /ultra/v1/execute → { signature, status, ... }
 //
@@ -13,6 +13,10 @@ package wltswap
 // message begins, sign those bytes with the user's Ed25519 key via
 // the existing TSS pipeline, splice the signature back into slot 0,
 // and post the result to /execute.
+//
+// /order is a GET with all parameters in the query string —
+// Jupiter responds with HTTP 404 to a POST. /execute is a POST
+// because the signed-transaction blob doesn't fit a query string.
 
 import (
 	"context"
@@ -20,6 +24,8 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
@@ -33,27 +39,29 @@ type jupiterProvider struct{}
 func (jupiterProvider) Name() string  { return "jupiter_ultra" }
 func (jupiterProvider) Chain() string { return "solana" }
 
-// Request / response shapes — only the fields we read or write.
-type jupiterOrderRequest struct {
-	InputMint        string `json:"inputMint"`
-	OutputMint       string `json:"outputMint"`
-	Amount           string `json:"amount"`
-	Taker            string `json:"taker"`
-	ReferralAccount  string `json:"referralAccount,omitempty"`
-	ReferralFee      string `json:"referralFee,omitempty"`
-	SlippageBps      uint16 `json:"slippageBps,omitempty"`
-}
-
+// Response shape — only the fields we read. Jupiter Ultra /order is
+// a GET so the request shape is just url.Values built inline below.
+//
+// Error fields can be populated even on HTTP 200: an "Insufficient
+// funds" route surfaces as a 200 with `transaction:""`,
+// `errorCode:1`, `errorMessage:"Insufficient funds"`. Surface those
+// to the caller instead of the generic ErrCodeNoLiquidity we used
+// to return for any empty-transaction response.
 type jupiterOrderResponse struct {
-	Transaction    string               `json:"transaction"`
-	RequestId      string               `json:"requestId"`
-	InAmount       string               `json:"inAmount"`
-	OutAmount      string               `json:"outAmount"`
-	OtherAmount    string               `json:"otherAmountThreshold"` // min out w/ slippage
-	SlippageBps    uint16               `json:"slippageBps"`
-	PriceImpactPct string               `json:"priceImpactPct"`
-	RoutePlan      []jupiterRoutePlan   `json:"routePlan"`
-	SwapType       string               `json:"swapType"`
+	Transaction    string             `json:"transaction"`
+	RequestId      string             `json:"requestId"`
+	InAmount       string             `json:"inAmount"`
+	OutAmount      string             `json:"outAmount"`
+	OtherAmount    string             `json:"otherAmountThreshold"` // min out w/ slippage
+	SlippageBps    uint16             `json:"slippageBps"`
+	PriceImpactPct string             `json:"priceImpactPct"`
+	RoutePlan      []jupiterRoutePlan `json:"routePlan"`
+	SwapType       string             `json:"swapType"`
+
+	// Per-order errors that ride along with HTTP 200.
+	ErrorCode    int    `json:"errorCode,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 type jupiterRoutePlan struct {
@@ -106,22 +114,34 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	inMint := solanaNativeMintOrAddr(req.TokenIn.Address)
 	outMint := solanaNativeMintOrAddr(req.TokenOut.Address)
 
-	body := jupiterOrderRequest{
-		InputMint:       inMint,
-		OutputMint:      outMint,
-		Amount:          req.AmountIn,
-		Taker:           acct.GetAddress(),
-		ReferralAccount: JupiterReferralAccount,
-		ReferralFee:     fmt.Sprintf("%d", DefaultFeeBps),
-		SlippageBps:     req.SlippageBps,
+	qs := url.Values{}
+	qs.Set("inputMint", inMint)
+	qs.Set("outputMint", outMint)
+	qs.Set("amount", req.AmountIn)
+	qs.Set("taker", acct.GetAddress())
+	qs.Set("referralAccount", JupiterReferralAccount)
+	qs.Set("referralFee", strconv.Itoa(int(DefaultFeeBps)))
+	if req.SlippageBps > 0 {
+		qs.Set("slippageBps", strconv.Itoa(int(req.SlippageBps)))
 	}
 
 	var resp jupiterOrderResponse
-	if err := httpPostJSON(ctx, JupiterOrderURL, body, jupiterHeader(), &resp); err != nil {
+	if err := httpGetJSON(ctx, JupiterOrderURL, qs, jupiterHeader(), &resp); err != nil {
 		return nil, err
 	}
+	// Jupiter sometimes returns an HTTP 200 with an empty transaction
+	// when routing fails (insufficient funds, no route, slippage too
+	// tight). Surface the upstream errorMessage instead of the
+	// generic ErrCodeNoLiquidity we used to emit.
 	if resp.Transaction == "" || resp.RequestId == "" {
-		return nil, newErr(ErrCodeNoLiquidity, "Jupiter returned an empty order")
+		msg := resp.ErrorMessage
+		if msg == "" {
+			msg = resp.Error
+		}
+		if msg == "" {
+			msg = "Jupiter returned an empty order"
+		}
+		return nil, newErr(ErrCodeNoLiquidity, msg)
 	}
 	rawTx, err := base64.StdEncoding.DecodeString(resp.Transaction)
 	if err != nil {
