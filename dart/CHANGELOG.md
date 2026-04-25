@@ -1,3 +1,19 @@
+## 0.4.5
+
+- **Fixed: every Solana swap quote crashed with `404 Not Found` from
+  Jupiter Ultra.** Jupiter's `/ultra/v1/order` endpoint accepts only
+  `GET` with query parameters; we'd been POSTing JSON since the
+  swap feature shipped. Switched to GET with `url.Values`;
+  `/execute` stays POST (the signed transaction blob doesn't fit a
+  query string). The httptest-backed adapter test is now pinned to
+  GET so a future regression fires loudly instead of silently
+  404'ing in production.
+- **Improved: surface Jupiter routing errors verbatim.** When
+  Jupiter returns HTTP 200 with `transaction:""` (insufficient
+  funds, no route, slippage too tight) the adapter now passes
+  through the upstream `errorMessage` instead of the generic
+  "Jupiter returned an empty order".
+
 ## 0.4.4
 
 - **New: `Token:listCurated` endpoint + `tokens.listCurated(network)`
