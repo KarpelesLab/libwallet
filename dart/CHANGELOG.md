@@ -1,3 +1,26 @@
+## 0.4.6
+
+- **New: `swap.maxSpendable(...)`** — returns the same `SwapQuote`
+  shape as `swap.quote()`, automatically resolved to the largest
+  `tokenIn` amount the account can spend. `quote.amountIn` carries
+  the resolved value so the UI can render "MAX → 1.234 SOL"
+  alongside the standard quote display. Native input reserves the
+  network fee + (Solana) rent-exempt minimums; token input returns
+  the full balance because gas is paid in the chain's native
+  currency. Returns `invalid_request` if the resolved max is zero.
+- **New: `"MAX"` sentinel on `swap.quote(amountIn: ...)`.** Same
+  end result as `swap.maxSpendable` — the libwallet side resolves
+  the max amount before issuing the upstream quote, so a Max
+  button in a swap form can wire straight to `quote()` without
+  branching on a separate code path.
+- **`transactions.maxSendable()` now supports tokens.** Previously
+  errored with "v1 supports native assets only" for any token
+  asset. SPL (Solana) and ERC-20 (EVM) now return `max == balance`
+  (fees are paid in native currency, so the full token balance is
+  spendable). The `fee` field reports the *native-currency* fee a
+  token transfer would cost so the UI can warn when the user
+  doesn't have enough native to cover gas.
+
 ## 0.4.5
 
 - **Fixed: every Solana swap quote crashed with `404 Not Found` from
