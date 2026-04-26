@@ -4,6 +4,27 @@ import (
 	"testing"
 )
 
+func TestAssetSuffix(t *testing.T) {
+	cases := map[string]string{
+		"":                                                                  "",
+		"NATIVE":                                                            "",
+		"evm.1.NATIVE":                                                      "",
+		"evm.1":                                                             "",
+		"evm.1.0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48":                  "0xA0b86991c6218B36c1d19D4a2e9Eb0cE3606eB48",
+		"solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v":      "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		// Suffix can contain dots — the parser keeps everything after the
+		// second separator as one address. We test this not because tokens
+		// have dotted addresses (they don't) but because mis-trimming would
+		// silently corrupt input.
+		"evm.1.0xfoo.bar":                                                  "0xfoo.bar",
+	}
+	for in, want := range cases {
+		if got := assetSuffix(in); got != want {
+			t.Errorf("assetSuffix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestComputeSolanaMaxSendable(t *testing.T) {
 	const (
 		fee        = uint64(5000)

@@ -5,11 +5,19 @@ package wlttx
 // and (on Solana) the rent-exempt minimum the sender must retain plus
 // the rent-exempt minimum a newly-created recipient must receive.
 //
-// The v1 implementation is native-only: native SOL / ETH / BTC. For
-// token assets (ERC-20, SPL) the sendable amount equals the token
-// balance — callers should use Asset:list to read token balances and
-// call maxSendable separately to verify the account holds enough
-// native currency to pay the fee.
+// Native assets (SOL / ETH / BTC) reserve fees + rents from the
+// returned Max so the value is immediately usable as the input
+// amount of a transfer or swap.
+//
+// Token assets (SPL on Solana, ERC-20 on EVM) report the full
+// on-chain balance as Max — fees are paid in the chain's native
+// currency and don't reduce the spendable token amount. The Fee
+// field reports the *native-currency* fee a transfer would cost so
+// the frontend can warn when the user lacks enough native to pay
+// it; the units there are intentionally different from Max.
+//
+// Bitcoin-family chains have no token model; passing a non-native
+// Asset on a Bitcoin network errors.
 
 import (
 	"context"
@@ -101,20 +109,54 @@ func apiMaxSendable(ctx context.Context, req *MaxSendableRequest) (any, error) {
 		return nil, err
 	}
 
-	if !isNativeAsset(req.Asset, n) {
-		return nil, fmt.Errorf("maxSendable: v1 supports native assets only; for tokens use Asset:list (the full token balance is sendable, fees are paid in native currency)")
-	}
+	return MaxSendable(ctx, n, acct, req)
+}
 
+// MaxSendable is the RPC-driven core of Transaction:maxSendable, exposed
+// so other endpoints (Swap:maxSpendable, asset-aware UIs) can ask the
+// same question without going through pobj. The caller is responsible
+// for resolving acct + n + UpdateAddressForNetwork beforehand.
+func MaxSendable(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *MaxSendableRequest) (*MaxSendableResult, error) {
+	if isNativeAsset(req.Asset, n) {
+		switch n.Type {
+		case "solana":
+			return maxSendableSolana(ctx, n, acct, req)
+		case "evm":
+			return maxSendableEVM(ctx, n, acct, req)
+		case "bitcoin":
+			return maxSendableBitcoin(ctx, n, acct, req)
+		default:
+			return nil, fmt.Errorf("unsupported network type %s", n.Type)
+		}
+	}
+	addr := assetSuffix(req.Asset)
+	if addr == "" {
+		return nil, fmt.Errorf("maxSendable: cannot derive token address from asset %q", req.Asset)
+	}
 	switch n.Type {
 	case "solana":
-		return maxSendableSolana(ctx, n, acct, req)
+		return maxSendableSolanaSPL(ctx, n, acct, addr)
 	case "evm":
-		return maxSendableEVM(ctx, n, acct, req)
+		return maxSendableEVMERC20(ctx, n, acct, addr)
 	case "bitcoin":
-		return maxSendableBitcoin(ctx, n, acct, req)
+		return nil, fmt.Errorf("maxSendable: Bitcoin-family chains have no token model")
 	default:
 		return nil, fmt.Errorf("unsupported network type %s", n.Type)
 	}
+}
+
+// assetSuffix returns the third dotted segment of a canonical asset
+// key — the on-chain mint or contract address. Returns "" when the
+// suffix is missing, "NATIVE", or the key isn't well-formed.
+func assetSuffix(asset string) string {
+	parts := strings.SplitN(asset, ".", 3)
+	if len(parts) != 3 {
+		return ""
+	}
+	if parts[2] == "" || parts[2] == "NATIVE" {
+		return ""
+	}
+	return parts[2]
 }
 
 func resolveAccount(e wltintf.Env, from string) (*wltacct.Account, error) {
@@ -302,7 +344,172 @@ func maxSendableSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acc
 	return res, nil
 }
 
-// ── EVM ───────────────────────────────────────────────────────────────────
+// maxSendableSolanaSPL returns the full SPL-token balance for (acct,
+// mint) on n. Fees are paid in SOL and don't reduce the spendable
+// token amount, so Max == Balance == sum of token-account balances
+// for that mint (almost always exactly one account; we sum to be
+// safe). Fee reports the *native-currency* fee a transfer costs so
+// the frontend can warn when SOL is insufficient — its decimals
+// (9, lamports) intentionally don't match Max's (the token's own).
+func maxSendableSolanaSPL(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, mint string) (*MaxSendableResult, error) {
+	raw, err := n.DoRPCCtx(ctx, "getTokenAccountsByOwner",
+		acct.GetAddress(),
+		map[string]any{"mint": mint},
+		map[string]any{"encoding": "jsonParsed"},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("getTokenAccountsByOwner: %w", err)
+	}
+	var resp struct {
+		Value []struct {
+			Account struct {
+				Data struct {
+					Parsed struct {
+						Info struct {
+							TokenAmount struct {
+								Amount   string `json:"amount"`
+								Decimals int    `json:"decimals"`
+							} `json:"tokenAmount"`
+						} `json:"info"`
+					} `json:"parsed"`
+				} `json:"data"`
+			} `json:"account"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse getTokenAccountsByOwner: %w", err)
+	}
+
+	total := new(big.Int)
+	decimals := 0
+	for _, ta := range resp.Value {
+		amt, ok := new(big.Int).SetString(ta.Account.Data.Parsed.Info.TokenAmount.Amount, 10)
+		if !ok {
+			continue
+		}
+		total.Add(total, amt)
+		decimals = ta.Account.Data.Parsed.Info.TokenAmount.Decimals
+	}
+
+	res := &MaxSendableResult{
+		Chain:   "solana",
+		Balance: wltobj.NewAmountRaw(total, decimals),
+		Max:     wltobj.NewAmountRaw(total, decimals),
+		// Native fee for an SPL transfer (no extra ATA creation).
+		// Same 5000-lamport sig fee as a native transfer; a real
+		// transfer may add ATA-rent (~2_039_280) when the recipient
+		// has no ATA, but we don't know the recipient here.
+		Fee: wltobj.NewAmountRaw(big.NewInt(5000), 9),
+	}
+	if total.Sign() == 0 {
+		res.Reason = fmt.Sprintf("no SPL balance for mint %s", mint)
+	}
+	return res, nil
+}
+
+// ── EVM ERC-20 ────────────────────────────────────────────────────────────
+
+// erc20BalanceOfSelector / erc20DecimalsSelector are the ERC-20
+// function selectors we hit for token max-sendable. Same constants
+// the discovery path uses (wlttoken/discover.go); duplicated here to
+// avoid an import cycle (wlttoken depends on wlttx via the asset key).
+const (
+	erc20BalanceOfSelector = "0x70a08231" // balanceOf(address)
+	erc20DecimalsSelector  = "0x313ce567" // decimals()
+)
+
+// maxSendableEVMERC20 returns the ERC-20 balance for (acct, contract)
+// on n. Same semantics as the SPL helper — Max equals Balance because
+// gas is paid in the chain's native currency. Fee here is the
+// estimated gas cost of a typical ERC-20 transfer (~65k gas, twice
+// the basic 21k since the contract write touches storage), in native
+// units.
+func maxSendableEVMERC20(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, contract string) (*MaxSendableResult, error) {
+	balI, err := evmERC20BalanceOf(ctx, n, contract, acct.GetAddress())
+	if err != nil {
+		return nil, fmt.Errorf("balanceOf: %w", err)
+	}
+	dec, err := evmERC20Decimals(ctx, n, contract)
+	if err != nil {
+		return nil, fmt.Errorf("decimals: %w", err)
+	}
+
+	// Native gas estimate for a typical ERC-20 transfer. 65000 is the
+	// conservative ceiling: the canonical openzeppelin transfer is
+	// ~50k for warm storage, ~65k for cold. We err high so the
+	// reported Fee never under-warns.
+	const gas uint64 = 65000
+	feeI, err := evmFeeForBasicTransfer(ctx, n, gas)
+	if err != nil {
+		return nil, err
+	}
+	nativeDecimals := n.CurrencyDecimals
+	if nativeDecimals == 0 {
+		if info, ierr := n.GetChainInfo(); ierr == nil {
+			nativeDecimals = info.NativeCurrency.Decimals
+		}
+	}
+	if nativeDecimals == 0 {
+		nativeDecimals = 18
+	}
+
+	res := &MaxSendableResult{
+		Chain:   "evm",
+		Balance: wltobj.NewAmountRaw(balI, dec),
+		Max:     wltobj.NewAmountRaw(new(big.Int).Set(balI), dec),
+		Fee:     wltobj.NewAmountRaw(feeI, nativeDecimals),
+	}
+	if balI.Sign() == 0 {
+		res.Reason = fmt.Sprintf("no ERC-20 balance for %s", contract)
+	}
+	return res, nil
+}
+
+// evmERC20BalanceOf reads balanceOf(owner) from contract on n. ABI:
+// the call data is the 4-byte selector followed by the owner address
+// padded to 32 bytes. Result is a single uint256.
+func evmERC20BalanceOf(ctx context.Context, n *wltnet.Network, contract, owner string) (*big.Int, error) {
+	addr := strings.TrimPrefix(strings.ToLower(owner), "0x")
+	data := erc20BalanceOfSelector + strings.Repeat("0", 64-len(addr)) + addr
+	hexResult, err := ethrpc.ReadString(n.DoRPCCtx(ctx, "eth_call", map[string]string{
+		"to":   contract,
+		"data": data,
+	}, "latest"))
+	if err != nil {
+		return nil, err
+	}
+	hexResult = strings.TrimPrefix(hexResult, "0x")
+	if hexResult == "" {
+		return new(big.Int), nil
+	}
+	v, ok := new(big.Int).SetString(hexResult, 16)
+	if !ok {
+		return nil, fmt.Errorf("invalid balanceOf response %q", hexResult)
+	}
+	return v, nil
+}
+
+// evmERC20Decimals reads decimals() from contract on n.
+func evmERC20Decimals(ctx context.Context, n *wltnet.Network, contract string) (int, error) {
+	hexResult, err := ethrpc.ReadString(n.DoRPCCtx(ctx, "eth_call", map[string]string{
+		"to":   contract,
+		"data": erc20DecimalsSelector,
+	}, "latest"))
+	if err != nil {
+		return 0, err
+	}
+	hexResult = strings.TrimPrefix(hexResult, "0x")
+	if hexResult == "" {
+		return 0, fmt.Errorf("decimals() returned empty response")
+	}
+	v, ok := new(big.Int).SetString(hexResult, 16)
+	if !ok {
+		return 0, fmt.Errorf("invalid decimals response %q", hexResult)
+	}
+	return int(v.Int64()), nil
+}
+
+// ── EVM native ────────────────────────────────────────────────────────────
 
 // evmFeeForBasicTransfer returns the fee in wei for a single EOA-to-EOA
 // transfer on n. Uses EIP-1559 (maxFee = 2 * baseFee + tip) when the
