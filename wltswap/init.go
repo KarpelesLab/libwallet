@@ -7,6 +7,7 @@ func init() {
 	pobj.RegisterStatic("Swap:execute", swapExecute)
 	pobj.RegisterStatic("Swap:buildApproval", swapBuildApproval)
 	pobj.RegisterStatic("Swap:availability", swapAvailability)
+	pobj.RegisterStatic("Swap:maxSpendable", swapMaxSpendable)
 
 	// Providers register themselves — done eagerly at package init
 	// so tests can override via RegisterProvider without needing a

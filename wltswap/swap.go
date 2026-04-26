@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wlttx"
 )
 
 // QuoteRequest is the input to Swap:quote. Callers pass the tokens
@@ -236,7 +238,7 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
 	}
 	if req.AmountIn == "" {
-		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required")
+		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required (use \"MAX\" to swap the full balance)")
 	}
 	if req.SlippageBps == 0 {
 		req.SlippageBps = DefaultSlippageBps
@@ -250,6 +252,67 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 		return nil, err
 	}
 
+	// "MAX" sentinel: resolve to the largest base-unit amount the
+	// account can spend in tokenIn. The Quote returned to the caller
+	// has Quote.AmountIn populated with the resolved value, so the
+	// frontend always knows what the user is actually swapping.
+	if strings.EqualFold(req.AmountIn, "MAX") {
+		amt, err := resolveMaxAmountIn(ctx, n, acct, req.TokenIn.Address)
+		if err != nil {
+			return nil, err
+		}
+		req.AmountIn = amt
+	}
+
+	return runQuote(ctx, n, acct, req)
+}
+
+// swapMaxSpendable is Swap:maxSpendable: build a Quote for the
+// maximum amount of req.TokenIn the account can spend. The Quote
+// shape is identical to Swap:quote — Quote.AmountIn carries the
+// resolved max so the frontend can display "Max: 1.234 SOL".
+//
+// Equivalent to calling Swap:quote with amountIn="MAX". Provided as
+// a discrete endpoint so callers don't need to special-case the
+// sentinel string in their typed clients.
+func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	if req == nil {
+		return nil, newErr(ErrCodeInvalidRequest, "nil request")
+	}
+	if req.TokenIn.Address == "" || req.TokenOut.Address == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
+	}
+	if req.SlippageBps == 0 {
+		req.SlippageBps = DefaultSlippageBps
+	}
+
+	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
+	if err != nil {
+		return nil, err
+	}
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
+		return nil, err
+	}
+
+	amt, err := resolveMaxAmountIn(ctx, n, acct, req.TokenIn.Address)
+	if err != nil {
+		return nil, err
+	}
+	if amt == "0" || amt == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "max-spendable amount is zero — balance does not cover the network fee")
+	}
+	req.AmountIn = amt
+	return runQuote(ctx, n, acct, req)
+}
+
+// runQuote drives the provider call + auto-fallback + cache, after
+// the caller has already done validation, account/network resolution,
+// and AmountIn resolution. Shared by swapQuote and swapMaxSpendable.
+func runQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error) {
 	provider, err := selectProvider(n, req.Provider)
 	if err != nil {
 		return nil, err
@@ -280,6 +343,30 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 	quote.from = acct.GetAddress()
 	quoteCache.put(quote)
 	return quote, nil
+}
+
+// resolveMaxAmountIn returns the largest base-unit amount of
+// tokenInAddress the account can spend on n, ready to drop into a
+// QuoteRequest.AmountIn. Native assets reserve fees + rents; tokens
+// return the full balance because gas is paid in the chain's native
+// currency.
+//
+// tokenInAddress accepts the canonical TokenRef.Address shape:
+//   - "NATIVE" or empty → native currency
+//   - any other string  → on-chain mint / contract address
+func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, tokenInAddress string) (string, error) {
+	asset := n.Type + "." + n.ChainId + ".NATIVE"
+	if tokenInAddress != "" && !strings.EqualFold(tokenInAddress, "NATIVE") {
+		asset = n.Type + "." + n.ChainId + "." + tokenInAddress
+	}
+	res, err := wlttx.MaxSendable(ctx, n, acct, &wlttx.MaxSendableRequest{Asset: asset})
+	if err != nil {
+		return "", err
+	}
+	if res.Max == nil {
+		return "0", nil
+	}
+	return res.Max.Value().String(), nil
 }
 
 // swapExecute is the Swap:execute entry point.

@@ -62,7 +62,11 @@ class SwapApi {
   /// Solana use `"NATIVE"` or the wSOL mint `So1111…1112`; on EVM
   /// use `"NATIVE"` or the specific ERC-20 contract address.
   ///
-  /// [amountIn] is the input in base units (decimal string).
+  /// [amountIn] is the input in base units (decimal string). Pass
+  /// the literal string `"MAX"` to swap the full balance of
+  /// [tokenIn] — the resolved amount lands in `quote.amountIn` so
+  /// the UI can display "MAX → X.YZ TOKEN". Equivalent to calling
+  /// [maxSpendable] without the sentinel handling.
   ///
   /// [slippageBps] defaults to 50 (0.5%) if omitted; clamp from the
   /// app if you want tighter control.
@@ -98,6 +102,43 @@ class SwapApi {
     if (network != null) params['network'] = network;
     if (provider != null) params['provider'] = provider;
     final data = await _conn.request('Swap:quote', 'POST', params);
+    return SwapQuote.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Get a quote that swaps the maximum amount of [tokenIn] the
+  /// account can spend. Returns the same [SwapQuote] shape as
+  /// [quote], with `quote.amountIn` populated from the resolved
+  /// max — perfect for a "Max" button that needs to render the
+  /// resolved amount before the user commits.
+  ///
+  /// For native assets (SOL / ETH) the max is balance minus the
+  /// estimated network fee + (Solana) the rent-exempt minimums.
+  /// For tokens (SPL / ERC-20) the max is the full token balance —
+  /// fees are paid in the chain's native currency and don't reduce
+  /// the spendable token amount. The frontend should still call
+  /// [TransactionApi.maxSendable] on the *native* asset to confirm
+  /// the user has enough native left to cover gas.
+  ///
+  /// All other parameters behave the same as [quote]. Returns the
+  /// same error codes as [quote] plus `invalid_request` when the
+  /// resolved max would be zero (balance does not cover the fee).
+  Future<SwapQuote> maxSpendable({
+    required SwapTokenRef tokenIn,
+    required SwapTokenRef tokenOut,
+    String? from,
+    int? slippageBps,
+    String? network,
+    String? provider,
+  }) async {
+    final params = <String, dynamic>{
+      'tokenIn': tokenIn.toJson(),
+      'tokenOut': tokenOut.toJson(),
+    };
+    if (from != null) params['from'] = from;
+    if (slippageBps != null) params['slippageBps'] = slippageBps;
+    if (network != null) params['network'] = network;
+    if (provider != null) params['provider'] = provider;
+    final data = await _conn.request('Swap:maxSpendable', 'POST', params);
     return SwapQuote.fromJson(data as Map<String, dynamic>);
   }
 

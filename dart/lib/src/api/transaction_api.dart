@@ -124,15 +124,26 @@ class TransactionApi {
   /// (e.g. `"evm.1.NATIVE"`, `"solana.mainnet.<mint>"`). The
   /// network is derived from the `"<type>.<chainId>."` prefix; when
   /// [asset] is omitted or bare `"NATIVE"`, the current network's
-  /// native currency is used. Token assets (ERC-20, SPL) return an
-  /// error in v1 — the full token balance is always sendable and
-  /// fees are paid in native currency; call `maxSendable` on the
-  /// native asset to check whether the account can cover the fee.
+  /// native currency is used.
   ///
-  /// Pass [to] on Solana to detect a brand-new recipient — when the
-  /// recipient account doesn't exist yet, the returned [max] is
-  /// reduced so the transfer can fund it to rent-exemption. On EVM
-  /// and Bitcoin [to] is ignored in v1.
+  /// **Native assets** (SOL / ETH / BTC) reserve the network fee
+  /// and (on Solana) the rent-exempt minimums from [max] so the
+  /// returned value is immediately usable as a transfer/swap input.
+  ///
+  /// **Token assets** (ERC-20 / SPL) return [max] equal to the full
+  /// on-chain token balance — fees are paid in the chain's native
+  /// currency and don't reduce the spendable token amount. The
+  /// returned [fee] reports the *native-currency* fee a token
+  /// transfer would cost (different decimals from [max]); use it to
+  /// warn when the user lacks enough native to cover the transfer.
+  ///
+  /// Bitcoin-family chains have no token model; passing a non-native
+  /// [asset] on a Bitcoin network returns an error.
+  ///
+  /// Pass [to] on Solana native transfers to detect a brand-new
+  /// recipient — when the recipient account doesn't exist yet, the
+  /// returned [max] is reduced so the transfer can fund it to
+  /// rent-exemption. On EVM and Bitcoin [to] is ignored in v1.
   Future<MaxSendableResult> maxSendable({
     String? from,
     String? to,
