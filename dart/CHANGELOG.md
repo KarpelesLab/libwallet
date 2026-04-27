@@ -1,3 +1,30 @@
+## 0.4.7
+
+- **Fixed: every EVM `signAndSend` without a prior `validate` call
+  errored with "invalid maxFeePerGas".** The fee-population block
+  (MaxFeePerGas / MaxPriorityFeePerGas / Nonce / Gas) lived only
+  inside `Transaction:validate`, so a Dart caller that built an
+  `UnsignedTransaction` and shipped it straight to `signAndSend`
+  reached signing with empty fee fields. `signAndSend` now runs
+  `validate` as its first step (idempotent — only fills empty
+  fields). Side benefit: closes a latent bug where an
+  `erc20_transfer` built without `validate` would have signed with
+  the recipient address as `to` instead of the token contract.
+- **Fixed: `swap.maxSpendable` for SOL → SPL handed back amounts
+  Jupiter would reject** when the user didn't already hold the
+  output mint. Jupiter / dFlow auto-inject
+  `createAssociatedTokenAccount` for the destination, costing
+  ~2,039,280 lamports of rent paid by the taker. The previous max
+  reserved only the system-account rent, leaving the wallet too
+  tight to cover the new ATA — Jupiter then returned HTTP 400
+  "Failed to get quotes". Now: when the input is native SOL and
+  the user has no ATA for the output mint, the output ATA's
+  rent-exempt minimum is subtracted from the resolved max
+  (probed live via `getTokenAccountsByOwner` +
+  `getMinimumBalanceForRentExemption`, with a canonical fallback).
+  Doesn't apply to non-Solana chains, native→wSOL, or when the
+  user already holds the output mint.
+
 ## 0.4.6
 
 - **New: `swap.maxSpendable(...)`** — returns the same `SwapQuote`
