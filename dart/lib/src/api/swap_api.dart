@@ -113,11 +113,21 @@ class SwapApi {
   ///
   /// For native assets (SOL / ETH) the max is balance minus the
   /// estimated network fee + (Solana) the rent-exempt minimums.
+  ///
+  /// On Solana, when [tokenIn] is native SOL and [tokenOut] is an
+  /// SPL token the user does not yet hold, an extra ~2.04M lamports
+  /// is reserved for the destination Associated Token Account that
+  /// Jupiter / dFlow will create on the fly. Without this reserve
+  /// Jupiter rejects the order with HTTP 400 "Failed to get quotes"
+  /// when the wallet ends up at exactly the system-account rent
+  /// minimum and can't cover the new ATA.
+  ///
   /// For tokens (SPL / ERC-20) the max is the full token balance —
   /// fees are paid in the chain's native currency and don't reduce
   /// the spendable token amount. The frontend should still call
   /// [TransactionApi.maxSendable] on the *native* asset to confirm
-  /// the user has enough native left to cover gas.
+  /// the user has enough native left to cover gas (and on Solana,
+  /// any ATA-creation rent for the output mint).
   ///
   /// All other parameters behave the same as [quote]. Returns the
   /// same error codes as [quote] plus `invalid_request` when the

@@ -9,7 +9,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -257,7 +259,7 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 	// has Quote.AmountIn populated with the resolved value, so the
 	// frontend always knows what the user is actually swapping.
 	if strings.EqualFold(req.AmountIn, "MAX") {
-		amt, err := resolveMaxAmountIn(ctx, n, acct, req.TokenIn.Address)
+		amt, err := resolveMaxAmountIn(ctx, n, acct, req)
 		if err != nil {
 			return nil, err
 		}
@@ -298,12 +300,12 @@ func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 		return nil, err
 	}
 
-	amt, err := resolveMaxAmountIn(ctx, n, acct, req.TokenIn.Address)
+	amt, err := resolveMaxAmountIn(ctx, n, acct, req)
 	if err != nil {
 		return nil, err
 	}
 	if amt == "0" || amt == "" {
-		return nil, newErr(ErrCodeInvalidRequest, "max-spendable amount is zero — balance does not cover the network fee")
+		return nil, newErr(ErrCodeInvalidRequest, "max-spendable amount is zero — balance does not cover network fee + ATA rent")
 	}
 	req.AmountIn = amt
 	return runQuote(ctx, n, acct, req)
@@ -346,15 +348,24 @@ func runQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 }
 
 // resolveMaxAmountIn returns the largest base-unit amount of
-// tokenInAddress the account can spend on n, ready to drop into a
+// req.TokenIn the account can spend on n, ready to drop into a
 // QuoteRequest.AmountIn. Native assets reserve fees + rents; tokens
 // return the full balance because gas is paid in the chain's native
 // currency.
 //
-// tokenInAddress accepts the canonical TokenRef.Address shape:
+// req.TokenIn.Address accepts the canonical TokenRef.Address shape:
 //   - "NATIVE" or empty → native currency
 //   - any other string  → on-chain mint / contract address
-func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, tokenInAddress string) (string, error) {
+//
+// On Solana, when the input is native SOL and the user does not yet
+// hold the output mint, an extra reservation is subtracted to cover
+// the rent-exempt minimum for the new Associated Token Account that
+// Jupiter / dFlow will inject into the swap transaction. Without
+// this Jupiter responds with HTTP 400 "Failed to get quotes" when
+// the wallet's post-swap balance lands at the system-account rent
+// minimum but lacks the ~2.04M lamports for an SPL ATA.
+func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (string, error) {
+	tokenInAddress := req.TokenIn.Address
 	asset := n.Type + "." + n.ChainId + ".NATIVE"
 	if tokenInAddress != "" && !strings.EqualFold(tokenInAddress, "NATIVE") {
 		asset = n.Type + "." + n.ChainId + "." + tokenInAddress
@@ -366,7 +377,93 @@ func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Ac
 	if res.Max == nil {
 		return "0", nil
 	}
-	return res.Max.Value().String(), nil
+	maxV := new(big.Int).Set(res.Max.Value())
+
+	if extra := solanaOutputAtaReservation(ctx, n, acct, req); extra > 0 {
+		ataR := new(big.Int).SetUint64(extra)
+		if maxV.Cmp(ataR) > 0 {
+			maxV.Sub(maxV, ataR)
+		} else {
+			maxV.SetInt64(0)
+		}
+	}
+
+	return maxV.String(), nil
+}
+
+// solanaOutputAtaReservation returns the extra lamports that need to
+// be held back on a native-SOL → SPL swap when the user has no ATA
+// for the output mint yet. Returns 0 when:
+//
+//   - the chain isn't Solana, or
+//   - the input isn't native SOL (an SPL→SPL swap consumes SOL for
+//     ATA creation but it doesn't come out of the input amount —
+//     surfacing that needs a different mechanism), or
+//   - the output is itself native SOL / wSOL, or
+//   - the user already has an ATA for the output mint.
+//
+// Errors from the RPC probes degrade to "no reservation" so a slow
+// upstream doesn't fail the MAX path; in the worst case the upstream
+// will still reject the actual swap and the user retries with a
+// smaller amount. The fallback rent value (2_039_280) matches the
+// canonical SPL token-account rent and is used when the live
+// getMinimumBalanceForRentExemption call fails.
+func solanaOutputAtaReservation(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) uint64 {
+	if n.Type != "solana" {
+		return 0
+	}
+	if !isNativeTokenAddress(req.TokenIn.Address) {
+		return 0
+	}
+	outMint := solanaNativeMintOrAddr(req.TokenOut.Address)
+	if outMint == WrappedSOLMint {
+		return 0
+	}
+	has, err := solanaHasTokenAccount(ctx, n, acct.GetAddress(), outMint)
+	if err != nil {
+		// Conservative on probe failure: assume no ATA so we keep
+		// the user safe rather than hand them a too-aggressive max.
+		has = false
+	}
+	if has {
+		return 0
+	}
+	rent, err := wlttx.SolanaRentExemptMinimum(ctx, n, 165) // 165 = SPL token-account size
+	if err != nil || rent == 0 {
+		return 2_039_280
+	}
+	return rent
+}
+
+// solanaHasTokenAccount returns true when owner already has at least
+// one token account for the given mint. Uses getTokenAccountsByOwner
+// filtered by mint — a single-shot RPC call.
+func solanaHasTokenAccount(ctx context.Context, n *wltnet.Network, owner, mint string) (bool, error) {
+	raw, err := n.DoRPCCtx(ctx, "getTokenAccountsByOwner",
+		owner,
+		map[string]any{"mint": mint},
+		map[string]any{"encoding": "base64"},
+	)
+	if err != nil {
+		return false, err
+	}
+	var resp struct {
+		Value []json.RawMessage `json:"value"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return false, err
+	}
+	return len(resp.Value) > 0, nil
+}
+
+// isNativeTokenAddress reports whether a TokenRef.Address means "the
+// chain's native currency" — empty, "NATIVE", or (on Solana) the
+// wSOL mint.
+func isNativeTokenAddress(addr string) bool {
+	if addr == "" || strings.EqualFold(addr, "NATIVE") {
+		return true
+	}
+	return addr == WrappedSOLMint
 }
 
 // swapExecute is the Swap:execute entry point.
