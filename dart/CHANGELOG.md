@@ -1,3 +1,33 @@
+## 0.4.8
+
+- **New: `accounts.addressFormats(id, network: ...)`** — returns
+  every receive-address shape available for a Bitcoin-family
+  account on the given chain, ordered by display preference
+  (modern first). Use it to power a "show my address as Native
+  SegWit / SegWit-wrapped / Legacy / …" picker, or to display
+  every form a counterparty might use to send funds (the backend
+  already watches every key type, so funds received at any of
+  these forms land in the same balance).
+
+  Per-chain coverage:
+  - bitcoin → Native SegWit (`bc1...`), SegWit-wrapped (`3...`),
+    Legacy (`1...`)
+  - litecoin → Native SegWit (`ltc1...`), SegWit-wrapped (`M...`),
+    Legacy (`L...`)
+  - monacoin → Native SegWit (`mona1...`), Legacy (`M...`)
+  - bitcoin-cash → CashAddr (`bitcoincash:...`)
+  - dogecoin → Standard (`D...`)
+
+  The first entry's `isDefault` is true and matches the address
+  shown in `Account.address` for that chain — so a frontend
+  switching from `Account.address` to the picker sees the same
+  primary address. Pinned by a Go test that asserts byte-equality
+  between `AddressFormats[0].address` and the canonical
+  `bitcoinAddress()` output, so the default entry can never
+  silently drift from the rest of libwallet.
+- **New Dart models `AddressFormat` and `AddressFormatsResult`**,
+  exported from the top-level barrel.
+
 ## 0.4.7
 
 - **Fixed: every EVM `signAndSend` without a prior `validate` call
