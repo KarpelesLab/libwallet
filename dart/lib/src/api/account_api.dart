@@ -183,6 +183,32 @@ class AccountApi {
         'Account/$id:allAddresses', 'POST', params.isNotEmpty ? params : null);
     return AddressListing.fromJson(data as Map<String, dynamic>);
   }
+
+  /// Returns every receive-address format available for this account on
+  /// the given Bitcoin-family network — Native SegWit / SegWit
+  /// (legacy-compatible) / Legacy / etc., ordered by display
+  /// preference (modern first). The first entry's [AddressFormat.address]
+  /// matches what `Account.address` shows when this network is current.
+  ///
+  /// Use cases:
+  /// - "Show my address as Native SegWit / Legacy" picker.
+  /// - Display every shape a counterparty could send funds to so the
+  ///   user knows their wallet sees them all (the backend's
+  ///   modchain_* indexing watches every key type, so funds received
+  ///   at any of these forms land in the same balance).
+  ///
+  /// Errors when the resolved network isn't a Bitcoin-family chain.
+  /// [network] is the network XUID; defaults to the current network.
+  Future<AddressFormatsResult> addressFormats(
+    String id, {
+    String? network,
+  }) async {
+    final params = <String, dynamic>{};
+    if (network != null) params['Network'] = network;
+    final data = await _conn.request(
+        'Account/$id:addressFormats', 'POST', params.isNotEmpty ? params : null);
+    return AddressFormatsResult.fromJson(data as Map<String, dynamic>);
+  }
 }
 
 /// The next available HD address.
@@ -240,6 +266,71 @@ class HdAddress {
         address: json['address'] as String,
         path: json['path'] as String,
         clean: json['clean'] as bool,
+      );
+}
+
+/// One receive-address format available for a Bitcoin-family account
+/// on a specific chain. Returned by [AccountApi.addressFormats].
+class AddressFormat {
+  /// Stable script-type identifier: `"p2wpkh"` (Native SegWit),
+  /// `"p2sh:p2wpkh"` (SegWit-wrapped, base58 address), `"p2pkh"`
+  /// (Legacy). Use this when the UI needs to act on the format
+  /// programmatically.
+  final String kind;
+
+  /// Human-facing label (`"Native SegWit"`, `"Legacy"`, `"CashAddr"`,
+  /// …). Suitable for direct display in a picker.
+  final String name;
+
+  /// The formatted on-chain address string. Already chain-tagged
+  /// (e.g. `"ltc1..."`, `"L..."`, `"bitcoincash:..."`).
+  final String address;
+
+  /// HD derivation suffix the address came from, relative to the
+  /// account root. Currently always `"m/0/0"` (receive chain, index
+  /// 0) — same path that drives `Account.address`.
+  final String path;
+
+  /// True for the format `Account.address` currently uses. Frontend
+  /// can highlight this entry as the wallet's "primary" address.
+  final bool isDefault;
+
+  const AddressFormat({
+    required this.kind,
+    required this.name,
+    required this.address,
+    required this.path,
+    required this.isDefault,
+  });
+
+  factory AddressFormat.fromJson(Map<String, dynamic> json) => AddressFormat(
+        kind: json['kind'] as String,
+        name: json['name'] as String,
+        address: json['address'] as String,
+        path: json['path'] as String,
+        isDefault: (json['default'] as bool?) ?? false,
+      );
+}
+
+/// Result of [AccountApi.addressFormats]: every receive-address shape
+/// the account can render on a specific Bitcoin-family chain.
+class AddressFormatsResult {
+  /// The chain id the formats were rendered for (echoes the resolved
+  /// network so callers don't have to re-look-up).
+  final String chainId;
+
+  /// Available formats, ordered by display preference (modern first).
+  /// The first entry's [AddressFormat.isDefault] is always true.
+  final List<AddressFormat> formats;
+
+  const AddressFormatsResult({required this.chainId, required this.formats});
+
+  factory AddressFormatsResult.fromJson(Map<String, dynamic> json) =>
+      AddressFormatsResult(
+        chainId: json['chainId'] as String,
+        formats: (json['formats'] as List)
+            .map((e) => AddressFormat.fromJson(e as Map<String, dynamic>))
+            .toList(),
       );
 }
 

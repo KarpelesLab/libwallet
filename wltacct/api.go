@@ -27,6 +27,7 @@ func init() {
 	pobj.RegisterStatic("Account:setCurrent", accountSetCurrent)
 	pobj.RegisterStatic("Account:nextAddress", accountNextAddress)
 	pobj.RegisterStatic("Account:allAddresses", accountAllAddresses)
+	pobj.RegisterStatic("Account:addressFormats", accountAddressFormats)
 	pobj.RegisterStatic("Account:xpub", accountXpub)
 }
 

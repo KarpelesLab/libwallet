@@ -152,6 +152,41 @@ func scanChain(net *wltnet.Network, acct *Account, chain int) ([]map[string]any,
 	return out, nil
 }
 
+// accountAddressFormats returns every receive-address format available
+// for the active account on the given Bitcoin-family chain — Native
+// SegWit / SegWit-wrapped / Legacy etc., ordered by display preference.
+// Use it to populate a "show my <kind>" address picker, or to display
+// every shape a counterparty might use to send funds.
+//
+// Parameters (optional):
+//   - Network: network XUID. Defaults to the current network.
+//
+// Errors when the network isn't a Bitcoin-family chain.
+func accountAddressFormats(ctx *apirouter.Context, in struct {
+	Network string `json:"Network"`
+}) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	acct := apirouter.GetObject[Account](ctx, "Account")
+	if acct == nil {
+		return nil, errors.New("account required")
+	}
+	net, err := resolveBtcNetwork(e, in.Network)
+	if err != nil {
+		return nil, err
+	}
+	formats, err := acct.AddressFormats(net.ChainId)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"chainId": net.ChainId,
+		"formats": formats,
+	}, nil
+}
+
 // resolveBtcNetwork returns the Bitcoin-family network specified by the XUID
 // (or the current network if empty). Errors if the network isn't a bitcoin type.
 func resolveBtcNetwork(e wltintf.Env, networkId string) (*wltnet.Network, error) {
