@@ -457,6 +457,18 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		return errors.New("failed to get env")
 	}
 
+	// Auto-validate so callers can hit signAndSend without an
+	// explicit Transaction:validate first. Idempotent — every
+	// Validate write only fires when the field is empty, so an
+	// already-validated tx is a no-op. Without this an EVM tx
+	// built straight in Dart (no validate() call) reaches
+	// encodeTx with empty MaxFeePerGas / Nonce / Gas and fails
+	// with "invalid maxFeePerGas". Also makes erc20_transfer's
+	// To/Data rewrite happen on the signAndSend-only path.
+	if err := tx.Validate(e); err != nil {
+		return err
+	}
+
 	var acct *wltacct.Account
 	var err error
 
