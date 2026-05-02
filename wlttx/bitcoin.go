@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"strconv"
 	"strings"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
@@ -32,12 +33,31 @@ func walletByAccount(e wltintf.Env, a *wltacct.Account) (*wltwallet.Wallet, erro
 // modchain serializes Bitcoin amounts via outscript.BtcAmount, which
 // marshals to a decimal string (e.g. "0.00000001"). The BtcAmount
 // type's UnmarshalJSON handles both decimal and integer forms.
+//
+// Path is the modern form ("m/0/0", "m/1/3"); I is the legacy
+// per-chain index. Newer modchain versions emit Path only; older
+// ones emit I + branch. childIndex() returns whichever is present.
 type bitcoinTxo struct {
-	Txo    string             `json:"txo"` // "<txid>:<vout>"
-	Height int64              `json:"height"`
-	Amt    outscript.BtcAmount `json:"amt"` // satoshi, decoded from "0.00000001" form
-	I      int                `json:"i"`      // child index under the scan path
-	Script string             `json:"script"` // flavor: p2pkh, p2wpkh, etc
+	Txo    string              `json:"txo"` // "<txid>:<vout>"
+	Height int64               `json:"height"`
+	Amt    outscript.BtcAmount `json:"amt"`  // satoshi, decoded from "0.00000001" form
+	Path   string              `json:"path"` // full HD path ("m/0/0"); preferred
+	I      int                 `json:"i"`    // legacy per-chain index; fallback when Path is empty
+	Script string              `json:"script"` // flavor: p2pkh, p2wpkh, etc
+}
+
+// childIndex returns the BIP32 child index this txo's address was
+// derived at. Reads Path's trailing segment when set ("m/0/3" → 3),
+// else falls back to the legacy I field.
+func (t bitcoinTxo) childIndex() int {
+	if t.Path != "" {
+		if i := strings.LastIndexByte(t.Path, '/'); i >= 0 && i+1 < len(t.Path) {
+			if n, err := strconv.Atoi(t.Path[i+1:]); err == nil {
+				return n
+			}
+		}
+	}
+	return t.I
 }
 
 type bitcoinTxoResp struct {
@@ -155,7 +175,7 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 
 	signers := make([]*outscript.BtcTxSign, len(selected))
 	for i, u := range selected {
-		signer, err := newBtcInputSigner(ctx, acct, 0 /*receive*/, u.I, keys)
+		signer, err := newBtcInputSigner(ctx, acct, 0 /*receive*/, u.childIndex(), keys)
 		if err != nil {
 			return fmt.Errorf("new signer for input %d: %w", i, err)
 		}
@@ -226,7 +246,7 @@ func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network
 		for _, t := range txos.Txo {
 			owned[t.Txo] = ownedEntry{
 				chain:  cp.chain,
-				index:  t.I,
+				index:  t.childIndex(),
 				amount: t.Amt,
 				scheme: t.Script,
 			}
