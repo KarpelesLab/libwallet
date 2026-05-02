@@ -67,17 +67,37 @@ class TransactionSimulation {
   final int? unitsConsumed;
 
   // ── Bitcoin ────────────────────────────────────────────────
-  /// Decoded inputs of a bitcoin-family tx. Amounts are NOT populated
-  /// (would require separate RPC lookup of prev txouts).
+  /// Decoded or planned inputs. In a *dry-run* preview (an
+  /// unsigned `bitcoin_transfer` simulated before build) each
+  /// entry has `amount`, `address`, and `path` populated so the
+  /// approval UI can render "spend ltc1...XX (m/0/3) — 0.05 LTC".
+  /// In a *post-build* sim (decoded from `tx.raw`) only `txid` /
+  /// `vout` are present because the prev-utxo lookup costs an
+  /// RPC roundtrip per input.
   final List<BitcoinIO>? bitcoinInputs;
 
-  /// Decoded outputs. `amount` is in satoshi; `script` is the raw
-  /// hex script.
+  /// Planned or decoded outputs. The dry-run preview includes the
+  /// recipient first, then the change output (if any) — both with
+  /// resolved [BitcoinIO.address]. Decode-from-raw sims surface
+  /// the raw hex script in `script` and leave `address` empty.
   final List<BitcoinIO>? bitcoinOutputs;
 
-  /// Fee in satoshi, when available (libwallet knows it from
-  /// tx-construction; external txs don't carry it).
+  /// Fee in satoshi. Always populated in dry-run previews;
+  /// post-build sims only carry it when libwallet itself
+  /// constructed the tx (`tx.fee` is known).
   final int? bitcoinFee;
+
+  /// Change amount returned to the account in a dry-run preview
+  /// (satoshis). Zero when the spend has no change output —
+  /// either the user is sending the exact amount or the change
+  /// fell below the dust threshold and was added to the fee.
+  final int? bitcoinChange;
+
+  /// Estimated transaction vsize in vbytes. Dry-run previews
+  /// compute it from the planned inputs / outputs; post-build
+  /// sims report `len(raw)` so the UI can show "fee X sat × Y
+  /// vbytes = Z sat" without reverse-math.
+  final int? bitcoinVSize;
 
   const TransactionSimulation({
     required this.chain,
@@ -94,6 +114,8 @@ class TransactionSimulation {
     this.bitcoinInputs,
     this.bitcoinOutputs,
     this.bitcoinFee,
+    this.bitcoinChange,
+    this.bitcoinVSize,
   });
 
   factory TransactionSimulation.fromJson(Map<String, dynamic> json) {
@@ -146,6 +168,8 @@ class TransactionSimulation {
       bitcoinInputs: parseIOs(json['bitcoinInputs']),
       bitcoinOutputs: parseIOs(json['bitcoinOutputs']),
       bitcoinFee: (json['bitcoinFee'] as num?)?.toInt(),
+      bitcoinChange: (json['bitcoinChange'] as num?)?.toInt(),
+      bitcoinVSize: (json['bitcoinVSize'] as num?)?.toInt(),
     );
   }
 
@@ -219,9 +243,9 @@ class BitcoinIO {
   /// for non-standard scripts — fall back to [script].
   final String address;
 
-  /// Amount in satoshi (8 decimal places). Only meaningful for outputs
-  /// in v1 — input amounts would require a per-input prev-txo lookup
-  /// which the simulator doesn't perform yet.
+  /// Amount in satoshi. Always populated in dry-run previews;
+  /// post-build sims only fill it for outputs (inputs would need a
+  /// per-prev-txo RPC lookup the decode-only path skips).
   final int amount;
 
   /// Hex-encoded script pubkey. Non-empty for non-standard scripts.
@@ -233,12 +257,18 @@ class BitcoinIO {
   /// Previous output index — inputs only.
   final int vout;
 
+  /// BIP32 derivation path the input belongs to (e.g. `"m/0/3"`,
+  /// `"m/1/0"`). Only populated by the dry-run preview; lets the
+  /// approval UI flag when a change UTXO is being spent.
+  final String path;
+
   const BitcoinIO({
     this.address = '',
     this.amount = 0,
     this.script = '',
     this.txid = '',
     this.vout = 0,
+    this.path = '',
   });
 
   factory BitcoinIO.fromJson(Map<String, dynamic> json) => BitcoinIO(
@@ -247,6 +277,7 @@ class BitcoinIO {
         script: (json['script'] as String?) ?? '',
         txid: (json['txid'] as String?) ?? '',
         vout: (json['vout'] as num?)?.toInt() ?? 0,
+        path: (json['path'] as String?) ?? '',
       );
 }
 

@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/outscript"
@@ -75,10 +76,23 @@ type SimulationResult struct {
 	Logs           []string `json:"logs,omitempty"`
 	UnitsConsumed  uint64   `json:"unitsConsumed,omitempty"`
 
-	// Bitcoin-specific — decoded from Tx.Raw via outscript.BtcTx.
+	// Bitcoin-specific — decoded from Tx.Raw via outscript.BtcTx, or
+	// dry-run from the Transaction shape when Raw is empty.
 	BitcoinInputs  []BitcoinIO `json:"bitcoinInputs,omitempty"`
 	BitcoinOutputs []BitcoinIO `json:"bitcoinOutputs,omitempty"`
 	BitcoinFee     int64       `json:"bitcoinFee,omitempty"` // sats, only when inputs are resolved
+	// BitcoinChange is the change amount (sats) returned to the
+	// account in a dry-run preview. Zero when there's no change
+	// output (sending the exact amount, or change went to dust).
+	// Only populated by the dry-run path; decode-only sims leave it
+	// at zero because they can't separate the change output from
+	// the recipient output without context.
+	BitcoinChange int64 `json:"bitcoinChange,omitempty"`
+	// BitcoinVSize is the estimated tx vsize in vbytes, surfaced so
+	// the approval UI can show "X sat/vB × Y vbytes = fee" without
+	// reverse-engineering the ratio from BitcoinFee alone. Set by
+	// the dry-run path; decode-only sims compute it from len(Raw).
+	BitcoinVSize int `json:"bitcoinVSize,omitempty"`
 }
 
 // Effect is one observable transfer the tx will cause.
@@ -110,6 +124,12 @@ type BitcoinIO struct {
 	Script  string `json:"script,omitempty"`  // hex script if we couldn't map to an address
 	TxID    string `json:"txid,omitempty"`    // inputs only: prev txid (big-endian hex)
 	Vout    uint32 `json:"vout,omitempty"`    // inputs only
+	// Path is the BIP32 derivation the input belongs to (e.g.
+	// "m/0/3"), populated by the dry-run preview so the UI can
+	// flag when a change UTXO is being spent. Empty on decoded-
+	// from-Raw sims because the prev-utxo-to-path mapping isn't
+	// derivable from the wire bytes alone.
+	Path string `json:"path,omitempty"`
 }
 
 // apiSimulateTransaction is the Transaction:simulate endpoint. Accepts
@@ -654,14 +674,31 @@ func simulateSolana(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *T
 
 func simulateBitcoin(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *Transaction) (*SimulationResult, error) {
 	res := &SimulationResult{Chain: "bitcoin"}
+	if tx.To != "" && tx.Amount != nil {
+		res.DecodedMethod = "native_transfer"
+		res.DecodedArgs = map[string]any{"to": tx.To, "amount": tx.Amount.String()}
+	}
+
+	// Dry-run preview path: no Raw bytes built yet, but enough
+	// intent to plan the spend. Run the same coin-selection +
+	// fee math buildBitcoinTx would, but stop before signing —
+	// gives the approval UI a "you would spend these inputs,
+	// pay this fee, get this change back" view without a wallet
+	// commit.
 	if len(tx.Raw) == 0 {
-		// No raw tx yet — just reflect the intent.
-		if tx.Amount != nil {
-			res.DecodedMethod = "native_transfer"
-			res.DecodedArgs = map[string]any{"to": tx.To, "amount": tx.Amount.String()}
+		if tx.Type == "bitcoin_transfer" && tx.From != "" && tx.To != "" && tx.Amount != nil {
+			if err := simulateBitcoinDryRun(e, n, tx, res); err != nil {
+				res.Warnings = append(res.Warnings, Warning{
+					Code:    "bitcoin_dryrun_failed",
+					Message: err.Error(),
+				})
+			}
 		}
 		return res, nil
 	}
+
+	// Decode-from-Raw path: tx is already built (post-validate /
+	// post-buildBitcoinTx), surface its actual on-wire shape.
 	btx := &outscript.BtcTx{}
 	if err := btx.UnmarshalBinary(tx.Raw); err != nil {
 		return res, fmt.Errorf("decode btc tx: %w", err)
@@ -690,10 +727,117 @@ func simulateBitcoin(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *
 	if tx.Fee != nil {
 		res.BitcoinFee = tx.Fee.Value().Int64()
 	}
-	res.DecodedMethod = "native_transfer"
-	if tx.To != "" && tx.Amount != nil {
-		res.DecodedArgs = map[string]any{"to": tx.To, "amount": tx.Amount.String()}
-	}
+	res.BitcoinVSize = len(tx.Raw)
 	return res, nil
+}
+
+// simulateBitcoinDryRun mirrors buildBitcoinTx's selection + fee math
+// without signing, so the approval UI can show what the user is about
+// to commit to before any wallet keys are touched. Reads the same
+// fetchBitcoinAllUTXOs source the build path uses, honours
+// tx.UTXOs (manual selection), and produces resolved input
+// addresses + amounts so the preview reads like "spend ltc1...XX,
+// L...YY → ltc1<recipient> + change to ltc1<change>, fee 1234 sats".
+func simulateBitcoinDryRun(e wltintf.Env, n *wltnet.Network, tx *Transaction, res *SimulationResult) error {
+	wantSats := tx.Amount.Value().Int64()
+	if wantSats <= 0 {
+		return errors.New("invalid amount")
+	}
+
+	// Resolve the spending account from tx.From — we need the
+	// xpub + DerivePublic to render input addresses for the
+	// preview. Validate already set tx.From if it was empty, so
+	// FindAccount has a concrete value to look up.
+	acct, err := wltacct.FindAccount(e, tx.From)
+	if err != nil {
+		return fmt.Errorf("find account %q: %w", tx.From, err)
+	}
+	xpub, err := acct.Xpub()
+	if err != nil {
+		return fmt.Errorf("xpub: %w", err)
+	}
+	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
+	if err != nil {
+		return err
+	}
+	if len(allUTXOs) == 0 {
+		return errors.New("no spendable UTXOs")
+	}
+
+	feeRate, err := bitcoinFeeRate(n)
+	if err != nil {
+		feeRate = 10
+	}
+
+	var selected []bitcoinTxo
+	var totalIn int64
+	if len(tx.UTXOs) > 0 {
+		owned := make(map[string]bitcoinTxo, len(allUTXOs))
+		for _, u := range allUTXOs {
+			owned[u.Txo] = u
+		}
+		for _, ref := range tx.UTXOs {
+			u, ok := owned[ref]
+			if !ok {
+				return fmt.Errorf("UTXO %q not owned", ref)
+			}
+			selected = append(selected, u)
+			totalIn += int64(u.Amt)
+		}
+	} else {
+		selected, totalIn, err = selectUTXOs(allUTXOs, wantSats, feeRate)
+		if err != nil {
+			return err
+		}
+	}
+
+	estVSize := estimateMixedTxVSize(selected, 2)
+	fee := int64(estVSize) * feeRate
+	change := totalIn - wantSats - fee
+	if change < 0 {
+		return fmt.Errorf("insufficient funds: have %d, need %d + fee %d", totalIn, wantSats, fee)
+	}
+
+	tag := outscriptAddressTag(n.ChainId)
+	for _, u := range selected {
+		entry := BitcoinIO{
+			Amount: int64(u.Amt),
+			Path:   u.Path,
+		}
+		if txid, vout, perr := parseTxoRef(u.Txo); perr == nil {
+			entry.TxID = hex.EncodeToString(txid)
+			entry.Vout = vout
+		}
+		if addr, derr := deriveAddressForTxo(acct, u, tag); derr == nil {
+			entry.Address = addr
+		}
+		res.BitcoinInputs = append(res.BitcoinInputs, entry)
+	}
+
+	res.BitcoinOutputs = append(res.BitcoinOutputs, BitcoinIO{
+		Address: tx.To,
+		Amount:  wantSats,
+	})
+	if change > 546 {
+		// Next clean change index — same source the build path uses.
+		changeIndex := 0
+		if changeUtxos, cerr := fetchBitcoinUTXOs(n, xpub, "m/1"); cerr == nil {
+			changeIndex = changeUtxos.LastI + 1
+		}
+		if changeAddr, cerr := acct.ChangeAddress(n.ChainId, changeIndex); cerr == nil {
+			res.BitcoinOutputs = append(res.BitcoinOutputs, BitcoinIO{
+				Address: changeAddr,
+				Amount:  change,
+			})
+			res.BitcoinChange = change
+		}
+	} else {
+		// Change goes to fee (dust threshold) — match buildBitcoinTx.
+		fee += change
+		change = 0
+	}
+	res.BitcoinFee = fee
+	res.BitcoinVSize = estVSize
+	return nil
 }
 
