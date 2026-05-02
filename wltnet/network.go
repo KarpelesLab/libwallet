@@ -694,34 +694,65 @@ func (n *Network) nativeBalance(ctx context.Context, acct AddressProvider) (*wlt
 	}
 }
 
-// bitcoinBalance queries modchain_assets with the account's xpub (preferred)
-// or falls back to a single-address lookup via modchain_lookupTxo. Returns
-// the sum of unspent UTXO amounts as an Amount with 8 decimals (satoshi).
+// bitcoinBalance returns the spendable native balance for a Bitcoin-
+// family account on n. When the account has an xpub it sums the
+// receive-chain (m/0) and change-chain (m/1) balances reported by
+// modchain_lookupTxoBIP32. When only a flat address is available it
+// falls back to modchain_assets on that address.
+//
+// Why not modchain_assets on the xpub: that endpoint returns 0 for
+// some xpubs even when modchain_lookupTxoBIP32 finds spendable UTXOs
+// at the same paths (observed on litecoin with xpub661MyMw…cw —
+// modchain_assets returns balance:0, modchain_lookupTxoBIP32/m-0
+// returns balance:0.1). modchain_lookupTxoBIP32 is the source of
+// truth used by every other libwallet bitcoin path (sign, max-
+// sendable, next-address) — using it here too keeps the views
+// consistent.
 func (n *Network) bitcoinBalance(ctx context.Context, acct AddressProvider) (*wltobj.Amount, error) {
-	var lookupArg string
 	if xp, ok := acct.(XpubProvider); ok {
 		xpub, err := xp.Xpub()
 		if err == nil && xpub != "" {
-			lookupArg = xpub
+			return n.bitcoinXpubBalance(ctx, xpub)
 		}
 	}
-	if lookupArg == "" {
-		// Fall back to single-address scan
-		lookupArg = acct.GetAddress()
-	}
-	if lookupArg == "" {
+	addr := acct.GetAddress()
+	if addr == "" {
 		return nil, errors.New("no address or xpub available")
 	}
+	return n.bitcoinAddressBalance(ctx, addr)
+}
 
-	raw, err := n.DoRPCCtx(ctx, "modchain_assets", lookupArg)
+// bitcoinXpubBalance sums modchain_lookupTxoBIP32(m/0) + (m/1)
+// balances for xpub. Each call returns a `balance` field already
+// expressed in satoshis via outscript.BtcAmount.
+func (n *Network) bitcoinXpubBalance(ctx context.Context, xpub string) (*wltobj.Amount, error) {
+	type bitcoinTxoResp struct {
+		Balance outscript.BtcAmount `json:"balance"`
+	}
+	var total uint64
+	for _, path := range []string{"m/0", "m/1"} {
+		raw, err := n.DoRPCCtx(ctx, "modchain_lookupTxoBIP32", xpub, path, true)
+		if err != nil {
+			return nil, fmt.Errorf("modchain_lookupTxoBIP32 %s: %w", path, err)
+		}
+		var resp bitcoinTxoResp
+		if err := json.Unmarshal(raw, &resp); err != nil {
+			return nil, fmt.Errorf("modchain_lookupTxoBIP32 %s decode: %w", path, err)
+		}
+		total += uint64(resp.Balance)
+	}
+	return wltobj.NewAmountRaw(new(big.Int).SetUint64(total), 8), nil
+}
+
+// bitcoinAddressBalance fetches modchain_assets for a single flat
+// address (used by view-only accounts that have no xpub). Same
+// parsing as the previous xpub path; this keeps view-only accounts
+// working until they grow xpub support.
+func (n *Network) bitcoinAddressBalance(ctx context.Context, address string) (*wltobj.Amount, error) {
+	raw, err := n.DoRPCCtx(ctx, "modchain_assets", address)
 	if err != nil {
 		return nil, err
 	}
-
-	// modchain_assets serializes `balance` via outscript.BtcAmount, which
-	// always marshals as a decimal-formatted number (e.g. "0.00000000").
-	// Use BtcAmount directly — its UnmarshalJSON handles both decimal and
-	// integer forms.
 	var resp struct {
 		Assets []struct {
 			Asset    string              `json:"asset"`
