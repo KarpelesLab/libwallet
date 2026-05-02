@@ -1,3 +1,23 @@
+## 0.4.9
+
+- **Fixed: Bitcoin-family `Asset:list` reported zero balance even
+  when the xpub held funds.** `bitcoinBalance` was calling
+  `modchain_assets` with the account xpub. That endpoint can
+  return `balance:0 / txo:null` for some xpubs even when
+  spendable UTXOs exist at the standard `m/0` / `m/1` paths
+  (observed on Litecoin: a wallet with 0.1 LTC at `m/0/0`
+  surfaced as 0 in `Asset:list` while every other libwallet
+  bitcoin path — sign, max-sendable, next-address — saw the
+  funds correctly because they all use `modchain_lookupTxoBIP32`).
+
+  Switched xpub balance queries to sum
+  `modchain_lookupTxoBIP32(m/0)` + `(m/1)`, which is now the
+  single source of truth for bitcoin-family balance / signing /
+  max across the whole library. Plain-address fallback (used by
+  view-only accounts with no xpub) keeps `modchain_assets` since
+  that path works for single addresses. Amounts stay in satoshis
+  via `outscript.BtcAmount`, so no float drift.
+
 ## 0.4.8
 
 - **New: `accounts.addressFormats(id, network: ...)`** — returns
