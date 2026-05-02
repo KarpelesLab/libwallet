@@ -69,6 +69,15 @@ class UnsignedTransaction {
   /// [computeUnitPrice] is set, that wins over [priorityLevel].
   final String? priorityLevel;
 
+  /// Bitcoin-family only — manual coin selection. When set on a
+  /// `bitcoin_transfer` tx, the build path skips greedy auto-
+  /// selection and uses exactly these `"<txid>:<vout>"` UTXOs as
+  /// inputs (each verified against the account's current set;
+  /// foreign or stale refs error out cleanly). Source the strings
+  /// from `accounts.listUTXOs(...)`. Empty / null preserves the
+  /// auto-selection behaviour.
+  final List<String>? utxos;
+
   /// Signing keys — required only for `signAndSend`, ignored by `validate`.
   final List<SigningKey>? keys;
 
@@ -90,6 +99,7 @@ class UnsignedTransaction {
     this.computeUnitLimit,
     this.computeUnitPrice,
     this.priorityLevel,
+    this.utxos,
     this.keys,
   });
 
@@ -144,6 +154,7 @@ class UnsignedTransaction {
         computeUnitLimit: computeUnitLimit,
         computeUnitPrice: computeUnitPrice,
         priorityLevel: priorityLevel,
+        utxos: utxos,
         keys: k,
       );
 
@@ -166,6 +177,7 @@ class UnsignedTransaction {
     if (computeUnitLimit != null) m['computeUnitLimit'] = computeUnitLimit;
     if (computeUnitPrice != null) m['computeUnitPrice'] = computeUnitPrice;
     if (priorityLevel != null) m['priorityLevel'] = priorityLevel;
+    if (utxos != null && utxos!.isNotEmpty) m['utxos'] = utxos;
     if (keys != null) m['Keys'] = keys!.map((k) => k.toJson()).toList();
     return m;
   }

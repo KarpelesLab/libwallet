@@ -209,6 +209,27 @@ class AccountApi {
         'Account/$id:addressFormats', 'POST', params.isNotEmpty ? params : null);
     return AddressFormatsResult.fromJson(data as Map<String, dynamic>);
   }
+
+  /// Lists every spendable UTXO the Bitcoin-family account currently
+  /// holds — across the receive (`m/0`) and change (`m/1`) chains —
+  /// ordered largest amount first. Powers an "advanced coin
+  /// selection" picker: show the user every output (with its source
+  /// address, amount, script type, and HD path) and let them choose
+  /// which to spend by passing the selected `txo` strings back via
+  /// `TransactionApi.signAndSend` in a transaction's `utxos` field.
+  ///
+  /// Errors when the resolved network isn't a Bitcoin-family chain.
+  /// [network] is the network XUID; defaults to the current network.
+  Future<BitcoinUTXOList> listUTXOs(
+    String id, {
+    String? network,
+  }) async {
+    final params = <String, dynamic>{};
+    if (network != null) params['Network'] = network;
+    final data = await _conn.request(
+        'Account/$id:listUTXOs', 'POST', params.isNotEmpty ? params : null);
+    return BitcoinUTXOList.fromJson(data as Map<String, dynamic>);
+  }
 }
 
 /// The next available HD address.
@@ -331,6 +352,72 @@ class AddressFormatsResult {
         formats: (json['formats'] as List)
             .map((e) => AddressFormat.fromJson(e as Map<String, dynamic>))
             .toList(),
+      );
+}
+
+/// One unspent output entry returned by [AccountApi.listUTXOs].
+class BitcoinUTXO {
+  /// On-chain reference, `"<txid>:<vout>"`. Pass this back in a
+  /// transaction's `utxos` field to spend this specific output.
+  final String txo;
+
+  /// BIP32 derivation path under the account xpub
+  /// (e.g. `"m/0/3"` receive #3, `"m/1/0"` change #0).
+  final String path;
+
+  /// Output value in the chain's smallest unit (satoshis), as a
+  /// decimal string for big-int safety.
+  final String amount;
+
+  /// Locking-script type: `"p2wpkh"` (Native SegWit), `"p2pkh"`
+  /// (Legacy), `"p2sh:p2wpkh"` (SegWit-wrapped).
+  final String script;
+
+  /// Address the output locks to (e.g. `"ltc1..."`, `"L..."`,
+  /// `"bitcoincash:..."`). Empty when the path/script combination
+  /// could not be rendered.
+  final String address;
+
+  /// Block height the output landed in. Zero when still unconfirmed.
+  final int height;
+
+  const BitcoinUTXO({
+    required this.txo,
+    required this.path,
+    required this.amount,
+    required this.script,
+    required this.address,
+    required this.height,
+  });
+
+  factory BitcoinUTXO.fromJson(Map<String, dynamic> json) => BitcoinUTXO(
+        txo: (json['txo'] as String?) ?? '',
+        path: (json['path'] as String?) ?? '',
+        amount: (json['amount'] as String?) ?? '0',
+        script: (json['script'] as String?) ?? '',
+        address: (json['address'] as String?) ?? '',
+        height: (json['height'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// The Account:listUTXOs response shape.
+class BitcoinUTXOList {
+  /// Echoes the resolved network's chain id (e.g. `"litecoin"`,
+  /// `"bitcoin"`).
+  final String chainId;
+
+  /// Available UTXOs sorted largest-amount-first.
+  final List<BitcoinUTXO> utxos;
+
+  const BitcoinUTXOList({required this.chainId, required this.utxos});
+
+  factory BitcoinUTXOList.fromJson(Map<String, dynamic> json) =>
+      BitcoinUTXOList(
+        chainId: (json['chainId'] as String?) ?? '',
+        utxos: (json['utxos'] as List?)
+                ?.map((e) => BitcoinUTXO.fromJson(e as Map<String, dynamic>))
+                .toList() ??
+            const [],
       );
 }
 

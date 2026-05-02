@@ -140,7 +140,9 @@ export 'src/api/account_api.dart'
         HdAddress,
         AddressListing,
         AddressFormat,
-        AddressFormatsResult;
+        AddressFormatsResult,
+        BitcoinUTXO,
+        BitcoinUTXOList;
 export 'src/api/asset_api.dart' show AssetApi;
 export 'src/api/nft_api.dart' show NftApi;
 export 'src/api/transaction_api.dart' show TransactionApi;
