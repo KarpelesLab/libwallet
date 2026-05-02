@@ -10,6 +10,7 @@ import (
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltwallet"
 	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
@@ -152,18 +153,41 @@ func FindAccount(e wltintf.Env, id string) (*Account, error) {
 		}
 	}
 
-	acct, err := psql.Get[Account](e, map[string]any{"Address": id})
-	if err != nil {
-		return nil, fs.ErrNotExist
+	if acct, err := psql.Get[Account](e, map[string]any{"Address": id}); err == nil {
+		// The address-lookup path used to skip check(), which left
+		// acct.Curve empty for pre-curve-tracking records. That in
+		// turn short-circuited EnsureEd25519PubkeyOnAccount's curve
+		// gate and meant the Ed25519 pubkey self-heal never fired.
+		// Also refreshes Address for the current network so stale
+		// rows don't linger after a pubkey repair.
+		_ = acct.check(e)
+		return acct, nil
 	}
-	// The address-lookup path used to skip check(), which left
-	// acct.Curve empty for pre-curve-tracking records. That in
-	// turn short-circuited EnsureEd25519PubkeyOnAccount's curve
-	// gate and meant the Ed25519 pubkey self-heal never fired.
-	// Also refreshes Address for the current network so stale
-	// rows don't linger after a pubkey repair.
-	_ = acct.check(e)
-	return acct, nil
+
+	// Network-derived fallback: the Address column on disk holds the
+	// account's *creation-time* address (typically the ETH address),
+	// but check() rewrites Account.Address in memory whenever the
+	// active network changes — so callers often hold a non-EVM form
+	// (e.g. "ltc1...", "L...", "bc1...") that the direct lookup
+	// above can't find. Walk every account, derive its address for
+	// the current network, and match. Bounded by accounts-per-wallet
+	// (small N) and only fires on the slow path (DB lookup miss).
+	if net, nerr := wltnet.CurrentNetwork(e); nerr == nil {
+		all, lerr := psql.Fetch[Account](e, nil)
+		if lerr == nil {
+			for _, candidate := range all {
+				if uerr := candidate.UpdateAddressForNetwork(net); uerr != nil {
+					continue
+				}
+				if candidate.Address == id {
+					_ = candidate.check(e)
+					return candidate, nil
+				}
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("account %q: %w", id, fs.ErrNotExist)
 }
 
 func AccountById(e wltintf.Env, id *xuid.XUID) (*Account, error) {
