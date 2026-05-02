@@ -1,3 +1,59 @@
+## 0.4.10
+
+- **Fixed: bitcoin-family `signAndSend` could only spend receive-
+  chain UTXOs.** Coin selection used to fetch only `m/0` —
+  anything that landed on a change address (`m/1/i`) showed up in
+  the balance but couldn't be spent until it happened to land on
+  a future receive address. `buildBitcoinTx` now scans both
+  chains via a single `modchain_assets` call and signs each
+  input with the right key derived from its own path
+  (`m/0/*` vs `m/1/*`).
+- **Fixed: bitcoin-family fee under-payment with mixed-shape
+  inputs.** Per-input vsize is now read from the actual script
+  type (`p2wpkh` ≈ 68 vb, `p2sh:p2wpkh` ≈ 91, `p2pkh` ≈ 148)
+  instead of assuming every input is `p2wpkh`. A wallet that
+  received funds at a legacy address mixed with segwit no
+  longer broadcasts an under-paid tx that stalls in the mempool.
+- **`account.findAccount` fallback by network-derived address.**
+  Frontends often hand back the displayed `Account.address`
+  (which is the current network's derived form, e.g. `ltc1...`)
+  as `from`, but the DB column still holds the creation-time
+  address. `FindAccount` now derives each candidate's address
+  for the current network and matches — fixes
+  `LibwalletException(404): file does not exist` on
+  `Transaction:maxSendable` (and any other `from`-resolving
+  endpoint) when called from a non-EVM chain.
+- **Fixed: bitcoin-family `Asset:list` (cont.)** — reverted the
+  0.4.9 lookupTxoBIP32 sum back to `modchain_assets` now that
+  the backend merges receive + change correctly. Single RPC,
+  same source of truth as the rest of the bitcoin path.
+- **`txo.path` accepted alongside legacy `i`/`branch`.** Newer
+  modchain emits `path: "m/0/0"` only; the wallet now reads the
+  trailing segment for the BIP32 child index and falls back to
+  the legacy `i` field when present.
+- **New: `accounts.listUTXOs(id, network: ...)`** — returns
+  every spendable UTXO the bitcoin-family account holds across
+  receive + change, ordered largest amount first. Each entry
+  carries `txo`, `path`, `amount`, `script`, `address`, and
+  `height`. Pair with the new `utxos` field on
+  `UnsignedTransaction` to power a manual coin-selection
+  picker.
+- **New: `UnsignedTransaction.utxos: List<String>?`** — when set
+  on a `bitcoin_transfer`, libwallet skips greedy auto-selection
+  and uses exactly the supplied `"<txid>:<vout>"` entries
+  (each verified to be owned). Empty / null preserves the
+  auto-selection behaviour.
+- **`transactions.simulate(...)` for bitcoin: dry-run preview.**
+  When the tx hasn't been built yet (no `raw`), the simulator
+  runs the same coin-selection + fee math `signAndSend` would,
+  stops short of signing, and returns the planned shape:
+  inputs with resolved `amount` + `address` + `path`,
+  recipient + change outputs with addresses, fee in sats, and
+  the new `bitcoinChange` and `bitcoinVSize` fields. Honours
+  the manual `utxos` selection so a manually-picked spend
+  previews exactly what it'll send. Decode-from-`raw` path
+  unchanged.
+
 ## 0.4.9
 
 - **Fixed: Bitcoin-family `Asset:list` reported zero balance even
