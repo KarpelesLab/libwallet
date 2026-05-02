@@ -60,6 +60,44 @@ func (t bitcoinTxo) childIndex() int {
 	return t.I
 }
 
+// chainFromPath returns 0 for m/0/* (receive), 1 for m/1/* (change).
+// Defaults to 0 when Path is missing or malformed (the legacy receive-
+// only behaviour).
+func (t bitcoinTxo) chainFromPath() int {
+	if t.Path == "" {
+		return 0
+	}
+	// Expected shape "m/<chain>/<index>"; split on '/' and read index 1.
+	parts := strings.Split(t.Path, "/")
+	if len(parts) < 2 {
+		return 0
+	}
+	c, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0
+	}
+	return c
+}
+
+// vsize returns the contribution of this input to the transaction's
+// vsize, in vbytes. p2wpkh witness inputs are tiny (~68); legacy
+// p2pkh inputs are ~148; p2sh-p2wpkh sits in the middle (~91).
+// Estimating from the actual input script type means a wallet with
+// mixed shapes (a sender used your legacy address) doesn't under-pay.
+func (t bitcoinTxo) vsize() int {
+	switch t.Script {
+	case "p2wpkh", "p2wsh":
+		return 68
+	case "p2sh:p2wpkh", "p2sh-p2wpkh":
+		return 91
+	case "p2pkh", "p2pukh":
+		return 148
+	}
+	// Unknown script: assume the most expensive form so the broadcast
+	// is over-paid rather than under-paid.
+	return 148
+}
+
 type bitcoinTxoResp struct {
 	Txo     []bitcoinTxo        `json:"txo"`
 	Balance outscript.BtcAmount `json:"balance"`
@@ -81,12 +119,15 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 		return fmt.Errorf("xpub: %w", err)
 	}
 
-	// 1. Fetch unspent UTXOs from the receive chain
-	utxos, err := fetchBitcoinUTXOs(n, xpub, "m/0")
+	// 1. Fetch every spendable UTXO across both the receive (m/0)
+	//    and change (m/1) chains in one call. Older code only
+	//    scanned m/0 — change UTXOs were unspendable until they
+	//    happened to land on a future receive address.
+	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
 	if err != nil {
 		return err
 	}
-	if len(utxos.Txo) == 0 {
+	if len(allUTXOs) == 0 {
 		return errors.New("no spendable UTXOs")
 	}
 
@@ -105,9 +146,30 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 		feeRateSatPerVB = 10 // conservative fallback
 	}
 
-	selected, totalIn, err := selectUTXOs(utxos.Txo, wantSats, feeRateSatPerVB)
-	if err != nil {
-		return err
+	var selected []bitcoinTxo
+	var totalIn int64
+	if len(tx.UTXOs) > 0 {
+		// Manual selection: caller pinned exact (txid:vout) entries.
+		// Verify each is owned and reject the request otherwise so a
+		// typo can't accidentally short-pay or include a foreign
+		// output we can't sign.
+		owned := make(map[string]bitcoinTxo, len(allUTXOs))
+		for _, u := range allUTXOs {
+			owned[u.Txo] = u
+		}
+		for _, ref := range tx.UTXOs {
+			u, ok := owned[ref]
+			if !ok {
+				return fmt.Errorf("UTXO %q is not owned by this account", ref)
+			}
+			selected = append(selected, u)
+			totalIn += int64(u.Amt)
+		}
+	} else {
+		selected, totalIn, err = selectUTXOs(allUTXOs, wantSats, feeRateSatPerVB)
+		if err != nil {
+			return err
+		}
 	}
 
 	// 4. Derive next change address (m/1/{lastChangeI+1})
@@ -147,8 +209,11 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 		Script: recipientOut.Bytes(),
 	})
 
-	// Compute size-based fee, then derive change
-	estVSize := estimateTxVSize(len(selected), 2) // send + change
+	// Compute size-based fee from the actual selected inputs, then
+	// derive change. Per-input vsize is needed when selected mixes
+	// segwit and legacy shapes — otherwise a single legacy input
+	// makes us under-pay.
+	estVSize := estimateMixedTxVSize(selected, 2) // send + change
 	fee := int64(estVSize) * feeRateSatPerVB
 	change := totalIn - wantSats - fee
 	if change < 0 {
@@ -175,7 +240,11 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 
 	signers := make([]*outscript.BtcTxSign, len(selected))
 	for i, u := range selected {
-		signer, err := newBtcInputSigner(ctx, acct, 0 /*receive*/, u.childIndex(), keys)
+		// Chain comes from the UTXO's own path (m/0/* receive,
+		// m/1/* change) — earlier code hardcoded chain=0 because
+		// it only ever fetched m/0; with m/1 in the mix that
+		// would derive the wrong key.
+		signer, err := newBtcInputSigner(ctx, acct, u.chainFromPath(), u.childIndex(), keys)
 		if err != nil {
 			return fmt.Errorf("new signer for input %d: %w", i, err)
 		}
@@ -235,21 +304,16 @@ func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network
 		scheme       string
 	}
 	owned := make(map[string]ownedEntry)
-	for _, cp := range []struct {
-		chain int
-		path  string
-	}{{0, "m/0"}, {1, "m/1"}} {
-		txos, err := fetchBitcoinUTXOs(n, xpub, cp.path)
-		if err != nil {
-			return nil, fmt.Errorf("scan %s: %w", cp.path, err)
-		}
-		for _, t := range txos.Txo {
-			owned[t.Txo] = ownedEntry{
-				chain:  cp.chain,
-				index:  t.childIndex(),
-				amount: t.Amt,
-				scheme: t.Script,
-			}
+	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
+	if err != nil {
+		return nil, fmt.Errorf("scan utxos: %w", err)
+	}
+	for _, t := range allUTXOs {
+		owned[t.Txo] = ownedEntry{
+			chain:  t.chainFromPath(),
+			index:  t.childIndex(),
+			amount: t.Amt,
+			scheme: t.Script,
 		}
 	}
 
@@ -328,6 +392,39 @@ func fetchBitcoinUTXOs(n *wltnet.Network, xpub, path string) (*bitcoinTxoResp, e
 	return &resp, nil
 }
 
+// fetchBitcoinAllUTXOs returns every spendable UTXO under xpub across
+// both the receive (m/0) and change (m/1) chains in a single
+// modchain_assets call. Each txo's Path identifies which chain +
+// index it came from; consumers use childIndex() and chainFromPath()
+// to derive the right signing key.
+//
+// Replaces the old per-chain modchain_lookupTxoBIP32 loop for the
+// hot input-discovery path — the bug that motivated this was that
+// the old buildBitcoinTx only fetched m/0, so any UTXO that landed
+// on a change address (m/1/i) was invisible to coin selection and
+// the user couldn't spend their own change.
+func fetchBitcoinAllUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) {
+	raw, err := n.DoRPC("modchain_assets", xpub)
+	if err != nil {
+		return nil, fmt.Errorf("modchain_assets: %w", err)
+	}
+	var resp struct {
+		Assets []struct {
+			Asset string       `json:"asset"`
+			Txo   []bitcoinTxo `json:"txo"`
+		} `json:"assets"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return nil, fmt.Errorf("parse modchain_assets: %w", err)
+	}
+	for _, a := range resp.Assets {
+		if a.Asset == "NATIVE" {
+			return a.Txo, nil
+		}
+	}
+	return nil, nil
+}
+
 func bitcoinFeeRate(n *wltnet.Network) (int64, error) {
 	raw, err := n.DoRPC("estimatesmartfee", 6)
 	if err != nil {
@@ -350,6 +447,11 @@ func bitcoinFeeRate(n *wltnet.Network) (int64, error) {
 // selectUTXOs does naive greedy coin selection. Returns selected UTXOs and
 // their total input amount. Does not fee-bump iteratively; caller recomputes
 // fee based on selected input count.
+//
+// vsize math is per-input via bitcoinTxo.vsize() — a wallet holding a
+// mix of segwit and legacy inputs gets a fee that actually covers the
+// final tx, instead of under-paying because we assumed every input is
+// p2wpkh (~68 vb) when one is p2pkh (~148 vb).
 func selectUTXOs(all []bitcoinTxo, wantSats, feeRatePerVB int64) ([]bitcoinTxo, int64, error) {
 	// Sort largest first (mutate a copy)
 	utxos := make([]bitcoinTxo, len(all))
@@ -366,7 +468,7 @@ func selectUTXOs(all []bitcoinTxo, wantSats, feeRatePerVB int64) ([]bitcoinTxo, 
 	for _, u := range utxos {
 		out = append(out, u)
 		total += int64(u.Amt)
-		estFee := int64(estimateTxVSize(len(out), 2)) * feeRatePerVB
+		estFee := int64(estimateMixedTxVSize(out, 2)) * feeRatePerVB
 		if total >= wantSats+estFee {
 			return out, total, nil
 		}
@@ -374,11 +476,26 @@ func selectUTXOs(all []bitcoinTxo, wantSats, feeRatePerVB int64) ([]bitcoinTxo, 
 	return nil, 0, fmt.Errorf("insufficient funds: have %d sats across %d utxos", total, len(out))
 }
 
-// estimateTxVSize returns a rough vsize estimate for a p2wpkh transaction
-// with the given number of inputs and outputs. Conservative.
+// estimateTxVSize returns a rough vsize estimate assuming all inputs
+// are p2wpkh. Kept for callers that don't have the actual script
+// types yet (e.g. maxsendable's pre-selection estimate); prefer
+// estimateMixedTxVSize once you've selected concrete UTXOs.
 func estimateTxVSize(ins, outs int) int {
 	// p2wpkh segwit: input ~68 vbytes, output ~31 vbytes, overhead ~11
 	return 11 + ins*68 + outs*31
+}
+
+// estimateMixedTxVSize returns the vsize of a transaction whose
+// inputs are the given UTXOs (each contributing per its script type)
+// plus `outs` p2wpkh outputs. Use this in the final fee math after
+// coin selection so the broadcast pays the correct rate even when
+// inputs are a mix of segwit and legacy.
+func estimateMixedTxVSize(ins []bitcoinTxo, outs int) int {
+	total := 11 + outs*31
+	for _, u := range ins {
+		total += u.vsize()
+	}
+	return total
 }
 
 func parseTxoRef(ref string) ([]byte, uint32, error) {

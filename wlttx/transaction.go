@@ -52,6 +52,13 @@ type Transaction struct {
 	ComputeUnitLimit uint32 `json:"computeUnitLimit,omitempty" sql:"-"` // SetComputeUnitLimit instruction argument
 	ComputeUnitPrice uint64 `json:"computeUnitPrice,omitempty" sql:"-"` // microlamports per CU; 0 = use PriorityLevel
 	PriorityLevel    string `json:"priorityLevel,omitempty" sql:"-"`    // "none" | "low" | "medium" | "high"
+	// ── Bitcoin manual coin selection (opt-in) ──
+	// When non-empty on a bitcoin_transfer tx, buildBitcoinTx skips
+	// greedy auto-selection and uses exactly these "<txid>:<vout>"
+	// entries as inputs. Each must be present in the account's
+	// current UTXO set or the build fails. Empty (the default) keeps
+	// the auto-selection behaviour.
+	UTXOs []string `json:"utxos,omitempty" sql:"-"`
 	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
 	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
 	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`

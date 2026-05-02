@@ -53,3 +53,66 @@ func TestBitcoinTxo_ChildIndex(t *testing.T) {
 		})
 	}
 }
+
+func TestBitcoinTxo_ChainFromPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want int
+	}{
+		{"m/0/0", 0},
+		{"m/0/12", 0},
+		{"m/1/0", 1},
+		{"m/1/9", 1},
+		{"", 0},          // missing → default receive
+		{"garbage", 0},   // malformed → default receive
+		{"m/0", 0},       // truncated → default receive (no chain segment)
+	}
+	for _, c := range cases {
+		t.Run(c.path, func(t *testing.T) {
+			x := bitcoinTxo{Path: c.path}
+			if got := x.chainFromPath(); got != c.want {
+				t.Errorf("chainFromPath() = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestBitcoinTxo_Vsize(t *testing.T) {
+	// Per-input vsize must reflect the actual script type — a single
+	// p2pkh input mixed in with p2wpkh would otherwise blow our fee
+	// estimate by ~80 vbytes per input.
+	cases := []struct {
+		script string
+		want   int
+	}{
+		{"p2wpkh", 68},
+		{"p2wsh", 68},
+		{"p2sh:p2wpkh", 91},
+		{"p2sh-p2wpkh", 91},
+		{"p2pkh", 148},
+		{"p2pukh", 148},
+		{"unknown-script-shape", 148}, // pessimistic fallback
+		{"", 148},
+	}
+	for _, c := range cases {
+		t.Run(c.script, func(t *testing.T) {
+			x := bitcoinTxo{Script: c.script}
+			if got := x.vsize(); got != c.want {
+				t.Errorf("vsize(%q) = %d, want %d", c.script, got, c.want)
+			}
+		})
+	}
+}
+
+func TestEstimateMixedTxVSize(t *testing.T) {
+	// 11 overhead + 2 outputs × 31 = 73 base
+	// + p2wpkh 68 + p2pkh 148 = 216 inputs = 289 total
+	ins := []bitcoinTxo{{Script: "p2wpkh"}, {Script: "p2pkh"}}
+	if got := estimateMixedTxVSize(ins, 2); got != 289 {
+		t.Errorf("estimateMixedTxVSize(mixed, 2 out) = %d, want 289", got)
+	}
+	// Empty inputs (degenerate) — base only.
+	if got := estimateMixedTxVSize(nil, 2); got != 73 {
+		t.Errorf("estimateMixedTxVSize(no inputs, 2 out) = %d, want 73", got)
+	}
+}
