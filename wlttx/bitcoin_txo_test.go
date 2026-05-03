@@ -3,6 +3,8 @@ package wlttx
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/KarpelesLab/secp256k1"
 )
 
 // TestBitcoinTxo_ChildIndex pins both response shapes — modchain
@@ -102,6 +104,42 @@ func TestBitcoinTxo_Vsize(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBtcInputSigner_PublicSupportsCompressedExport pins the
+// Public() return type to a concrete shape that implements
+// SerializeCompressed(). outscript's pubkey:comp generator (used
+// when building p2pkh / p2sh:p2wpkh witnesses) requires this
+// interface; *ecdsa.PublicKey doesn't satisfy it and signing
+// non-p2wpkh inputs fired "pubkey of type *ecdsa.PublicKey does
+// not support pubkey:comp export" before this fix. A future
+// refactor that flips the type back gets caught here.
+func TestBtcInputSigner_PublicSupportsCompressedExport(t *testing.T) {
+	priv, err := secp256k1Generate(t)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	s := &btcInputSigner{childPub: priv.PubKey()}
+	pub := s.Public()
+	if _, ok := pub.(interface{ SerializeCompressed() []byte }); !ok {
+		t.Fatalf("Public() returned %T which does not satisfy interface{SerializeCompressed() []byte}", pub)
+	}
+}
+
+// secp256k1Generate isolates the import so the rest of this test
+// file doesn't pull in the curve package needlessly.
+func secp256k1Generate(t *testing.T) (*secp256k1Priv, error) {
+	t.Helper()
+	return secp256k1NewPrivateKey()
+}
+
+// secp256k1Priv / secp256k1NewPrivateKey are tiny aliases over
+// the actual secp256k1 package to keep the test imports limited
+// to what's needed.
+type secp256k1Priv = secp256k1.PrivateKey
+
+func secp256k1NewPrivateKey() (*secp256k1Priv, error) {
+	return secp256k1.GeneratePrivateKey()
 }
 
 func TestEstimateMixedTxVSize(t *testing.T) {

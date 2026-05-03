@@ -2,7 +2,6 @@ package wlttx
 
 import (
 	"crypto"
-	"crypto/ecdsa"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -581,12 +580,16 @@ func newBtcInputSigner(ctx *SignContext, acct *wltacct.Account, chain, index int
 }
 
 func (s *btcInputSigner) Public() crypto.PublicKey {
-	// Return an *ecdsa.PublicKey (what outscript expects to generate scripts)
-	return &ecdsa.PublicKey{
-		Curve: secp256k1.S256(),
-		X:     s.childPub.X(),
-		Y:     s.childPub.Y(),
-	}
+	// Return *secp256k1.PublicKey directly — outscript's
+	// pubkey:comp generator (used to embed the spending pubkey in
+	// p2pkh / p2sh:p2wpkh / p2wpkh witnesses, btctx.go:143/188/268)
+	// requires a type that implements SerializeCompressed().
+	// *ecdsa.PublicKey has X/Y coordinates but no SerializeCompressed,
+	// so signing any non-p2wpkh input with it fired
+	// "pubkey of type *ecdsa.PublicKey does not support pubkey:comp
+	// export" — typically hit on the first p2pkh / p2sh-wrapped
+	// input the wallet ever spent.
+	return s.childPub
 }
 
 func (s *btcInputSigner) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
