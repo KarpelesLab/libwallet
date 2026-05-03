@@ -1,3 +1,28 @@
+## 0.4.12
+
+- **Fixed: bitcoin-family `signAndSend` errored with `-25
+  bad-txns-inputs-missingorspent`** in two distinct cases:
+  1. modchain returning a `txo[]` entry with a non-null `spent`
+     field. Fetch path now drops anything with a populated
+     `spent` value before coin selection sees it.
+  2. Back-to-back sends. Send #1 spends UTXO A and creates
+     change UTXO B; send #2 issued seconds later picked A
+     again because modchain hadn't reindexed past send #1's
+     mempool tx, and the broadcast failed because the bitcoin
+     node knew A was already spent.
+- **New: in-memory UTXO tracker** that bridges the
+  modchain-reindex gap. After every successful broadcast it
+  records the inputs that were just spent + the change UTXO
+  that was just created (with the broadcast tx hash filled in).
+  The next coin-selection call layers this on top of modchain's
+  response — drops the spent ones, injects the pending change.
+  TTL: 1 hour. When modchain catches up the matching pending
+  entry auto-prunes (the modchain ground truth replaces our
+  local copy). Process-local state — survives within one
+  libwallet session, lost on restart (by which time modchain is
+  current anyway). Lets a user fire several bitcoin sends in a
+  row without waiting for confirmations between them.
+
 ## 0.4.11
 
 - **Fixed: bitcoin-family `signAndSend` errored with "pubkey of
