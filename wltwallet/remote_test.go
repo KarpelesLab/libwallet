@@ -9,11 +9,19 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltsign"
+	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/xuid"
 )
 
 func init() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	// Temporary: surface the raw response body when rest.Do can't
+	// parse it as JSON. Three back-to-back CI failures on
+	// Crypto/WalletSign:setGeneratedKey returned HTML
+	// ("invalid character '<' looking for beginning of value")
+	// without telling us what the body actually said. Drop after
+	// the cause is identified.
+	rest.Debug = true
 }
 
 func TestRemoteWallet(t *testing.T) {
