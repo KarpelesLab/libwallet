@@ -1,3 +1,16 @@
+## 0.4.11
+
+- **Fixed: bitcoin-family `signAndSend` errored with "pubkey of
+  type *ecdsa.PublicKey does not support pubkey:comp export"**
+  on the first spend that touched a non-`p2wpkh` UTXO (legacy
+  `p2pkh` or wrapped-segwit `p2sh:p2wpkh`). The TSS input
+  signer's `Public()` returned `*ecdsa.PublicKey`, but
+  outscript's witness builder requires a type that implements
+  `SerializeCompressed()`. Returns `*secp256k1.PublicKey`
+  directly now (which has the method natively). Latent since
+  forever; surfaced by 0.4.10's m/0+m/1 coin selection because
+  before then we only ever spent receive-chain p2wpkh outputs.
+
 ## 0.4.10
 
 - **Fixed: bitcoin-family `signAndSend` could only spend receive-
