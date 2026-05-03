@@ -43,6 +43,19 @@ type bitcoinTxo struct {
 	Path   string              `json:"path"` // full HD path ("m/0/0"); preferred
 	I      int                 `json:"i"`    // legacy per-chain index; fallback when Path is empty
 	Script string              `json:"script"` // flavor: p2pkh, p2wpkh, etc
+	// Spent is null/absent for an unspent output; non-null when
+	// modchain knows the spend (its value is the spending tx info).
+	// We only ever want unspent entries — selecting a spent one
+	// makes sendrawtransaction fail with "bad-txns-inputs-
+	// missingorspent" at broadcast time.
+	Spent json.RawMessage `json:"spent,omitempty"`
+}
+
+// isSpent reports whether this txo entry has been spent. Treats both
+// null literals and an empty/absent Spent field as unspent.
+func (t bitcoinTxo) isSpent() bool {
+	s := strings.TrimSpace(string(t.Spent))
+	return s != "" && s != "null"
 }
 
 // childIndex returns the BIP32 child index this txo's address was
@@ -417,9 +430,23 @@ func fetchBitcoinAllUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) 
 		return nil, fmt.Errorf("parse modchain_assets: %w", err)
 	}
 	for _, a := range resp.Assets {
-		if a.Asset == "NATIVE" {
-			return a.Txo, nil
+		if a.Asset != "NATIVE" {
+			continue
 		}
+		// Drop any entry modchain marked as spent. Belt-and-braces:
+		// the "spendable_outputs" asset type already implies
+		// unspent-only, but if a partial backend rollout ever
+		// surfaces spent entries here we don't want to feed them
+		// into the tx (the broadcast would then fail with
+		// "bad-txns-inputs-missingorspent" at send time).
+		out := make([]bitcoinTxo, 0, len(a.Txo))
+		for _, t := range a.Txo {
+			if t.isSpent() {
+				continue
+			}
+			out = append(out, t)
+		}
+		return out, nil
 	}
 	return nil, nil
 }

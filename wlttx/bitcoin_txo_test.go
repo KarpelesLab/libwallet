@@ -79,6 +79,36 @@ func TestBitcoinTxo_ChainFromPath(t *testing.T) {
 	}
 }
 
+// TestBitcoinTxo_IsSpent pins the spent-filter behaviour: only
+// entries with a null / absent Spent field count as spendable.
+// modchain occasionally surfaces both spent and unspent entries
+// in the same array (the user-visible field name is just "txo");
+// selecting a spent one makes sendrawtransaction reject the tx
+// with "bad-txns-inputs-missingorspent" at broadcast time, which
+// is the user-facing failure mode this filter prevents.
+func TestBitcoinTxo_IsSpent(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{`{"txo":"a:0","spent":null}`, false},                       // unspent (explicit null)
+		{`{"txo":"a:0"}`, false},                                    // field absent
+		{`{"txo":"a:0","spent":"deadbeef:0"}`, true},                // string spend ref
+		{`{"txo":"a:0","spent":{"txid":"deadbeef","vin":0}}`, true}, // object spend ref
+	}
+	for _, c := range cases {
+		t.Run(c.raw, func(t *testing.T) {
+			var x bitcoinTxo
+			if err := json.Unmarshal([]byte(c.raw), &x); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := x.isSpent(); got != c.want {
+				t.Errorf("isSpent() = %v, want %v (raw=%s)", got, c.want, c.raw)
+			}
+		})
+	}
+}
+
 func TestBitcoinTxo_Vsize(t *testing.T) {
 	// Per-input vsize must reflect the actual script type — a single
 	// p2pkh input mixed in with p2wpkh would otherwise blow our fee
