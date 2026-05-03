@@ -59,6 +59,15 @@ type Transaction struct {
 	// current UTXO set or the build fails. Empty (the default) keeps
 	// the auto-selection behaviour.
 	UTXOs []string `json:"utxos,omitempty" sql:"-"`
+	// btcSpentRefs / btcPendingChange capture what buildBitcoinTx
+	// just consumed and produced so SignAndSend can hand the result
+	// to the in-memory utxoTracker after broadcast succeeds. The
+	// tracker enables back-to-back sends without waiting for
+	// modchain to reindex — each subsequent fetchBitcoinAllUTXOs
+	// call drops the spent refs and injects the new change UTXO.
+	// Unexported on purpose: not in the wire shape, never persisted.
+	btcSpentRefs     []string    `json:"-" sql:"-"`
+	btcPendingChange *bitcoinTxo `json:"-" sql:"-"`
 	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
 	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
 	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
@@ -528,6 +537,28 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		}
 		if err := broadcastBitcoinTx(tx, n); err != nil {
 			return fmt.Errorf("broadcast bitcoin tx: %w", err)
+		}
+		// Broadcast accepted — register what we just spent + the
+		// new change UTXO with the in-memory tracker so a back-
+		// to-back send can spend the change before modchain
+		// reindexes past us. xpub failures here are non-fatal:
+		// the next send will just fall back to modchain's view
+		// (and may rediscover the race that motivated the
+		// tracker, but we don't want to fail the user's
+		// already-broadcast tx because of bookkeeping).
+		if xpub, xperr := acct.Xpub(); xperr == nil {
+			var pending []bitcoinTxo
+			if tx.btcPendingChange != nil && tx.Hash != "" {
+				p := *tx.btcPendingChange
+				// Real change vout was stashed in Height by
+				// buildBitcoinTx; restore Height to 0
+				// (unconfirmed) and assemble the tracker key.
+				vout := p.Height
+				p.Height = 0
+				p.Txo = fmt.Sprintf("%s:%d", tx.Hash, vout)
+				pending = []bitcoinTxo{p}
+			}
+			utxoTrackerInstance.RecordTx(xpub, tx.btcSpentRefs, pending)
 		}
 		wltintf.NotifyTxBroadcast(e)
 		return tx.save(e)

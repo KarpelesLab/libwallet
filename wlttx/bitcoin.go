@@ -233,11 +233,15 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 	}
 
 	// Dust threshold: ~546 sats for p2pkh, skip change below that
+	var changeVout uint32
+	hasChange := false
 	if change > 546 {
 		btx.Out = append(btx.Out, &outscript.BtcTxOutput{
 			Amount: outscript.BtcAmount(change),
 			Script: changeOut.Bytes(),
 		})
+		changeVout = uint32(len(btx.Out) - 1)
+		hasChange = true
 	} else {
 		// Give dust to miners
 		fee += change
@@ -280,7 +284,47 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 	}
 	tx.Raw = rawBytes
 	tx.Fee = wltobj.NewAmountRaw(big.NewInt(fee), 8)
+
+	// Capture what we spent + the change we created so SignAndSend
+	// can register them with the in-memory UTXO tracker after the
+	// broadcast lands. Lets a follow-up send spend the change
+	// without waiting for modchain to reindex past this tx.
+	tx.btcSpentRefs = make([]string, 0, len(selected))
+	for _, u := range selected {
+		tx.btcSpentRefs = append(tx.btcSpentRefs, u.Txo)
+	}
+	if hasChange {
+		// Txo is filled in after broadcast (needs the fresh tx
+		// hash); the tracker-commit step in transaction.go does
+		// that.
+		changeScript := bitcoinChangeScript(n.ChainId)
+		tx.btcPendingChange = &bitcoinTxo{
+			Path:   fmt.Sprintf("m/1/%d", changeIndex),
+			Amt:    outscript.BtcAmount(change),
+			Script: changeScript,
+			I:      changeIndex,
+		}
+		// Stash vout in the Height field temporarily — we never
+		// use Height before the tracker commit fills in the real
+		// (zero, since unconfirmed) value, and it saves a parallel
+		// scratch field on Transaction.
+		tx.btcPendingChange.Height = int64(changeVout)
+	}
 	return nil
+}
+
+// bitcoinChangeScript returns the script type bitcoinAddress emits
+// for the change-chain receive address on chainId. Mirrors the
+// switch in btc_address.go's bitcoinAddress so the tracker entry's
+// Script matches what the tx actually paid into.
+func bitcoinChangeScript(chainId string) string {
+	switch chainId {
+	case "bitcoin", "litecoin", "monacoin":
+		return "p2wpkh"
+	case "bitcoin-cash", "dogecoin":
+		return "p2pkh"
+	}
+	return "p2wpkh"
 }
 
 // SignRawBitcoinTx signs every input in a pre-built bitcoin-family
@@ -446,7 +490,11 @@ func fetchBitcoinAllUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) 
 			}
 			out = append(out, t)
 		}
-		return out, nil
+		// Layer the in-memory tracker on top so back-to-back
+		// sends don't blow up while modchain reindexes — drops
+		// entries we just spent locally and injects the change
+		// outputs from those sends.
+		return utxoTrackerInstance.Apply(xpub, out), nil
 	}
 	return nil, nil
 }
