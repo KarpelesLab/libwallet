@@ -1,3 +1,27 @@
+## 0.4.14
+
+- **Fixed: every bitcoin-family `signAndSend` failed with `-25
+  bad-txns-inputs-missingorspent` since BTC support shipped on
+  Apr 14.** `parseTxoRef` reversed the txid bytes before storing
+  them in `BtcTxInput.TXID`, but outscript also reverses TXID
+  at marshal time (its convention is "TXID stored in displayable
+  / big-endian form, wire reversal happens at serialize"). The
+  double-reverse meant every broadcast tx referenced a bogus
+  txid that was the modchain-reported id with its bytes flipped
+  — and the litecoin / bitcoin / dogecoin / monacoin / bitcoin-
+  cash node correctly rejected it because no such UTXO exists.
+  All previous `bad-txns-inputs-missingorspent` reports
+  attributed to "modchain reindex lag" or "stale UTXO state"
+  were really this bug. The 0.4.12 in-memory tracker and 0.4.12
+  spent-filter remain useful but were never the actual fix.
+- **Same byte-order bug fixed in `SignRawBitcoinTx`** (mpurse /
+  Counterparty path): wire-decoded TXIDs were reversed before
+  the modchain ownership lookup, making every input report as
+  "not owned by this account". Removed the reverse.
+- **Regression test pins the byte-order convention** so a future
+  refactor that flips `parseTxoRef` back to the old behaviour
+  fires loudly at test time, not in production.
+
 ## 0.4.13
 
 - **Diagnostics: bitcoin broadcast errors now carry the inputs +
