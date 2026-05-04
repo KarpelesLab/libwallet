@@ -70,6 +70,20 @@ type ReservedAmt struct {
 }
 
 // MaxSendableResult is the response shape returned by Transaction:maxSendable.
+//
+// For bitcoin-family chains, BitcoinUTXOs and BitcoinFeeRate carry
+// the exact selection + fee rate maxSendable used to compute Max.
+// Threading them back into the build call (Transaction.UTXOs +
+// Transaction.BitcoinFeeRate) eliminates the two ways "send max"
+// can fail with insufficient-funds:
+//
+//  1. The fee-rate RPC (estimatesmartfee) returning a different
+//     value between maxSendable and build.
+//  2. Coin selection picking a different UTXO subset than max
+//     accounted for.
+//
+// Pinning both pins the fee math end-to-end. EVM / Solana paths
+// leave these fields empty.
 type MaxSendableResult struct {
 	// Chain: "evm" | "solana" | "bitcoin".
 	Chain string `json:"chain"`
@@ -86,6 +100,17 @@ type MaxSendableResult struct {
 	Reserved []ReservedAmt `json:"reserved,omitempty"`
 	// Reason is a human-readable message populated when Max is zero.
 	Reason string `json:"reason,omitempty"`
+
+	// BitcoinUTXOs is the list of "<txid>:<vout>" inputs the
+	// max calculation accounted for. Pass back via
+	// Transaction.UTXOs to make build use the same selection.
+	// Empty on non-bitcoin chains.
+	BitcoinUTXOs []string `json:"bitcoinUtxos,omitempty"`
+	// BitcoinFeeRate is the sat/vB rate the max calculation
+	// used. Pass back via Transaction.BitcoinFeeRate to make
+	// build use the same rate (no second estimatesmartfee call,
+	// no drift). Zero on non-bitcoin chains.
+	BitcoinFeeRate uint64 `json:"bitcoinFeeRate,omitempty"`
 }
 
 // apiMaxSendable is the Transaction:maxSendable endpoint.
@@ -654,11 +679,33 @@ func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Acco
 	// Per-input vsize math (reads bitcoinTxo.Script for each
 	// candidate) so a wallet whose change is p2wpkh but whose
 	// historical receives include p2pkh entries doesn't under-
-	// pay. Output count = 1 — sending max means no change.
-	vsize := estimateMixedTxVSize(utxos, 1)
+	// pay.
+	//
+	// Output count = 2 (recipient + change) on purpose, even
+	// though a max-send produces no change output. We need to
+	// match buildBitcoinTx's coin-selection check, which uses
+	// the 2-output assumption — otherwise build computes a
+	// strictly larger fee than maxSendable did, sees
+	// `change < 0`, and bounces with insufficient-funds. The
+	// caller can still send the max amount; build will detect
+	// that change rounds to zero and emit a 1-output tx, paying
+	// the small (~31 vbyte × feeRate) overestimate to the
+	// miner. That overpayment is the cost of having a stable
+	// "send the entire balance" UX without per-build special-
+	// casing.
+	vsize := estimateMixedTxVSize(utxos, 2)
 	maxSats, feeSats, reason := computeBitcoinMaxSendable(totalSats, vsize, feeRate)
 	res.Max = wltobj.NewAmountRaw(big.NewInt(maxSats), 8)
 	res.Fee = wltobj.NewAmountRaw(big.NewInt(feeSats), 8)
 	res.Reason = reason
+
+	// Pin the inputs + fee rate so the caller can pass them
+	// back via Transaction.UTXOs + Transaction.BitcoinFeeRate
+	// to keep build's math identical to ours.
+	res.BitcoinFeeRate = uint64(feeRate)
+	res.BitcoinUTXOs = make([]string, 0, len(utxos))
+	for _, u := range utxos {
+		res.BitcoinUTXOs = append(res.BitcoinUTXOs, u.Txo)
+	}
 	return res, nil
 }

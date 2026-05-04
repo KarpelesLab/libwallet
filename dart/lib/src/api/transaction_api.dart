@@ -144,6 +144,22 @@ class TransactionApi {
   /// recipient — when the recipient account doesn't exist yet, the
   /// returned [max] is reduced so the transfer can fund it to
   /// rent-exemption. On EVM and Bitcoin [to] is ignored in v1.
+  ///
+  /// **Bitcoin "send max" requires pinning** the inputs and fee
+  /// rate this call computed against — otherwise the eventual
+  /// `signAndSend` can fail with insufficient-funds (different
+  /// `estimatesmartfee` reading, different greedy-selection
+  /// outcome). The result carries `bitcoinUtxos` + `bitcoinFeeRate`
+  /// for that purpose. Easiest path is the convenience constructor:
+  ///
+  /// ```dart
+  /// final m = await client.transactions.maxSendable(asset: 'bitcoin.litecoin.NATIVE');
+  /// final tx = UnsignedTransaction.maxSend(m, to: recipient);
+  /// await client.transactions.signAndSendSimple(tx, keys: keys);
+  /// ```
+  ///
+  /// Or build the [UnsignedTransaction] manually and pass
+  /// `utxos: m.bitcoinUtxos` + `bitcoinFeeRate: m.bitcoinFeeRate`.
   Future<MaxSendableResult> maxSendable({
     String? from,
     String? to,

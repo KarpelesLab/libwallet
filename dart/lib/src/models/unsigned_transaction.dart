@@ -1,5 +1,6 @@
 import 'amount.dart';
 import 'key_description.dart';
+import 'max_sendable_result.dart';
 
 /// Typed builder for `Transaction:validate` and `Transaction:signAndSend` input.
 ///
@@ -74,9 +75,20 @@ class UnsignedTransaction {
   /// selection and uses exactly these `"<txid>:<vout>"` UTXOs as
   /// inputs (each verified against the account's current set;
   /// foreign or stale refs error out cleanly). Source the strings
-  /// from `accounts.listUTXOs(...)`. Empty / null preserves the
+  /// from `accounts.listUTXOs(...)` or
+  /// `MaxSendableResult.bitcoinUtxos`. Empty / null preserves the
   /// auto-selection behaviour.
   final List<String>? utxos;
+
+  /// Bitcoin-family only — pinned fee rate in sat/vB. When set
+  /// (non-zero) on a `bitcoin_transfer` tx, the build path skips
+  /// the `estimatesmartfee` RPC and uses this rate exactly. Pass
+  /// back `MaxSendableResult.bitcoinFeeRate` here when sending
+  /// max so the build's fee math is identical to what max
+  /// computed against — otherwise estimate drift between the two
+  /// calls will sometimes make the build reject with
+  /// insufficient-funds. Zero / null preserves the auto behaviour.
+  final int? bitcoinFeeRate;
 
   /// Signing keys — required only for `signAndSend`, ignored by `validate`.
   final List<SigningKey>? keys;
@@ -100,8 +112,50 @@ class UnsignedTransaction {
     this.computeUnitPrice,
     this.priorityLevel,
     this.utxos,
+    this.bitcoinFeeRate,
     this.keys,
   });
+
+  /// Convenience: build a "send the maximum amount" tx from a
+  /// [MaxSendableResult]. Threads the inputs and fee rate that
+  /// max-sendable computed against straight into the new tx so
+  /// the build path's coin selection + fee math are identical to
+  /// what produced [m.max]. Without this pinning, an
+  /// `estimatesmartfee` drift between the two calls or a
+  /// different greedy-selection outcome can make signAndSend
+  /// reject the broadcast with insufficient-funds.
+  ///
+  /// Bitcoin-family only — for EVM / Solana max-sends just call
+  /// the regular constructor; the fee math there isn't subject to
+  /// the same race.
+  ///
+  /// ```dart
+  /// final m = await client.transactions.maxSendable(asset: 'bitcoin.litecoin.NATIVE');
+  /// final tx = UnsignedTransaction.maxSend(m, to: recipient);
+  /// await client.transactions.signAndSendSimple(tx, keys: keys);
+  /// ```
+  factory UnsignedTransaction.maxSend(
+    MaxSendableResult m, {
+    required String to,
+    String? from,
+    String? network,
+  }) {
+    if (m.chain != 'bitcoin') {
+      throw ArgumentError(
+          'UnsignedTransaction.maxSend supports bitcoin-family chains only '
+          '(got chain="${m.chain}"). For EVM/Solana max-sends, use the '
+          'regular UnsignedTransaction constructor with amount: m.max.');
+    }
+    return UnsignedTransaction(
+      type: 'bitcoin_transfer',
+      to: to,
+      from: from,
+      amount: m.max,
+      network: network,
+      utxos: m.bitcoinUtxos.isEmpty ? null : m.bitcoinUtxos,
+      bitcoinFeeRate: m.bitcoinFeeRate > 0 ? m.bitcoinFeeRate : null,
+    );
+  }
 
   /// Convenience: create a simple native-currency transfer.
   factory UnsignedTransaction.transfer({
@@ -155,6 +209,7 @@ class UnsignedTransaction {
         computeUnitPrice: computeUnitPrice,
         priorityLevel: priorityLevel,
         utxos: utxos,
+        bitcoinFeeRate: bitcoinFeeRate,
         keys: k,
       );
 
@@ -178,6 +233,9 @@ class UnsignedTransaction {
     if (computeUnitPrice != null) m['computeUnitPrice'] = computeUnitPrice;
     if (priorityLevel != null) m['priorityLevel'] = priorityLevel;
     if (utxos != null && utxos!.isNotEmpty) m['utxos'] = utxos;
+    if (bitcoinFeeRate != null && bitcoinFeeRate! > 0) {
+      m['bitcoinFeeRate'] = bitcoinFeeRate;
+    }
     if (keys != null) m['Keys'] = keys!.map((k) => k.toJson()).toList();
     return m;
   }

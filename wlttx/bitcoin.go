@@ -171,11 +171,18 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 
 	// 3. Coin selection (greedy — simple but effective)
 	wantSats := tx.Amount.Value().Int64()
-	// Fee estimation: modchain exposes fee via JSON-RPC; fall back to a
-	// conservative estimate based on tx size if the RPC call fails.
-	feeRateSatPerVB, err := bitcoinFeeRate(n)
-	if err != nil {
-		feeRateSatPerVB = 10 // conservative fallback
+	// Fee rate: caller can pin via tx.BitcoinFeeRate (used by
+	// max-send to ensure build's fee math matches what
+	// maxSendable computed against). Otherwise hit the chain
+	// for an estimate, fall back to 10 sat/vB on RPC error.
+	var feeRateSatPerVB int64
+	if tx.BitcoinFeeRate > 0 {
+		feeRateSatPerVB = int64(tx.BitcoinFeeRate)
+	} else {
+		feeRateSatPerVB, err = bitcoinFeeRate(n)
+		if err != nil {
+			feeRateSatPerVB = 10 // conservative fallback
+		}
 	}
 
 	var selected []bitcoinTxo

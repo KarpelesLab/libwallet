@@ -59,6 +59,15 @@ type Transaction struct {
 	// current UTXO set or the build fails. Empty (the default) keeps
 	// the auto-selection behaviour.
 	UTXOs []string `json:"utxos,omitempty" sql:"-"`
+	// BitcoinFeeRate (sat/vB). When > 0 on a bitcoin_transfer
+	// tx, buildBitcoinTx skips the bitcoinFeeRate(n) RPC and
+	// uses this exact rate. Together with UTXOs, lets the
+	// caller pin both fee math and selection to whatever
+	// Transaction:maxSendable computed against — eliminates
+	// every "max-send fails with insufficient funds" race
+	// (estimatesmartfee drift, coin-selection differences).
+	// Zero / unset preserves the auto behaviour.
+	BitcoinFeeRate uint64 `json:"bitcoinFeeRate,omitempty" sql:"-"`
 	// btcSpentRefs / btcPendingChange capture what buildBitcoinTx
 	// just consumed and produced so SignAndSend can hand the result
 	// to the in-memory utxoTracker after broadcast succeeds. The
