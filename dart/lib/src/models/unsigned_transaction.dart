@@ -64,10 +64,19 @@ class UnsignedTransaction {
   /// Set to 0 (or leave null) to let [priorityLevel] decide.
   final int? computeUnitPrice;
 
-  /// Solana only — named shorthand for a priority fee: `none`
-  /// (no ComputeBudget instructions), `low` (25th percentile of
-  /// recent network fees), `medium` (50th), `high` (75th). When
-  /// [computeUnitPrice] is set, that wins over [priorityLevel].
+  /// Per-chain priority hint. Names are uniform across chains:
+  /// `none`, `low`, `medium`, `high` (default = medium when
+  /// unset).
+  ///
+  /// - **Solana**: drives ComputeBudget priority fee (`low` =
+  ///   25th percentile of recent network fees, `medium` = 50th,
+  ///   `high` = 75th, `none` = no ComputeBudget instructions).
+  ///   When [computeUnitPrice] is set, that wins.
+  /// - **Bitcoin-family**: drives the `estimatesmartfee`
+  ///   confirmation target (`low` = 144 blocks, `medium` = 6,
+  ///   `high` = 2). When [bitcoinFeeRate] is set, that wins.
+  /// - **EVM**: ignored in v1 — gas pricing comes from
+  ///   [maxFeePerGas] / [maxPriorityFeePerGas] / [gasPrice].
   final String? priorityLevel;
 
   /// Bitcoin-family only — manual coin selection. When set on a

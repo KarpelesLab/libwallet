@@ -171,15 +171,16 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 
 	// 3. Coin selection (greedy — simple but effective)
 	wantSats := tx.Amount.Value().Int64()
-	// Fee rate: caller can pin via tx.BitcoinFeeRate (used by
-	// max-send to ensure build's fee math matches what
-	// maxSendable computed against). Otherwise hit the chain
-	// for an estimate, fall back to 10 sat/vB on RPC error.
+	// Fee rate resolution, in priority order:
+	//   1. tx.BitcoinFeeRate (pinned, e.g. from maxSendable)
+	//   2. estimatesmartfee at the conf target tx.PriorityLevel
+	//      maps to ("low" → 144, "" → 6, "high" → 2)
+	//   3. 10 sat/vB conservative fallback on RPC error
 	var feeRateSatPerVB int64
 	if tx.BitcoinFeeRate > 0 {
 		feeRateSatPerVB = int64(tx.BitcoinFeeRate)
 	} else {
-		feeRateSatPerVB, err = bitcoinFeeRate(n)
+		feeRateSatPerVB, err = bitcoinFeeRateForPriority(n, tx.PriorityLevel)
 		if err != nil {
 			feeRateSatPerVB = 10 // conservative fallback
 		}
@@ -521,8 +522,27 @@ func fetchBitcoinUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) {
 	return nil, nil
 }
 
+// bitcoinFeeRate returns the chain's recommended fee rate in sat/vB
+// at the medium priority confirmation target. Convenience for
+// callers that don't care about priority.
 func bitcoinFeeRate(n *wltnet.Network) (int64, error) {
-	raw, err := n.DoRPC("estimatesmartfee", 6)
+	return bitcoinFeeRateForPriority(n, "")
+}
+
+// bitcoinFeeRateForPriority returns sat/vB at a confirmation target
+// chosen by priority:
+//
+//   "low"           → 144 blocks  (Bitcoin ~24 h, Litecoin ~6 h)
+//   "" / "medium"   →  6 blocks
+//   "high"          →  2 blocks
+//
+// Unknown values fall back to medium. Same RPC the cheaper/faster
+// view UI surfaces — the caller can ask the chain for "what would a
+// fast send cost vs a cheap one" by calling Transaction:maxSendable
+// twice with different Priority values.
+func bitcoinFeeRateForPriority(n *wltnet.Network, priority string) (int64, error) {
+	confTarget := bitcoinPriorityToConfTarget(priority)
+	raw, err := n.DoRPC("estimatesmartfee", confTarget)
 	if err != nil {
 		return 0, err
 	}
@@ -538,6 +558,22 @@ func bitcoinFeeRate(n *wltnet.Network) (int64, error) {
 		satPerVB = 1
 	}
 	return satPerVB, nil
+}
+
+// bitcoinPriorityToConfTarget maps the user-facing priority string
+// to a bitcoin estimatesmartfee confirmation target (block count).
+// Cheap = far horizon (lots of room for the fee market to catch up
+// to a small bid); fast = near horizon (must beat current mempool
+// to confirm in the next 1–2 blocks).
+func bitcoinPriorityToConfTarget(priority string) int {
+	switch priority {
+	case "low":
+		return 144
+	case "high":
+		return 2
+	}
+	// "" / "medium" / unknown → medium
+	return 6
 }
 
 // selectUTXOs does naive greedy coin selection. Returns selected UTXOs and

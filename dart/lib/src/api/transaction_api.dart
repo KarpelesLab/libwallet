@@ -160,15 +160,28 @@ class TransactionApi {
   ///
   /// Or build the [UnsignedTransaction] manually and pass
   /// `utxos: m.bitcoinUtxos` + `bitcoinFeeRate: m.bitcoinFeeRate`.
+  ///
+  /// [priority] selects how aggressive the fee budget is (cheap and
+  /// slow vs expensive and fast). Bitcoin: maps to
+  /// `estimatesmartfee`'s confirmation target (`"low"` = 144 blocks,
+  /// `""` / `"medium"` = 6, `"high"` = 2). EVM and Solana ignore it
+  /// here; the existing per-tx priority controls there are
+  /// unchanged. Call this twice with different priorities to show
+  /// the user a "cheap vs fast" comparison; pair the chosen result
+  /// with [UnsignedTransaction.maxSend] (or hand-thread the
+  /// pinned utxos + fee rate) so the eventual send uses the same
+  /// fee budget.
   Future<MaxSendableResult> maxSendable({
     String? from,
     String? to,
     String? asset,
+    String? priority,
   }) async {
     final params = <String, dynamic>{};
     if (from != null) params['from'] = from;
     if (to != null) params['to'] = to;
     if (asset != null) params['asset'] = asset;
+    if (priority != null) params['priority'] = priority;
     final data = await _conn.request(
         'Transaction:maxSendable', 'POST', params.isNotEmpty ? params : null);
     return MaxSendableResult.fromJson(data as Map<String, dynamic>);

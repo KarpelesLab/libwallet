@@ -58,6 +58,15 @@ type MaxSendableRequest struct {
 	// back to the current network's native currency. Non-native
 	// (token) assets return an error in v1.
 	Asset string `json:"asset,omitempty"`
+	// Priority controls how much fee the calculation budgets:
+	//   "low"    → cheap, slow to confirm
+	//   ""/"medium" → default
+	//   "high"   → expensive, expected next 1–2 blocks
+	// Bitcoin-family: maps to estimatesmartfee's confirmation
+	// target (144 / 6 / 2 blocks). Solana / EVM ignore it
+	// here; the existing PriorityLevel field on Transaction
+	// drives Solana ComputeBudget pricing at build time.
+	Priority string `json:"priority,omitempty"`
 }
 
 // ReservedAmt is one line item in MaxSendableResult.Reserved — an amount
@@ -638,7 +647,7 @@ func computeBitcoinMaxSendable(totalSats int64, vsize int, feeRate int64) (max i
 	return totalSats - fee, fee, ""
 }
 
-func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Account, _ *MaxSendableRequest) (*MaxSendableResult, error) {
+func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Account, req *MaxSendableRequest) (*MaxSendableResult, error) {
 	xpub, err := acct.Xpub()
 	if err != nil {
 		return nil, fmt.Errorf("xpub: %w", err)
@@ -672,7 +681,7 @@ func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Acco
 		return res, nil
 	}
 
-	feeRate, err := bitcoinFeeRate(n)
+	feeRate, err := bitcoinFeeRateForPriority(n, req.Priority)
 	if err != nil {
 		feeRate = 10
 	}

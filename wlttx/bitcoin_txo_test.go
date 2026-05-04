@@ -137,6 +137,37 @@ func TestBitcoinTxo_Vsize(t *testing.T) {
 	}
 }
 
+func TestBitcoinPriorityToConfTarget(t *testing.T) {
+	// "Cheap" should target a far horizon (lots of room for the fee
+	// market to catch up to a small bid); "fast" targets the next
+	// 1-2 blocks. A future tweak that flips low/high or moves the
+	// medium default lands here so the user-facing priority labels
+	// don't silently change meaning.
+	cases := map[string]int{
+		"low":     144,
+		"":        6,
+		"medium":  6,
+		"high":    2,
+		"unknown": 6, // fallback
+		"none":    6, // legacy Solana value, not meaningful for bitcoin
+	}
+	for in, want := range cases {
+		t.Run(in, func(t *testing.T) {
+			if got := bitcoinPriorityToConfTarget(in); got != want {
+				t.Errorf("bitcoinPriorityToConfTarget(%q) = %d, want %d", in, got, want)
+			}
+		})
+	}
+	// Sanity: low > medium > high (cheap is far, fast is near).
+	if !(bitcoinPriorityToConfTarget("low") > bitcoinPriorityToConfTarget("medium") &&
+		bitcoinPriorityToConfTarget("medium") > bitcoinPriorityToConfTarget("high")) {
+		t.Errorf("priority ordering wrong: low=%d medium=%d high=%d (want low > medium > high)",
+			bitcoinPriorityToConfTarget("low"),
+			bitcoinPriorityToConfTarget("medium"),
+			bitcoinPriorityToConfTarget("high"))
+	}
+}
+
 func TestNextChangeIndex(t *testing.T) {
 	cases := []struct {
 		name string

@@ -51,7 +51,7 @@ type Transaction struct {
 	// ── Solana priority fees (opt-in; zero values preserve legacy behaviour) ──
 	ComputeUnitLimit uint32 `json:"computeUnitLimit,omitempty" sql:"-"` // SetComputeUnitLimit instruction argument
 	ComputeUnitPrice uint64 `json:"computeUnitPrice,omitempty" sql:"-"` // microlamports per CU; 0 = use PriorityLevel
-	PriorityLevel    string `json:"priorityLevel,omitempty" sql:"-"`    // "none" | "low" | "medium" | "high"
+	PriorityLevel    string `json:"priorityLevel,omitempty" sql:"-"`    // "none" | "low" | "medium" | "high" — Solana ComputeBudget OR bitcoin estimatesmartfee target
 	// ── Bitcoin manual coin selection (opt-in) ──
 	// When non-empty on a bitcoin_transfer tx, buildBitcoinTx skips
 	// greedy auto-selection and uses exactly these "<txid>:<vout>"
