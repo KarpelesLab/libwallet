@@ -380,13 +380,15 @@ func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network
 
 	signers := make([]*outscript.BtcTxSign, len(btx.In))
 	for i, in := range btx.In {
-		// BtcTx stores txid little-endian (wire format); modchain returns
-		// txos keyed by the display (big-endian) hex form.
-		var be [32]byte
-		for j := 0; j < 32; j++ {
-			be[j] = in.TXID[31-j]
-		}
-		ref := fmt.Sprintf("%x:%d", be, in.Vout)
+		// outscript stores BtcTxInput.TXID in displayable (big-
+		// endian) byte order — UnmarshalBinary reverses the wire
+		// bytes for us (btctx.go line 626). Hex-encode directly
+		// to get a key that matches modchain's txo refs (which
+		// use the same displayable form). An earlier version of
+		// this loop reversed TXID before encoding, which produced
+		// the byte-reversed lookup key and made every input
+		// resolve to "not owned by this account".
+		ref := fmt.Sprintf("%x:%d", in.TXID, in.Vout)
 		entry, ok := owned[ref]
 		if !ok {
 			return nil, fmt.Errorf("input %d (%s) is not owned by this account", i, ref)
@@ -593,16 +595,21 @@ func parseTxoRef(ref string) ([]byte, uint32, error) {
 	if len(txid) != 32 {
 		return nil, 0, fmt.Errorf("txid must be 32 bytes, got %d", len(txid))
 	}
-	// Reverse the txid: Bitcoin stores txids little-endian on the wire
-	rev := make([]byte, 32)
-	for i := 0; i < 32; i++ {
-		rev[i] = txid[31-i]
-	}
+	// Return the txid in displayable (big-endian) byte order — that
+	// is the convention outscript.BtcTxInput.TXID expects, and
+	// outscript reverses to wire (little-endian) order itself when
+	// it serializes the tx (BtcTxInput.Bytes line 548 does
+	// `slices.Reverse(txid)` before emitting). An earlier version
+	// here pre-reversed the bytes, which compounded with outscript's
+	// reverse and emitted wire bytes whose displayable form was the
+	// reversal of the modchain-reported txid — every bitcoin
+	// broadcast hit "bad-txns-inputs-missingorspent" because the
+	// node was looking for a UTXO at the wrong txid.
 	var vout uint32
 	if _, err := fmt.Sscanf(parts[1], "%d", &vout); err != nil {
 		return nil, 0, fmt.Errorf("invalid vout: %w", err)
 	}
-	return rev, vout, nil
+	return txid, vout, nil
 }
 
 func bitcoinNetworkName(chainId string) string {

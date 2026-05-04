@@ -1,6 +1,7 @@
 package wlttx
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 
@@ -153,6 +154,34 @@ func TestBtcInputSigner_PublicSupportsCompressedExport(t *testing.T) {
 	pub := s.Public()
 	if _, ok := pub.(interface{ SerializeCompressed() []byte }); !ok {
 		t.Fatalf("Public() returned %T which does not satisfy interface{SerializeCompressed() []byte}", pub)
+	}
+}
+
+// TestParseTxoRef_PreservesDisplayOrder pins the byte-order
+// convention: parseTxoRef must return the txid bytes in the same
+// (displayable / big-endian) order modchain reports them, so they
+// land in BtcTxInput.TXID without modification — outscript
+// itself reverses to wire format at marshal time. Pre-reversing
+// here compounds with outscript's reversal and emits the wrong
+// txid in the broadcast tx, which the bitcoin node rejects with
+// "bad-txns-inputs-missingorspent".
+func TestParseTxoRef_PreservesDisplayOrder(t *testing.T) {
+	const display = "d36a0d698b6eedad1d1de470c2b31b7a239b0d8c5500bd70f3efc6cf3d61bf9b"
+	const ref = display + ":7"
+
+	gotBytes, gotVout, err := parseTxoRef(ref)
+	if err != nil {
+		t.Fatalf("parseTxoRef: %v", err)
+	}
+	if gotVout != 7 {
+		t.Errorf("vout = %d, want 7", gotVout)
+	}
+	gotHex := hex.EncodeToString(gotBytes)
+	if gotHex != display {
+		t.Fatalf("byte-order regression: parseTxoRef returned %q, want %q\n"+
+			"  pre-reversing here makes outscript double-reverse → broadcast tx\n"+
+			"  references the wrong txid → node returns -25 missingorspent",
+			gotHex, display)
 	}
 }
 
