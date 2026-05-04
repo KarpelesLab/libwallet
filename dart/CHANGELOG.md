@@ -1,3 +1,42 @@
+## 0.4.16
+
+- **Fixed: bitcoin "send max" intermittently failed with
+  insufficient-funds at signAndSend** even when the
+  `maxSendable` value was correct. Two races contributed:
+  1. Math mismatch — `maxSendable` budgeted vsize for 1 output
+     (max-send → no change), but `signAndSend`'s coin-selection
+     guard assumes 2 outputs (recipient + change). For an
+     exact-max send, build's fee was strictly larger and
+     `change` went negative.
+  2. Fee-rate drift — both calls independently asked
+     `estimatesmartfee`, and a different reading between them
+     would push the math out of agreement.
+
+  Fix bundles two complementary parts:
+    - `MaxSendableResult` now exposes `bitcoinUtxos` +
+      `bitcoinFeeRate` carrying the exact selection + sat/vB
+      it computed against.
+    - `UnsignedTransaction` accepts `bitcoinFeeRate` (`utxos`
+      already existed). When set, the build path skips the
+      `estimatesmartfee` RPC and uses the pinned values.
+    - New convenience `UnsignedTransaction.maxSend(m, to: ...)`
+      threads both fields automatically — recommended path
+      for any "Send Max" button.
+    - `maxSendable` now budgets at 2-output vsize so the
+      coin-selection check passes; build emits a 1-output tx
+      and the small ~31 vbyte × rate overestimate goes to
+      the miner. No special-casing needed elsewhere.
+- **New: `priority` field on `Transaction:maxSendable` + the
+  existing `priorityLevel` on `Transaction` now drives bitcoin
+  fee selection.** Map: `"low"` → `estimatesmartfee` target 144
+  blocks (cheap), `""` / `"medium"` → 6 (default), `"high"` →
+  2 (fast). Call `maxSendable` twice with different priorities
+  to power a "cheap vs fast" comparison UI; pass the chosen
+  result through `UnsignedTransaction.maxSend` and the actual
+  send uses the same fee budget. EVM and Solana semantics
+  unchanged (Solana already used `priorityLevel` for
+  ComputeBudget pricing).
+
 ## 0.4.15
 
 - **Fixed: `transactions.maxSendable` returned 0 right after a
