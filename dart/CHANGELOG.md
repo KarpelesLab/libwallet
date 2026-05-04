@@ -1,3 +1,14 @@
+## 0.4.13
+
+- **Diagnostics: bitcoin broadcast errors now carry the inputs +
+  raw tx hex.** When `sendrawtransaction` rejects a tx (e.g.
+  `bad-txns-inputs-missingorspent`) the error message now
+  includes the full `(txid:vout)` list libwallet selected and
+  the hex-encoded transaction. Without these, reproducing the
+  failure required guessing which UTXO modchain reported but
+  the bitcoin node disagreed about. Format:
+  `sendrawtransaction: <upstream> (inputs=a:0,b:1 rawhex=...)`.
+
 ## 0.4.12
 
 - **Fixed: bitcoin-family `signAndSend` errored with `-25
