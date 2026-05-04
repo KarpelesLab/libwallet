@@ -602,12 +602,11 @@ func maxSendableEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Accoun
 // ── Bitcoin ───────────────────────────────────────────────────────────────
 
 // computeBitcoinMaxSendable is the RPC-free math extracted for unit tests.
-// totalSats is the sum of available UTXOs; nInputs is how many of them
-// would be spent; feeRate is sat/vB; the output count is fixed at 1
-// (sending max = no change output).
-func computeBitcoinMaxSendable(totalSats int64, nInputs int, feeRate int64) (max int64, fee int64, reason string) {
-	vsize := int64(estimateTxVSize(nInputs, 1))
-	fee = vsize * feeRate
+// totalSats is the sum of available UTXOs; vsize is the precomputed
+// transaction vsize in vbytes (use estimateMixedTxVSize from the
+// caller so per-input shapes are honoured); feeRate is sat/vB.
+func computeBitcoinMaxSendable(totalSats int64, vsize int, feeRate int64) (max int64, fee int64, reason string) {
+	fee = int64(vsize) * feeRate
 	if totalSats <= fee {
 		return 0, fee, fmt.Sprintf("total UTXO %d sats does not cover fee %d sats", totalSats, fee)
 	}
@@ -619,16 +618,22 @@ func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Acco
 	if err != nil {
 		return nil, fmt.Errorf("xpub: %w", err)
 	}
-	utxos, err := fetchBitcoinUTXOs(n, xpub, "m/0")
+	// Pull EVERY spendable UTXO across receive (m/0) AND change
+	// (m/1) — the same source buildBitcoinTx uses. m/0-only made
+	// maxSendable return 0 immediately after a send because the
+	// change went to m/1 and was invisible here. fetchBitcoinAll
+	// UTXOs also runs through the in-memory tracker, so a just-
+	// broadcast change UTXO is visible before modchain reindexes.
+	utxos, err := fetchBitcoinAllUTXOs(n, xpub)
 	if err != nil {
 		return nil, err
 	}
 
 	var totalSats int64
-	for _, u := range utxos.Txo {
+	for _, u := range utxos {
 		totalSats += int64(u.Amt)
 	}
-	nInputs := len(utxos.Txo)
+	nInputs := len(utxos)
 
 	res := &MaxSendableResult{
 		Chain:   "bitcoin",
@@ -646,7 +651,12 @@ func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Acco
 	if err != nil {
 		feeRate = 10
 	}
-	maxSats, feeSats, reason := computeBitcoinMaxSendable(totalSats, nInputs, feeRate)
+	// Per-input vsize math (reads bitcoinTxo.Script for each
+	// candidate) so a wallet whose change is p2wpkh but whose
+	// historical receives include p2pkh entries doesn't under-
+	// pay. Output count = 1 — sending max means no change.
+	vsize := estimateMixedTxVSize(utxos, 1)
+	maxSats, feeSats, reason := computeBitcoinMaxSendable(totalSats, vsize, feeRate)
 	res.Max = wltobj.NewAmountRaw(big.NewInt(maxSats), 8)
 	res.Fee = wltobj.NewAmountRaw(big.NewInt(feeSats), 8)
 	res.Reason = reason

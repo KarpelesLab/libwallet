@@ -113,7 +113,7 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 	tests := []struct {
 		name       string
 		totalSats  int64
-		nInputs    int
+		vsize      int
 		feeRate    int64
 		wantMax    int64
 		wantReason bool
@@ -123,7 +123,7 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 			// vsize = 11 + 1*68 + 1*31 = 110; fee = 1100
 			name:      "1 BTC, 1 input @10 sat/vB",
 			totalSats: 100_000_000,
-			nInputs:   1,
+			vsize:     110,
 			feeRate:   10,
 			wantMax:   100_000_000 - 1100,
 		},
@@ -132,7 +132,7 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 			// at 1 sat/vB.
 			name:      "3 inputs @1 sat/vB",
 			totalSats: 10_000_000,
-			nInputs:   3,
+			vsize:     246,
 			feeRate:   1,
 			wantMax:   10_000_000 - 246,
 		},
@@ -140,7 +140,7 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 			// Dust input below the fee.
 			name:       "dust input",
 			totalSats:  500,
-			nInputs:    1,
+			vsize:      110,
 			feeRate:    10,
 			wantMax:    0,
 			wantReason: true,
@@ -148,7 +148,7 @@ func TestComputeBitcoinMaxSendable(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			max, fee, reason := computeBitcoinMaxSendable(tc.totalSats, tc.nInputs, tc.feeRate)
+			max, fee, reason := computeBitcoinMaxSendable(tc.totalSats, tc.vsize, tc.feeRate)
 			if max != tc.wantMax {
 				t.Errorf("max = %d, want %d", max, tc.wantMax)
 			}
