@@ -410,6 +410,11 @@ func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network
 }
 
 // broadcastBitcoinTx sends the raw transaction via sendrawtransaction.
+// On failure the error message carries the full set of (txid:vout)
+// inputs the build path selected and the hex-encoded tx — without
+// these, "bad-txns-inputs-missingorspent" reports give us no way
+// to figure out which of the candidate UTXOs the node thinks is
+// missing, and re-running locally is the only diagnostic path.
 func broadcastBitcoinTx(tx *Transaction, n *wltnet.Network) error {
 	if len(tx.Raw) == 0 {
 		return errors.New("empty raw tx")
@@ -417,7 +422,11 @@ func broadcastBitcoinTx(tx *Transaction, n *wltnet.Network) error {
 	hexRaw := hex.EncodeToString(tx.Raw)
 	raw, err := n.DoRPC("sendrawtransaction", hexRaw)
 	if err != nil {
-		return fmt.Errorf("sendrawtransaction: %w", err)
+		inputs := strings.Join(tx.btcSpentRefs, ",")
+		if inputs == "" {
+			inputs = "(none recorded)"
+		}
+		return fmt.Errorf("sendrawtransaction: %w (inputs=%s rawhex=%s)", err, inputs, hexRaw)
 	}
 	var txid string
 	if err := json.Unmarshal(raw, &txid); err != nil {
