@@ -1,3 +1,21 @@
+## 0.4.15
+
+- **Fixed: `transactions.maxSendable` returned 0 right after a
+  send.** The bitcoin path was still scanning only `m/0` while
+  `signAndSend` had moved to both chains in 0.4.10 — change
+  UTXOs landed on `m/1` and were invisible to maxSendable.
+  Switched to the same combined fetch `signAndSend` uses.
+- **Performance: collapsed two bitcoin UTXO fetchers into one.**
+  Coin selection, max-sendable, listUTXOs, sign-raw, and the
+  simulate dry-run all now read from a single
+  `modchain_assets` call. Previously some paths additionally
+  hit `modchain_lookupTxoBIP32` per chain just to discover the
+  next change index — which becomes meaningful overhead on
+  wallets with hundreds of historical outputs. Next-change-
+  index is now derived from the same unspent set's `m/1`
+  entries (see `nextChangeIndex` for the fully-spent-history
+  caveat).
+
 ## 0.4.14
 
 - **Fixed: every bitcoin-family `signAndSend` failed with `-25
