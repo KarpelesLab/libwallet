@@ -78,7 +78,7 @@ func accountListUTXOs(ctx *apirouter.Context, in struct {
 	if err != nil {
 		return nil, fmt.Errorf("xpub: %w", err)
 	}
-	utxos, err := fetchBitcoinAllUTXOs(net, xpub)
+	utxos, err := fetchBitcoinUTXOs(net, xpub)
 	if err != nil {
 		return nil, err
 	}

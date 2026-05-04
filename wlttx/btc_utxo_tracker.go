@@ -17,7 +17,7 @@ package wlttx
 //   - the new output(s) we own (typically the change, so we can
 //     spend it right away in send #2)
 //
-// fetchBitcoinAllUTXOs applies this tracker to the modchain-returned
+// fetchBitcoinUTXOs applies this tracker to the modchain-returned
 // list before coin selection sees it.
 //
 // Lifetime / pruning: entries TTL out after utxoTrackerTTL — by which

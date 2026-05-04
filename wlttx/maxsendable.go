@@ -621,10 +621,10 @@ func maxSendableBitcoin(_ context.Context, n *wltnet.Network, acct *wltacct.Acco
 	// Pull EVERY spendable UTXO across receive (m/0) AND change
 	// (m/1) — the same source buildBitcoinTx uses. m/0-only made
 	// maxSendable return 0 immediately after a send because the
-	// change went to m/1 and was invisible here. fetchBitcoinAll
-	// UTXOs also runs through the in-memory tracker, so a just-
-	// broadcast change UTXO is visible before modchain reindexes.
-	utxos, err := fetchBitcoinAllUTXOs(n, xpub)
+	// change went to m/1 and was invisible here. fetchBitcoinUTXOs
+	// also runs through the in-memory tracker, so a just-broadcast
+	// change UTXO is visible before modchain reindexes.
+	utxos, err := fetchBitcoinUTXOs(n, xpub)
 	if err != nil {
 		return nil, err
 	}

@@ -110,10 +110,30 @@ func (t bitcoinTxo) vsize() int {
 	return 148
 }
 
-type bitcoinTxoResp struct {
-	Txo     []bitcoinTxo        `json:"txo"`
-	Balance outscript.BtcAmount `json:"balance"`
-	LastI   int                 `json:"lastI"`
+// nextChangeIndex walks an unspent UTXO set and returns the next
+// child index to use under m/1 (change chain). Returns max(m/1/i) + 1
+// across the visible entries, or 0 when no change has been seen.
+//
+// Caveat: only sees UNSPENT outputs. If every previous change UTXO
+// has been spent and modchain shows no m/1 entries, this returns 0
+// — possibly reusing an already-used change address. The in-memory
+// tracker layered on fetchBitcoinUTXOs cushions the immediate
+// post-send case (the just-emitted change is still pending), but a
+// long-lived account whose change history all confirmed-and-spent
+// can land back at 0. Acceptable for now; tighten with persistent
+// next-change-index tracking if/when address reuse becomes a
+// reported privacy concern.
+func nextChangeIndex(utxos []bitcoinTxo) int {
+	max := -1
+	for _, u := range utxos {
+		if u.chainFromPath() != 1 {
+			continue
+		}
+		if i := u.childIndex(); i > max {
+			max = i
+		}
+	}
+	return max + 1
 }
 
 // buildBitcoinTx assembles and signs a Bitcoin-family transaction for
@@ -135,7 +155,7 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 	//    and change (m/1) chains in one call. Older code only
 	//    scanned m/0 — change UTXOs were unspendable until they
 	//    happened to land on a future receive address.
-	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
+	allUTXOs, err := fetchBitcoinUTXOs(n, xpub)
 	if err != nil {
 		return err
 	}
@@ -184,12 +204,11 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 		}
 	}
 
-	// 4. Derive next change address (m/1/{lastChangeI+1})
-	changeUtxos, err := fetchBitcoinUTXOs(n, xpub, "m/1")
-	changeIndex := 0
-	if err == nil {
-		changeIndex = changeUtxos.LastI + 1
-	}
+	// 4. Derive next change address. Walk the unspent set we
+	//    already fetched to find the highest-used m/1 index;
+	//    +1 for the next slot. See nextChangeIndex's caveat re
+	//    fully-spent change history.
+	changeIndex := nextChangeIndex(allUTXOs)
 	changeAddr, err := acct.ChangeAddress(n.ChainId, changeIndex)
 	if err != nil {
 		return fmt.Errorf("derive change address: %w", err)
@@ -360,7 +379,7 @@ func SignRawBitcoinTx(ctx *SignContext, acct *wltacct.Account, n *wltnet.Network
 		scheme       string
 	}
 	owned := make(map[string]ownedEntry)
-	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
+	allUTXOs, err := fetchBitcoinUTXOs(n, xpub)
 	if err != nil {
 		return nil, fmt.Errorf("scan utxos: %w", err)
 	}
@@ -447,30 +466,15 @@ type SignContext struct {
 	Env wltintf.Env
 }
 
-func fetchBitcoinUTXOs(n *wltnet.Network, xpub, path string) (*bitcoinTxoResp, error) {
-	raw, err := n.DoRPC("modchain_lookupTxoBIP32", xpub, path, true)
-	if err != nil {
-		return nil, fmt.Errorf("modchain_lookupTxoBIP32: %w", err)
-	}
-	var resp bitcoinTxoResp
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("parse txo response: %w", err)
-	}
-	return &resp, nil
-}
-
-// fetchBitcoinAllUTXOs returns every spendable UTXO under xpub across
+// fetchBitcoinUTXOs returns every spendable UTXO under xpub across
 // both the receive (m/0) and change (m/1) chains in a single
 // modchain_assets call. Each txo's Path identifies which chain +
 // index it came from; consumers use childIndex() and chainFromPath()
-// to derive the right signing key.
-//
-// Replaces the old per-chain modchain_lookupTxoBIP32 loop for the
-// hot input-discovery path — the bug that motivated this was that
-// the old buildBitcoinTx only fetched m/0, so any UTXO that landed
-// on a change address (m/1/i) was invisible to coin selection and
-// the user couldn't spend their own change.
-func fetchBitcoinAllUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) {
+// to derive the right signing key. Single source of truth for the
+// bitcoin code paths — every caller (build, sign-raw, max-sendable,
+// list, simulate dry-run) reads from this so they all see the same
+// UTXO set.
+func fetchBitcoinUTXOs(n *wltnet.Network, xpub string) ([]bitcoinTxo, error) {
 	raw, err := n.DoRPC("modchain_assets", xpub)
 	if err != nil {
 		return nil, fmt.Errorf("modchain_assets: %w", err)

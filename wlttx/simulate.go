@@ -734,7 +734,7 @@ func simulateBitcoin(ctx context.Context, e wltintf.Env, n *wltnet.Network, tx *
 // simulateBitcoinDryRun mirrors buildBitcoinTx's selection + fee math
 // without signing, so the approval UI can show what the user is about
 // to commit to before any wallet keys are touched. Reads the same
-// fetchBitcoinAllUTXOs source the build path uses, honours
+// fetchBitcoinUTXOs source the build path uses, honours
 // tx.UTXOs (manual selection), and produces resolved input
 // addresses + amounts so the preview reads like "spend ltc1...XX,
 // L...YY → ltc1<recipient> + change to ltc1<change>, fee 1234 sats".
@@ -756,7 +756,7 @@ func simulateBitcoinDryRun(e wltintf.Env, n *wltnet.Network, tx *Transaction, re
 	if err != nil {
 		return fmt.Errorf("xpub: %w", err)
 	}
-	allUTXOs, err := fetchBitcoinAllUTXOs(n, xpub)
+	allUTXOs, err := fetchBitcoinUTXOs(n, xpub)
 	if err != nil {
 		return err
 	}
@@ -819,11 +819,8 @@ func simulateBitcoinDryRun(e wltintf.Env, n *wltnet.Network, tx *Transaction, re
 		Amount:  wantSats,
 	})
 	if change > 546 {
-		// Next clean change index — same source the build path uses.
-		changeIndex := 0
-		if changeUtxos, cerr := fetchBitcoinUTXOs(n, xpub, "m/1"); cerr == nil {
-			changeIndex = changeUtxos.LastI + 1
-		}
+		// Next clean change index — same helper the build path uses.
+		changeIndex := nextChangeIndex(allUTXOs)
 		if changeAddr, cerr := acct.ChangeAddress(n.ChainId, changeIndex); cerr == nil {
 			res.BitcoinOutputs = append(res.BitcoinOutputs, BitcoinIO{
 				Address: changeAddr,

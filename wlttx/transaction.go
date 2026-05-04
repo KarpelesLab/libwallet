@@ -63,7 +63,7 @@ type Transaction struct {
 	// just consumed and produced so SignAndSend can hand the result
 	// to the in-memory utxoTracker after broadcast succeeds. The
 	// tracker enables back-to-back sends without waiting for
-	// modchain to reindex — each subsequent fetchBitcoinAllUTXOs
+	// modchain to reindex — each subsequent fetchBitcoinUTXOs
 	// call drops the spent refs and injects the new change UTXO.
 	// Unexported on purpose: not in the wire shape, never persisted.
 	btcSpentRefs     []string    `json:"-" sql:"-"`

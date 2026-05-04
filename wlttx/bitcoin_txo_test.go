@@ -137,6 +137,43 @@ func TestBitcoinTxo_Vsize(t *testing.T) {
 	}
 }
 
+func TestNextChangeIndex(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []bitcoinTxo
+		want int
+	}{
+		{"empty set defaults to 0", nil, 0},
+		{
+			"only receive entries — no change history visible",
+			[]bitcoinTxo{{Path: "m/0/0"}, {Path: "m/0/3"}},
+			0,
+		},
+		{
+			"single change at index 0",
+			[]bitcoinTxo{{Path: "m/0/0"}, {Path: "m/1/0"}},
+			1,
+		},
+		{
+			"change at higher index",
+			[]bitcoinTxo{{Path: "m/1/5"}, {Path: "m/0/2"}, {Path: "m/1/3"}},
+			6,
+		},
+		{
+			"malformed paths ignored",
+			[]bitcoinTxo{{Path: "garbage"}, {Path: "m/1/9"}, {Path: "m/0/2"}},
+			10,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := nextChangeIndex(c.in); got != c.want {
+				t.Errorf("nextChangeIndex = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
 // TestBtcInputSigner_PublicSupportsCompressedExport pins the
 // Public() return type to a concrete shape that implements
 // SerializeCompressed(). outscript's pubkey:comp generator (used
