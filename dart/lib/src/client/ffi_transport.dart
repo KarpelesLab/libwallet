@@ -6,6 +6,7 @@ import 'dart:io' show Platform;
 import 'package:ffi/ffi.dart';
 
 import '../events/events.dart';
+import '../version.dart';
 import 'response.dart';
 import 'transport.dart';
 
@@ -160,8 +161,36 @@ class FfiTransport implements Transport {
   }
 
   static DynamicLibrary _loadDefaultLibrary() {
-    // Try to load from the native assets system or default paths
-    return DynamicLibrary.open('liblibwallet.dylib');
+    // iOS: the bridge symbols are statically linked into the host binary
+    // (see ios/Classes/LibwalletBridge.m); no .dylib to dlopen.
+    if (Platform.isIOS) return DynamicLibrary.process();
+
+    // Android: hook/build.dart ships .so files named with both ABI and
+    // package version, e.g. liblibwallet-android-arm64-v0.4.16.so. The
+    // unversioned name doesn't exist in the APK, so we have to construct
+    // the actual filename per-ABI.
+    if (Platform.isAndroid) {
+      final abi = switch (Abi.current()) {
+        Abi.androidArm64 => 'arm64',
+        Abi.androidArm => 'arm',
+        Abi.androidX64 => 'x64',
+        Abi.androidIA32 => 'ia32',
+        final other => throw UnsupportedError(
+            'libwallet has no Android binary for $other'),
+      };
+      return DynamicLibrary.open(
+          'liblibwallet-android-$abi-v$libwalletPackageVersion.so');
+    }
+
+    // macOS / Linux / Windows desktop builds: the c-shared dylib is
+    // co-located with the executable (or on the loader path) under the
+    // platform-conventional extension.
+    if (Platform.isMacOS) return DynamicLibrary.open('liblibwallet.dylib');
+    if (Platform.isLinux) return DynamicLibrary.open('liblibwallet.so');
+    if (Platform.isWindows) return DynamicLibrary.open('libwallet.dll');
+
+    throw UnsupportedError(
+        'libwallet has no default library loader for ${Platform.operatingSystem}');
   }
 
   @override
