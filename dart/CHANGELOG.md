@@ -1,3 +1,59 @@
+## 0.4.20
+
+- **Fixed: `Account:signAndSendTransaction` (Solana) failed
+  with "failed to decode account address" whenever the wallet
+  UI was on a non-Solana network.** `acct.Address` is the
+  network-specific display string and becomes `"N/A"` off
+  Solana, so basing the slot lookup on it broke any host that
+  hadn't called `networks.setCurrent` for a Solana cluster
+  first. Read the raw 32-byte pubkey from the stable
+  `acct.Pubkey` field instead.
+
+## 0.4.19
+
+- **Fixed: Solana `Account:signAndSendTransaction` posted to
+  whatever the wallet UI was currently showing** — typically an
+  EVM RPC, which then returned
+  `The method sendTransaction does not exist`. The send path
+  now picks an actual Solana network: if `CurrentNetwork` is
+  already a Solana cluster (so a user testing on devnet keeps
+  that selection) it's preserved, otherwise the default Solana
+  mainnet entry seeded by `MakeDefaultNetworks` is used.
+
+## 0.4.18
+
+- **Fixed: Solana sponsored transactions silently lost the
+  owner's signature.** `Account:signTransaction` /
+  `signAndSendTransaction` wrote the signature unconditionally
+  into signature slot 0. For sponsored txs the relay (fee
+  payer) holds slot 0 and the wallet owner is at slot 1+ — so
+  the owner's signature clobbered the relay's slot, the relay
+  re-signed slot 0 with its own key (overwriting the owner's),
+  and the tx hit Solana with slot 1 still zeroed and got
+  rejected with "missing signature for account 1". libwallet
+  now walks the message's account-keys array to find which
+  slot matches the signer's pubkey and writes there. Handles
+  both legacy and v0 versioned messages. Pubkeys that aren't
+  required signers for the transaction are rejected.
+
+## 0.4.17
+
+- **Fixed: the FFI transport only worked on macOS.** The
+  default library loader unconditionally opened
+  `liblibwallet.dylib`, so iOS, Android, Linux, and Windows
+  builds either failed to find a library or loaded a stale
+  one. Now picks the right thing per platform:
+    - iOS uses `DynamicLibrary.process()` (bridge symbols are
+      statically linked into the host binary via
+      `LibwalletBridge.m`; there is no `.dylib` to dlopen);
+    - Android constructs the versioned per-ABI filename
+      `liblibwallet-android-<abi>-v<version>.so` that
+      `hook/build.dart` actually ships;
+    - macOS / Linux / Windows use the conventional
+      `liblibwallet.{dylib,so}` / `libwallet.dll`.
+  Unknown platforms or ABIs raise `UnsupportedError` instead
+  of silently failing.
+
 ## 0.4.16
 
 - **Fixed: bitcoin "send max" intermittently failed with
