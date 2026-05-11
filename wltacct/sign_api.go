@@ -234,5 +234,18 @@ func signSolanaTransaction(ctx *apirouter.Context, txB64 string, keys []*wltsign
 	if err != nil {
 		return nil, nil, fmt.Errorf("solana sign failed: %w", err)
 	}
-	return solanaInsertSignature(txBytes, sig), acct, nil
+
+	// Decode the wallet's pubkey so we can find which signature slot it
+	// belongs in. Sponsored transactions put the relay (feePayer) at slot
+	// 0 and the wallet owner at slot 1+, so writing unconditionally to
+	// slot 0 silently corrupted the relay's slot.
+	pubkey, err := base58.Bitcoin.Decode(acct.Address)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to decode account address %q: %w", acct.Address, err)
+	}
+	signed, err := solanaInsertSignature(txBytes, sig, pubkey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to insert signature: %w", err)
+	}
+	return signed, acct, nil
 }

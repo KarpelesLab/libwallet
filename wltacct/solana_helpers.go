@@ -1,6 +1,7 @@
 package wltacct
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 )
@@ -42,15 +43,84 @@ func solanaExtractMessage(txBytes []byte) ([]byte, error) {
 	return txBytes[sigEnd:], nil
 }
 
-// solanaInsertSignature replaces the first 64-byte signature slot in a serialized Solana transaction.
-func solanaInsertSignature(txBytes []byte, sig []byte) []byte {
+// solanaFindSignerSlot returns the index in the message's account-keys array
+// that matches pubkey. Errors if pubkey is not present, or is present but
+// outside the required-signers prefix (i.e. not actually a signer).
+//
+// Handles both legacy and versioned (v0+) messages. Versioned messages start
+// with a byte whose high bit is set; the low 7 bits are the version.
+func solanaFindSignerSlot(msg []byte, pubkey []byte) (int, error) {
+	if len(pubkey) != 32 {
+		return -1, fmt.Errorf("pubkey must be 32 bytes, got %d", len(pubkey))
+	}
+	if len(msg) == 0 {
+		return -1, errors.New("empty message")
+	}
+
+	pos := 0
+	if msg[0]&0x80 != 0 {
+		// Versioned message: skip the version-prefix byte.
+		pos = 1
+	}
+	if len(msg) < pos+3 {
+		return -1, errors.New("message too short for header")
+	}
+	numRequiredSignatures := int(msg[pos])
+	pos += 3
+
+	numAccountKeys, consumed, err := solanaReadCompactU16(msg[pos:])
+	if err != nil {
+		return -1, fmt.Errorf("failed to read account keys count: %w", err)
+	}
+	pos += consumed
+	if pos+int(numAccountKeys)*32 > len(msg) {
+		return -1, errors.New("message too short for account keys")
+	}
+
+	for i := 0; i < int(numAccountKeys); i++ {
+		keyStart := pos + i*32
+		if bytes.Equal(msg[keyStart:keyStart+32], pubkey) {
+			if i >= numRequiredSignatures {
+				return -1, fmt.Errorf("pubkey is at account-keys slot %d but only %d account(s) are required signers", i, numRequiredSignatures)
+			}
+			return i, nil
+		}
+	}
+	return -1, errors.New("pubkey not found in transaction account keys")
+}
+
+// solanaInsertSignature writes sig into the signature slot whose corresponding
+// account-keys entry matches pubkey. Returns an error if pubkey isn't a signer
+// for this transaction or the transaction is malformed.
+//
+// The previous version wrote unconditionally into slot 0, which broke sponsored
+// transactions where the relay (fee payer) holds slot 0 and the wallet owner
+// is at a later slot.
+func solanaInsertSignature(txBytes []byte, sig []byte, pubkey []byte) ([]byte, error) {
+	if len(sig) != 64 {
+		return nil, fmt.Errorf("signature must be 64 bytes, got %d", len(sig))
+	}
+
+	numSigs, consumed, err := solanaReadCompactU16(txBytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read signature count: %w", err)
+	}
+	sigEnd := consumed + int(numSigs)*64
+	if sigEnd > len(txBytes) {
+		return nil, fmt.Errorf("transaction too short: need %d bytes for signatures, have %d", sigEnd, len(txBytes))
+	}
+
+	slot, err := solanaFindSignerSlot(txBytes[sigEnd:], pubkey)
+	if err != nil {
+		return nil, err
+	}
+	if slot >= int(numSigs) {
+		return nil, fmt.Errorf("signer slot %d exceeds signature array length %d (transaction is missing space for this signer)", slot, numSigs)
+	}
+
 	result := make([]byte, len(txBytes))
 	copy(result, txBytes)
-
-	_, consumed, err := solanaReadCompactU16(result)
-	if err != nil || consumed+64 > len(result) {
-		return result
-	}
-	copy(result[consumed:consumed+64], sig)
-	return result
+	sigStart := consumed + slot*64
+	copy(result[sigStart:sigStart+64], sig)
+	return result, nil
 }
