@@ -238,13 +238,20 @@ func signSolanaTransaction(ctx *apirouter.Context, txB64 string, keys []*wltsign
 		return nil, nil, fmt.Errorf("solana sign failed: %w", err)
 	}
 
-	// Decode the wallet's pubkey so we can find which signature slot it
-	// belongs in. Sponsored transactions put the relay (feePayer) at slot
-	// 0 and the wallet owner at slot 1+, so writing unconditionally to
-	// slot 0 silently corrupted the relay's slot.
-	pubkey, err := base58.Bitcoin.Decode(acct.Address)
+	// Find which signature slot belongs to this wallet. Sponsored
+	// transactions put the relay (feePayer) at slot 0 and the wallet
+	// owner at slot 1+, so writing unconditionally to slot 0 silently
+	// corrupted the relay's slot. Use the raw ed25519 pubkey on the
+	// Account directly — `acct.Address` is the display address and
+	// becomes "N/A" whenever the current network isn't Solana (see
+	// UpdateAddressForNetwork), which would break signing for any
+	// host that hadn't called networks.setCurrent first.
+	pubkey, err := base64.RawURLEncoding.DecodeString(acct.Pubkey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode account address %q: %w", acct.Address, err)
+		return nil, nil, fmt.Errorf("failed to decode ed25519 pubkey on account: %w", err)
+	}
+	if len(pubkey) != 32 {
+		return nil, nil, fmt.Errorf("ed25519 pubkey on account has wrong length: got %d, want 32", len(pubkey))
 	}
 	signed, err := solanaInsertSignature(txBytes, sig, pubkey)
 	if err != nil {
