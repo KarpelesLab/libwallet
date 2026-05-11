@@ -167,11 +167,14 @@ func accountSignAndSendTransaction(ctx *apirouter.Context, in struct {
 	if err != nil {
 		return nil, err
 	}
-	_ = acct // currently only Solana supported; net comes from current network
+	_ = acct // currently only Solana supported
 
-	net, err := wltnet.CurrentNetwork(e)
+	// Pick a Solana RPC. Using CurrentNetwork would send the tx to whatever
+	// the user is browsing in the wallet UI (often an EVM RPC), which then
+	// returns "The method sendTransaction does not exist".
+	net, err := wltnet.SolanaBroadcastNetwork(e)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get current network: %w", err)
+		return nil, fmt.Errorf("failed to get Solana network: %w", err)
 	}
 	txBase58 := base58.Bitcoin.Encode(signed)
 	result, err := net.DoRPC("sendTransaction", txBase58, map[string]any{"encoding": "base58"})

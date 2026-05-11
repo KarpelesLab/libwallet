@@ -96,6 +96,21 @@ func CurrentNetwork(e wltintf.Env) (*Network, error) {
 	return NetworkById(e, xid)
 }
 
+// SolanaBroadcastNetwork returns the Solana network to use when broadcasting
+// a Solana transaction. If CurrentNetwork already points at a Solana cluster
+// (e.g. the user has switched to devnet for testing), that selection is
+// preserved. Otherwise we fall back to the default Solana mainnet entry —
+// MakeDefaultNetworks always seeds one. Without this fallback,
+// Account:signAndSendTransaction would route Solana txs to whatever the user
+// happens to be looking at in the wallet UI — typically an EVM RPC, which
+// rejects them with "method sendTransaction does not exist".
+func SolanaBroadcastNetwork(e wltintf.Env) (*Network, error) {
+	if cur, err := CurrentNetwork(e); err == nil && cur != nil && cur.Type == "solana" {
+		return cur, nil
+	}
+	return solanaNetwork(e, "mainnet", 97, false)
+}
+
 func apiFetchNetwork(ctx *apirouter.Context, in struct{ Id string }) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
