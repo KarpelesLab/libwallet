@@ -1,3 +1,14 @@
+## 0.4.21
+
+- **Added: `Wallet:initiateKeygen` + `Wallet:joinSign`** for the
+  ClawdWallet skill-gated agent-wallet protocol. `initiateKeygen` is
+  the keygen leader — it sends `walletsign/<sid>/init` to each peer in
+  the committee with the canonical InitPayload, then runs the local
+  EdDSA keygen as a share holder. `joinSign` is the joiner side of the
+  threshold-sign ceremony (mobile is not in the sign committee for
+  ClawdWallet; the agent leads). PartyID.Key is taken from the
+  peer-supplied `key` field, matching wdrone's existing convention.
+
 ## 0.4.20
 
 - **Fixed: `Account:signAndSendTransaction` (Solana) failed
