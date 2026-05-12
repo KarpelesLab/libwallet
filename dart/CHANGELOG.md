@@ -1,7 +1,7 @@
 ## 0.4.24
 
 - **Added: `LibwalletClient.clawdWallet.pair(url)`** — verifies a
-  ClawdWallet pairing URL (`clawd://pair?agent=...&token=...`) by
+  ClawdWallet pairing URL (`tibane://pair?agent=...&token=...`) by
   handshaking with the agent over Spot and returns the verified
   `AgentIdentity` (`agentSpotId`, `suggestedName`, `agentVersion`,
   `capabilities`). Used as the deep-link replacement for the manual
@@ -26,6 +26,24 @@
   native library. Republished with both files in sync. Use
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
+
+## Unreleased
+
+- **Added: `LibwalletClient.wallets.createAgentWallet`** — one
+  high-level call that opens the server-side `Crypto/WalletSign:newAgent`
+  session (filling in `mobile_spot_id` from libwallet's own Spot
+  client) and drives the 3-party EdDSA keygen ceremony to completion.
+  Returns a `CreateAgentWalletResult` with the new wallet id + Solana
+  address. The host passes its existing `AtOnline` session in as
+  `api:` so libwallet doesn't have to manage bearer tokens. Replaces
+  the previous "do four things in a row from the screen" flow.
+- **Removed: `info.spotId()` / `Info:spotId` endpoint.** Hosts no
+  longer need to read the local Spot TargetId — `createAgentWallet`
+  fills it in internally. The shape of the previous flow (host reads
+  spot id, app posts newAgent, app calls initiateKeygen) collapsed
+  to a single call.
+- **Added: dependency on `atonline_api` ^0.5.0** (passed in by the
+  host; libwallet does not store or refresh tokens).
 
 ## 0.4.22
 

@@ -2,7 +2,7 @@ package wltwallet
 
 // ClawdWallet pairing — Stage 1.
 //
-// The mobile app receives a `clawd://pair?agent=<spot-id>&token=<token>`
+// The mobile app receives a `tibane://pair?agent=<spot-id>&token=<token>`
 // URL out-of-band, hands it to libwallet, and gets back a verified agent
 // identity (or a typed error). The handshake is one Spot round trip:
 // mobile → agent's `pair` endpoint with {v, token, mobile_spot_id};
@@ -89,7 +89,7 @@ type pairErrorBody struct {
 	Message string `json:"message,omitempty"`
 }
 
-// parseClawdPairURL validates a clawd://pair?... URL and extracts the
+// parseClawdPairURL validates a tibane://pair?... URL and extracts the
 // agent spot id and pairing token. Returns errPairURLMalformed for any
 // validation failure — callers don't need to distinguish the sub-reasons,
 // the Dart side surfaces the same exception class either way.
@@ -101,10 +101,10 @@ func parseClawdPairURL(raw string) (agentSpotID, token string, err error) {
 	if err != nil {
 		return "", "", errPairURLMalformed
 	}
-	if u.Scheme != "clawd" {
+	if u.Scheme != "tibane" {
 		return "", "", errPairURLMalformed
 	}
-	// `clawd://pair?...` parses as scheme=clawd, host=pair, path="" — the
+	// `tibane://pair?...` parses as scheme=tibane, host=pair, path="" — the
 	// "pair" segment lives in u.Host. Accept either, since some URL
 	// libraries normalise differently.
 	target := u.Host

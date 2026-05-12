@@ -18,6 +18,10 @@ dependencies:
   ffi: ^2.0.0
   hooks: ^1.0.0
   code_assets: ^1.0.0
+  # AtOnline session is the host's responsibility. We accept it as an
+  # argument in createAgentWallet so libwallet doesn't have to manage
+  # bearer tokens or refresh — the host already does that.
+  atonline_api: ^0.5.0
 
 dev_dependencies:
   test: ^1.24.0

@@ -54,13 +54,13 @@ void main() {
       'agent_version': 'v0.1.0',
       'capabilities': {'curves': ['ed25519']},
     });
-    final id = await api.pair('clawd://pair?agent=k.AAAA1234&token=tok');
+    final id = await api.pair('tibane://pair?agent=k.AAAA1234&token=tok');
     expect(id.agentSpotId, 'k.AAAA1234');
     expect(id.suggestedName, 'laptop');
     expect(id.agentVersion, 'v0.1.0');
     expect(id.capabilities['curves'], ['ed25519']);
     expect(tx.lastPath, 'ClawdWallet:pair');
-    expect(tx.lastParams, {'url': 'clawd://pair?agent=k.AAAA1234&token=tok'});
+    expect(tx.lastParams, {'url': 'tibane://pair?agent=k.AAAA1234&token=tok'});
   });
 
   test('pair tolerates missing optional fields and null capabilities', () async {
@@ -69,7 +69,7 @@ void main() {
       'agent_spot_id': 'k.BBB',
       'capabilities': null,
     });
-    final id = await api.pair('clawd://pair?agent=k.BBB&token=t');
+    final id = await api.pair('tibane://pair?agent=k.BBB&token=t');
     expect(id.suggestedName, '');
     expect(id.agentVersion, '');
     expect(id.capabilities, isEmpty);
@@ -92,7 +92,7 @@ void main() {
     test('${entry.key} → ${entry.value}', () async {
       tx.willThrow(LibwalletException(message: entry.key, code: '500'));
       await expectLater(
-        api.pair('clawd://pair?agent=k.X&token=t'),
+        api.pair('tibane://pair?agent=k.X&token=t'),
         throwsA(isA<PairingException>().having(
             (e) => e.runtimeType, 'runtimeType', entry.value)),
       );
@@ -106,7 +106,7 @@ void main() {
     tx.willThrow(LibwalletException(
         message: 'agent_unreachable: connection refused', code: '500'));
     await expectLater(
-      api.pair('clawd://pair?agent=k.X&token=t'),
+      api.pair('tibane://pair?agent=k.X&token=t'),
       throwsA(isA<PairingAgentUnreachableException>()),
     );
   });
@@ -115,7 +115,7 @@ void main() {
     tx.willThrow(
         LibwalletException(message: 'who_knows', code: '500'));
     await expectLater(
-      api.pair('clawd://pair?agent=k.X&token=t'),
+      api.pair('tibane://pair?agent=k.X&token=t'),
       throwsA(isA<PairingBadRequestException>()),
     );
   });
@@ -124,7 +124,7 @@ void main() {
       () async {
     tx.willThrow(LibwalletException(message: 'token_expired', code: '500'));
     try {
-      await api.pair('clawd://pair?agent=k.X&token=t');
+      await api.pair('tibane://pair?agent=k.X&token=t');
       fail('expected throw');
     } catch (e) {
       expect(e, isA<PairingException>());

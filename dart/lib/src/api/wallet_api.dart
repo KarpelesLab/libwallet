@@ -1,3 +1,5 @@
+import 'package:atonline_api/atonline_api.dart' show AtOnline;
+
 import '../client/transport.dart';
 import '../client/response.dart';
 import '../models/key_description.dart';
@@ -327,6 +329,94 @@ class WalletApi {
     return Map<String, dynamic>.from(data as Map);
   }
 
+  /// Provision an agent-controlled wallet end-to-end: opens the
+  /// server-side WalletSign session + skill policy, then drives the
+  /// 3-party EdDSA keygen ceremony with the agent and wdrone, and
+  /// returns the new wallet id + Solana address.
+  ///
+  /// Internally this:
+  ///   1. Asks libwallet to build the `Crypto/WalletSign:newAgent` body
+  ///      (libwallet fills in `mobile_spot_id` from its own Spot
+  ///      TargetId — the host never has to read that value);
+  ///   2. POSTs the body to phplatform using [api] (the host's existing
+  ///      `AtOnline` session — libwallet stays out of bearer-token
+  ///      management);
+  ///   3. Hands the response back to libwallet's `Wallet:initiateKeygen`
+  ///      which drives the keygen committee to completion.
+  ///
+  /// Inputs:
+  /// - [api]: the host app's logged-in `AtOnline` session. Libwallet
+  ///   does not store or reuse it — it's passed through to one
+  ///   authenticated POST.
+  /// - [name]: wallet name (also used as `Number` on the server row).
+  /// - [agentSpotId]: agent's Spot identity (`k.<base64url>`), typically
+  ///   from a successful pairing handshake (`clawdWallet.pair`).
+  /// - [policy]: skill-policy fields. Stage 1 accepts
+  ///   `per_tx_max_usd` (num), `daily_max_usd` (num),
+  ///   `recipient_allowlist` (`List<String>`), `recipient_denylist`
+  ///   (`List<String>`). Pass-through — libwallet doesn't interpret the
+  ///   shape; the policy module on phplatform validates.
+  ///
+  /// Throws on any failure (network, server, keygen). The wallet is not
+  /// rolled back on partial failure — the host should surface the error
+  /// and let the user retry (a fresh keygen session is opened each call).
+  Future<CreateAgentWalletResult> createAgentWallet({
+    required AtOnline api,
+    required String name,
+    required String agentSpotId,
+    required Map<String, dynamic> policy,
+  }) async {
+    // 1. Compose the newAgent body server-side so mobile_spot_id is
+    //    filled in from libwallet's Spot client — the host never has
+    //    to know about spot ids.
+    final body = await _conn.request('Wallet:buildNewAgentBody', 'POST', {
+      'name': name,
+      'agent_spot_id': agentSpotId,
+      'policy': policy,
+    });
+    final bodyMap = Map<String, dynamic>.from(body as Map);
+
+    // 2. User-authenticated POST through the host's atonline session.
+    final apiResp = await api.authReq(
+      'Crypto/WalletSign:newAgent',
+      method: 'POST',
+      body: bodyMap,
+    );
+    final data = Map<String, dynamic>.from(apiResp.data as Map);
+
+    // 3. Drive the keygen ceremony. The init_payload.peers list is the
+    //    canonical committee assembled server-side.
+    final remoteKey = data['remote_key'] as String?;
+    final wdroneSpotId = data['wdrone_spot_id'] as String?;
+    final initPayload = data['init_payload'];
+    final rawPeers =
+        (initPayload is Map ? initPayload['peers'] : null) as List?;
+    if (remoteKey == null ||
+        wdroneSpotId == null ||
+        rawPeers == null ||
+        rawPeers.isEmpty) {
+      throw StateError(
+        'Crypto/WalletSign:newAgent response is missing keygen material '
+        '(remote_key, wdrone_spot_id, init_payload.peers)',
+      );
+    }
+    final peers = rawPeers
+        .map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map))
+        .toList();
+
+    final kg = await initiateKeygen(
+      remoteKey: remoteKey,
+      peers: peers,
+      wdroneSpotId: wdroneSpotId,
+      name: name,
+    );
+    return CreateAgentWalletResult(
+      walletId: (kg['wlt_id'] as String?) ?? '',
+      solanaAddress: (kg['solana_address'] as String?) ?? '',
+      pubkey: (kg['pubkey'] as String?) ?? '',
+    );
+  }
+
   /// Join a ClawdWallet sign ceremony (Stage 1).
   ///
   /// Mobile is *not* a signer in the 2-of-3 ClawdWallet sign topology
@@ -364,4 +454,28 @@ class WalletApi {
     });
     return Map<String, dynamic>.from(data as Map);
   }
+}
+
+/// Result of [WalletApi.createAgentWallet].
+class CreateAgentWalletResult {
+  /// New wallet's local id (`wlt-*`).
+  final String walletId;
+
+  /// Wallet's Solana address (base58 of the 32-byte ed25519 pubkey).
+  /// Show this on the funding screen so the owner can send SOL + USDC.
+  final String solanaAddress;
+
+  /// Base64url of the raw ed25519 pubkey. Useful for diagnostics; the
+  /// human-visible value is [solanaAddress].
+  final String pubkey;
+
+  const CreateAgentWalletResult({
+    required this.walletId,
+    required this.solanaAddress,
+    required this.pubkey,
+  });
+
+  @override
+  String toString() =>
+      'CreateAgentWalletResult($walletId, $solanaAddress)';
 }

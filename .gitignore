@@ -1,3 +1,7 @@
 /dist/
 /libwallet-*.tar.gz
 /wlttest/test/
+
+# Flutter test runner build cache — created by `flutter test` (now the
+# package's test runner; see .github/workflows/dart-test.yml).
+/dart/build/

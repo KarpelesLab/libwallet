@@ -5,7 +5,7 @@ import '../models/agent_identity.dart';
 
 /// ClawdWallet pairing API.
 ///
-/// Stage 1 surface is a single call: hand a `clawd://pair?...` URL in,
+/// Stage 1 surface is a single call: hand a `tibane://pair?...` URL in,
 /// get a verified [AgentIdentity] back, or one of the typed
 /// [PairingException] subclasses on failure. The host app does not speak
 /// Spot — libwallet drives the entire handshake.
@@ -17,7 +17,7 @@ class ClawdWalletApi {
   final Transport _conn;
   ClawdWalletApi(this._conn);
 
-  /// Verify a `clawd://pair?agent=...&token=...` URL by handshaking with
+  /// Verify a `tibane://pair?agent=...&token=...` URL by handshaking with
   /// the agent over Spot, and return the agent's verified identity.
   ///
   /// Throws a typed [PairingException] subclass on failure — see that file

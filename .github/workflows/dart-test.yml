@@ -17,17 +17,15 @@ jobs:
         with:
           go-version: "1.26"
 
-      # Same dual-SDK setup as publish-dart.yml: Flutter is needed
-      # because pubspec.yaml declares a Flutter SDK lower bound (the
-      # ffiPlugin path-based pod requires it), so plain
-      # dart-lang/setup-dart fails `dart pub get` with
-      # "libwallet requires the Flutter SDK, version solving failed".
-      # Order matters: setup-dart runs second so its OIDC + pub
-      # credential plumbing wins on PATH for any test that publishes.
+      # Flutter is the test runner here: libwallet's Dart side now
+      # depends on atonline_api (which transitively pulls in Flutter
+      # via flutter_secure_storage), so `dart test` fails to load any
+      # file that imports `package:libwallet/libwallet.dart` —
+      # `flutter test` compiles those imports correctly. setup-dart is
+      # no longer needed; this job doesn't publish.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - uses: dart-lang/setup-dart@v1
 
       # Same ldflag plumbing as build.yml so CI test binaries also
       # carry populated dateTag/gitTag in Info:version. Lets the
@@ -54,24 +52,25 @@ jobs:
 
       - name: Install Dart dependencies
         working-directory: dart
-        run: dart pub get
+        run: flutter pub get
 
       - name: Run Dart analysis
         working-directory: dart
-        run: dart analyze lib test hook
+        run: flutter analyze lib test hook
 
       # Belt-and-suspenders for the version-constant lockstep:
-      # version_constant_test.dart catches drift if you `dart test`,
+      # version_constant_test.dart catches drift if you run the tests,
       # but if a release commit only updates pubspec.yaml without
       # touching anything in test/, the test wouldn't run on PR. The
-      # CLI check covers that case.
+      # CLI check covers that case. bump_version.dart is plain Dart
+      # — `dart run` works inside a Flutter project tree.
       - name: Verify pubspec ↔ lib/src/version.dart lockstep
         working-directory: dart
         run: dart run tools/bump_version.dart --check
 
       - name: Run Dart unit tests
         working-directory: dart
-        run: dart test test/amount_test.dart test/models_test.dart test/response_test.dart test/version_constant_test.dart
+        run: flutter test test/amount_test.dart test/models_test.dart test/response_test.dart test/version_constant_test.dart test/clawdwallet_pair_test.dart
 
       - name: Run FFI integration tests
         working-directory: dart
@@ -79,10 +78,10 @@ jobs:
           # The Go c-shared runtime's background goroutines can crash on
           # process exit when the Dart VM tears down NativeCallable pointers.
           # All tests pass before the exit crash, so accept exit code 134 (SIGABRT).
-          dart test --concurrency=1 test/ffi_integration_test.dart || {
+          flutter test --concurrency=1 test/ffi_integration_test.dart || {
             EXIT=$?
             if [ $EXIT -eq 134 ]; then
-              echo "Go runtime exit crash (expected with c-shared + dart test)"
+              echo "Go runtime exit crash (expected with c-shared + flutter test)"
             else
               exit $EXIT
             fi

@@ -19,22 +19,22 @@ func TestParseClawdPairURL(t *testing.T) {
 	}{
 		{
 			name:      "valid",
-			url:       "clawd://pair?agent=" + goodAgent + "&token=" + goodToken,
+			url:       "tibane://pair?agent=" + goodAgent + "&token=" + goodToken,
 			wantAgent: goodAgent,
 			wantToken: goodToken,
 		},
 		{
 			name:      "valid extra params ignored",
-			url:       "clawd://pair?agent=" + goodAgent + "&token=" + goodToken + "&v=1",
+			url:       "tibane://pair?agent=" + goodAgent + "&token=" + goodToken + "&v=1",
 			wantAgent: goodAgent,
 			wantToken: goodToken,
 		},
 		{name: "empty", url: "", wantErr: errPairURLMalformed},
 		{name: "wrong scheme", url: "https://pair?agent=" + goodAgent + "&token=" + goodToken, wantErr: errPairURLMalformed},
-		{name: "wrong path", url: "clawd://other?agent=" + goodAgent + "&token=" + goodToken, wantErr: errPairURLMalformed},
-		{name: "missing agent", url: "clawd://pair?token=" + goodToken, wantErr: errPairURLMalformed},
-		{name: "missing token", url: "clawd://pair?agent=" + goodAgent, wantErr: errPairURLMalformed},
-		{name: "agent without k. prefix", url: "clawd://pair?agent=zzzz&token=" + goodToken, wantErr: errPairURLMalformed},
+		{name: "wrong path", url: "tibane://other?agent=" + goodAgent + "&token=" + goodToken, wantErr: errPairURLMalformed},
+		{name: "missing agent", url: "tibane://pair?token=" + goodToken, wantErr: errPairURLMalformed},
+		{name: "missing token", url: "tibane://pair?agent=" + goodAgent, wantErr: errPairURLMalformed},
+		{name: "agent without k. prefix", url: "tibane://pair?agent=zzzz&token=" + goodToken, wantErr: errPairURLMalformed},
 		{name: "garbage", url: ":::not a url", wantErr: errPairURLMalformed},
 	}
 
