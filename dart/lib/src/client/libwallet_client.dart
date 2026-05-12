@@ -4,6 +4,7 @@ import 'dart:ffi';
 
 import '../api/account_api.dart';
 import '../api/asset_api.dart';
+import '../api/clawdwallet_api.dart';
 import '../api/contact_api.dart';
 import '../api/crash_api.dart';
 import '../api/info_api.dart';
@@ -65,6 +66,7 @@ class LibwalletClient {
   late final RequestApi requests = RequestApi(_transport);
   late final WalletConnectApi walletConnect = WalletConnectApi(_transport);
   late final CrashApi crashes = CrashApi(_transport);
+  late final ClawdWalletApi clawdWallet = ClawdWalletApi(_transport);
 
   LibwalletClient._(this._transport) {
     ready = _verifyVersionMatch();

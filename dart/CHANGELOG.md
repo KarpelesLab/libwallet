@@ -1,3 +1,21 @@
+## Unreleased
+
+- **Added: `LibwalletClient.clawdWallet.pair(url)`** — verifies a
+  ClawdWallet pairing URL (`clawd://pair?agent=...&token=...`) by
+  handshaking with the agent over Spot and returns the verified
+  `AgentIdentity` (`agentSpotId`, `suggestedName`, `agentVersion`,
+  `capabilities`). Used as the deep-link replacement for the manual
+  "paste agent_spot_id" field on the Create-agent-wallet flow. The
+  app hands a URL string in; libwallet drives the entire Spot
+  handshake. Failures throw typed `PairingException` subclasses —
+  `PairingURLMalformedException`, `PairingAgentUnreachableException`
+  (15s timeout), `PairingTokenInvalidException`,
+  `PairingTokenExpiredException`, `PairingTokenConsumedException`,
+  `PairingBadRequestException`, and
+  `PairingIdentityMismatchException` (security: response's
+  `agent_spot_id` ≠ URL `agent` param). Wire contract:
+  `tibaneapp/docs/clawdwallet-pairing.md`.
+
 ## 0.4.23
 
 - **Fixed: `libwalletPackageVersion` was stuck at `0.4.20` in the
