@@ -1,3 +1,14 @@
+## 0.4.22
+
+- **Added: `info.spotId()`** returns the local Spot TargetId
+  (`k.<base64url>`). Hosts pass it into `Crypto/WalletSign:newAgent`
+  as `mobile_spot_id` so the policy module includes the mobile in
+  the canonical peers list for the keygen ceremony.
+- **Changed: `peers[].id` wire tag** (was `spot_id`) on
+  `Wallet:initiateKeygen` and `Wallet:joinSign`. Aligns with
+  tss-lib's `MessageWrapper_PartyID` protobuf JSON tag so wdrone
+  can unmarshal peers directly into `tss.SortedPartyIDs`.
+
 ## 0.4.21
 
 - **Added: `Wallet:initiateKeygen` + `Wallet:joinSign`** for the

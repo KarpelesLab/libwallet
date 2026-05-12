@@ -2,7 +2,7 @@ name: libwallet
 description: >-
   Multi-chain TSS cryptocurrency wallet client. Supports EVM, Bitcoin, Solana
   and Monacoin via direct FFI to the Go libwallet core.
-version: 0.4.21
+version: 0.4.22
 repository: https://github.com/KarpelesLab/libwallet
 issue_tracker: https://github.com/KarpelesLab/libwallet/issues
 
