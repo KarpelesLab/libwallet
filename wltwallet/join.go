@@ -81,7 +81,11 @@ func init() {
 //     same bytes so SortedPartyIDs agrees across the committee —
 //     this matches wdrone's existing convention (party.go:124-135).
 type joinPeer struct {
-	SpotId  string `json:"spot_id"`
+	// SpotId carries the peer's Spot TargetId ("k.<base64url>"). JSON tag
+	// is `id` so the wire shape matches tss-lib's MessageWrapper_PartyID
+	// protobuf JSON tag — wdrone unmarshals the peers list directly into
+	// tss.SortedPartyIDs and needs `id` populated for routing.
+	SpotId  string `json:"id"`
 	Moniker string `json:"moniker"`
 	Key     string `json:"key"`
 }

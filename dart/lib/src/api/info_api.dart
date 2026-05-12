@@ -101,6 +101,19 @@ class InfoApi {
     final data = await _conn.request('Info:getWalletInfo', 'GET');
     return WalletInfo.fromJson(Map<String, dynamic>.from(data as Map));
   }
+
+  /// Returns the local Spot TargetId — the `k.<base64url>` peer identifier
+  /// libwallet uses on the Spot network. Empty when the spot client isn't
+  /// online yet (host should retry).
+  ///
+  /// Hosts pass this into `Crypto/WalletSign:newAgent` (as `mobile_spot_id`)
+  /// so the policy module includes the mobile in the canonical peers list
+  /// for the keygen ceremony.
+  Future<String> spotId() async {
+    final data = await _conn.request('Info:spotId', 'GET');
+    final m = Map<String, dynamic>.from(data as Map);
+    return (m['spot_id'] as String?) ?? '';
+  }
 }
 
 /// Host-wallet identity block sent to libwallet via [InfoApi.setWalletInfo].

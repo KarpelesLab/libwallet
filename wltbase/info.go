@@ -33,6 +33,7 @@ func init() {
 	pobj.RegisterStatic("Info:onboarding", infoOnboarding)
 	pobj.RegisterStatic("Info:setWalletInfo", infoSetWalletInfo)
 	pobj.RegisterStatic("Info:getWalletInfo", infoGetWalletInfo)
+	pobj.RegisterStatic("Info:spotId", infoSpotId)
 
 	// version is populated by -ldflags only on tag-triggered release
 	// builds. An empty version means this binary was built from a
@@ -149,6 +150,26 @@ func infoFirstRun(ctx context.Context) (any, error) {
 	t := &wltobj.TimeId{}
 	err = t.UnmarshalBinary(v)
 	return t, err
+}
+
+// infoSpotId returns the local Spot TargetId — the `k.<base64url>` peer
+// identifier the host wallet uses on the Spot network. Hosts pass this into
+// `Crypto/WalletSign:newAgent` so the policy module can include the mobile
+// in the canonical peers list for the keygen ceremony.
+//
+// Returns an empty string when the spot client isn't ready yet (host should
+// retry — typically resolves within a second of startup once the spotlib
+// client comes online).
+func infoSpotId(ctx context.Context) (any, error) {
+	e := apirouter.GetObject[env](ctx, "@env")
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	spot := e.Spot()
+	if spot == nil {
+		return map[string]any{"spot_id": ""}, nil
+	}
+	return map[string]any{"spot_id": spot.TargetId()}, nil
 }
 
 func infoOnboarding(ctx context.Context) (any, error) {
