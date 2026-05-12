@@ -27,7 +27,7 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
-## Unreleased
+## 0.4.25
 
 - **Added: `LibwalletClient.wallets.createAgentWallet`** — one
   high-level call that opens the server-side `Crypto/WalletSign:newAgent`
