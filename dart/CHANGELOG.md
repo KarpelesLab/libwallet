@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.24
 
 - **Added: `LibwalletClient.clawdWallet.pair(url)`** — verifies a
   ClawdWallet pairing URL (`clawd://pair?agent=...&token=...`) by
