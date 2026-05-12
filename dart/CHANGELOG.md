@@ -1,3 +1,14 @@
+## 0.4.23
+
+- **Fixed: `libwalletPackageVersion` was stuck at `0.4.20` in the
+  0.4.21 and 0.4.22 publishes.** The bump for those releases only
+  touched `pubspec.yaml`; the constant in `lib/src/version.dart`
+  was never updated, so `LibwalletClient.initialize` would trip
+  its stale-binary mismatch check at runtime against the bundled
+  native library. Republished with both files in sync. Use
+  `dart run tools/bump_version.dart <version>` (not a hand edit)
+  to keep them locked.
+
 ## 0.4.22
 
 - **Added: `info.spotId()`** returns the local Spot TargetId
