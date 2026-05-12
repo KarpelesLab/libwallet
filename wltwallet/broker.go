@@ -180,12 +180,20 @@ func (b *localBroker) Receive(msg *tss.JsonMessage) error {
 // spotPeer represents a TSS party that lives on the other end of a Spot
 // connection. It knows how to perform the walletSignReshareInit handshake
 // once, and how to forward outbound JsonMessages to that peer.
+//
+// selfId is the local Spot TargetId; set when the spotPeer is constructed
+// so outbound sender paths converge on the canonical
+// `<my_spot_id>/<sid>/<my_party_id>` form (CLAWDWALLET_STAGE1.md
+// integration-phase decision). When empty (legacy reshare callers),
+// Send falls back to the historical `/<sid>/<my_party_id>` leading-slash
+// form for backwards compat — wdrone parses both.
 type spotPeer struct {
 	hub     *tssHub
 	partyId *tss.PartyID
 	info    *walletSignReshareInit
 	spot    *spotlib.Client
 	sid     string
+	selfId  string
 
 	stOnce sync.Once
 	stErr  error
@@ -194,9 +202,21 @@ type spotPeer struct {
 
 // Start performs the walletSignReshareInit handshake exactly once. Must be
 // called synchronously before any TSS round starts.
+//
+// Joiner mode: when s.peer is already populated and s.info is nil, Start
+// only registers the inbound message handler and skips the selectPeer +
+// init query. The handshake is handled out-of-band — for ClawdWallet the
+// walletsign session row is opened server-side and the joining party just
+// needs to listen for TSS rounds addressed to <my-spot-id>/<sid>/...
 func (s *spotPeer) Start() error {
 	s.stOnce.Do(func() {
 		s.spot.SetHandler(s.sid, s.messageHandler)
+
+		if s.peer != "" && s.info == nil {
+			// joiner mode: peer was set explicitly, no handshake needed
+			log.Printf("spotPeer joiner: sid=%s peer=%s party=%s ready", s.sid, s.peer, s.partyId.Id)
+			return
+		}
 
 		peerCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -241,7 +261,17 @@ func (s *spotPeer) Send(msg *tss.JsonMessage) error {
 	if msg.From != nil {
 		fromId = msg.From.Id
 	}
-	sender := "/" + s.sid + "/" + fromId
+	// Canonical sender form (integration-phase decision):
+	//   <my_spot_id>/<sid>/<my_party_id>
+	// Fall back to the legacy leading-slash form when selfId is
+	// unset — wdrone tolerates both. New ClawdWallet code always
+	// populates selfId via the spotPeer constructor in join.go.
+	var sender string
+	if s.selfId != "" {
+		sender = s.selfId + "/" + s.sid + "/" + fromId
+	} else {
+		sender = "/" + s.sid + "/" + fromId
+	}
 
 	return s.spot.SendToWithFrom(context.Background(), tgt, body, sender)
 }

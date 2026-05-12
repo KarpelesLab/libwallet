@@ -286,4 +286,82 @@ class WalletApi {
       }
     }
   }
+
+  /// Run the mobile-led ClawdWallet keygen ceremony (Stage 1).
+  ///
+  /// Mobile is the keygen leader: this call sends a
+  /// `walletsign/<sid>/init` message to each non-self peer (agent +
+  /// wdrone) over Spot, then drives the local eddsatss keygen party to
+  /// completion. The session row identified by [remoteKey] must already
+  /// be Status=valid on the phplatform policy module side
+  /// (Crypto/ClawdWallet:create handles that).
+  ///
+  /// - [remoteKey]: `<crws-id>:<crwsv-id>` issued by the policy module.
+  /// - [peers]: full committee from the `:create` response, each entry
+  ///   shaped `{spot_id, moniker, key}` where `key` is base64url of the
+  ///   peer's raw Ed25519 pubkey bytes. Pass through verbatim.
+  /// - [wdroneSpotId]: explicit wdrone spot id (also present in [peers]).
+  /// - [name]: human-readable wallet name.
+  /// - [curve]: `'ed25519'` only in Stage 1.
+  /// - [meMoniker]: optional override for selecting this party in the
+  ///   committee; defaults to matching the local Spot TargetId against
+  ///   [peers].
+  ///
+  /// Returns `{wlt_id, solana_address, pubkey}` on success.
+  Future<Map<String, dynamic>> initiateKeygen({
+    required String remoteKey,
+    required List<Map<String, dynamic>> peers,
+    required String wdroneSpotId,
+    required String name,
+    String curve = 'ed25519',
+    String? meMoniker,
+  }) async {
+    final data = await _conn.request('Wallet:initiateKeygen', 'POST', {
+      'remote_key': remoteKey,
+      'peers': peers,
+      'wdrone_spot_id': wdroneSpotId,
+      'name': name,
+      'curve': curve,
+      if (meMoniker != null) 'me_moniker': meMoniker,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
+
+  /// Join a ClawdWallet sign ceremony (Stage 1).
+  ///
+  /// Mobile is *not* a signer in the 2-of-3 ClawdWallet sign topology
+  /// (agent + wdrone do the signing), so this is wired for completeness
+  /// and for any future flow that wants mobile to co-sign. Joiner-only:
+  /// expects an inbound `walletsign/<sid>/init` message from the
+  /// initiator (the agent for tx-sign).
+  ///
+  /// - [walletId]: the local wallet's `wlt-*` id (returned by
+  ///   [initiateKeygen]).
+  /// - [remoteKey]: `<crws-id>:<crwsv-id>` for the sign session.
+  /// - [peers]: signer committee from the policy module, same shape as
+  ///   [initiateKeygen] peers.
+  /// - [digest]: base64 of the 32-byte digest to sign.
+  /// - [curve]: `'ed25519'` only in Stage 1.
+  /// - [meMoniker]: optional override for selecting this party.
+  ///
+  /// Returns `{signature}` where `signature` is base64 of the 64-byte
+  /// Ed25519 signature.
+  Future<Map<String, dynamic>> joinSign({
+    required String walletId,
+    required String remoteKey,
+    required List<Map<String, dynamic>> peers,
+    required String digest,
+    String curve = 'ed25519',
+    String? meMoniker,
+  }) async {
+    final data = await _conn.request('Wallet:joinSign', 'POST', {
+      'wlt_id': walletId,
+      'remote_key': remoteKey,
+      'peers': peers,
+      'digest': digest,
+      'curve': curve,
+      if (meMoniker != null) 'me_moniker': meMoniker,
+    });
+    return Map<String, dynamic>.from(data as Map);
+  }
 }
