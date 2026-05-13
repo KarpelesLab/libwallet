@@ -18,9 +18,11 @@ import (
 
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltsign"
+	"github.com/KarpelesLab/libwallet/wlttoken"
 	"github.com/KarpelesLab/libwallet/wlttx"
 )
 
@@ -508,6 +510,36 @@ func swapExecute(ctx context.Context, req *ExecuteRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Post-execute housekeeping. Best-effort: a failure here doesn't
+	// invalidate the swap that already broadcast — log and continue.
+	//
+	// 1. Nudge the balance poller so the spent (TokenIn) and earned
+	//    (TokenOut) balances refresh within ~a second instead of
+	//    waiting for the next 60 s tick. The Solana broadcast paths
+	//    in wlttx call NotifyTxBroadcast already; aggregator-driven
+	//    swaps run through the provider's own HTTP/RPC route and
+	//    never touched this hook before.
+	wltintf.NotifyTxBroadcast(e)
+	// 2. Surface TokenOut in the user's token list when it isn't
+	//    already tracked. Without this, the user sees the new
+	//    balance via the chain RPC but the token name/symbol stays
+	//    "Unknown" because no Token row exists.
+	if !isNativeTokenAddress(q.TokenOut.Address) {
+		if _, terr := wlttoken.EnsureToken(
+			e,
+			n.Id,
+			q.TokenOut.Address,
+			q.TokenOut.Symbol,
+			"", // Name — TokenRef doesn't carry it; UI falls back to symbol/address
+			q.TokenOut.Decimals,
+			"", // Type — defaults to "erc20" / "spl-token" via wlttoken validate
+		); terr != nil {
+			wltlog.Warnf("swap/execute: failed to ensure TokenOut %s on %s: %v",
+				q.TokenOut.Address, n.Id, terr)
+		}
+	}
+
 	// Leave the quote in cache until natural expiry so the caller
 	// can retry cheaply if broadcast failed after we returned.
 	return result, nil

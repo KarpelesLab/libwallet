@@ -27,6 +27,30 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
+## Unreleased
+
+- **Fixed: balances stayed stale after a successful swap.**
+  `Swap:execute` paths through Jupiter / dFlow / 1inch broadcast via
+  the aggregator's own HTTP/RPC route and never called
+  `wltintf.NotifyTxBroadcast`, so the balance poller didn't get the
+  nudge it does after every other broadcast. Both the spent
+  (`TokenIn`) and earned (`TokenOut`) balances now refresh within
+  ~a second of the swap landing instead of waiting up to 60 s for
+  the next polling tick.
+- **Added: previously-unknown swap outputs auto-register in the
+  user's token list.** When `Swap:execute` lands on a `TokenOut` the
+  user has never held before, libwallet inserts a `Token` row with
+  the metadata from the swap quote (symbol, decimals) so the new
+  asset surfaces in `Token:list` with its name instead of
+  "Unknown". Native outputs (SOL / ETH) are skipped. Failure to add
+  the token is non-fatal — logged but doesn't fail the swap.
+- **Added: `wlttoken.EnsureToken(env, network, address, symbol,
+  name, decimals, type)`** — Go-side helper that idempotently
+  ensures a Token row exists for `(network, address)`. Currently
+  called by the swap path; available for any future caller that
+  wants to surface a previously-unknown asset without an explicit
+  `Token:create` round trip.
+
 ## 0.4.26
 
 - **Fixed: Solana devnet / testnet transaction-explorer links resolved

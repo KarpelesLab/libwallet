@@ -105,6 +105,63 @@ func TokenById(e wltintf.Env, id *xuid.XUID) (*token, error) {
 	return wltintf.ByPrimaryKey[token](e, id)
 }
 
+// EnsureToken returns the Token row for (networkId, address), creating
+// one with the supplied metadata if none exists yet. Used by callers
+// that receive a token they don't necessarily already track (e.g.
+// wltswap when a swap lands on a token the user has never held before)
+// to surface the new asset in the user's token list without requiring
+// an explicit `Token:create` round-trip.
+//
+// Address is normalised the same way `Token:create` normalises it
+// (EVM checksum case, Solana base58 round-trip via [token.validate]),
+// so callers can pass whatever shape the upstream provider returned.
+//
+// Empty `symbol` / `name` are accepted; UI fills in a fallback display
+// from the address. `tokenType` left empty defaults to the chain's
+// canonical type ("erc20" / "spl-token") in validate().
+//
+// NOTE: there is no `UNIQUE(Network, Address)` constraint on the Token
+// table today, so a transient DB error between lookup and insert could
+// produce a duplicate row. Acceptable for the swap path — the user can
+// dedupe via Token:delete — but worth tightening if EnsureToken grows
+// more callers.
+func EnsureToken(e wltintf.Env, networkId *xuid.XUID, address, symbol, name string, decimals int, tokenType string) (*token, error) {
+	if networkId == nil {
+		return nil, errors.New("network is required")
+	}
+	if address == "" {
+		return nil, errors.New("address is required")
+	}
+	t := &token{
+		Network:  networkId,
+		Address:  address,
+		Symbol:   symbol,
+		Name:     name,
+		Decimals: decimals,
+		Type:     tokenType,
+	}
+	if err := t.validate(e); err != nil {
+		return nil, err
+	}
+
+	if existing, err := psql.Get[token](e, map[string]any{
+		"Network": networkId,
+		"Address": t.Address,
+	}); err == nil {
+		return existing, nil
+	}
+
+	var err error
+	t.Id, err = xuid.NewRandom("tok")
+	if err != nil {
+		return nil, err
+	}
+	if err := t.save(e); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
 // Exported accessors for external callers (e.g. wlttx for ERC-20 transfer encoding).
 
 func (t *token) GetAddress() string   { return t.Address }
