@@ -27,6 +27,15 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
+## 0.4.26
+
+- **Fixed: Solana devnet / testnet transaction-explorer links resolved
+  to "Transaction not found".** `Network.TransactionUrl` was appending
+  `/tx/<hash>` to the explorer base without `?cluster=`, so links to
+  explorer.solana.com / solscan.io / solana.fm always queried the
+  default cluster (mainnet). Non-mainnet `ChainId`s now get
+  `?cluster=<id>` suffixed; mainnet stays bare.
+
 ## 0.4.25
 
 - **Added: `LibwalletClient.wallets.createAgentWallet`** — one
