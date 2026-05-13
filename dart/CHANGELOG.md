@@ -27,6 +27,30 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
+## Unreleased
+
+- **Added: Solana mainnet token-list auto-discovery on first asset
+  list.** The first time `Asset:list` runs for a (mainnet Solana,
+  owner) pair, libwallet calls Helius DAS `getAssetsByOwner` with
+  `showFungible: true` and seeds the user's `Token` table with the
+  fungibles the address actually holds — name + symbol + decimals
+  in one round trip, no manual `Token:create` per token. A
+  conservative spam filter rejects entries with empty symbol,
+  symbol > 12 chars, name > 64 chars (typical link-stuffing
+  pattern), or non-positive decimals. Subsequent `Asset:list`
+  calls skip the discovery (config flag gated per
+  network/owner) and use the cached Token rows for name/symbol
+  enrichment. Devnet/testnet are excluded — DAS coverage there
+  is patchy.
+- **Changed: Solana SPL balances enrich names from the Token table.**
+  `SolanaTokenBalances` previously returned `EPjFW.../EPjFW`-style
+  truncated mint fallback whenever the embedded curated registry
+  didn't recognise a mint. Now the result is overlaid with the
+  user's Token-table metadata (populated by the auto-discovery,
+  by `Token:create`, or by post-swap registration). So newly-
+  acquired tokens — via swap, airdrop, or transfer — surface with
+  their proper name without a manual lookup.
+
 ## 0.4.27
 
 - **Fixed: balances stayed stale after a successful swap.**

@@ -168,6 +168,28 @@ func (t *token) GetAddress() string   { return t.Address }
 func (t *token) GetDecimals() int     { return t.Decimals }
 func (t *token) GetType() string      { return t.Type }
 func (t *token) GetNetwork() *xuid.XUID { return t.Network }
+func (t *token) GetName() string      { return t.Name }
+func (t *token) GetSymbol() string    { return t.Symbol }
+
+// LookupTokenByMint returns the Token row for (networkId, address), or
+// nil if no row exists. Distinguishes "not found" (nil, nil) from
+// "lookup failed" (nil, err). Used by callers (e.g. wltbase asset
+// enrichment) that want to overlay user-saved metadata on top of a
+// chain-fetched balance list without erroring out when the mint isn't
+// tracked.
+func LookupTokenByMint(e wltintf.Env, networkId *xuid.XUID, address string) (*token, error) {
+	if networkId == nil || address == "" {
+		return nil, nil
+	}
+	t, err := psql.Get[token](e, map[string]any{
+		"Network": networkId,
+		"Address": address,
+	})
+	if err != nil {
+		return nil, nil
+	}
+	return t, nil
+}
 
 func (t *token) ApiDelete(ctx *apirouter.Context) error {
 	e := wltintf.GetEnv(ctx)
