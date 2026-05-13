@@ -74,25 +74,66 @@ func TestNetworkNativeSymbol(t *testing.T) {
 }
 
 func TestNetworkTransactionUrl(t *testing.T) {
-	// Solana with custom explorer
-	n := &Network{Type: "solana", BlockExplorer: "https://solscan.io"}
+	// Solana mainnet with custom explorer
+	n := &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: "https://solscan.io"}
 	url := n.TransactionUrl("abc123")
 	if url != "https://solscan.io/tx/abc123" {
 		t.Errorf("expected https://solscan.io/tx/abc123, got %s", url)
 	}
 
-	// Solana with auto explorer
-	n2 := &Network{Type: "solana", BlockExplorer: "auto"}
+	// Solana mainnet with auto explorer
+	n2 := &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: "auto"}
 	url2 := n2.TransactionUrl("abc123")
 	if url2 != "https://explorer.solana.com/tx/abc123" {
 		t.Errorf("expected default solana explorer URL, got %s", url2)
 	}
 
-	// Solana with empty explorer
-	n3 := &Network{Type: "solana", BlockExplorer: ""}
+	// Solana mainnet with empty explorer
+	n3 := &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: ""}
 	url3 := n3.TransactionUrl("abc123")
 	if url3 != "https://explorer.solana.com/tx/abc123" {
 		t.Errorf("expected default solana explorer URL, got %s", url3)
+	}
+
+	// Solana devnet — must include ?cluster=devnet, otherwise the
+	// explorer defaults to mainnet and shows "Transaction not found".
+	nDev := &Network{Type: "solana", ChainId: "devnet", BlockExplorer: ""}
+	urlDev := nDev.TransactionUrl("abc123")
+	if urlDev != "https://explorer.solana.com/tx/abc123?cluster=devnet" {
+		t.Errorf("expected devnet cluster suffix, got %s", urlDev)
+	}
+
+	// Solana testnet — same treatment as devnet.
+	nTest := &Network{Type: "solana", ChainId: "testnet", BlockExplorer: "auto"}
+	urlTest := nTest.TransactionUrl("abc123")
+	if urlTest != "https://explorer.solana.com/tx/abc123?cluster=testnet" {
+		t.Errorf("expected testnet cluster suffix, got %s", urlTest)
+	}
+
+	// Solana devnet with a custom explorer — suffix still gets appended.
+	// solscan.io honours `?cluster=devnet`; other explorers ignore it
+	// harmlessly.
+	nDevSolscan := &Network{Type: "solana", ChainId: "devnet", BlockExplorer: "https://solscan.io"}
+	urlDevSolscan := nDevSolscan.TransactionUrl("abc123")
+	if urlDevSolscan != "https://solscan.io/tx/abc123?cluster=devnet" {
+		t.Errorf("expected solscan devnet URL, got %s", urlDevSolscan)
+	}
+
+	// "mainnet-beta" — Solana's own canonical cluster name — must be
+	// treated identically to our "mainnet" alias (no suffix appended).
+	nMB := &Network{Type: "solana", ChainId: "mainnet-beta", BlockExplorer: ""}
+	urlMB := nMB.TransactionUrl("abc123")
+	if urlMB != "https://explorer.solana.com/tx/abc123" {
+		t.Errorf("expected bare mainnet URL for mainnet-beta alias, got %s", urlMB)
+	}
+
+	// Empty ChainId (shouldn't happen in practice — MakeDefaultNetworks
+	// always seeds "mainnet" — but the bare branch is what callers see
+	// for any uninitialised Solana network).
+	nEmpty := &Network{Type: "solana", ChainId: "", BlockExplorer: ""}
+	urlEmpty := nEmpty.TransactionUrl("abc123")
+	if urlEmpty != "https://explorer.solana.com/tx/abc123" {
+		t.Errorf("expected bare URL when ChainId is empty, got %s", urlEmpty)
 	}
 
 	// EVM with custom explorer

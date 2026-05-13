@@ -337,10 +337,22 @@ func (n *Network) NativeSymbol() (string, error) {
 
 func (n *Network) TransactionUrl(txHash string) string {
 	if n.Type == "solana" {
-		if e := n.BlockExplorer; e != "" && e != "auto" {
-			return fmt.Sprintf("%s/tx/%s", e, txHash)
+		base := n.BlockExplorer
+		if base == "" || base == "auto" {
+			base = "https://explorer.solana.com"
 		}
-		return fmt.Sprintf("https://explorer.solana.com/tx/%s", txHash)
+		// Solana block explorers (explorer.solana.com, solscan.io,
+		// solana.fm, …) host one URL per address/tx across all clusters
+		// and switch on `?cluster=`. Without the suffix the explorer
+		// defaults to mainnet and a devnet/testnet tx renders as
+		// "Transaction not found". Mainnet stays bare (the default).
+		// Custom local clusters get their ChainId passed through —
+		// some explorers honour arbitrary values, others ignore it.
+		url := fmt.Sprintf("%s/tx/%s", base, txHash)
+		if n.ChainId != "" && n.ChainId != "mainnet" && n.ChainId != "mainnet-beta" {
+			url += "?cluster=" + n.ChainId
+		}
+		return url
 	}
 	if e := n.BlockExplorer; e != "" && e != "auto" {
 		return fmt.Sprintf("%s/tx/%s", e, txHash)
