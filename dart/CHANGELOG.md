@@ -27,7 +27,7 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
-## Unreleased
+## 0.4.27
 
 - **Fixed: balances stayed stale after a successful swap.**
   `Swap:execute` paths through Jupiter / dFlow / 1inch broadcast via
