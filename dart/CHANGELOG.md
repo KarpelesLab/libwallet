@@ -27,7 +27,7 @@
   `dart run tools/bump_version.dart <version>` (not a hand edit)
   to keep them locked.
 
-## Unreleased
+## 0.4.28
 
 - **Added: Solana mainnet token-list auto-discovery on first asset
   list.** The first time `Asset:list` runs for a (mainnet Solana,
