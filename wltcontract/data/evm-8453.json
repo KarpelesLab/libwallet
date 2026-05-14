@@ -1,0 +1,44 @@
+[
+  {
+    "chainKey": "evm.8453",
+    "address": "0x2626664c2603336E57B271c5C0b26F421741e481",
+    "label": "Uniswap V3: SwapRouter02",
+    "kind": "router",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.8453",
+    "address": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+    "label": "Uniswap: Universal Router",
+    "kind": "router",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.8453",
+    "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "label": "Uniswap: Permit2",
+    "kind": "permit2",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.8453",
+    "address": "0x0000000000000068F116a894984e2DB1123eB395",
+    "label": "OpenSea: Seaport 1.6",
+    "kind": "marketplace",
+    "project": "opensea"
+  },
+  {
+    "chainKey": "evm.8453",
+    "address": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+    "label": "Aave V3: Pool",
+    "kind": "lending_pool",
+    "project": "aave"
+  },
+  {
+    "chainKey": "evm.8453",
+    "address": "0xb125E6687d4313864e53df431d5425969c15Eb2F",
+    "label": "Compound V3: cUSDCv3 (Comet)",
+    "kind": "lending_pool",
+    "project": "compound"
+  }
+]

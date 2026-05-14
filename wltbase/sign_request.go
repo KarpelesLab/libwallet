@@ -23,8 +23,10 @@ import (
 	"math/big"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/KarpelesLab/libwallet/wltcontract"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wlttx"
@@ -199,6 +201,18 @@ type MessageSignValue struct {
 	// StructuredData map for common fields.
 	StructuredPrimaryType string         `json:"structuredPrimaryType,omitempty"`
 	StructuredDomain      map[string]any `json:"structuredDomain,omitempty"`
+
+	// VerifyingContractLabel: curated display label for the EIP-712
+	// domain's verifyingContract, when the address matches a known
+	// entry in wltcontract — e.g. "Uniswap V3: SwapRouter02",
+	// "OpenSea: Seaport 1.6". Empty when there's no curated match
+	// (custom contract, chain not yet in the registry); the host
+	// shows the raw address in that case.
+	//
+	// Backed by wltcontract.Lookup; the same registry is exposed
+	// as a generic primitive via Contracts:lookup for hosts that
+	// want to label addresses at other render sites.
+	VerifyingContractLabel string `json:"verifyingContractLabel,omitempty"`
 
 	// IsSIWE / IsSIWS: auto-detected Sign-In-With-Ethereum /
 	// Sign-In-With-Solana pattern. Empty MessageText means the
@@ -415,6 +429,54 @@ func extractPrimaryAndDomain(td map[string]any) (primaryType string, domain map[
 	return
 }
 
+// lookupVerifyingContractLabel returns the curated label for the EIP-712
+// domain's verifyingContract on chain, or "" when no curated entry exists
+// (custom contract, chain not yet covered). chain is the wltnet.Network
+// .Type ("evm" / "solana") — pulled from the signing-request context;
+// the domain's chainId determines which chain registry to consult.
+//
+// Only fires for EVM. EIP-712 on Solana exists but the verifyingContract
+// pattern doesn't apply the same way.
+func lookupVerifyingContractLabel(chain string, domain map[string]any) string {
+	if chain != "evm" || domain == nil {
+		return ""
+	}
+	vc, _ := domain["verifyingContract"].(string)
+	if vc == "" {
+		return ""
+	}
+	// EIP-712 chainId can be a JSON number or a string. Normalise.
+	var chainId string
+	switch v := domain["chainId"].(type) {
+	case string:
+		// Some dApps send hex ("0x1"); normalise to decimal so the
+		// chainId matches our registry's "evm.<decimalChainId>" key.
+		if strings.HasPrefix(v, "0x") || strings.HasPrefix(v, "0X") {
+			if b, ok := new(big.Int).SetString(v, 0); ok {
+				chainId = b.Text(10)
+			}
+		} else {
+			chainId = v
+		}
+	case float64:
+		chainId = strconv.FormatInt(int64(v), 10)
+	case int:
+		chainId = strconv.Itoa(v)
+	case int64:
+		chainId = strconv.FormatInt(v, 10)
+	case json.Number:
+		chainId = string(v)
+	}
+	if chainId == "" {
+		return ""
+	}
+	e := wltcontract.Lookup(chain, chainId, vc)
+	if e == nil {
+		return ""
+	}
+	return e.Label
+}
+
 // ── Base64 / hex helpers ─────────────────────────────────────
 
 func b64Encode(b []byte) string  { return base64.StdEncoding.EncodeToString(b) }
@@ -453,6 +515,11 @@ func newMessageSignValue(ctx context.Context, chain, method, from string, msgByt
 		if err := json.Unmarshal([]byte(typedDataJSON), &td); err == nil {
 			val.StructuredData = td
 			val.StructuredPrimaryType, val.StructuredDomain = extractPrimaryAndDomain(td)
+			// Curated label for verifyingContract — sign sheet shows
+			// "Uniswap V3: SwapRouter02" above the raw 0x… instead of
+			// just hex when the address matches a known entry. Empty
+			// when no match; host renders the address alone.
+			val.VerifyingContractLabel = lookupVerifyingContractLabel(chain, val.StructuredDomain)
 		}
 	}
 	detectSIWE(val)

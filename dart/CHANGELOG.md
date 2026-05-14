@@ -1,3 +1,27 @@
+## Unreleased
+
+- **Added: `MessageSignRequest.verifyingContractLabel`** — typed-data
+  approval sheets can now show `"Uniswap V3: SwapRouter02"` (or
+  `"OpenSea: Seaport 1.6"`, `"Aave V3: Pool"`, …) above the raw
+  `0x…` for EIP-712 messages whose domain `verifyingContract`
+  matches a known address in libwallet's contract registry. Empty
+  for unknown contracts — host falls back to the raw address.
+  Domain `chainId` is normalised (JSON number, decimal string, hex
+  string, `0x`-prefixed) so dApp idiosyncrasies don't matter.
+- **Added: `LibwalletClient.contracts.lookup(chainKey:, address:)`**
+  — generic registry lookup for hosts that want to label addresses
+  at other render sites (effect rows, watch_asset, explorer-link
+  rows). Returns a `ContractLabel` (`address`, `label`, `kind`,
+  `project`) or `null` for unknown addresses. Same registry that
+  backs the typed-data field.
+- **Initial registry coverage:** Uniswap V2/V3 routers, Universal
+  Router, Permit2; OpenSea Seaport 1.5 + 1.6; Aave V3 Pool;
+  Compound V3 Comet (cUSDCv3, cWETHv3); Balancer V2 Vault;
+  Curve 3pool. Chains: Ethereum, Base, Arbitrum, Optimism, Polygon,
+  Avalanche. Permit2 + Seaport are deterministic-address contracts —
+  they resolve correctly across every chain that's in the registry
+  without per-chain copies of the entry.
+
 ## 0.4.29
 
 - **Added: `Network.addressUrl(address)` + `Network.transactionUrl(hash)`

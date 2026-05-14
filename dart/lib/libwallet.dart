@@ -153,6 +153,7 @@ export 'src/api/web3_connection_api.dart' show Web3ConnectionApi;
 export 'src/api/request_api.dart' show RequestApi;
 export 'src/api/wallet_connect_api.dart' show WalletConnectApi;
 export 'src/api/clawdwallet_api.dart' show ClawdWalletApi;
+export 'src/api/contracts_api.dart' show ContractsApi, ContractLabel;
 export 'src/models/agent_identity.dart' show AgentIdentity;
 export 'src/exceptions/pairing.dart'
     show

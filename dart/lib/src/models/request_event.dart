@@ -448,6 +448,19 @@ class MessageSignRequest extends PendingRequest {
     return v is Map ? Map<String, dynamic>.from(v) : null;
   }
 
+  /// Curated label for the EIP-712 domain's `verifyingContract` when
+  /// the address matches a known entry in libwallet's contract
+  /// registry — e.g. `"Uniswap V3: SwapRouter02"`,
+  /// `"OpenSea: Seaport 1.6"`, `"Aave V3: Pool"`. Empty when there's
+  /// no curated match (custom contract, chain not yet in the
+  /// registry); host shows the raw address alone in that case.
+  ///
+  /// Backed by libwallet's wltcontract package; the same registry is
+  /// exposed as a generic lookup via [LibwalletClient.contracts] so
+  /// hosts can label addresses at other render sites.
+  String get verifyingContractLabel =>
+      _v?['verifyingContractLabel'] as String? ?? '';
+
   /// True when the message matches the EIP-4361 (Sign-In With
   /// Ethereum) pattern. UI can render a friendlier "Login to
   /// example.com" prompt with [siweFields] instead of the raw
