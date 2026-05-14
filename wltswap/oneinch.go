@@ -244,8 +244,11 @@ func (oneInchProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wlt
 }
 
 // oneInchTokenOrSentinel translates the package's "NATIVE" marker to
-// 1inch's native-sentinel address.
+// 1inch's native-sentinel address. Strips the "<type>.<chainId>."
+// prefix when present so callers can pass either the bare contract
+// or the Asset.Key form ("evm.1.0xA0b8…") returned by `Asset:list`.
 func oneInchTokenOrSentinel(addr string) string {
+	addr = stripChainPrefix(addr)
 	if addr == "NATIVE" || addr == "" {
 		return OneInchNativeSentinel
 	}

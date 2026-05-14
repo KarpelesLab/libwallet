@@ -86,9 +86,16 @@ func TestNewQuoteID_Unique(t *testing.T) {
 
 func TestSolanaNativeMintOrAddr(t *testing.T) {
 	cases := map[string]string{
-		"":                                     WrappedSOLMint,
-		"NATIVE":                               WrappedSOLMint,
+		"":       WrappedSOLMint,
+		"NATIVE": WrappedSOLMint,
 		"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		// Asset.Key-shaped input — strip the prefix so Jupiter sees
+		// the bare mint. Reproduces the field bug where Jupiter
+		// returned HTTP 400 "Invalid outputMint" for
+		// "solana.mainnet.EPjFW…".
+		"solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		"solana.mainnet.NATIVE":                                      WrappedSOLMint,
+		"solana.mainnet.":                                            WrappedSOLMint,
 	}
 	for in, want := range cases {
 		if got := solanaNativeMintOrAddr(in); got != want {
@@ -102,10 +109,31 @@ func TestOneInchTokenOrSentinel(t *testing.T) {
 		"":           OneInchNativeSentinel,
 		"NATIVE":     OneInchNativeSentinel,
 		"0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48": "0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48",
+		// Same prefix-strip behaviour as the Solana adapter.
+		"evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48": "0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48",
+		"evm.1.NATIVE": OneInchNativeSentinel,
 	}
 	for in, want := range cases {
 		if got := oneInchTokenOrSentinel(in); got != want {
 			t.Errorf("oneInchTokenOrSentinel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestStripChainPrefix(t *testing.T) {
+	cases := map[string]string{
+		"":            "",
+		"NATIVE":      "NATIVE",
+		"0xAbcd":      "0xAbcd",
+		"EPjFWdd5":    "EPjFWdd5",
+		"evm.1.0xAb":  "0xAb",
+		"solana.mainnet.EPjFW": "EPjFW",
+		"solana.devnet.AAA":    "AAA",
+		"trailing.dot.":        "",
+	}
+	for in, want := range cases {
+		if got := stripChainPrefix(in); got != want {
+			t.Errorf("stripChainPrefix(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

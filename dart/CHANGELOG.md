@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **Fixed: `Swap:quote` / `Swap:maxSpendable` rejected `Asset.Key`-shaped
+  token addresses.** Hosts that piped `Asset.Key` (the
+  `"solana.mainnet.<mint>"` / `"evm.1.<contract>"` shape returned by
+  `Asset:list`) into `tokenIn.address` / `tokenOut.address` got an
+  HTTP 400 from Jupiter ("Invalid outputMint") or 1inch — libwallet
+  was passing the prefixed string straight through to the aggregator,
+  which only accepts bare mints / contracts. The swap entry points
+  now strip the `<type>.<chainId>.` prefix; bare addresses pass
+  through unchanged. The `"NATIVE"` sentinel works in both forms.
+
 - **Added: `MessageSignRequest.verifyingContractLabel`** — typed-data
   approval sheets can now show `"Uniswap V3: SwapRouter02"` (or
   `"OpenSea: Seaport 1.6"`, `"Aave V3: Pool"`, …) above the raw

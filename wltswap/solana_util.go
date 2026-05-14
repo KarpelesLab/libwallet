@@ -12,6 +12,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/KarpelesLab/base58"
@@ -26,10 +27,30 @@ import (
 const WrappedSOLMint = "So11111111111111111111111111111111111111112"
 
 // solanaNativeMintOrAddr maps the package's "NATIVE" sentinel to
-// wSOL's mint. Any other value is returned verbatim.
+// wSOL's mint. Any other value is returned with the chain-key
+// prefix stripped if present — callers can pass either the bare
+// mint ("EPjFW…") or the Asset.Key form ("solana.mainnet.EPjFW…")
+// returned by `Asset:list`; both resolve to the bare form Jupiter
+// / dFlow expect on the wire.
 func solanaNativeMintOrAddr(addr string) string {
+	addr = stripChainPrefix(addr)
 	if addr == "NATIVE" || addr == "" {
 		return WrappedSOLMint
+	}
+	return addr
+}
+
+// stripChainPrefix removes the leading "<type>.<chainId>." prefix
+// from an Asset.Key-shaped address ("solana.mainnet.EPjFW…",
+// "evm.1.0xA0b8…"), returning the bare mint / contract.
+//
+// EVM addresses (0x-hex) and Solana mints (base58) never contain a
+// dot, so splitting on "." and taking the last segment is always
+// safe. Bare inputs (no dot) pass through unchanged. The "NATIVE"
+// sentinel pre- or post-prefix likewise round-trips.
+func stripChainPrefix(addr string) string {
+	if idx := strings.LastIndexByte(addr, '.'); idx >= 0 {
+		return addr[idx+1:]
 	}
 	return addr
 }

@@ -241,6 +241,12 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 	if req.TokenIn.Address == "" || req.TokenOut.Address == "" {
 		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
 	}
+	// Normalise Asset.Key-shaped inputs ("solana.mainnet.EPjFW…",
+	// "evm.1.0xA0b8…") to the bare mint / contract Jupiter / 1inch
+	// expect. Hosts get the prefixed form from Asset:list and reasonably
+	// pass it through; the adapters only understand the bare form.
+	req.TokenIn.Address = stripChainPrefix(req.TokenIn.Address)
+	req.TokenOut.Address = stripChainPrefix(req.TokenOut.Address)
 	if req.AmountIn == "" {
 		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required (use \"MAX\" to swap the full balance)")
 	}
@@ -290,6 +296,8 @@ func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 	if req.TokenIn.Address == "" || req.TokenOut.Address == "" {
 		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
 	}
+	req.TokenIn.Address = stripChainPrefix(req.TokenIn.Address)
+	req.TokenOut.Address = stripChainPrefix(req.TokenOut.Address)
 	if req.SlippageBps == 0 {
 		req.SlippageBps = DefaultSlippageBps
 	}
