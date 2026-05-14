@@ -1,3 +1,33 @@
+## Unreleased
+
+- **Added: `Amount.max(decimals)` sentinel — resolved at build time.**
+  Pass `Amount.max(...)` as `Transaction.amount` and libwallet's build
+  path (`Transaction.Validate`, called by `signAndSend`) substitutes
+  `balance - actual-fee` at the latest possible moment using the
+  resolved gas estimate of the actual tx contents (recipient,
+  calldata). Eliminates the `transactions.maxSendable` →
+  `transactions.signAndSend` race where the gas price or balance can
+  drift between the two calls — the same `Validate` pass that picks
+  the gas number also picks the amount. Native EVM only in this
+  release; Bitcoin uses the existing UTXO-pinning path
+  (`bitcoinUtxos` + `bitcoinFeeRate` from `MaxSendable`); Solana MAX
+  resolution is a follow-up. Wire form: `{"v": "MAX", "e": <decimals>}`
+  (or bare `"MAX"` string).
+- **Added: `Transaction:maxSendable` accepts `data` + `value` (EVM).**
+  When `data` is set, the EVM path runs `eth_estimateGas` with
+  `{from, to, value, data}` to get the contract's actual gas cost
+  instead of the 21000 EOA-transfer default — the right number for
+  native swaps, where the previous default reserved ~10x too little
+  gas and "Max" broadcasts failed at execution. `value` lets callers
+  pin a specific call value (some swap routers revert in
+  `eth_estimateGas` with `value: 0` when native is the input);
+  defaults to `balance/2`. Plain transfers (no `data`) keep the
+  21000 fast-path with no extra RTT. **Prefer `Amount.max` over
+  computing max upfront** — it's the same answer with no
+  drift-window. This `data`/`value` plumbing remains for previews
+  where the user needs to see the number before committing to build
+  the tx.
+
 ## 0.4.28
 
 - **Added: Solana mainnet token-list auto-discovery on first asset

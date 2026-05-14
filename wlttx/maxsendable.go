@@ -47,8 +47,9 @@ type MaxSendableRequest struct {
 	// is checked via getAccountInfo — if it doesn't exist, Max is
 	// reduced by the rent-exempt minimum needed to fund the new
 	// account. On Bitcoin the To field is unused (fee is computed
-	// from the input count + a single output). On EVM it's ignored
-	// for v1 (the 21000-gas assumption covers EOA destinations).
+	// from the input count + a single output). On EVM it's used as
+	// the eth_estimateGas target when [Data] is supplied; otherwise
+	// the 21000-gas EOA-transfer default applies.
 	To string `json:"to,omitempty"`
 	// Asset is the asset key to compute max against. Canonical
 	// form is "<type>.<chainId>.<suffix>" (e.g. "evm.1.NATIVE",
@@ -67,6 +68,21 @@ type MaxSendableRequest struct {
 	// here; the existing PriorityLevel field on Transaction
 	// drives Solana ComputeBudget pricing at build time.
 	Priority string `json:"priority,omitempty"`
+	// Data is the 0x-prefixed hex calldata of the transaction the
+	// caller intends to send. Only meaningful for EVM. When set,
+	// MaxSendable runs eth_estimateGas with {From, To, Value, Data}
+	// to get the actual gas cost — necessary for native swaps where
+	// the default 21000 reserves ~10x too little gas. Empty falls
+	// back to the 21000 default for plain EOA transfers.
+	Data string `json:"data,omitempty"`
+	// Value is the call value (wei) the caller intends to send,
+	// used only by the EVM eth_estimateGas path when Data is set.
+	// Some contracts (1inch swap with native input) revert in
+	// estimateGas if msg.value is 0; passing the intended swap
+	// amount here gives an accurate gas estimate. Optional —
+	// defaults to half the balance, which is non-zero enough for
+	// any value-checking contract while leaving headroom.
+	Value string `json:"value,omitempty"`
 }
 
 // ReservedAmt is one line item in MaxSendableResult.Reserved — an amount
@@ -545,6 +561,53 @@ func evmERC20Decimals(ctx context.Context, n *wltnet.Network, contract string) (
 
 // ── EVM native ────────────────────────────────────────────────────────────
 
+// evmEstimateGasForCall runs eth_estimateGas with the calldata in req
+// to get the actual gas cost of a contract call (typically a native
+// EVM swap). Without this, MaxSendable would reserve only the
+// 21000-gas EOA-transfer default and a swap broadcast at "max" would
+// fail with out-of-gas at execution.
+//
+// req.Value is used verbatim when the caller pinned a specific value
+// (e.g. they know the swap router needs exactly N wei). When empty,
+// uses balance/2 as a non-zero placeholder — some swap routers (1inch
+// with native input) revert in estimateGas if msg.value == 0, and
+// using the full balance leaves no room for the gas itself. balance/2
+// is non-zero enough for any value-checking contract while avoiding
+// the chicken-and-egg of "value depends on gas which depends on value".
+func evmEstimateGasForCall(ctx context.Context, n *wltnet.Network, from string, req *MaxSendableRequest, balance *big.Int) (uint64, error) {
+	if req.To == "" {
+		return 0, errors.New("To is required when estimating gas with calldata")
+	}
+	value := new(big.Int)
+	if req.Value != "" {
+		v, ok := new(big.Int).SetString(req.Value, 0)
+		if !ok {
+			return 0, fmt.Errorf("invalid value %q", req.Value)
+		}
+		value = v
+	} else if balance != nil && balance.Sign() > 0 {
+		value = new(big.Int).Quo(balance, big.NewInt(2))
+	}
+
+	call := map[string]any{
+		"from": from,
+		"to":   req.To,
+		"data": req.Data,
+	}
+	if value.Sign() > 0 {
+		call["value"] = "0x" + value.Text(16)
+	}
+	gasHex, err := ethrpc.ReadString(n.DoRPCCtx(ctx, "eth_estimateGas", call))
+	if err != nil {
+		return 0, err
+	}
+	gas, ok := new(big.Int).SetString(gasHex, 0)
+	if !ok || !gas.IsUint64() {
+		return 0, fmt.Errorf("invalid gas estimate %q", gasHex)
+	}
+	return gas.Uint64(), nil
+}
+
 // evmFeeForBasicTransfer returns the fee in wei for a single EOA-to-EOA
 // transfer on n. Uses EIP-1559 (maxFee = 2 * baseFee + tip) when the
 // chain supports it, else eth_gasPrice.
@@ -589,7 +652,7 @@ func evmFeeForBasicTransfer(ctx context.Context, n *wltnet.Network, gas uint64) 
 	return new(big.Int).Mul(gp, new(big.Int).SetUint64(gas)), nil
 }
 
-func maxSendableEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, _ *MaxSendableRequest) (*MaxSendableResult, error) {
+func maxSendableEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *MaxSendableRequest) (*MaxSendableResult, error) {
 	info, err := n.GetChainInfo()
 	if err != nil {
 		return nil, err
@@ -608,11 +671,20 @@ func maxSendableEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Accoun
 		return nil, fmt.Errorf("invalid balance from rpc: %q", balHex)
 	}
 
-	// Basic EOA-to-EOA transfer is 21000 gas; contract destinations
-	// cost more, but we can't know that here without a To. Callers
-	// sending to a contract should call Transaction:validate which
-	// runs eth_estimateGas and will refuse if the fee exceeds balance.
-	const gas uint64 = 21000
+	// Gas estimate. With no Data, fall back to the 21000 EOA-transfer
+	// default — that's the right answer for plain native transfers and
+	// avoids an estimateGas RTT on the hot path. With Data (native
+	// swap, contract call), run eth_estimateGas with the actual call
+	// to get the contract's real gas cost — without it, "Max" silently
+	// reserves ~10x too little for swaps and the user's tx fails.
+	gas := uint64(21000)
+	if req != nil && req.Data != "" {
+		var err error
+		gas, err = evmEstimateGasForCall(ctx, n, acct.GetAddress(), req, balI)
+		if err != nil {
+			return nil, fmt.Errorf("estimate gas with calldata: %w", err)
+		}
+	}
 	feeI, err := evmFeeForBasicTransfer(ctx, n, gas)
 	if err != nil {
 		return nil, err

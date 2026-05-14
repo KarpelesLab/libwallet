@@ -62,5 +62,49 @@ void main() {
       expect(a, equals(b));
       expect(a, isNot(equals(c)));
     });
+
+    group('MAX sentinel', () {
+      test('Amount.max constructs the sentinel', () {
+        final a = Amount.max(18);
+        expect(a.isMax, isTrue);
+        expect(a.exp, 18);
+        expect(a.sign, 0);
+        expect(a.toString(), 'MAX');
+      });
+
+      test('regular Amount has isMax false', () {
+        final a = Amount(BigInt.from(100), 2);
+        expect(a.isMax, isFalse);
+      });
+
+      test('toJson emits MAX sentinel with exp', () {
+        final j = Amount.max(9).toJson();
+        expect(j['v'], 'MAX');
+        expect(j['e'], 9);
+        // No "f" key — it would be NaN, which doesn't round-trip cleanly.
+        expect(j.containsKey('f'), isFalse);
+      });
+
+      test('fromJson recognises MAX in object form', () {
+        final a = Amount.fromJson({'v': 'MAX', 'e': 6});
+        expect(a.isMax, isTrue);
+        expect(a.exp, 6);
+      });
+
+      test('fromJson recognises bare "MAX" string', () {
+        final a = Amount.fromJson('MAX');
+        expect(a.isMax, isTrue);
+      });
+
+      test('isZero is false for MAX (distinct from a true zero amount)', () {
+        expect(Amount.max(0).isZero, isFalse);
+        expect(Amount.zero(0).isZero, isTrue);
+      });
+
+      test('equality treats MAX as distinct from zero with same exp', () {
+        expect(Amount.max(6) == Amount.zero(6), isFalse);
+        expect(Amount.max(6) == Amount.max(6), isTrue);
+      });
+    });
   });
 }

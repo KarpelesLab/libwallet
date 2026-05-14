@@ -1,6 +1,7 @@
 package wltobj
 
 import (
+	"bytes"
 	"encoding/json"
 	"math/big"
 	"testing"
@@ -557,5 +558,89 @@ func TestJSONBigIntUnmarshalJSONBadJSON(t *testing.T) {
 	err := j.UnmarshalJSON([]byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
+	}
+}
+
+func TestNewAmountMax(t *testing.T) {
+	a := NewAmountMax(18)
+	if !a.IsMax() {
+		t.Error("expected IsMax true")
+	}
+	if a.Sign() != 0 {
+		t.Errorf("Sign() = %d, want 0 for MAX (no concrete value yet)", a.Sign())
+	}
+	if a.Value() != nil {
+		t.Errorf("Value() = %v, want nil for MAX", a.Value())
+	}
+	if a.Exp() != 18 {
+		t.Errorf("Exp() = %d, want 18 (preserved decimals)", a.Exp())
+	}
+
+	regular := NewAmountRaw(big.NewInt(123), 6)
+	if regular.IsMax() {
+		t.Error("regular Amount should not be MAX")
+	}
+}
+
+func TestAmountMaxJSONRoundTrip(t *testing.T) {
+	orig := NewAmountMax(18)
+	raw, err := orig.MarshalJSON()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	// Should encode as the MAX sentinel string with the decimals preserved.
+	if !bytes.Contains(raw, []byte(`"v":"MAX"`)) {
+		t.Errorf("expected MAX sentinel in JSON, got %s", raw)
+	}
+	if !bytes.Contains(raw, []byte(`"e":18`)) {
+		t.Errorf("expected exponent in JSON, got %s", raw)
+	}
+
+	got := &Amount{}
+	if err := got.UnmarshalJSON(raw); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if !got.IsMax() {
+		t.Error("round-tripped value lost IsMax")
+	}
+	if got.Exp() != 18 {
+		t.Errorf("round-tripped exp = %d, want 18", got.Exp())
+	}
+
+	// Bare string form too — apps that hand-craft a JSON body with
+	// just "MAX" should also resolve.
+	bare := &Amount{}
+	if err := bare.UnmarshalJSON([]byte(`"MAX"`)); err != nil {
+		t.Fatalf("bare string Unmarshal: %v", err)
+	}
+	if !bare.IsMax() {
+		t.Error("bare string \"MAX\" did not produce IsMax")
+	}
+}
+
+func TestAmountMaxSetMaxResolved(t *testing.T) {
+	a := NewAmountMax(18)
+	if err := a.SetMaxResolved(big.NewInt(1_000_000_000)); err != nil {
+		t.Fatalf("SetMaxResolved: %v", err)
+	}
+	if a.IsMax() {
+		t.Error("after SetMaxResolved, IsMax should be false")
+	}
+	if a.Value().Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Errorf("Value() = %v, want 1_000_000_000", a.Value())
+	}
+
+	// SetMaxResolved on a non-MAX Amount is an error — guards against
+	// accidental mutation of a regular Amount via the wrong API.
+	plain := NewAmountRaw(big.NewInt(7), 0)
+	if err := plain.SetMaxResolved(big.NewInt(99)); err == nil {
+		t.Error("expected error setting MaxResolved on non-MAX Amount")
+	}
+
+	// Nil value rejected — defensive against callers that forget to
+	// initialise a *big.Int before passing it in.
+	max := NewAmountMax(0)
+	if err := max.SetMaxResolved(nil); err == nil {
+		t.Error("expected error for nil value")
 	}
 }

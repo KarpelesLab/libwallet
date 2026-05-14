@@ -20,9 +20,21 @@ var ErrAmountParseFailed = errors.New("failed to parse provided amount")
 // It uses a big.Int for the value and an exponent to represent the decimal position.
 // For example, 123.456 would be stored as value=123456 and exp=3.
 // This allows for precise decimal arithmetic without floating-point errors.
+//
+// Special MAX sentinel — see [NewAmountMax] / [Amount.IsMax]: a deferred
+// "use the maximum sendable" marker that the build path resolves at the
+// last possible moment with the actual tx data. Lets the host pass MAX
+// as a tx Amount and trust libwallet to compute balance - actual-fee at
+// build/sign time, eliminating the maxSendable→signAndSend race where
+// gas price or balance can drift between the two calls.
+//
+// MAX amounts must be resolved (via [Amount.SetMaxResolved]) before any
+// arithmetic — Value() returns nil and Sign() returns 0, but most other
+// operations panic to fail loudly if a MAX leaks past the build path.
 type Amount struct {
-	value *big.Int // The integer value (significand)
-	exp   int      // The exponent (number of decimal places)
+	value *big.Int // The integer value (significand). nil when isMax.
+	exp   int      // The exponent (number of decimal places).
+	isMax bool     // True for the MAX sentinel; resolved at build time.
 }
 
 // NewAmount returns a new Amount object set to the specific value and decimals.
@@ -141,6 +153,44 @@ func NewAmountFromString(s string, decimals int) (*Amount, error) {
 // NewAmountRaw returns a new Amount initialized with the passed values as is
 func NewAmountRaw(v *big.Int, decimals int) *Amount {
 	return &Amount{value: v, exp: decimals}
+}
+
+// NewAmountMax returns the MAX sentinel — a deferred "use the maximum
+// sendable amount" marker. The build path (wlttx Transaction.Validate)
+// detects MAX and replaces it with balance - actual-fee, computed
+// against the actual tx contents (recipient, calldata) so e.g. native
+// EVM swaps reserve the swap's real gas cost rather than the 21000-gas
+// EOA-transfer default.
+//
+// Decimals must match the asset the MAX is being sent in (so the
+// resolved amount inherits the right exponent). Pass the same decimals
+// you would for [NewAmountRaw].
+func NewAmountMax(decimals int) *Amount {
+	return &Amount{exp: decimals, isMax: true}
+}
+
+// IsMax reports whether this Amount is the MAX sentinel — a deferred
+// "use the maximum sendable amount" value the build path will resolve.
+// Returns false for the zero Amount and for any Amount with a value
+// already set.
+func (a Amount) IsMax() bool {
+	return a.isMax
+}
+
+// SetMaxResolved replaces a MAX sentinel with a concrete value, in
+// place. Used by the build path after gas / fee math is known. No-op
+// (and returns an error) when called on a non-MAX Amount — the caller
+// is presumably mishandling the resolution flow and should be told.
+func (a *Amount) SetMaxResolved(v *big.Int) error {
+	if !a.isMax {
+		return errors.New("SetMaxResolved called on a non-MAX Amount")
+	}
+	if v == nil {
+		return errors.New("SetMaxResolved value cannot be nil")
+	}
+	a.value = v
+	a.isMax = false
+	return nil
 }
 
 // Mul sets a=x*y and returns a.
@@ -276,7 +326,19 @@ type amountJson struct {
 	Float float64 `json:"f"`
 }
 
+// maxAmountSentinelString is the wire form of the MAX sentinel — a
+// distinct value so the existing string-decoding path in Scan picks it
+// up automatically without needing a new top-level field.
+const maxAmountSentinelString = "MAX"
+
 func (a Amount) MarshalJSON() ([]byte, error) {
+	if a.isMax {
+		// Round-trip-safe: Scan's string branch picks up "MAX" and
+		// rebuilds the sentinel. Decimals are preserved so the resolved
+		// amount inherits the right exponent.
+		v := &amountJson{Value: maxAmountSentinelString, Exp: a.exp}
+		return json.Marshal(v)
+	}
 	if a.value == nil {
 		v := &amountJson{Value: "0", Exp: a.exp}
 		return json.Marshal(v)
@@ -301,6 +363,12 @@ func (a *Amount) UnmarshalJSON(b []byte) error {
 func (a *Amount) Scan(v any) error {
 	switch in := v.(type) {
 	case string:
+		if in == maxAmountSentinelString {
+			a.value = nil
+			a.exp = 0
+			a.isMax = true
+			return nil
+		}
 		na, err := NewAmountFromString(in, 0)
 		if err != nil {
 			return err
@@ -318,13 +386,19 @@ func (a *Amount) Scan(v any) error {
 		v, vok := in["v"].(string)
 		e, eok := in["e"]
 		if vok && eok {
-			realV, vok := new(big.Int).SetString(v, 0)
-			if !vok {
-				return errors.New("failed to parse v")
-			}
 			realE, err := typutil.As[int](e)
 			if err != nil {
 				return err
+			}
+			if v == maxAmountSentinelString {
+				a.value = nil
+				a.exp = realE
+				a.isMax = true
+				return nil
+			}
+			realV, vok := new(big.Int).SetString(v, 0)
+			if !vok {
+				return errors.New("failed to parse v")
 			}
 			a.value = realV
 			a.exp = realE

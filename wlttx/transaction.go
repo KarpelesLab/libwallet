@@ -360,6 +360,15 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	if n.Type == "bitcoin" {
 		// Bitcoin-family: fee is computed at SignAndSend time (needs UTXO
 		// selection). Skip EVM-specific nonce/gas fields entirely.
+		if tx.Amount != nil && tx.Amount.IsMax() {
+			// Bitcoin MAX is handled by the existing UTXO sweep path
+			// (Transaction.UTXOs + Transaction.BitcoinFeeRate from
+			// MaxSendable). Resolution at Validate time would require
+			// a fresh RPC + UTXO walk and duplicate that logic — it
+			// can be added when a Bitcoin caller actually needs the
+			// sentinel form.
+			return errors.New("Amount=MAX is not yet supported on Bitcoin — use Transaction.UTXOs + BitcoinFeeRate from Transaction:maxSendable instead")
+		}
 		return nil
 	}
 
@@ -370,6 +379,17 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 			return err
 		}
 		tx.Nonce = txc
+	}
+
+	// MAX resolution (native EVM). Stash a balance/2 placeholder into
+	// tx.Amount so eth_estimateGas runs against a non-zero value (1inch
+	// and other swap routers revert in estimateGas with value=0 when
+	// native is the input). The actual value gets swapped in after
+	// computeFee below — balance - fee — so the broadcast tx carries
+	// "everything minus the gas this exact tx will consume".
+	maxResolveDone, err := resolveEvmMaxAmount(tx, n, acct.Address)
+	if err != nil {
+		return fmt.Errorf("MAX resolve: %w", err)
 	}
 
 	if tx.Gas == 0 {
@@ -438,7 +458,73 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 
 	tx.computeFee(n)
+	if maxResolveDone != nil {
+		maxResolveDone(tx)
+	}
 	return nil
+}
+
+// resolveEvmMaxAmount handles the Amount.IsMax() case for native EVM
+// transactions. Substitutes a placeholder value in tx.Amount so the
+// rest of Validate (estimateGas, fee math) runs unchanged, and returns
+// a callback the caller invokes after computeFee to set the real value
+// (balance - fee). Returns (nil, nil) when tx.Amount isn't MAX.
+//
+// Nothing in this flow uses the Amount sentinel after the placeholder
+// substitution — the rest of Validate sees a regular Amount with a
+// concrete value, so estimateGas / computeFee / the EVM sign path don't
+// need to learn about IsMax. The sentinel only escapes Validate when
+// the host explicitly calls Validate twice (idempotent) — the second
+// pass sees the resolved value and skips re-resolution.
+func resolveEvmMaxAmount(tx *Transaction, n *wltnet.Network, fromAddr string) (func(*Transaction), error) {
+	if tx == nil || tx.Amount == nil || !tx.Amount.IsMax() {
+		return nil, nil
+	}
+	if n.Type != "evm" {
+		return nil, fmt.Errorf("MAX resolution requires Type=evm, got %q", n.Type)
+	}
+
+	balHex, err := ethrpc.ReadString(n.DoRPC("eth_getBalance", fromAddr, "latest"))
+	if err != nil {
+		return nil, fmt.Errorf("eth_getBalance: %w", err)
+	}
+	balance, ok := new(big.Int).SetString(balHex, 0)
+	if !ok {
+		return nil, fmt.Errorf("invalid balance from rpc: %q", balHex)
+	}
+
+	info, err := n.GetChainInfo()
+	if err != nil {
+		return nil, err
+	}
+	decimals := n.CurrencyDecimals
+	if decimals == 0 {
+		decimals = info.NativeCurrency.Decimals
+	}
+
+	// Placeholder for estimateGas. balance/2 is non-zero (some swap
+	// routers revert in eth_estimateGas when msg.value=0 and native
+	// is the input) and leaves headroom for the gas itself. The exact
+	// value passed here doesn't affect gas cost for routers that just
+	// store msg.value — and even for routers that branch on it, the
+	// difference between balance/2 and balance-fee is tiny relative
+	// to the swap calldata's gas.
+	placeholder := new(big.Int).Quo(balance, big.NewInt(2))
+	tx.Amount = wltobj.NewAmountRaw(placeholder, decimals)
+
+	return func(tx *Transaction) {
+		// Guarded to never produce a negative amount even if the fee
+		// somehow exceeded the balance — the caller would broadcast
+		// a value=0 tx, which the chain rejects with insufficient
+		// funds for gas. Better than emitting a 2's-complement
+		// Amount.
+		feeWei := tx.Fee.Value()
+		if balance.Cmp(feeWei) <= 0 {
+			tx.Amount = wltobj.NewAmountRaw(big.NewInt(0), decimals)
+			return
+		}
+		tx.Amount = wltobj.NewAmountRaw(new(big.Int).Sub(balance, feeWei), decimals)
+	}, nil
 }
 
 func (tx *Transaction) computeFee(n *wltnet.Network) error {
