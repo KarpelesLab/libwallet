@@ -13,20 +13,17 @@
   (`bitcoinUtxos` + `bitcoinFeeRate` from `MaxSendable`); Solana MAX
   resolution is a follow-up. Wire form: `{"v": "MAX", "e": <decimals>}`
   (or bare `"MAX"` string).
-- **Added: `Transaction:maxSendable` accepts `data` + `value` (EVM).**
-  When `data` is set, the EVM path runs `eth_estimateGas` with
-  `{from, to, value, data}` to get the contract's actual gas cost
-  instead of the 21000 EOA-transfer default — the right number for
-  native swaps, where the previous default reserved ~10x too little
-  gas and "Max" broadcasts failed at execution. `value` lets callers
-  pin a specific call value (some swap routers revert in
-  `eth_estimateGas` with `value: 0` when native is the input);
-  defaults to `balance/2`. Plain transfers (no `data`) keep the
-  21000 fast-path with no extra RTT. **Prefer `Amount.max` over
-  computing max upfront** — it's the same answer with no
-  drift-window. This `data`/`value` plumbing remains for previews
-  where the user needs to see the number before committing to build
-  the tx.
+- **Added: `Transaction:maxSendable` accepts `data` (EVM).** When
+  set, the EVM path runs `eth_estimateGas` with the calldata to get
+  the contract's actual gas cost instead of the 21000 EOA-transfer
+  default — the right number for previews of native swaps where the
+  default reserved ~10x too little. The placeholder value passed to
+  estimateGas (some swap routers revert with `value: 0`) is
+  `balance/2`, computed internally; the caller never has to specify
+  it. Plain transfers (no `data`) keep the 21000 fast-path with no
+  extra RTT. **Prefer `Amount.max` in the actual tx** over computing
+  max upfront — same answer with no drift-window between maxSendable
+  and signAndSend.
 
 ## 0.4.28
 

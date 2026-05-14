@@ -172,18 +172,12 @@ class TransactionApi {
   /// pinned utxos + fee rate) so the eventual send uses the same
   /// fee budget.
   /// [data] is the 0x-prefixed hex calldata of the tx the caller
-  /// intends to send. Only meaningful for EVM. With it, MaxSendable
-  /// runs `eth_estimateGas({from, to, value, data})` to get the
-  /// contract's actual gas cost — necessary for native swaps where
-  /// the default 21000 reserves ~10x too little. Empty falls back to
-  /// the 21000 EOA-transfer default. Pair with [to] (the contract
+  /// intends to send. Only meaningful for EVM. With it, maxSendable
+  /// runs `eth_estimateGas` with the calldata to get the contract's
+  /// actual gas cost — necessary for previews of native swaps where
+  /// the default 21000 would under-reserve. Empty falls back to the
+  /// 21000 EOA-transfer default. Pair with [to] (the contract
   /// address — usually the swap router).
-  ///
-  /// [value] is the call value (wei) the caller intends to send,
-  /// used only by the EVM `eth_estimateGas` path when [data] is set.
-  /// Some swap routers revert with `value: 0` when native is the
-  /// input — pass the intended swap amount here for an accurate
-  /// estimate. Optional; defaults to `balance/2`.
   ///
   /// **Better than computing max upfront: pass [Amount.max] as
   /// `Transaction.amount` directly.** libwallet's build path resolves
@@ -197,7 +191,6 @@ class TransactionApi {
     String? asset,
     String? priority,
     String? data,
-    String? value,
   }) async {
     final params = <String, dynamic>{};
     if (from != null) params['from'] = from;
@@ -205,10 +198,9 @@ class TransactionApi {
     if (asset != null) params['asset'] = asset;
     if (priority != null) params['priority'] = priority;
     if (data != null) params['data'] = data;
-    if (value != null) params['value'] = value;
-    final data2 = await _conn.request(
+    final res = await _conn.request(
         'Transaction:maxSendable', 'POST', params.isNotEmpty ? params : null);
-    return MaxSendableResult.fromJson(data2 as Map<String, dynamic>);
+    return MaxSendableResult.fromJson(res as Map<String, dynamic>);
   }
 
   /// Delete transactions. Optionally filter by account (From) or network.

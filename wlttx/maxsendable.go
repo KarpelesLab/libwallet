@@ -70,19 +70,18 @@ type MaxSendableRequest struct {
 	Priority string `json:"priority,omitempty"`
 	// Data is the 0x-prefixed hex calldata of the transaction the
 	// caller intends to send. Only meaningful for EVM. When set,
-	// MaxSendable runs eth_estimateGas with {From, To, Value, Data}
-	// to get the actual gas cost — necessary for native swaps where
-	// the default 21000 reserves ~10x too little gas. Empty falls
-	// back to the 21000 default for plain EOA transfers.
+	// MaxSendable runs eth_estimateGas with {From, To, Data} (and
+	// balance/2 as the placeholder value, so swap routers that
+	// branch on msg.value don't revert in estimateGas) to get the
+	// contract's actual gas cost — necessary for previews where the
+	// default 21000 would under-reserve. Empty falls back to the
+	// 21000 default for plain EOA transfers.
+	//
+	// Prefer [wltobj.NewAmountMax] in the actual tx instead of
+	// computing max upfront here — it resolves at build time with
+	// no drift window between the maxSendable call and the
+	// signAndSend call.
 	Data string `json:"data,omitempty"`
-	// Value is the call value (wei) the caller intends to send,
-	// used only by the EVM eth_estimateGas path when Data is set.
-	// Some contracts (1inch swap with native input) revert in
-	// estimateGas if msg.value is 0; passing the intended swap
-	// amount here gives an accurate gas estimate. Optional —
-	// defaults to half the balance, which is non-zero enough for
-	// any value-checking contract while leaving headroom.
-	Value string `json:"value,omitempty"`
 }
 
 // ReservedAmt is one line item in MaxSendableResult.Reserved — an amount
@@ -567,35 +566,28 @@ func evmERC20Decimals(ctx context.Context, n *wltnet.Network, contract string) (
 // 21000-gas EOA-transfer default and a swap broadcast at "max" would
 // fail with out-of-gas at execution.
 //
-// req.Value is used verbatim when the caller pinned a specific value
-// (e.g. they know the swap router needs exactly N wei). When empty,
-// uses balance/2 as a non-zero placeholder — some swap routers (1inch
-// with native input) revert in estimateGas if msg.value == 0, and
-// using the full balance leaves no room for the gas itself. balance/2
-// is non-zero enough for any value-checking contract while avoiding
-// the chicken-and-egg of "value depends on gas which depends on value".
+// Uses balance/2 as the placeholder value for the estimateGas call —
+// some swap routers (1inch with native input) revert in estimateGas
+// if msg.value == 0, and using the full balance leaves no room for
+// the gas itself. balance/2 is non-zero enough for any value-checking
+// contract while avoiding the chicken-and-egg of "value depends on
+// gas which depends on value". The caller doesn't need to know about
+// or control this number — that's literally what they're asking
+// MaxSendable to compute.
 func evmEstimateGasForCall(ctx context.Context, n *wltnet.Network, from string, req *MaxSendableRequest, balance *big.Int) (uint64, error) {
 	if req.To == "" {
 		return 0, errors.New("To is required when estimating gas with calldata")
 	}
-	value := new(big.Int)
-	if req.Value != "" {
-		v, ok := new(big.Int).SetString(req.Value, 0)
-		if !ok {
-			return 0, fmt.Errorf("invalid value %q", req.Value)
-		}
-		value = v
-	} else if balance != nil && balance.Sign() > 0 {
-		value = new(big.Int).Quo(balance, big.NewInt(2))
-	}
-
 	call := map[string]any{
 		"from": from,
 		"to":   req.To,
 		"data": req.Data,
 	}
-	if value.Sign() > 0 {
-		call["value"] = "0x" + value.Text(16)
+	if balance != nil && balance.Sign() > 0 {
+		placeholder := new(big.Int).Quo(balance, big.NewInt(2))
+		if placeholder.Sign() > 0 {
+			call["value"] = "0x" + placeholder.Text(16)
+		}
 	}
 	gasHex, err := ethrpc.ReadString(n.DoRPCCtx(ctx, "eth_estimateGas", call))
 	if err != nil {
