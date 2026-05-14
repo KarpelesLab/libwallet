@@ -387,3 +387,81 @@ class SwapResult {
         quote: SwapQuote.fromJson(Map<String, dynamic>.from(json['quote'] as Map)),
       );
 }
+
+/// One provider's result from `Swap:quotes`. Exactly one of [quote] /
+/// [error] is populated:
+///
+/// - [quote] set → provider returned a viable route; pass
+///   [SwapQuote.quoteId] to [SwapApi.execute] when the user picks
+///   this provider.
+/// - [error] set → provider couldn't route (no liquidity, slippage
+///   exceeded, provider unavailable, …); render
+///   `"[providerLabel]: [SwapError.message]"` so the user understands
+///   why a route is missing.
+class QuoteAttempt {
+  /// Stable provider name — `"jupiter_ultra"`, `"dflow"`, `"1inch"`.
+  final String provider;
+
+  /// Display label — `"Jupiter Ultra"`, `"dFlow"`, `"1inch"`.
+  /// Pre-populated even on [error] so the picker UI can render
+  /// `"Jupiter Ultra: Failed to get quotes"` without a [quote].
+  final String providerLabel;
+
+  /// The provider's quote when successful. Null when [error] is set.
+  final SwapQuote? quote;
+
+  /// Typed failure when the provider couldn't return a quote. Null
+  /// when [quote] is set.
+  final SwapError? error;
+
+  const QuoteAttempt({
+    required this.provider,
+    required this.providerLabel,
+    this.quote,
+    this.error,
+  });
+
+  factory QuoteAttempt.fromJson(Map<String, dynamic> json) {
+    final q = json['quote'];
+    final e = json['error'];
+    return QuoteAttempt(
+      provider: (json['provider'] as String?) ?? '',
+      providerLabel: (json['providerLabel'] as String?) ?? '',
+      quote: q is Map
+          ? SwapQuote.fromJson(Map<String, dynamic>.from(q))
+          : null,
+      error: e is Map
+          ? SwapError.fromJson(Map<String, dynamic>.from(e))
+          : null,
+    );
+  }
+
+  /// Convenience predicate — `true` when [quote] is populated.
+  bool get isOk => quote != null;
+}
+
+/// Typed error returned inside a [QuoteAttempt] when a provider
+/// couldn't quote. The [code] is stable across releases; apps should
+/// branch on it rather than the [message] (which is informational
+/// and locale-free English).
+class SwapError implements Exception {
+  /// Stable code — `"no_liquidity"`, `"slippage_exceeded"`,
+  /// `"provider_unavailable"`, `"provider_bad_request"`,
+  /// `"unsupported_chain"`, `"unsupported_token_pair"`,
+  /// `"missing_api_key"`, `"invalid_request"`,
+  /// `"quote_expired"`, `"quote_not_found"`.
+  final String code;
+
+  /// Human-readable description. English; not localised.
+  final String message;
+
+  const SwapError({required this.code, required this.message});
+
+  factory SwapError.fromJson(Map<String, dynamic> json) => SwapError(
+        code: (json['code'] as String?) ?? '',
+        message: (json['message'] as String?) ?? '',
+      );
+
+  @override
+  String toString() => 'SwapError($code): $message';
+}

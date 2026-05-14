@@ -1,3 +1,28 @@
+## Unreleased
+
+- **Added: `client.swap.quotes(...)`** — quote the same swap across
+  every available provider for the chain in parallel and get one
+  `QuoteAttempt` per provider back. Successful attempts carry a
+  `SwapQuote` (with its own `quoteId` ready for `swap.execute(...)`);
+  failed attempts carry a typed `SwapError` so the picker UI can
+  render `"Jupiter Ultra: Failed to get quotes"` next to
+  `"dFlow: 0.00748 SOL → 1.49 USDC"`. The user picks; libwallet
+  never silently switches between providers.
+- **Changed: `swap.quote(...)` no longer silently falls back from
+  Jupiter to dFlow on Solana.** If the primary provider errors,
+  the host receives that error directly. Hosts that want
+  comparison should call `swap.quotes(...)` instead; hosts that
+  want the old "best-effort single quote" behaviour can call
+  `swap.quote(provider: 'jupiter_ultra')` then `swap.quote(provider:
+  'dflow')` themselves on failure.
+- **Changed: Jupiter `HTTP 400 "Failed to get quotes"`** is now
+  classified as `no_liquidity` instead of `provider_bad_request`.
+  This is semantically correct (it's a routing failure, not a
+  malformed request) and matches Jupiter's `HTTP 200` "empty
+  transaction" path which already maps to `no_liquidity`. Hosts
+  that branch on the error code now see one code for both
+  no-route surfaces.
+
 ## 0.4.30
 
 - **Fixed: `Swap:quote` / `Swap:maxSpendable` rejected `Asset.Key`-shaped

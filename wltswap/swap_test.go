@@ -1,9 +1,25 @@
 package wltswap
 
 import (
+	"context"
+	"fmt"
+	"math/big"
 	"testing"
 	"time"
+
+	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
+	"github.com/KarpelesLab/libwallet/wltsign"
 )
+
+// acctForTest returns a *wltacct.Account just usable enough for the
+// runQuotes path — GetAddress() is the only method runQuotes reaches
+// for (it stamps the resulting Quote.from). No DB / TSS involved.
+func acctForTest(t *testing.T) *wltacct.Account {
+	t.Helper()
+	return &wltacct.Account{Address: "7EEygcr1HaF2PY8pdHaeYSNByXPpMQU4GzrCezvps7KH"}
+}
 
 func TestQuoteCache_PutGet(t *testing.T) {
 	c := &quoteCacheT{entries: make(map[string]*Quote)}
@@ -116,6 +132,105 @@ func TestOneInchTokenOrSentinel(t *testing.T) {
 	for in, want := range cases {
 		if got := oneInchTokenOrSentinel(in); got != want {
 			t.Errorf("oneInchTokenOrSentinel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// stubProvider is a tiny Provider double for tests. Quote returns the
+// canned response without making an HTTP call.
+type stubProvider struct {
+	name  string
+	chain string
+	q     *Quote
+	err   error
+}
+
+func (s *stubProvider) Name() string  { return s.name }
+func (s *stubProvider) Chain() string { return s.chain }
+func (s *stubProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error) {
+	return s.q, s.err
+}
+func (s *stubProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+	return nil, fmt.Errorf("stub Execute not implemented")
+}
+
+// withStubProviders swaps in stubs for the duration of fn, then
+// restores the original registry. Tests can call this to drive
+// runQuotes without touching the live Jupiter / dFlow / 1inch
+// adapters.
+func withStubProviders(t *testing.T, stubs []*stubProvider, fn func()) {
+	t.Helper()
+	saved := make(map[string]Provider, len(providers))
+	for k, v := range providers {
+		saved[k] = v
+	}
+	// Wipe and install the stubs in their natural order. The chain's
+	// providerOrderForChain list pulls them back out.
+	providers = map[string]Provider{}
+	for _, s := range stubs {
+		RegisterProvider(s)
+	}
+	defer func() {
+		providers = saved
+	}()
+	fn()
+}
+
+func TestRunQuotes_CollectsPerProviderAttempts(t *testing.T) {
+	goodQuote := &Quote{
+		Provider:      "jupiter_ultra",
+		ProviderLabel: "Jupiter Ultra",
+		Chain:         "solana",
+		TokenIn:       TokenRef{Address: "NATIVE", Symbol: "SOL", Decimals: 9},
+		TokenOut:      TokenRef{Address: "EPjFW", Symbol: "USDC", Decimals: 6},
+		AmountIn:      wltobj.NewAmountRaw(big.NewInt(1_000_000), 9),
+		AmountOut:     wltobj.NewAmountRaw(big.NewInt(200_000), 6),
+	}
+	stubs := []*stubProvider{
+		{name: "jupiter_ultra", chain: "solana", q: goodQuote},
+		{name: "dflow", chain: "solana", err: newErr(ErrCodeNoLiquidity, "no route")},
+	}
+	withStubProviders(t, stubs, func() {
+		n := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
+		acct := acctForTest(t)
+		req := &QuoteRequest{TokenIn: TokenRef{Address: "NATIVE"}, TokenOut: TokenRef{Address: "EPjFW"}, AmountIn: "1000000"}
+		res, err := runQuotes(context.Background(), n, acct, req)
+		if err != nil {
+			t.Fatalf("runQuotes: %v", err)
+		}
+		if len(res.Attempts) != 2 {
+			t.Fatalf("got %d attempts, want 2", len(res.Attempts))
+		}
+		if res.Attempts[0].Provider != "jupiter_ultra" || res.Attempts[0].Quote == nil {
+			t.Errorf("attempt 0 = %+v, want jupiter_ultra with quote", res.Attempts[0])
+		}
+		if res.Attempts[0].ProviderLabel != "Jupiter Ultra" {
+			t.Errorf("attempt 0 label = %q, want Jupiter Ultra", res.Attempts[0].ProviderLabel)
+		}
+		if res.Attempts[1].Provider != "dflow" || res.Attempts[1].Error == nil {
+			t.Errorf("attempt 1 = %+v, want dflow with error", res.Attempts[1])
+		}
+		if res.Attempts[1].Error.Code != ErrCodeNoLiquidity {
+			t.Errorf("attempt 1 code = %q, want %q", res.Attempts[1].Error.Code, ErrCodeNoLiquidity)
+		}
+		// The successful attempt must have its QuoteId stamped so
+		// the host can immediately call Swap:execute with it.
+		if res.Attempts[0].Quote.QuoteId == "" {
+			t.Error("successful attempt missing QuoteId — caller can't execute it")
+		}
+	})
+}
+
+func TestProviderDisplayLabel(t *testing.T) {
+	cases := map[string]string{
+		"jupiter_ultra": "Jupiter Ultra",
+		"dflow":         "dFlow",
+		"1inch":         "1inch",
+		"unknown":       "unknown",
+	}
+	for in, want := range cases {
+		if got := providerDisplayLabel(in); got != want {
+			t.Errorf("providerDisplayLabel(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

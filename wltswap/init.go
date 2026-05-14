@@ -4,6 +4,7 @@ import "github.com/KarpelesLab/pobj"
 
 func init() {
 	pobj.RegisterStatic("Swap:quote", swapQuote)
+	pobj.RegisterStatic("Swap:quotes", swapQuotes)
 	pobj.RegisterStatic("Swap:execute", swapExecute)
 	pobj.RegisterStatic("Swap:buildApproval", swapBuildApproval)
 	pobj.RegisterStatic("Swap:availability", swapAvailability)

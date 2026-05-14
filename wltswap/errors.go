@@ -10,9 +10,12 @@ import "errors"
 
 // SwapError is a machine-readable failure. Code values are stable
 // across versions — apps in the wild depend on them.
+//
+// JSON-marshallable because Swap:quotes (plural) returns one
+// SwapError per failed provider attempt inside its response shape.
 type SwapError struct {
-	Code    string // stable code; see constants below
-	Message string // human-readable description
+	Code    string `json:"code"`    // stable code; see constants below
+	Message string `json:"message"` // human-readable description
 }
 
 func (e *SwapError) Error() string { return e.Message }

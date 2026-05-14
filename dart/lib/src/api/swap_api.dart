@@ -75,8 +75,11 @@ class SwapApi {
   /// - `"jupiter_ultra"` / `"dflow"` — Solana only
   /// - `"1inch"` — EVM only
   ///
-  /// Empty [provider] auto-selects; Solana falls back from Jupiter
-  /// to dFlow if Jupiter is unavailable.
+  /// Empty [provider] auto-selects the primary provider for the
+  /// chain (Jupiter on Solana, 1inch on EVM). **There is no silent
+  /// fallback** — if the primary provider errors, the caller sees
+  /// that error. Use [quotes] (plural) when you want side-by-side
+  /// results from every provider for the user to pick.
   ///
   /// Known error codes:
   /// - `no_liquidity` — aggregator has no route for this pair/size
@@ -103,6 +106,43 @@ class SwapApi {
     if (provider != null) params['provider'] = provider;
     final data = await _conn.request('Swap:quote', 'POST', params);
     return SwapQuote.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Quote the same swap against every available provider for the
+  /// chain and return one [QuoteAttempt] per provider — successful
+  /// quotes carry [QuoteAttempt.quote]; failures carry
+  /// [QuoteAttempt.error] with a typed error code. Hosts render the
+  /// attempts side-by-side and let the user pick.
+  ///
+  /// Each successful attempt is cached server-side; call [execute]
+  /// with the chosen `quoteId` to commit. Quotes expire after 90 s
+  /// — same TTL as [quote].
+  ///
+  /// "MAX" amountIn is resolved once (against the chain's primary
+  /// max calc) before fan-out so every provider sees the same input
+  /// and the comparison is apples-to-apples.
+  Future<List<QuoteAttempt>> quotes({
+    required SwapTokenRef tokenIn,
+    required SwapTokenRef tokenOut,
+    required String amountIn,
+    String? from,
+    int? slippageBps,
+    String? network,
+  }) async {
+    final params = <String, dynamic>{
+      'tokenIn': tokenIn.toJson(),
+      'tokenOut': tokenOut.toJson(),
+      'amountIn': amountIn,
+    };
+    if (from != null) params['from'] = from;
+    if (slippageBps != null) params['slippageBps'] = slippageBps;
+    if (network != null) params['network'] = network;
+    final data = await _conn.request('Swap:quotes', 'POST', params);
+    final m = Map<String, dynamic>.from(data as Map);
+    final raw = (m['attempts'] as List?) ?? const [];
+    return raw
+        .map((e) => QuoteAttempt.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
   }
 
   /// Get a quote that swaps the maximum amount of [tokenIn] the

@@ -101,7 +101,9 @@ export 'src/models/swap_quote.dart'
         SwapRouteHop,
         SwapResult,
         ApprovalPreview,
-        SwapAvailability;
+        SwapAvailability,
+        QuoteAttempt,
+        SwapError;
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;

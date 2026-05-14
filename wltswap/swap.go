@@ -277,6 +277,58 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 	return runQuote(ctx, n, acct, req)
 }
 
+// swapQuotes is the Swap:quotes entry point — same input shape as
+// Swap:quote but fans the request out to every available provider
+// for the chain and returns the collected per-provider attempts.
+// The host renders the attempts side-by-side and lets the user
+// pick; libwallet does NOT silently fall back from one provider to
+// another. Each successful attempt is cached so the caller can
+// Swap:execute by id without re-quoting.
+//
+// "MAX" sentinel is resolved once (against the chain's primary
+// provider's max calc) before fan-out so every provider gets the
+// same amountIn — without that, providers with different ATA-rent
+// reservations would each see different amounts and the side-by-side
+// comparison would be apples-to-oranges.
+func swapQuotes(ctx context.Context, req *QuoteRequest) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	if req == nil {
+		return nil, newErr(ErrCodeInvalidRequest, "nil request")
+	}
+	if req.TokenIn.Address == "" || req.TokenOut.Address == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
+	}
+	req.TokenIn.Address = stripChainPrefix(req.TokenIn.Address)
+	req.TokenOut.Address = stripChainPrefix(req.TokenOut.Address)
+	if req.AmountIn == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required (use \"MAX\" to quote the full balance)")
+	}
+	if req.SlippageBps == 0 {
+		req.SlippageBps = DefaultSlippageBps
+	}
+
+	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
+	if err != nil {
+		return nil, err
+	}
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
+		return nil, err
+	}
+
+	if strings.EqualFold(req.AmountIn, "MAX") {
+		amt, err := resolveMaxAmountIn(ctx, n, acct, req)
+		if err != nil {
+			return nil, err
+		}
+		req.AmountIn = amt
+	}
+
+	return runQuotes(ctx, n, acct, req)
+}
+
 // swapMaxSpendable is Swap:maxSpendable: build a Quote for the
 // maximum amount of req.TokenIn the account can spend. The Quote
 // shape is identical to Swap:quote — Quote.AmountIn carries the
@@ -321,40 +373,117 @@ func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 	return runQuote(ctx, n, acct, req)
 }
 
-// runQuote drives the provider call + auto-fallback + cache, after
-// the caller has already done validation, account/network resolution,
-// and AmountIn resolution. Shared by swapQuote and swapMaxSpendable.
+// runQuote drives the provider call + cache, after the caller has
+// already done validation, account/network resolution, and AmountIn
+// resolution. Shared by swapQuote and swapMaxSpendable.
+//
+// As of 0.4.31 there is no silent fallback — if the primary provider
+// errors, the caller sees that error verbatim. Hosts that want
+// dFlow's quote when Jupiter fails should call Swap:quotes (plural),
+// which returns one attempt per provider and lets the host render
+// both side-by-side instead of guessing which one libwallet picked.
 func runQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error) {
 	provider, err := selectProvider(n, req.Provider)
 	if err != nil {
 		return nil, err
 	}
-
 	quote, err := provider.Quote(ctx, n, acct, req)
 	if err != nil {
-		// Auto-fallback: if the caller didn't pin a provider and
-		// the primary is unavailable on Solana, try dFlow.
-		if req.Provider == "" && n.Type == "solana" && provider.Name() == "jupiter_ultra" {
-			if sw, ok := AsSwapError(err); ok && sw.Code == ErrCodeProviderUnavailable {
-				if fallback, ferr := getProvider("dflow"); ferr == nil {
-					if q2, e2 := fallback.Quote(ctx, n, acct, req); e2 == nil {
-						quote = q2
-						err = nil
-					}
-				}
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
-
-	quote.QuoteId = newQuoteID()
-	quote.createdAt = time.Now()
-	quote.ExpiresAt = quote.createdAt.Add(quoteTTL)
-	quote.from = acct.GetAddress()
-	quoteCache.put(quote)
+	finalizeQuote(quote, acct)
 	return quote, nil
+}
+
+// finalizeQuote stamps the cache-relevant fields (id, expiry, from)
+// onto a freshly-built provider quote and inserts it into the
+// quoteCache so the caller can execute by id. Shared by runQuote and
+// runQuotes (the multi-provider fan-out).
+func finalizeQuote(q *Quote, acct *wltacct.Account) {
+	q.QuoteId = newQuoteID()
+	q.createdAt = time.Now()
+	q.ExpiresAt = q.createdAt.Add(quoteTTL)
+	q.from = acct.GetAddress()
+	quoteCache.put(q)
+}
+
+// QuoteAttempt is one provider's result in a multi-provider quote
+// query. Exactly one of [Quote] or [Error] is populated. The host
+// renders [Quote] (with a "[providerLabel]" badge) when set, or the
+// error message otherwise — both are useful in the side-by-side
+// picker UI so the user understands why a route is missing on one
+// provider but available on another.
+type QuoteAttempt struct {
+	// Provider is the stable name ("jupiter_ultra" | "dflow" | "1inch").
+	Provider string `json:"provider"`
+	// ProviderLabel is the display string ("Jupiter Ultra", "dFlow",
+	// "1inch"). Pre-populated even on Error so the UI can render
+	// "Jupiter Ultra: Failed to get quotes" without a Quote.
+	ProviderLabel string `json:"providerLabel"`
+	// Quote is the successful price, populated when the provider
+	// returned a viable route. nil when the provider errored.
+	Quote *Quote `json:"quote,omitempty"`
+	// Error explains why this provider didn't return a quote — no
+	// liquidity, slippage exceeded, provider unavailable, etc.
+	// nil when the provider succeeded.
+	Error *SwapError `json:"error,omitempty"`
+}
+
+// QuotesResult is the response from Swap:quotes. One [QuoteAttempt]
+// per provider available for the current chain, in
+// [providerOrderForChain] order.
+type QuotesResult struct {
+	Attempts []QuoteAttempt `json:"attempts"`
+}
+
+// runQuotes is the multi-provider variant of runQuote — fans out the
+// same request to every provider available for the chain and returns
+// the collected attempts. Shared between Swap:quotes and (planned)
+// future maxSpendable variants. Each successful provider gets a
+// freshly-cached Quote so the caller can execute by id without
+// re-quoting.
+func runQuotes(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*QuotesResult, error) {
+	providers, err := providersForChain(n)
+	if err != nil {
+		return nil, err
+	}
+	res := &QuotesResult{Attempts: make([]QuoteAttempt, 0, len(providers))}
+	for _, p := range providers {
+		att := QuoteAttempt{
+			Provider:      p.Name(),
+			ProviderLabel: providerDisplayLabel(p.Name()),
+		}
+		q, qerr := p.Quote(ctx, n, acct, req)
+		if qerr != nil {
+			if se, ok := AsSwapError(qerr); ok {
+				att.Error = se
+			} else {
+				att.Error = &SwapError{Code: ErrCodeProviderUnavailable, Message: qerr.Error()}
+			}
+			res.Attempts = append(res.Attempts, att)
+			continue
+		}
+		finalizeQuote(q, acct)
+		att.Quote = q
+		res.Attempts = append(res.Attempts, att)
+	}
+	return res, nil
+}
+
+// providerDisplayLabel maps a stable provider name to the
+// human-friendly label shown in the picker UI. Kept in sync with the
+// labels each adapter populates on a successful Quote.ProviderLabel.
+func providerDisplayLabel(name string) string {
+	switch name {
+	case "jupiter_ultra":
+		return "Jupiter Ultra"
+	case "dflow":
+		return "dFlow"
+	case "1inch":
+		return "1inch"
+	default:
+		return name
+	}
 }
 
 // resolveMaxAmountIn returns the largest base-unit amount of

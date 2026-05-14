@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
@@ -127,6 +128,20 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 
 	var resp jupiterOrderResponse
 	if err := httpGetJSON(ctx, JupiterOrderURL, qs, jupiterHeader(), &resp); err != nil {
+		// Jupiter returns HTTP 400 with `{"error":"Failed to get
+		// quotes"}` when no DEX in their aggregator has a viable
+		// route for the (mint pair, size, slippage) combination —
+		// most commonly seen on tiny swaps where the gas cost
+		// would eat the trade's profit margin. The default
+		// httpRun classifier wraps that as ErrCodeProviderBadRequest
+		// which skips the runQuote dFlow fallback; semantically it's
+		// a routing failure (no liquidity), not a malformed request.
+		// Re-classify so the caller's auto-fallback gets a shot at
+		// dFlow.
+		if sw, ok := AsSwapError(err); ok && sw.Code == ErrCodeProviderBadRequest &&
+			strings.Contains(strings.ToLower(sw.Message), "failed to get quotes") {
+			return nil, newErr(ErrCodeNoLiquidity, sw.Message)
+		}
 		return nil, err
 	}
 	// Jupiter sometimes returns an HTTP 200 with an empty transaction

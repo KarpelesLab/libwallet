@@ -61,10 +61,49 @@ func computeReferralFee(amountIn *big.Int, bps uint16, decimals int) *wltobj.Amo
 	return wltobj.NewAmountRaw(v, decimals)
 }
 
-// selectProvider decides which provider to use for a given request.
-// Caller-pinned Provider wins; otherwise pick the primary for the
-// chain. For Solana the primary is Jupiter Ultra; if unregistered
-// for some reason we fall to dFlow. For EVM there's one: 1inch.
+// providerOrderForChain returns the priority-ordered provider names
+// libwallet attempts for n's chain family. Out-of-order callers get
+// the same list; the order is the historical "first-pick" preference
+// (Jupiter before dFlow on Solana) but no caller is obligated to use
+// position 0 over position 1.
+func providerOrderForChain(n *wltnet.Network) ([]string, error) {
+	switch n.Type {
+	case "solana":
+		return []string{"jupiter_ultra", "dflow"}, nil
+	case "evm":
+		return []string{"1inch"}, nil
+	default:
+		return nil, newErr(ErrCodeUnsupportedChain, fmt.Sprintf("swap not supported on %s networks", n.Type))
+	}
+}
+
+// providersForChain resolves [providerOrderForChain] to the actual
+// registered Provider implementations. Used by Swap:quotes to fan
+// out a quote request across every available provider for the chain.
+func providersForChain(n *wltnet.Network) ([]Provider, error) {
+	order, err := providerOrderForChain(n)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Provider, 0, len(order))
+	for _, name := range order {
+		if p, ok := providers[name]; ok {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 {
+		return nil, newErr(ErrCodeProviderUnavailable, fmt.Sprintf("no provider registered for %s", n.Type))
+	}
+	return out, nil
+}
+
+// selectProvider decides which provider to use for a single-quote
+// request. Caller-pinned Provider wins; otherwise pick the first
+// registered provider from [providerOrderForChain].
+//
+// As of 0.4.31 there is no silent fallback at the runQuote layer —
+// Swap:quote returns the primary's result verbatim. Hosts that want
+// dFlow's number too should call Swap:quotes (plural).
 func selectProvider(n *wltnet.Network, pinned string) (Provider, error) {
 	if pinned != "" {
 		p, err := getProvider(pinned)
@@ -77,21 +116,9 @@ func selectProvider(n *wltnet.Network, pinned string) (Provider, error) {
 		}
 		return p, nil
 	}
-
-	var order []string
-	switch n.Type {
-	case "solana":
-		order = []string{"jupiter_ultra", "dflow"}
-	case "evm":
-		order = []string{"1inch"}
-	default:
-		return nil, newErr(ErrCodeUnsupportedChain, fmt.Sprintf("swap not supported on %s networks", n.Type))
+	ps, err := providersForChain(n)
+	if err != nil {
+		return nil, err
 	}
-
-	for _, name := range order {
-		if p, ok := providers[name]; ok {
-			return p, nil
-		}
-	}
-	return nil, newErr(ErrCodeProviderUnavailable, fmt.Sprintf("no provider registered for %s", n.Type))
+	return ps[0], nil
 }
