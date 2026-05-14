@@ -1,32 +1,3 @@
-## 0.4.24
-
-- **Added: `LibwalletClient.clawdWallet.pair(url)`** — verifies a
-  ClawdWallet pairing URL (`tibane://pair?agent=...&token=...`) by
-  handshaking with the agent over Spot and returns the verified
-  `AgentIdentity` (`agentSpotId`, `suggestedName`, `agentVersion`,
-  `capabilities`). Used as the deep-link replacement for the manual
-  "paste agent_spot_id" field on the Create-agent-wallet flow. The
-  app hands a URL string in; libwallet drives the entire Spot
-  handshake. Failures throw typed `PairingException` subclasses —
-  `PairingURLMalformedException`, `PairingAgentUnreachableException`
-  (15s timeout), `PairingTokenInvalidException`,
-  `PairingTokenExpiredException`, `PairingTokenConsumedException`,
-  `PairingBadRequestException`, and
-  `PairingIdentityMismatchException` (security: response's
-  `agent_spot_id` ≠ URL `agent` param). Wire contract:
-  `tibaneapp/docs/clawdwallet-pairing.md`.
-
-## 0.4.23
-
-- **Fixed: `libwalletPackageVersion` was stuck at `0.4.20` in the
-  0.4.21 and 0.4.22 publishes.** The bump for those releases only
-  touched `pubspec.yaml`; the constant in `lib/src/version.dart`
-  was never updated, so `LibwalletClient.initialize` would trip
-  its stale-binary mismatch check at runtime against the bundled
-  native library. Republished with both files in sync. Use
-  `dart run tools/bump_version.dart <version>` (not a hand edit)
-  to keep them locked.
-
 ## 0.4.28
 
 - **Added: Solana mainnet token-list auto-discovery on first asset
@@ -101,6 +72,35 @@
   to a single call.
 - **Added: dependency on `atonline_api` ^0.5.0** (passed in by the
   host; libwallet does not store or refresh tokens).
+
+## 0.4.24
+
+- **Added: `LibwalletClient.clawdWallet.pair(url)`** — verifies a
+  ClawdWallet pairing URL (`tibane://pair?agent=...&token=...`) by
+  handshaking with the agent over Spot and returns the verified
+  `AgentIdentity` (`agentSpotId`, `suggestedName`, `agentVersion`,
+  `capabilities`). Used as the deep-link replacement for the manual
+  "paste agent_spot_id" field on the Create-agent-wallet flow. The
+  app hands a URL string in; libwallet drives the entire Spot
+  handshake. Failures throw typed `PairingException` subclasses —
+  `PairingURLMalformedException`, `PairingAgentUnreachableException`
+  (15s timeout), `PairingTokenInvalidException`,
+  `PairingTokenExpiredException`, `PairingTokenConsumedException`,
+  `PairingBadRequestException`, and
+  `PairingIdentityMismatchException` (security: response's
+  `agent_spot_id` ≠ URL `agent` param). Wire contract:
+  `tibaneapp/docs/clawdwallet-pairing.md`.
+
+## 0.4.23
+
+- **Fixed: `libwalletPackageVersion` was stuck at `0.4.20` in the
+  0.4.21 and 0.4.22 publishes.** The bump for those releases only
+  touched `pubspec.yaml`; the constant in `lib/src/version.dart`
+  was never updated, so `LibwalletClient.initialize` would trip
+  its stale-binary mismatch check at runtime against the bundled
+  native library. Republished with both files in sync. Use
+  `dart run tools/bump_version.dart <version>` (not a hand edit)
+  to keep them locked.
 
 ## 0.4.22
 
