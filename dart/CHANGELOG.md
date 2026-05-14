@@ -1,3 +1,18 @@
+## Unreleased
+
+- **Added: `Asset.isNative` + `Asset.tokenAddress`** on the Dart
+  model (plus matching `IsNative()` / `TokenAddress()` on Go's
+  `wltasset.Asset`). Use `asset.isNative` to branch native-vs-token
+  instead of inventing a matcher on `Asset.type` / `Asset.symbol`
+  / `Asset.name`. libwallet emits `Type: "fungible"` for both
+  native and tokens — `Asset.key`'s `.NATIVE` suffix is the only
+  invariant native-vs-token signal, and these getters wrap it as
+  the canonical predicate.
+- **Doc clarification on `Asset.type`** — the field's old example
+  list (`"native"`, `"erc20"`, `"spl-token"`) was aspirational;
+  the runtime value is always `"fungible"` for balance entries.
+  Updated to reflect reality and point readers at `isNative`.
+
 ## 0.4.31
 
 - **Added: `client.swap.quotes(...)`** — quote the same swap across

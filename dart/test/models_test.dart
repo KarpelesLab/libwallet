@@ -267,4 +267,53 @@ void main() {
       expect(e, isA<UnknownEvent>());
     });
   });
+
+  group('Asset', () {
+    Asset assetWithKey(String key) => Asset(
+          id: 'a',
+          key: key,
+          name: '',
+          symbol: '',
+          amount: Amount.zero(),
+          type: 'fungible',
+          network: '',
+          testNet: false,
+          created: DateTime.parse('2024-01-01T00:00:00Z'),
+          updated: DateTime.parse('2024-01-01T00:00:00Z'),
+        );
+
+    test('isNative is true for the .NATIVE suffix', () {
+      // The Asset.type field is "fungible" for BOTH native and tokens,
+      // so hosts can't branch on it. The .NATIVE suffix on Asset.key
+      // is libwallet's canonical native-vs-token signal.
+      expect(assetWithKey('evm.1.NATIVE').isNative, isTrue);
+      expect(assetWithKey('solana.mainnet.NATIVE').isNative, isTrue);
+      expect(assetWithKey('bitcoin.bitcoin.NATIVE').isNative, isTrue);
+    });
+
+    test('isNative is false for tokens', () {
+      expect(assetWithKey('evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48')
+          .isNative, isFalse);
+      expect(assetWithKey('solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
+          .isNative, isFalse);
+      expect(assetWithKey('').isNative, isFalse);
+      // "NATIVE" must be the trailing segment — a key that contains
+      // it elsewhere is still a token.
+      expect(assetWithKey('evm.1.NATIVE-extra').isNative, isFalse);
+    });
+
+    test('tokenAddress returns the address for tokens, null for native', () {
+      expect(
+          assetWithKey('evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48')
+              .tokenAddress,
+          '0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48');
+      expect(
+          assetWithKey('solana.mainnet.EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
+              .tokenAddress,
+          'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+      expect(assetWithKey('evm.1.NATIVE').tokenAddress, isNull);
+      expect(assetWithKey('').tokenAddress, isNull);
+      expect(assetWithKey('no-dots').tokenAddress, isNull);
+    });
+  });
 }

@@ -5,7 +5,11 @@ class Asset {
   /// Server-assigned identifier.
   final String id;
 
-  /// Unique key identifying this asset (e.g. `ethereum:ETH`).
+  /// Canonical asset identifier in `"<type>.<chainId>.<address>"`
+  /// form, e.g. `"evm.1.NATIVE"`, `"solana.mainnet.EPjFW…"`,
+  /// `"evm.1.0xA0b86991…"`. Native assets end with `.NATIVE`; tokens
+  /// end with the on-chain contract / mint address. Use [isNative]
+  /// to branch.
   final String key;
 
   /// Human-readable asset name (e.g. `"Ethereum"`).
@@ -17,7 +21,13 @@ class Asset {
   /// Current balance of this asset.
   final Amount amount;
 
-  /// Asset type (e.g. `native`, `erc20`, `spl-token`).
+  /// Coarse-grained asset family — currently `"fungible"` for every
+  /// runtime-emitted asset (native currencies + ERC-20 / SPL-token
+  /// balances both). Reserved for a future `"nft"` distinction.
+  ///
+  /// **Don't branch native-vs-token on this field** — use
+  /// [isNative] instead. Native is signalled by the `.NATIVE`
+  /// suffix on [key], not by [type].
   final String type;
 
   /// Network ID this asset belongs to.
@@ -60,6 +70,28 @@ class Asset {
     required this.created,
     required this.updated,
   });
+
+  /// True when this Asset is the chain's native currency (ETH / SOL /
+  /// BTC / etc.) — i.e. when [key] ends with `.NATIVE` (libwallet's
+  /// canonical native sentinel; see `wltnet/network.go`).
+  ///
+  /// Use this rather than matching on [type] / [symbol] / [name]:
+  /// libwallet emits `Type: "fungible"` for native AND tokens, the
+  /// symbol can collide (a token can ship as "ETH" too), and the
+  /// name is localised in some hosts. The `.NATIVE` suffix on the
+  /// key is the only invariant.
+  bool get isNative => key.endsWith('.NATIVE');
+
+  /// The on-chain mint / contract part of [key], or `null` for a
+  /// native asset. For `"evm.1.0xA0b86991…"` returns
+  /// `"0xA0b86991…"`; for `"solana.mainnet.EPjFW…"` returns
+  /// `"EPjFW…"`; for `"evm.1.NATIVE"` returns `null`.
+  String? get tokenAddress {
+    if (isNative) return null;
+    final idx = key.lastIndexOf('.');
+    if (idx < 0 || idx == key.length - 1) return null;
+    return key.substring(idx + 1);
+  }
 
   factory Asset.fromJson(Map<String, dynamic> json) {
     return Asset(
