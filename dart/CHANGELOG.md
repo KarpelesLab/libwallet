@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.29
 
 - **Added: `Network.addressUrl(address)` + `Network.transactionUrl(hash)`
   helpers on the Dart model.** Pure-sync, return a fully-composed
