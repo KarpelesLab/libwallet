@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.31
 
 - **Added: `client.swap.quotes(...)`** — quote the same swap across
   every available provider for the chain in parallel and get one
