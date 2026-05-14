@@ -110,6 +110,77 @@ void main() {
       expect(NetworkType.fromString('solana'), NetworkType.solana);
       expect(NetworkType.fromString('foo'), NetworkType.unknown);
     });
+
+    Network mk(NetworkType t, String chainId, String resolved) => Network(
+          id: 'net-x',
+          type: t,
+          chainId: chainId,
+          name: '',
+          rpc: '',
+          currencySymbol: '',
+          currencyDecimals: 18,
+          blockExplorer: 'auto',
+          resolvedBlockExplorer: resolved,
+          testNet: false,
+          priority: 0,
+          created: DateTime.parse('2024-01-01T00:00:00Z'),
+          updated: DateTime.parse('2024-01-01T00:00:00Z'),
+        );
+
+    group('addressUrl/transactionUrl', () {
+      test('EVM mainnet', () {
+        final n = mk(NetworkType.evm, '1', 'https://etherscan.io');
+        expect(n.addressUrl('0xabc'), 'https://etherscan.io/address/0xabc');
+        expect(n.transactionUrl('0xdead'), 'https://etherscan.io/tx/0xdead');
+      });
+
+      test('Solana mainnet (no cluster suffix)', () {
+        final n = mk(NetworkType.solana, 'mainnet', 'https://explorer.solana.com');
+        expect(n.addressUrl('Aaa'), 'https://explorer.solana.com/address/Aaa');
+        expect(n.transactionUrl('sig'), 'https://explorer.solana.com/tx/sig');
+      });
+
+      test('Solana devnet appends ?cluster=devnet', () {
+        final n = mk(NetworkType.solana, 'devnet', 'https://explorer.solana.com');
+        expect(n.addressUrl('Aaa'),
+            'https://explorer.solana.com/address/Aaa?cluster=devnet');
+        expect(n.transactionUrl('sig'),
+            'https://explorer.solana.com/tx/sig?cluster=devnet');
+      });
+
+      test('Solana mainnet-beta alias is bare', () {
+        final n =
+            mk(NetworkType.solana, 'mainnet-beta', 'https://explorer.solana.com');
+        expect(n.addressUrl('Aaa'), 'https://explorer.solana.com/address/Aaa');
+      });
+
+      test('No resolved explorer returns empty (host hides link)', () {
+        final n = mk(NetworkType.bitcoin, 'bitcoin', '');
+        expect(n.addressUrl('addr'), '');
+        expect(n.transactionUrl('hash'), '');
+      });
+
+      test('fromJson reads ResolvedBlockExplorer', () {
+        final n = Network.fromJson({
+          'Id': 'net-sol',
+          'Type': 'solana',
+          'ChainId': 'devnet',
+          'Name': 'Solana Devnet',
+          'RPC': '',
+          'CurrencySymbol': 'SOL',
+          'CurrencyDecimals': 9,
+          'BlockExplorer': 'auto',
+          'ResolvedBlockExplorer': 'https://explorer.solana.com',
+          'TestNet': true,
+          'Priority': 0,
+          'Created': '2024-01-01T00:00:00Z',
+          'Updated': '2024-01-01T00:00:00Z',
+        });
+        expect(n.resolvedBlockExplorer, 'https://explorer.solana.com');
+        expect(n.addressUrl('Aaa'),
+            'https://explorer.solana.com/address/Aaa?cluster=devnet');
+      });
+    });
   });
 
   group('KeyDescription', () {

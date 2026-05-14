@@ -1,5 +1,19 @@
 ## Unreleased
 
+- **Added: `Network.addressUrl(address)` + `Network.transactionUrl(hash)`
+  helpers on the Dart model.** Pure-sync, return a fully-composed
+  block-explorer URL with the right per-chain shape applied —
+  `?cluster=<id>` suffix for non-mainnet Solana, `/address/` vs
+  `/tx/` paths, `""` when no explorer is resolvable. Hosts no longer
+  need to fork the per-chain composition logic to render "tap address
+  → open in explorer" affordances on signing-critical rows.
+- **Added: `Network.resolvedBlockExplorer`** — populated by libwallet
+  with the bare base URL after resolving the `"auto"` sentinel
+  against the chain registry. Backs the URL helpers; also useful to
+  hosts that compose other URL shapes (`/token/`, `/block/`). Empty
+  when no canonical explorer is known (custom chains with nothing
+  configured) — hosts should hide the affordance in that case.
+
 - **Added: `Amount.max(decimals)` sentinel — resolved at build time.**
   Pass `Amount.max(...)` as `Transaction.amount` and libwallet's build
   path (`Transaction.Validate`, called by `signAndSend`) substitutes

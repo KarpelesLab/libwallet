@@ -267,16 +267,17 @@ func (n *Network) SetCurrent(e wltintf.Env) error {
 
 func (n *Network) MarshalJSON() ([]byte, error) {
 	res := map[string]any{
-		"Id":             n.Id,
-		"Type":           n.Type,
-		"ChainId":        n.ChainId,
-		"Name":           n.Name,
-		"RPC":            n.RPC,
-		"CurrencySymbol": n.CurrencySymbol,
-		"BlockExplorer":  n.BlockExplorer,
-		"TestNet":        n.TestNet,
-		"Created":        n.Created,
-		"Updated":        n.Updated,
+		"Id":                    n.Id,
+		"Type":                  n.Type,
+		"ChainId":               n.ChainId,
+		"Name":                  n.Name,
+		"RPC":                   n.RPC,
+		"CurrencySymbol":        n.CurrencySymbol,
+		"BlockExplorer":         n.BlockExplorer,
+		"ResolvedBlockExplorer": n.ResolvedBlockExplorer(),
+		"TestNet":               n.TestNet,
+		"Created":               n.Created,
+		"Updated":               n.Updated,
 	}
 
 	switch n.Type {
@@ -335,33 +336,69 @@ func (n *Network) NativeSymbol() (string, error) {
 	}
 }
 
-func (n *Network) TransactionUrl(txHash string) string {
-	if n.Type == "solana" {
-		base := n.BlockExplorer
-		if base == "" || base == "auto" {
-			base = "https://explorer.solana.com"
-		}
-		// Solana block explorers (explorer.solana.com, solscan.io,
-		// solana.fm, …) host one URL per address/tx across all clusters
-		// and switch on `?cluster=`. Without the suffix the explorer
-		// defaults to mainnet and a devnet/testnet tx renders as
-		// "Transaction not found". Mainnet stays bare (the default).
-		// Custom local clusters get their ChainId passed through —
-		// some explorers honour arbitrary values, others ignore it.
-		url := fmt.Sprintf("%s/tx/%s", base, txHash)
-		if n.ChainId != "" && n.ChainId != "mainnet" && n.ChainId != "mainnet-beta" {
-			url += "?cluster=" + n.ChainId
-		}
-		return url
+// ResolvedBlockExplorer returns the network's block-explorer base URL
+// after resolving the "auto" sentinel against the chain registry.
+// Falls back to "" when the network has no canonical explorer — custom
+// chains with BlockExplorer="" / "auto", non-EVM chains we don't have
+// a default for, unknown chain ids.
+//
+// Used internally by [TransactionUrl] / [AddressUrl] and embedded in
+// the Network JSON response (as `ResolvedBlockExplorer`) so Dart can
+// compose URLs locally without a per-call FFI round trip.
+func (n *Network) ResolvedBlockExplorer() string {
+	if n.BlockExplorer != "" && n.BlockExplorer != "auto" {
+		return n.BlockExplorer
 	}
-	if e := n.BlockExplorer; e != "" && e != "auto" {
-		return fmt.Sprintf("%s/tx/%s", e, txHash)
+	switch n.Type {
+	case "solana":
+		return "https://explorer.solana.com"
+	case "evm":
+		info, err := n.GetChainInfo()
+		if err != nil {
+			return ""
+		}
+		return info.ExplorerURL()
 	}
-	info, err := n.GetChainInfo()
-	if err != nil {
+	return ""
+}
+
+// solanaClusterSuffix returns the "?cluster=<id>" query string the
+// Solana explorers (explorer.solana.com, solscan.io, solana.fm, …)
+// switch on for non-mainnet links. Empty for mainnet — that's the
+// explorer default.
+func (n *Network) solanaClusterSuffix() string {
+	if n.Type != "solana" {
 		return ""
 	}
-	return info.TransactionUrl(txHash)
+	if n.ChainId == "" || n.ChainId == "mainnet" || n.ChainId == "mainnet-beta" {
+		return ""
+	}
+	return "?cluster=" + n.ChainId
+}
+
+func (n *Network) TransactionUrl(txHash string) string {
+	base := n.ResolvedBlockExplorer()
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/tx/%s", base, txHash) + n.solanaClusterSuffix()
+}
+
+// AddressUrl returns a block-explorer URL for the given account or
+// contract address on n. Symmetric with [TransactionUrl] — same
+// nullability semantics ("" when no explorer can be resolved), same
+// per-chain branching (Solana cluster suffix for devnet/testnet).
+//
+// Used by hosts to render "tap address → open in explorer"
+// affordances on signing-critical rows (verifying-contract, ERC-20
+// effect rows, bitcoin IOs) without forking the per-chain shape
+// logic into every host.
+func (n *Network) AddressUrl(address string) string {
+	base := n.ResolvedBlockExplorer()
+	if base == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/address/%s", base, address) + n.solanaClusterSuffix()
 }
 
 func (n *Network) getRPC() (ethrpc.Handler, error) {

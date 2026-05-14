@@ -1,6 +1,7 @@
 package wltnet
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -148,6 +149,109 @@ func TestNetworkTransactionUrl(t *testing.T) {
 	url5 := n5.TransactionUrl("0xdead")
 	if url5 == "" {
 		t.Error("expected non-empty URL for ethereum mainnet")
+	}
+}
+
+func TestNetworkAddressUrl(t *testing.T) {
+	const addr = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+
+	cases := []struct {
+		name string
+		n    *Network
+		want string
+		// nonEmpty: only checked when want=="" — true means assert
+		// the result is non-empty (chain-registry lookup, where the
+		// exact URL depends on the registry contents).
+		nonEmpty bool
+	}{
+		{
+			name: "EVM mainnet with custom explorer",
+			n:    &Network{Type: "evm", ChainId: "1", BlockExplorer: "https://etherscan.io"},
+			want: "https://etherscan.io/address/" + addr,
+		},
+		{
+			name:     "EVM mainnet with auto explorer falls back to chain registry",
+			n:        &Network{Type: "evm", ChainId: "1", BlockExplorer: "auto"},
+			nonEmpty: true,
+		},
+		{
+			name: "Solana mainnet auto",
+			n:    &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: "auto"},
+			want: "https://explorer.solana.com/address/" + addr,
+		},
+		{
+			name: "Solana mainnet with custom explorer (solscan)",
+			n:    &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: "https://solscan.io"},
+			want: "https://solscan.io/address/" + addr,
+		},
+		{
+			// The cluster suffix is what 0.4.26 fixed for tx links;
+			// AddressUrl needs the same treatment for the same reason.
+			name: "Solana devnet appends ?cluster=devnet",
+			n:    &Network{Type: "solana", ChainId: "devnet", BlockExplorer: ""},
+			want: "https://explorer.solana.com/address/" + addr + "?cluster=devnet",
+		},
+		{
+			name: "Solana testnet appends ?cluster=testnet",
+			n:    &Network{Type: "solana", ChainId: "testnet", BlockExplorer: "auto"},
+			want: "https://explorer.solana.com/address/" + addr + "?cluster=testnet",
+		},
+		{
+			name: "Solana mainnet-beta alias is treated like mainnet (no suffix)",
+			n:    &Network{Type: "solana", ChainId: "mainnet-beta", BlockExplorer: "auto"},
+			want: "https://explorer.solana.com/address/" + addr,
+		},
+		{
+			// Bitcoin networks have no auto-explorer fallback in
+			// libwallet today — host must configure one. This is
+			// the canonical "custom network with no explorer" case
+			// from the spec.
+			name: "Bitcoin with no BlockExplorer returns empty",
+			n:    &Network{Type: "bitcoin", ChainId: "bitcoin", BlockExplorer: ""},
+			want: "",
+		},
+		{
+			name: "Bitcoin with custom explorer",
+			n:    &Network{Type: "bitcoin", ChainId: "bitcoin", BlockExplorer: "https://blockstream.info"},
+			want: "https://blockstream.info/address/" + addr,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.n.AddressUrl(addr)
+			if tc.nonEmpty {
+				if got == "" {
+					t.Errorf("expected non-empty URL, got empty")
+				}
+				return
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNetworkResolvedBlockExplorerEmbedded(t *testing.T) {
+	// Network MarshalJSON should include ResolvedBlockExplorer so the
+	// Dart side has a usable bare URL even when BlockExplorer is the
+	// "auto" sentinel.
+	n := &Network{Type: "solana", ChainId: "mainnet", BlockExplorer: "auto"}
+	raw, err := json.Marshal(n)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if v, _ := got["ResolvedBlockExplorer"].(string); v != "https://explorer.solana.com" {
+		t.Errorf("ResolvedBlockExplorer = %v, want https://explorer.solana.com", got["ResolvedBlockExplorer"])
+	}
+	// BlockExplorer (the raw value) is also still present so callers
+	// that distinguish "user-customised" from "auto-resolved" can.
+	if v, _ := got["BlockExplorer"].(string); v != "auto" {
+		t.Errorf("BlockExplorer = %v, want auto", got["BlockExplorer"])
 	}
 }
 

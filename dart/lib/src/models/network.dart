@@ -41,8 +41,20 @@ class Network {
   /// Number of decimal places for the native currency.
   final int currencyDecimals;
 
-  /// Base URL of the block explorer for this network.
+  /// Base URL of the block explorer for this network. Raw user-set
+  /// value — `"auto"` for the default networks where libwallet picks
+  /// the explorer at runtime. Use [resolvedBlockExplorer] (or the
+  /// [transactionUrl] / [addressUrl] helpers) to get a usable URL.
   final String blockExplorer;
+
+  /// Block-explorer base URL after libwallet resolves the `"auto"`
+  /// sentinel (against the chain registry for EVM, defaults for
+  /// Solana). Empty when no canonical explorer is known — typically
+  /// custom networks the user added without a [blockExplorer], or
+  /// Bitcoin networks that haven't been configured. Hosts that render
+  /// "open in explorer" affordances should hide the link when this
+  /// (or [transactionUrl] / [addressUrl]) returns empty.
+  final String resolvedBlockExplorer;
 
   /// Whether this is a test network.
   final bool testNet;
@@ -65,6 +77,7 @@ class Network {
     required this.currencySymbol,
     required this.currencyDecimals,
     required this.blockExplorer,
+    this.resolvedBlockExplorer = '',
     required this.testNet,
     required this.priority,
     required this.created,
@@ -81,6 +94,8 @@ class Network {
       currencySymbol: json['CurrencySymbol'] as String? ?? '',
       currencyDecimals: json['CurrencyDecimals'] as int? ?? 18,
       blockExplorer: json['BlockExplorer'] as String? ?? '',
+      resolvedBlockExplorer:
+          json['ResolvedBlockExplorer'] as String? ?? '',
       testNet: json['TestNet'] as bool? ?? false,
       priority: json['Priority'] as int? ?? 0,
       created: DateTime.parse(json['Created'] as String),
@@ -97,9 +112,44 @@ class Network {
         'CurrencySymbol': currencySymbol,
         'CurrencyDecimals': currencyDecimals,
         'BlockExplorer': blockExplorer,
+        if (resolvedBlockExplorer.isNotEmpty)
+          'ResolvedBlockExplorer': resolvedBlockExplorer,
         'TestNet': testNet,
         'Priority': priority,
         'Created': created.toIso8601String(),
         'Updated': updated.toIso8601String(),
       };
+
+  /// Block-explorer URL for [txHash] on this network. Returns `""`
+  /// when the network has no resolvable explorer (custom chain, no
+  /// `blockExplorer` configured). Hosts should hide the affordance
+  /// when this returns empty.
+  ///
+  /// On Solana devnet/testnet the result carries `?cluster=<chainId>`
+  /// — required to make explorer.solana.com / solscan.io / solana.fm
+  /// query the right cluster. Mainnet stays bare.
+  String transactionUrl(String txHash) {
+    if (resolvedBlockExplorer.isEmpty) return '';
+    return '$resolvedBlockExplorer/tx/$txHash${_solanaClusterSuffix()}';
+  }
+
+  /// Block-explorer URL for an account or contract [address] on this
+  /// network. Symmetric with [transactionUrl] — same nullability,
+  /// same per-chain branching (Solana cluster suffix on non-mainnet).
+  ///
+  /// Use for "tap address → open in explorer" affordances. Returns
+  /// `""` when the network has no resolvable explorer; hosts should
+  /// hide the link in that case.
+  String addressUrl(String address) {
+    if (resolvedBlockExplorer.isEmpty) return '';
+    return '$resolvedBlockExplorer/address/$address${_solanaClusterSuffix()}';
+  }
+
+  String _solanaClusterSuffix() {
+    if (type != NetworkType.solana) return '';
+    if (chainId.isEmpty || chainId == 'mainnet' || chainId == 'mainnet-beta') {
+      return '';
+    }
+    return '?cluster=$chainId';
+  }
 }
