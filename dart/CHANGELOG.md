@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.30
 
 - **Fixed: `Swap:quote` / `Swap:maxSpendable` rejected `Asset.Key`-shaped
   token addresses.** Hosts that piped `Asset.Key` (the
