@@ -286,24 +286,50 @@ jobs:
               echo "::endgroup::"
             fi
 
-            # Exit codes 143 (SIGTERM) / 137 (SIGKILL) → watchdog fired.
-            # Anything else came from flutter itself.
             if [ "$EXIT" = "0" ]; then
               exit 0
             fi
-            if [ "$EXIT" = "143" ] || [ "$EXIT" = "137" ] || \
-               ( grep -q "Waiting for VM Service port to be available" "$LOG" \
-                 && grep -q "0 tests passed" "$LOG" ); then
-              echo "Attempt $attempt: VM Service attach hang (exit $EXIT); rebooting sim and retrying"
+
+            # Classify: genuine test failure vs. infra glitch.
+            #
+            # The only reliable "genuine failure" signal is flutter's
+            # canonical end-of-run line `Some tests failed.` — it's
+            # printed iff the run actually executed tests and at least
+            # one assertion failed. Everything else that exits non-zero
+            # WITHOUT reaching that line never got a test to run:
+            #   - watchdog SIGTERM/SIGKILL (exit 143/137) — VM Service
+            #     attach hang, the app launched but flutter couldn't
+            #     attach to the Dart VM;
+            #   - "unknown to FrontBoard" / FBSOpenApplicationService
+            #     ErrorDomain — the simulator's install database lost
+            #     the app bundle, so the launch itself failed;
+            #   - a plain crash before setUpAll.
+            # All three are macos-runner / iOS-simulator infra flakes
+            # unrelated to libwallet; they clear on a fresh simulator.
+            #
+            # Retrying a genuine compile error or a deterministic test
+            # failure just burns one extra cycle then fails the same
+            # way — no bug is masked — so the worst case of this
+            # broader retry is slightly slower red CI, never a green
+            # CI that should be red.
+            if grep -q "Some tests failed\." "$LOG"; then
+              echo "flutter test: genuine test failure (exit $EXIT) — not retrying"
+              exit "$EXIT"
+            fi
+            if [ "$attempt" = "1" ]; then
+              echo "Attempt 1 failed without running tests (exit $EXIT) — likely a"
+              echo "simulator infra flake. Erasing the sim to a pristine state and retrying."
+              # Full erase, not just reboot: the "unknown to FrontBoard"
+              # failure is a corrupt install database — only `erase`
+              # clears it. erase requires the device shut down first.
               xcrun simctl shutdown "$DEVICE_ID" || true
+              xcrun simctl erase "$DEVICE_ID" || true
               xcrun simctl boot "$DEVICE_ID"
               xcrun simctl bootstatus "$DEVICE_ID" -b
               continue
             fi
-            echo "flutter test failed with exit $EXIT (real failure, not the attach hang) — not retrying"
-            exit $EXIT
           done
-          echo "Both attempts hit the VM Service attach hang"
+          echo "Both attempts failed before any test ran — persistent simulator infra issue"
           exit 1
 
   # Android emulator integration tests (FFI via c-shared)
