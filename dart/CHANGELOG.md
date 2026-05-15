@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.32
 
 - **Fixed: Jupiter "Failed to get quotes" on tiny Solana swaps.**
   At small input amounts (typically under ~0.01 SOL), Jupiter's
