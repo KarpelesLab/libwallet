@@ -179,3 +179,185 @@ func TestHTTPError_ScrubsAPIKey(t *testing.T) {
 		t.Errorf("code = %q, want provider_bad_request", se.Code)
 	}
 }
+
+func TestJupiterFetchOrderWithRetry_FeeWaivedOnNoRoute(t *testing.T) {
+	// Reproduces the field bug: Jupiter returns HTTP 400 "Failed to
+	// get quotes" when our 50bps platform fee makes a small swap
+	// stop penciling. The retry without fee succeeds via JupiterZ
+	// RFQ and we surface a successful Quote with feeWaived=true.
+	const successBody = `{
+		"transaction": "AAAA",
+		"requestId": "retry-success",
+		"inAmount": "7481806",
+		"outAmount": "689281",
+		"otherAmountThreshold": "689281",
+		"slippageBps": 0,
+		"swapType": "rfq"
+	}`
+
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		q := r.URL.Query()
+		hasFee := q.Get("referralFee") != ""
+		switch {
+		case calls == 1:
+			if !hasFee {
+				t.Errorf("first call missing referralFee — should always carry it")
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"requestId":"first","error":"Failed to get quotes"}`))
+		case calls == 2:
+			if hasFee {
+				t.Errorf("retry must NOT carry referralFee, got %q", q.Get("referralFee"))
+			}
+			if q.Get("referralAccount") != "" {
+				t.Errorf("retry must NOT carry referralAccount, got %q", q.Get("referralAccount"))
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(successBody))
+		default:
+			t.Errorf("unexpected call %d to Jupiter", calls)
+		}
+	}))
+	defer srv.Close()
+
+	origURL := JupiterOrderURL
+	JupiterOrderURL = srv.URL
+	defer func() { JupiterOrderURL = origURL }()
+
+	resp, feeWaived, err := jupiterFetchOrderWithRetry(t.Context(),
+		"So11111111111111111111111111111111111111112",
+		"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		"7481806",
+		"7EEygcr1HaF2PY8pdHaeYSNByXPpMQU4GzrCezvps7KH",
+		50,
+	)
+	if err != nil {
+		t.Fatalf("expected success on retry, got %v", err)
+	}
+	if !feeWaived {
+		t.Error("feeWaived should be true after the retry succeeded")
+	}
+	if resp.Transaction != "AAAA" || resp.RequestId != "retry-success" {
+		t.Errorf("got resp %+v, expected the retry's successful body", resp)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 Jupiter calls (1 with fee + 1 retry), got %d", calls)
+	}
+}
+
+func TestJupiterFetchOrderWithRetry_FirstCallSucceedsNoRetry(t *testing.T) {
+	// The retry only fires on no-route. A first-call success means
+	// we collect the platform fee — happy path.
+	const okBody = `{
+		"transaction": "BBBB",
+		"requestId": "first-success",
+		"inAmount": "100000000",
+		"outAmount": "10000000",
+		"otherAmountThreshold": "9950000",
+		"swapType": "aggregator"
+	}`
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Query().Get("referralFee") == "" {
+			t.Error("first call should always carry referralFee")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okBody))
+	}))
+	defer srv.Close()
+	origURL := JupiterOrderURL
+	JupiterOrderURL = srv.URL
+	defer func() { JupiterOrderURL = origURL }()
+
+	resp, feeWaived, err := jupiterFetchOrderWithRetry(t.Context(),
+		"So11111111111111111111111111111111111111112",
+		"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		"100000000",
+		"7EEygcr1HaF2PY8pdHaeYSNByXPpMQU4GzrCezvps7KH",
+		50,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if feeWaived {
+		t.Error("feeWaived should be false on first-call success")
+	}
+	if resp.Transaction != "BBBB" {
+		t.Errorf("wrong response: %+v", resp)
+	}
+	if calls != 1 {
+		t.Errorf("expected 1 call (no retry), got %d", calls)
+	}
+}
+
+func TestJupiterFetchOrderWithRetry_NonRouteErrorNoRetry(t *testing.T) {
+	// "Insufficient funds" / other non-route errors should NOT
+	// trigger the fee-waiver retry. Surface the original error so
+	// the user gets the actionable message.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"requestId":"bad","error":"Insufficient funds"}`))
+	}))
+	defer srv.Close()
+	origURL := JupiterOrderURL
+	JupiterOrderURL = srv.URL
+	defer func() { JupiterOrderURL = origURL }()
+
+	_, feeWaived, err := jupiterFetchOrderWithRetry(t.Context(),
+		"So11111111111111111111111111111111111111112",
+		"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		"100000000",
+		"7EEygcr1HaF2PY8pdHaeYSNByXPpMQU4GzrCezvps7KH",
+		50,
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if feeWaived {
+		t.Error("feeWaived should be false when both attempts failed / no retry")
+	}
+	if calls != 1 {
+		t.Errorf("non-route errors should not retry, got %d calls", calls)
+	}
+}
+
+func TestJupiterFetchOrderWithRetry_BothFailReturnsNoLiquidity(t *testing.T) {
+	// When the no-fee retry also can't route, surface as
+	// no_liquidity (the canonical no-route code).
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"Failed to get quotes"}`))
+	}))
+	defer srv.Close()
+	origURL := JupiterOrderURL
+	JupiterOrderURL = srv.URL
+	defer func() { JupiterOrderURL = origURL }()
+
+	_, _, err := jupiterFetchOrderWithRetry(t.Context(),
+		"So11111111111111111111111111111111111111112",
+		"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+		"100",
+		"7EEygcr1HaF2PY8pdHaeYSNByXPpMQU4GzrCezvps7KH",
+		50,
+	)
+	if err == nil {
+		t.Fatal("expected error after both attempts fail")
+	}
+	se, ok := AsSwapError(err)
+	if !ok {
+		t.Fatalf("expected SwapError, got %T: %v", err, err)
+	}
+	if se.Code != ErrCodeNoLiquidity {
+		t.Errorf("code = %q, want %q", se.Code, ErrCodeNoLiquidity)
+	}
+	if calls != 2 {
+		t.Errorf("expected 2 calls (fee + retry), got %d", calls)
+	}
+}

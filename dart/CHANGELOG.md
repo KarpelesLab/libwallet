@@ -1,5 +1,20 @@
 ## Unreleased
 
+- **Fixed: Jupiter "Failed to get quotes" on tiny Solana swaps.**
+  At small input amounts (typically under ~0.01 SOL), Jupiter's
+  RFQ market makers (JupiterZ) will gladly fill the trade — they
+  even subsidize the gas — but stacking our 50 bps platform fee on
+  top makes the route stop penciling and Jupiter falls back to
+  aggregator routes that can't handle the size. The Jupiter
+  adapter now retries once without the `referralFee` /
+  `referralAccount` params on the specific "Failed to get quotes"
+  no-route response. The retry's success path returns a Quote
+  with `feeBps: 0` and `referralFee: 0` so the host's approval
+  sheet correctly shows "no platform fee on this swap". One extra
+  RTT only when the first attempt couldn't route.
+
+
+
 - **Added: `Asset.isNative` + `Asset.tokenAddress`** on the Dart
   model (plus matching `IsNative()` / `TokenAddress()` on Go's
   `wltasset.Asset`). Use `asset.isNative` to branch native-vs-token

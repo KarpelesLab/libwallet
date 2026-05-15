@@ -115,49 +115,12 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 	inMint := solanaNativeMintOrAddr(req.TokenIn.Address)
 	outMint := solanaNativeMintOrAddr(req.TokenOut.Address)
 
-	qs := url.Values{}
-	qs.Set("inputMint", inMint)
-	qs.Set("outputMint", outMint)
-	qs.Set("amount", req.AmountIn)
-	qs.Set("taker", acct.GetAddress())
-	qs.Set("referralAccount", JupiterReferralAccount)
-	qs.Set("referralFee", strconv.Itoa(int(DefaultFeeBps)))
-	if req.SlippageBps > 0 {
-		qs.Set("slippageBps", strconv.Itoa(int(req.SlippageBps)))
-	}
-
-	var resp jupiterOrderResponse
-	if err := httpGetJSON(ctx, JupiterOrderURL, qs, jupiterHeader(), &resp); err != nil {
-		// Jupiter returns HTTP 400 with `{"error":"Failed to get
-		// quotes"}` when no DEX in their aggregator has a viable
-		// route for the (mint pair, size, slippage) combination —
-		// most commonly seen on tiny swaps where the gas cost
-		// would eat the trade's profit margin. The default
-		// httpRun classifier wraps that as ErrCodeProviderBadRequest
-		// which skips the runQuote dFlow fallback; semantically it's
-		// a routing failure (no liquidity), not a malformed request.
-		// Re-classify so the caller's auto-fallback gets a shot at
-		// dFlow.
-		if sw, ok := AsSwapError(err); ok && sw.Code == ErrCodeProviderBadRequest &&
-			strings.Contains(strings.ToLower(sw.Message), "failed to get quotes") {
-			return nil, newErr(ErrCodeNoLiquidity, sw.Message)
-		}
+	resp, feeWaived, err := jupiterFetchOrderWithRetry(ctx, inMint, outMint, req.AmountIn, acct.GetAddress(), req.SlippageBps)
+	if err != nil {
 		return nil, err
 	}
-	// Jupiter sometimes returns an HTTP 200 with an empty transaction
-	// when routing fails (insufficient funds, no route, slippage too
-	// tight). Surface the upstream errorMessage instead of the
-	// generic ErrCodeNoLiquidity we used to emit.
-	if resp.Transaction == "" || resp.RequestId == "" {
-		msg := resp.ErrorMessage
-		if msg == "" {
-			msg = resp.Error
-		}
-		if msg == "" {
-			msg = "Jupiter returned an empty order"
-		}
-		return nil, newErr(ErrCodeNoLiquidity, msg)
-	}
+	// jupiterFetchOrderWithRetry guarantees Transaction + RequestId
+	// are populated on a non-error return.
 	rawTx, err := base64.StdEncoding.DecodeString(resp.Transaction)
 	if err != nil {
 		return nil, newErr(ErrCodeProviderUnavailable, fmt.Sprintf("decode Jupiter transaction: %v", err))
@@ -196,6 +159,14 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 		slippage = req.SlippageBps
 	}
 
+	// Quote.FeeBps and Quote.ReferralFee reflect what we actually
+	// asked Jupiter for. When the no-fee retry kicked in (feeWaived),
+	// we collected nothing and the host should reflect that on the
+	// approval sheet ("no platform fee on this swap").
+	feeBps := uint16(DefaultFeeBps)
+	if feeWaived {
+		feeBps = 0
+	}
 	q := &Quote{
 		Provider:      "jupiter_ultra",
 		ProviderLabel: "Jupiter Ultra",
@@ -206,9 +177,9 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 		AmountOut:     wltobj.NewAmountRaw(amountOut, req.TokenOut.Decimals),
 		MinAmountOut:  wltobj.NewAmountRaw(minOut, req.TokenOut.Decimals),
 		PriceImpact:   priceImpact,
-		FeeBps:        DefaultFeeBps,
+		FeeBps:        feeBps,
 		SlippageBps:   slippage,
-		ReferralFee:   computeReferralFee(amountIn, DefaultFeeBps, req.TokenIn.Decimals),
+		ReferralFee:   computeReferralFee(amountIn, feeBps, req.TokenIn.Decimals),
 		// Solana base fee is 5000 lamports; v1 doesn't surface
 		// ComputeBudget priority fees the Jupiter tx may have set.
 		NetworkFee:   wltobj.NewAmountRaw(big.NewInt(5000), 9),
@@ -216,6 +187,112 @@ func (jupiterProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltac
 		providerBlob: &jupiterBlob{RawTx: rawTx, RequestId: resp.RequestId},
 	}
 	return q, nil
+}
+
+// jupiterFetchOrderWithRetry hits Jupiter Ultra's /order endpoint
+// once with the platform referralFee set, and on the specific
+// "Failed to get quotes" no-route response retries once without the
+// fee. Returns the successful response, a flag indicating whether
+// the fee was waived, or the error from whichever attempt was made
+// last (the no-fee attempt's error wins when both fail).
+//
+// Why retry-without-fee: on tiny swaps (typically under ~0.01 SOL),
+// Jupiter's RFQ market makers (JupiterZ) will gladly fill the trade
+// — they even subsidize the gas — but stacking our 50 bps platform
+// fee on top makes the route stop penciling and Jupiter falls back
+// to checking aggregator routes that can't handle the size. Letting
+// our fee get in the way of the user completing a $1.50 swap is
+// strictly worse than collecting nothing on dust trades, so we drop
+// it on the retry. Larger swaps keep paying the fee on the first
+// attempt's success.
+func jupiterFetchOrderWithRetry(ctx context.Context, inMint, outMint, amount, taker string, slippageBps uint16) (*jupiterOrderResponse, bool, error) {
+	build := func(withFee bool) url.Values {
+		qs := url.Values{}
+		qs.Set("inputMint", inMint)
+		qs.Set("outputMint", outMint)
+		qs.Set("amount", amount)
+		qs.Set("taker", taker)
+		if withFee {
+			qs.Set("referralAccount", JupiterReferralAccount)
+			qs.Set("referralFee", strconv.Itoa(int(DefaultFeeBps)))
+		}
+		if slippageBps > 0 {
+			qs.Set("slippageBps", strconv.Itoa(int(slippageBps)))
+		}
+		return qs
+	}
+
+	// First attempt — with the platform fee.
+	var resp jupiterOrderResponse
+	err := httpGetJSON(ctx, JupiterOrderURL, build(true), jupiterHeader(), &resp)
+	if err == nil && resp.Transaction != "" && resp.RequestId != "" {
+		return &resp, false, nil
+	}
+
+	// "Failed to get quotes" arrives two ways: HTTP 400 with the
+	// error in the body (httpRun wraps that as
+	// ErrCodeProviderBadRequest with the body in the message), and
+	// HTTP 200 with an empty Transaction + Error="Failed to get
+	// quotes". Both are no-route signals; either triggers the retry.
+	noRoute := false
+	if err != nil {
+		if sw, ok := AsSwapError(err); ok && sw.Code == ErrCodeProviderBadRequest &&
+			strings.Contains(strings.ToLower(sw.Message), "failed to get quotes") {
+			noRoute = true
+		}
+	} else if resp.Transaction == "" || resp.RequestId == "" {
+		// Successful HTTP, empty order — also a no-route surface.
+		msg := resp.ErrorMessage
+		if msg == "" {
+			msg = resp.Error
+		}
+		if strings.Contains(strings.ToLower(msg), "failed to get quotes") {
+			noRoute = true
+		}
+	}
+	if !noRoute {
+		// Some other failure (transport error, decode failure,
+		// genuine bad request, "insufficient funds" from the
+		// aggregator). Don't retry — bubble what we know.
+		if err != nil {
+			return nil, false, err
+		}
+		// Empty-order / non-no-route — surface the upstream message
+		// as no_liquidity for code symmetry with the original empty-
+		// transaction path.
+		msg := resp.ErrorMessage
+		if msg == "" {
+			msg = resp.Error
+		}
+		if msg == "" {
+			msg = "Jupiter returned an empty order"
+		}
+		return nil, false, newErr(ErrCodeNoLiquidity, msg)
+	}
+
+	// Second attempt — without the fee. JupiterZ RFQ usually fills.
+	var resp2 jupiterOrderResponse
+	err2 := httpGetJSON(ctx, JupiterOrderURL, build(false), jupiterHeader(), &resp2)
+	if err2 == nil && resp2.Transaction != "" && resp2.RequestId != "" {
+		return &resp2, true, nil
+	}
+	// Both attempts failed — surface the no-route as no_liquidity.
+	if err2 != nil {
+		if sw, ok := AsSwapError(err2); ok && sw.Code == ErrCodeProviderBadRequest &&
+			strings.Contains(strings.ToLower(sw.Message), "failed to get quotes") {
+			return nil, false, newErr(ErrCodeNoLiquidity, sw.Message)
+		}
+		return nil, false, err2
+	}
+	// Empty 200 from the no-fee retry too — pass through the message.
+	msg := resp2.ErrorMessage
+	if msg == "" {
+		msg = resp2.Error
+	}
+	if msg == "" {
+		msg = "Jupiter returned an empty order on the no-fee retry"
+	}
+	return nil, false, newErr(ErrCodeNoLiquidity, msg)
 }
 
 func (jupiterProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
