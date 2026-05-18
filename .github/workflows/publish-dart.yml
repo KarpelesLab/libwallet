@@ -65,4 +65,39 @@ jobs:
 
       - name: Publish
         working-directory: dart
-        run: dart pub publish --force
+        # `dart pub publish` resolves credentials against pub.dev via the
+        # GitHub OIDC token. Pub.dev periodically rejects the JWT with
+        # "Invalid timestamps" (clock-skew / OIDC issuer cache eviction);
+        # we hit it on v0.4.20. The exchange is otherwise idempotent —
+        # if the upload already landed on attempt 1 (rare for a 400 path
+        # but possible) pub.dev refuses a duplicate version on attempt 2
+        # and we treat that as success. Three attempts with backoff.
+        run: |
+          set +e
+          for attempt in 1 2 3; do
+            echo "::group::dart pub publish attempt $attempt"
+            dart pub publish --force
+            EXIT=$?
+            echo "::endgroup::"
+            if [ "$EXIT" = "0" ]; then
+              echo "publish succeeded on attempt $attempt"
+              exit 0
+            fi
+            # Idempotency: pub.dev rejects re-uploading the same version,
+            # which means a prior attempt already landed it. Treat as
+            # success — better than failing a release that's already live.
+            VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+            if dart pub deps 2>&1 | head -3 >/dev/null; then
+              :
+            fi
+            if curl -sf "https://pub.dev/api/packages/libwallet/versions/$VERSION" >/dev/null 2>&1; then
+              echo "Version $VERSION is already on pub.dev — treating as success"
+              exit 0
+            fi
+            if [ "$attempt" = "3" ]; then
+              echo "publish failed on all 3 attempts (exit $EXIT)"
+              exit "$EXIT"
+            fi
+            echo "publish attempt $attempt failed (exit $EXIT); retrying after backoff"
+            sleep $((attempt * 10))
+          done
