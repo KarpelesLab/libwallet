@@ -1,3 +1,16 @@
+## Unreleased
+
+- **Changed: transient phplatform errors retry transparently** in
+  every libwallet → `Crypto/WalletSign:*` call (`remoteNew`,
+  `remoteVerify`, `remoteSign`, `remoteReshare`, `walletkey`'s
+  key-list + setGeneratedKey, etc.). HTTP 5xx — including the
+  "There was a database error" blip the integration tests have
+  been tripping on — retries up to 3 attempts with 500ms / 1s
+  backoff. 4xx errors (auth, validation, not-found) pass through
+  immediately. Context cancellation aborts the loop. Affects
+  runtime callers too, not just tests — a brief backend hiccup no
+  longer surfaces as a user-visible error.
+
 ## 0.4.32
 
 - **Fixed: Jupiter "Failed to get quotes" on tiny Solana swaps.**

@@ -177,9 +177,9 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		// store on remote server
 		// First, get keys of machines that will need to be able to decrypt this
 		var ids []string
-		err = rest.Apply(withClientID(context.Background()), "Crypto/WalletSign:keys", "GET", nil, &ids)
+		err = restApplyRetry(withClientID(context.Background()), "Crypto/WalletSign:keys", "GET", nil, &ids)
 		if err != nil {
-			err = rest.Apply(withClientID(context.Background()), "Crypto/WalletSign:keys", "GET", nil, &ids)
+			err = restApplyRetry(withClientID(context.Background()), "Crypto/WalletSign:keys", "GET", nil, &ids)
 			if err != nil {
 				return err
 			}
@@ -234,7 +234,7 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		if wk.eddata != nil {
 			curveParam = "ed25519"
 		}
-		_, err = rest.Do(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", rest.Param{"data": base64.RawURLEncoding.EncodeToString(buf), "key": kd.Key, "curve": curveParam})
+		_, err = restDoRetry(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", rest.Param{"data": base64.RawURLEncoding.EncodeToString(buf), "key": kd.Key, "curve": curveParam})
 		if err != nil {
 			return err
 		}
@@ -355,9 +355,9 @@ func (wk *WalletKey) decryptMnemonic(kd *wltsign.KeyDescription) (*MnemonicKeySh
 func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {
 	ctx = withClientID(ctx)
 	var ids []string
-	err := rest.Apply(ctx, "Crypto/WalletSign:keys", "GET", nil, &ids)
+	err := restApplyRetry(ctx, "Crypto/WalletSign:keys", "GET", nil, &ids)
 	if err != nil {
-		err = rest.Apply(ctx, "Crypto/WalletSign:keys", "GET", nil, &ids)
+		err = restApplyRetry(ctx, "Crypto/WalletSign:keys", "GET", nil, &ids)
 		if err != nil {
 			return "", err
 		}
