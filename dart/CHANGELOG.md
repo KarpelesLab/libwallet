@@ -1,4 +1,4 @@
-## Unreleased
+## 0.4.33
 
 - **Changed: transient phplatform errors retry transparently** in
   every libwallet → `Crypto/WalletSign:*` call (`remoteNew`,
