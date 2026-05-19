@@ -311,6 +311,10 @@ func apiInitiateKeygen(ctx *apirouter.Context, in initiateKeygenInput) (any, err
 		Id:        xuid.New("wlt"),
 		Name:      in.Name,
 		Curve:     "ed25519",
+		// ClawdWallet keygen still runs through eddsatss in Stage 1;
+		// Step 4 of the protocol-modernization track will swap this
+		// for ProtocolFROST once the dispatch + frosttss adapter land.
+		Protocol:  ProtocolLegacyEdDSA,
 		Threshold: 1,
 		Created:   now,
 		Modified:  now,

@@ -9,6 +9,24 @@ class Wallet {
   /// Elliptic curve used by this wallet (`secp256k1` or `ed25519`).
   final String curve;
 
+  /// TSS protocol that the wallet's key shares were generated with.
+  /// Determines which signing path libwallet runs:
+  ///
+  /// - `"gg18"` — legacy threshold ECDSA on secp256k1 (the
+  ///   ecdsatss package). Empty value on a secp256k1 wallet means
+  ///   the same thing (rows that pre-date this field).
+  /// - `"eddsa"` — legacy GG18-style Schnorr on ed25519. Empty
+  ///   value on an ed25519 wallet means this.
+  /// - `"dkls23"` — modern threshold ECDSA via DKLs23 (no
+  ///   Paillier; sidesteps the GG18 attack surface). Used by new
+  ///   secp256k1 wallets.
+  /// - `"frost"` — modern Schnorr / Ed25519 threshold via FROST
+  ///   (RFC 9591). Used by new ed25519 wallets.
+  ///
+  /// Once a wallet is created its protocol is fixed; sign / reshare
+  /// always uses the same protocol the keygen ceremony ran.
+  final String protocol;
+
   /// Minimum number of key shares required to sign a transaction.
   final int threshold;
 
@@ -34,6 +52,7 @@ class Wallet {
     required this.id,
     required this.name,
     required this.curve,
+    this.protocol = '',
     required this.threshold,
     required this.gen,
     required this.pubkey,
@@ -48,6 +67,7 @@ class Wallet {
       id: json['Id'] as String,
       name: json['Name'] as String? ?? '',
       curve: json['Curve'] as String? ?? 'secp256k1',
+      protocol: json['Protocol'] as String? ?? '',
       threshold: json['Threshold'] as int? ?? 0,
       gen: json['Gen'] as int? ?? 0,
       pubkey: json['Pubkey'] as String? ?? '',
@@ -65,6 +85,7 @@ class Wallet {
         'Id': id,
         'Name': name,
         'Curve': curve,
+        'Protocol': protocol,
         'Threshold': threshold,
         'Gen': gen,
         'Pubkey': pubkey,

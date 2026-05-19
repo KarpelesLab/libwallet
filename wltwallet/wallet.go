@@ -30,16 +30,67 @@ import (
 // It can contain multiple keys with a configurable threshold for signatures
 type Wallet struct {
 	TableName psql.Name    `sql:"Wallet"`
-	Id        *xuid.XUID   `sql:",key=PRIMARY"`                  // Unique identifier for the wallet
-	Name      string       `sql:",type=VARCHAR,size=255"`        // User-friendly name
-	Curve     string       `sql:",type=VARCHAR,size=255"`        // Elliptic curve used (e.g., "secp256k1")
-	Threshold int          `sql:",type=INT"`                     // Minimum number of keys required for signing
-	Keys      []*WalletKey `sql:"-"`                             // Associated keys (not stored in database)
-	Gen       uint64       `sql:",type=BIGINT,null=0,default=0"` // incremented on reshare
-	Pubkey    string       `sql:",type=TEXT"`                    // Base64 encoded public key
-	Chaincode string       `sql:",type=TEXT"`                    // Base64 encoded chaincode for HD wallet derivation
-	Created   time.Time    `sql:",type=DATETIME"`                // Creation timestamp
-	Modified  time.Time    `sql:",type=DATETIME"`                // Last modification timestamp
+	Id        *xuid.XUID   `sql:",key=PRIMARY"`                              // Unique identifier for the wallet
+	Name      string       `sql:",type=VARCHAR,size=255"`                    // User-friendly name
+	Curve     string       `sql:",type=VARCHAR,size=255"`                    // Elliptic curve used (e.g., "secp256k1")
+	Protocol  string       `sql:",type=VARCHAR,size=64,null=0,default=''"`   // TSS protocol — see ProtocolFor* constants. Empty = legacy (gg18 / eddsa).
+	Threshold int          `sql:",type=INT"`                                 // Minimum number of keys required for signing
+	Keys      []*WalletKey `sql:"-"`                                         // Associated keys (not stored in database)
+	Gen       uint64       `sql:",type=BIGINT,null=0,default=0"`             // incremented on reshare
+	Pubkey    string       `sql:",type=TEXT"`                                // Base64 encoded public key
+	Chaincode string       `sql:",type=TEXT"`                                // Base64 encoded chaincode for HD wallet derivation
+	Created   time.Time    `sql:",type=DATETIME"`                            // Creation timestamp
+	Modified  time.Time    `sql:",type=DATETIME"`                            // Last modification timestamp
+}
+
+// TSS protocol identifiers stored in [Wallet.Protocol]. The value
+// determines which keygen / sign / reshare path libwallet runs for
+// the wallet — once set at keygen time, it stays for the lifetime of
+// the wallet because the persisted key shares are protocol-specific.
+//
+// Empty string matches the historical wallet rows that pre-date this
+// field; it's treated identically to the legacy constants below by
+// every dispatch site. New wallets created today land with one of the
+// modern values.
+const (
+	// ProtocolLegacyECDSA — secp256k1 wallets that use tss-lib's GG18
+	// implementation (the ecdsatss package). Empty Protocol on a
+	// secp256k1 wallet maps to this.
+	ProtocolLegacyECDSA = "gg18"
+	// ProtocolLegacyEdDSA — ed25519 wallets that use tss-lib's
+	// eddsatss package (GG18-style Schnorr). Empty Protocol on an
+	// ed25519 wallet maps to this.
+	ProtocolLegacyEdDSA = "eddsa"
+
+	// ProtocolDKLS — modern secp256k1 path via DKLs23 (dklstss).
+	// Drops the Paillier/MtA layer, sidestepping the GG18 attack
+	// surface (TSSHOCK, Alpha-Rays, etc.). Used for new secp256k1
+	// wallets.
+	ProtocolDKLS = "dkls23"
+	// ProtocolFROST — modern ed25519 path via FROST (RFC 9591, the
+	// frosttss package). Used for new ed25519 wallets.
+	ProtocolFROST = "frost"
+)
+
+// resolveProtocol returns the effective protocol for the wallet,
+// substituting the curve-appropriate legacy value when [Wallet.Protocol]
+// is empty. Callsites should branch on the resolved value — never the
+// raw field — so existing rows continue to route through the legacy
+// keygen / sign paths.
+func (w *Wallet) resolveProtocol() string {
+	if w == nil {
+		return ""
+	}
+	if w.Protocol != "" {
+		return w.Protocol
+	}
+	switch w.Curve {
+	case "secp256k1":
+		return ProtocolLegacyECDSA
+	case "ed25519":
+		return ProtocolLegacyEdDSA
+	}
+	return ""
 }
 
 // save persists the wallet and all its keys to the database
@@ -232,6 +283,13 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 	w.Pubkey = base64.RawURLEncoding.EncodeToString(pk.SerializeCompressed())
 	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
 	w.Curve = curve.Params().Name
+	// Stamp the persisted Protocol so resolveProtocol() doesn't need
+	// to infer it. New wallets created today still go through the
+	// ecdsatss path; Step 3 of the protocol-modernization track will
+	// add a Protocol=="dkls23" branch above this point.
+	if w.Protocol == "" {
+		w.Protocol = ProtocolLegacyECDSA
+	}
 
 	// Encrypt keys with their respective key descriptions
 	for i, kInfo := range kDesc {
@@ -248,6 +306,11 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 // initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS
 func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
 	w.Curve = "ed25519"
+	// Stamp Protocol so resolveProtocol() returns it directly on
+	// reload. Step 4 will add a Protocol=="frost" branch.
+	if w.Protocol == "" {
+		w.Protocol = ProtocolLegacyEdDSA
+	}
 	if w.Threshold == 0 {
 		w.Threshold = 1
 	}
