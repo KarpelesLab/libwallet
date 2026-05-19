@@ -6,7 +6,7 @@
 // "M shares with T-threshold reconstruction".
 //
 // Scope:
-//   - secp256k1 only in this commit; ed25519 (eddsatss) follow-up.
+//   - secp256k1 only in this commit; ed25519 (frost) follow-up.
 //   - No optional DerivationPath: we always promote at the wallet's
 //     existing master, so the post-promote address is identical.
 //     Promoting a mnemonic at a sub-path is a v2 feature.
@@ -15,6 +15,7 @@ package wltwallet
 
 import (
 	"context"
+	"crypto/elliptic"
 	"errors"
 	"fmt"
 	"log"
@@ -27,7 +28,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
 	tsscrypto "github.com/KarpelesLab/tss-lib/v2/crypto"
-	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
@@ -61,10 +62,10 @@ func apiWalletPromote(ctx *apirouter.Context, in struct {
 }
 
 // Promote converts an imported 1-of-1 wallet (Schema "raw" or
-// "mnemonic") into a normal N-of-T TSS wallet. The master pubkey
-// and chaincode are preserved; only the storage of the signing key
-// changes. After successful promote, the original imported
-// WalletKey row is deleted.
+// "mnemonic") into a DKLs23 N-of-T TSS wallet. The master pubkey and
+// chaincode are preserved; only the storage of the signing key
+// changes. After successful promote, the original imported WalletKey
+// row is deleted and wallet.Protocol becomes "dkls23".
 func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDescription, newThreshold int) error {
 	if w.Curve != "secp256k1" {
 		return fmt.Errorf("Promote currently supports secp256k1 wallets only (got %q); ed25519 promote follow-up pending", w.Curve)
@@ -93,22 +94,11 @@ func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDes
 	}
 	defer zero(masterPriv)
 
-	// 2) Synthesize a 1-of-1 ecdsatss.Key with Xi = masterPriv. Use a
-	//    deterministic ShareID = the imported WalletKey's UUID-derived
-	//    big.Int, matching the old-committee party ID we'll register
-	//    with tss.
-	oldPartyKey := new(big.Int).SetBytes(imported.Id.UUID[:])
-	oldParty := tss.NewPartyID(imported.Id.String(), imported.Id.String(), oldPartyKey)
-	oldSynth, err := synthesizeOneOfOneECDSAKey(masterPriv, oldPartyKey)
-	if err != nil {
-		return fmt.Errorf("synthesize 1-of-1 share: %w", err)
-	}
-
-	// 3) Allocate the new committee's WalletKey rows (with Paillier
-	//    pre-params, since they're the new TSS parties).
+	// 2) Allocate new committee WalletKey rows. DKLs23 doesn't need
+	//    Paillier preparams; use thin rows rather than going through
+	//    createWalletKey (which still runs Paillier for secp256k1).
 	nk := len(newKeys)
 	newWKeys := make([]*WalletKey, nk)
-
 	root := newProgressScope(ctx)
 	root.report(0)
 	for i, kInfo := range newKeys {
@@ -117,127 +107,37 @@ func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDes
 		default:
 			return fmt.Errorf("unsupported key type %s for new key #%d", kInfo.Type, i+1)
 		}
-		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
-		if err != nil {
-			return fmt.Errorf("create new committee key %d: %w", i, err)
+		newWKeys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: w.Id,
+			Type:   kInfo.Type,
+			Gen:    w.Gen + 1,
 		}
-		newWKeys[i] = k
+		root.sub(i, nk+1).report(1)
 	}
 	finalScope := root.sub(nk, nk+1)
 	finalScope.report(0)
 
-	// 4) Build TSS contexts: old committee = [oldParty], new committee
-	//    = newWKeys' party IDs.
-	oldSorted := tss.SortPartyIDs(tss.UnSortedPartyIDs{oldParty})
-	oldTssCtx := tss.NewPeerContext(oldSorted)
-
-	var newIds tss.UnSortedPartyIDs
-	newIdMap := make(map[int]*tss.PartyID)
-	for n, p := range newWKeys {
-		key := new(big.Int).SetBytes(p.Id.UUID[:])
-		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
-		newIds = append(newIds, id)
-		newIdMap[n] = id
-	}
-	newSorted := tss.SortPartyIDs(newIds)
-	newTssCtx := tss.NewPeerContext(newSorted)
-
-	curve, ok := tss.GetCurveByName(tss.CurveName(w.Curve))
-	if !ok {
-		return fmt.Errorf("unknown curve %s", w.Curve)
+	// 3) Run the modern import + reshare. The dkls23 path delivers fresh
+	//    dklsData on every new WalletKey; the public key is preserved by
+	//    construction (dklstss.NewResharing's oldECDSAPub binding).
+	if err := promoteToDkls23(ctx, masterPriv, imported, newWKeys, newThreshold); err != nil {
+		return err
 	}
 
-	// 5) Run resharing. All parties are local to this process — the
-	//    imported wallet has no remote peers, and the new committee
-	//    is being created here. RemoteKey targets in the new committee
-	//    upload their share blobs after success (handled in the
-	//    encrypt() loop at the end via the RemoteKey case).
-	hub := newTssHub()
-	hub.addLocal(oldParty)
-	for _, p := range newWKeys {
-		hub.addLocal(newIdMap[indexOfWKey(newWKeys, p)])
-	}
-
-	var wg sync.WaitGroup
-	var reshareErr error
-	var once sync.Once
-
-	// New committee
-	for n, p := range newWKeys {
-		params := tss.NewReSharingParameters(
-			curve, oldTssCtx, newTssCtx, newIdMap[n],
-			1, 0, // old: 1 party, threshold 0
-			nk, newThreshold, // new: nk parties, requested threshold
-		)
-		params.SetBroker(hub.local[newIdMap[n].Id])
-		rs, err := ecdsatss.NewResharing(ctx, params, nil, *p.pre)
-		if err != nil {
-			return fmt.Errorf("start new-committee resharing for party %d: %w", n, err)
-		}
-		wg.Add(1)
-		go func(p *WalletKey, rs *ecdsatss.Resharing) {
-			defer wg.Done()
-			select {
-			case k := <-rs.Done:
-				p.sdata = k
-			case err := <-rs.Err:
-				log.Printf("Promote: new-committee err: %s", err)
-				once.Do(func() { reshareErr = err })
-			case <-ctx.Done():
-				once.Do(func() { reshareErr = ctx.Err() })
-			}
-		}(p, rs)
-	}
-
-	// Old committee (the synthesized 1-of-1)
-	{
-		params := tss.NewReSharingParameters(
-			curve, oldTssCtx, newTssCtx, oldParty,
-			1, 0, // old
-			nk, newThreshold, // new
-		)
-		params.SetBroker(hub.local[oldParty.Id])
-		rs, err := ecdsatss.NewResharing(ctx, params, oldSynth)
-		if err != nil {
-			return fmt.Errorf("start old-committee resharing: %w", err)
-		}
-		wg.Add(1)
-		go func(rs *ecdsatss.Resharing) {
-			defer wg.Done()
-			select {
-			case <-rs.Done:
-				// old committee result has Xi zeroed by the protocol; discard.
-			case err := <-rs.Err:
-				log.Printf("Promote: old-committee err: %s", err)
-				once.Do(func() { reshareErr = err })
-			case <-ctx.Done():
-				once.Do(func() { reshareErr = ctx.Err() })
-			}
-		}(rs)
-	}
-
-	wg.Wait()
-	if reshareErr != nil {
-		return reshareErr
-	}
-	for i, p := range newWKeys {
-		if p.sdata == nil {
-			return fmt.Errorf("Promote: new committee key %d missing share data", i)
-		}
-	}
-
-	// 6) Encrypt and persist the new committee. Threshold and
-	//    generation are updated atomically with the keys.
+	// 4) Encrypt + persist. wallet.Pubkey / Chaincode stay (they were
+	//    already correct on the imported wallet); we only advance the
+	//    protocol marker so the sign / reshare dispatchers route the
+	//    new shares through the dkls23 paths.
+	w.Protocol = ProtocolDKLS
 	for i, kInfo := range newKeys {
 		if err := newWKeys[i].encrypt(kInfo); err != nil {
 			return fmt.Errorf("encrypt new committee key %d: %w", i, err)
 		}
 	}
 
-	// 7) Delete the old imported WalletKey row. The new committee's
-	//    rows are saved by w.save() which the caller invokes; but the
-	//    imported row needs explicit removal because it's not in
-	//    w.Keys after we swap.
+	// 5) Delete the imported WalletKey row before swapping in the new
+	//    committee. The new rows are saved by the caller's w.save().
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
 		return errors.New("Promote: cannot delete imported share without env")
@@ -250,6 +150,130 @@ func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDes
 	w.Threshold = newThreshold
 	w.Modified = time.Now()
 	finalScope.report(1)
+	return nil
+}
+
+// promoteToDkls23 wraps the (masterPriv, importerPartyID) input as a
+// 1-of-1 dklstss.Key via dklstss.ImportKey and reshares to the new
+// committee defined by newWKeys. The importer party plays the sole OLD
+// role; newWKeys play NEW. After return, every newWKeys[i].dklsData
+// holds the new committee's share and shares the original pubkey.
+//
+// All parties run in-process. A real "wdrone holds an old share"
+// reshare uses Wallet.Reshare (modern); promote is always purely
+// local because the imported privkey lives only on this machine.
+func promoteToDkls23(ctx context.Context, masterPriv []byte, imported *WalletKey, newWKeys []*WalletKey, newThreshold int) error {
+	importerKey := new(big.Int).SetBytes(imported.Id.UUID[:])
+	importerParty := tss.NewPartyID(imported.Id.String(), imported.Id.String(), importerKey)
+
+	priv := secp256k1.PrivKeyFromBytes(masterPriv).ToECDSA()
+	// dklstss.ImportKey accepts *ecdsa.PrivateKey but checks the curve
+	// via tss.SameCurve(priv.Curve, tss.S256()). secp256k1.ToECDSA
+	// returns a key whose Curve is the decred secp256k1 elliptic.Curve;
+	// substitute the tss S256 curve so SameCurve succeeds.
+	priv.Curve = tss.S256().(elliptic.Curve)
+	oldKey, err := dklstss.ImportKey(priv, importerParty)
+	if err != nil {
+		return fmt.Errorf("dklstss.ImportKey: %w", err)
+	}
+	oldECDSAPub := oldKey.ECDSAPub
+
+	oldSubset := tss.SortedPartyIDs{importerParty}
+
+	var newIds tss.UnSortedPartyIDs
+	newIdMap := make(map[int]*tss.PartyID)
+	for n, p := range newWKeys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		newIds = append(newIds, id)
+		newIdMap[n] = id
+	}
+	newSubset := tss.SortPartyIDs(newIds)
+
+	// dklstss uses a single combined peer context for params (oldSubset
+	// + newSubset). The patched dklstss/v2.2.8 indexes finalize arrays
+	// by position-within-newSubset, so the interleave order of the
+	// combined sort no longer matters for correctness.
+	combined := make(tss.UnSortedPartyIDs, 0, 1+len(newWKeys))
+	combined = append(combined, importerParty)
+	combined = append(combined, []*tss.PartyID(newSubset)...)
+	combinedSorted := tss.SortPartyIDs(combined)
+	combinedCtx := tss.NewPeerContext(combinedSorted)
+
+	hub := newTssHub()
+	hub.addLocal(importerParty)
+	for _, id := range newSubset {
+		hub.addLocal(id)
+	}
+
+	curve := tss.S256()
+	var wg sync.WaitGroup
+	var reshareErr error
+	var once sync.Once
+
+	for n, p := range newWKeys {
+		params := tss.NewParameters(curve, combinedCtx, newIdMap[n], len(combinedSorted), newThreshold)
+		params.SetBroker(hub.local[newIdMap[n].Id])
+		rp, err := dklstss.NewResharing(ctx, params, oldECDSAPub, nil, oldSubset, newSubset, newThreshold)
+		if err != nil {
+			return fmt.Errorf("start dkls23 promote new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rp *dklstss.ResharingParty) {
+			defer wg.Done()
+			select {
+			case key := <-rp.Done:
+				p.dklsData = key
+			case err := <-rp.Err:
+				log.Printf("Promote: dkls23 new-committee err: %s", err)
+				once.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				once.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rp)
+	}
+
+	{
+		params := tss.NewParameters(curve, combinedCtx, importerParty, len(combinedSorted), newThreshold)
+		params.SetBroker(hub.local[importerParty.Id])
+		rp, err := dklstss.NewResharing(ctx, params, oldECDSAPub, oldKey, oldSubset, newSubset, newThreshold)
+		if err != nil {
+			return fmt.Errorf("start dkls23 promote old party: %w", err)
+		}
+		wg.Add(1)
+		go func(rp *dklstss.ResharingParty) {
+			defer wg.Done()
+			select {
+			case <-rp.Done:
+				// importer signals nil after round 1; discard.
+			case err := <-rp.Err:
+				log.Printf("Promote: dkls23 old-committee err: %s", err)
+				once.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				once.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(rp)
+	}
+
+	wg.Wait()
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for i, p := range newWKeys {
+		if p.dklsData == nil {
+			return fmt.Errorf("Promote: dkls23 new committee key %d missing share data", i)
+		}
+	}
+
+	// Sanity: pubkey is preserved by NewResharing (it's the C-1 binding
+	// check on the inside), but we double-check against the new shares
+	// to catch a hypothetical regression before it lands in a stored
+	// row. Cheap.
+	for i, p := range newWKeys {
+		if p.dklsData.ECDSAPub == nil || !p.dklsData.ECDSAPub.Equals(oldECDSAPub) {
+			return fmt.Errorf("Promote: dkls23 new committee key %d has mismatched pubkey", i)
+		}
+	}
 	return nil
 }
 
@@ -287,40 +311,8 @@ func importedMasterPrivkey(wk *WalletKey, kd *wltsign.KeyDescription) ([]byte, e
 	}
 }
 
-// synthesizeOneOfOneECDSAKey constructs a tss-lib ecdsatss.Key with
-// Xi = the imported master privkey. This is the input to
-// `NewResharing` on the old committee side of the promotion.
-//
-// Per the package layout in `tss-lib/v2/ecdsatss/key.go`:
-//   - Xi              = master privkey as big.Int
-//   - ShareID         = the synthesized party's tss.PartyID.Key
-//   - Ks              = [ShareID]                    (single-party keygen index)
-//   - BigXj           = [ECDSAPub]                   (per-party public commitment)
-//   - ECDSAPub        = Xi*G                         (the master pubkey)
-//   - LocalPreParams  = unset; only the new committee runs the
-//                       Paillier-protected new-share rounds, the old
-//                       committee just decrypts/sends shares for
-//                       resharing-out
-//   - NTildej/H1j/H2j/PaillierPKs = nil; same reason as PreParams
-func synthesizeOneOfOneECDSAKey(privkey []byte, partyKey *big.Int) (*ecdsatss.Key, error) {
-	priv := secp256k1.PrivKeyFromBytes(privkey)
-	pub := priv.PubKey()
-	ecdsaPub, err := tsscrypto.NewECPoint(secp256k1.S256(), pub.X(), pub.Y())
-	if err != nil {
-		return nil, fmt.Errorf("compute ECDSAPub point: %w", err)
-	}
-	k := ecdsatss.NewKey(1)
-	k.Xi = new(big.Int).SetBytes(privkey)
-	k.ShareID = partyKey
-	k.Ks = []*big.Int{partyKey}
-	k.BigXj = []*tsscrypto.ECPoint{ecdsaPub}
-	k.ECDSAPub = ecdsaPub
-	return k, nil
-}
-
-// indexOfWKey is a tiny helper for the hub registration loop above —
-// the inner closure needs the party index and we already have the
-// pointer-to-WalletKey, so look up by identity.
+// indexOfWKey is a tiny helper kept for the reshare hub-registration
+// callers that still inline pointer-identity lookups.
 func indexOfWKey(arr []*WalletKey, target *WalletKey) int {
 	for i, p := range arr {
 		if p == target {
@@ -330,7 +322,8 @@ func indexOfWKey(arr []*WalletKey, target *WalletKey) int {
 	return -1
 }
 
-// _ keeps the xuid import alive for parity with the rest of the
-// package; future Promote variants (e.g., per-account derivation)
-// will use it to generate fresh wallet IDs.
-var _ = xuid.New
+// _ pulls tsscrypto into the package's import graph for the duration
+// of the dkls23 migration; future ed25519 promote (frost via
+// frosttss.ImportKey) will use it again to build the importer point
+// from a scalar.
+var _ = tsscrypto.NewECPoint

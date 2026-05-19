@@ -17,9 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/KarpelesLab/apirouter"
@@ -27,9 +25,6 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/secp256k1/ecckd"
-	tsscrypto "github.com/KarpelesLab/tss-lib/v2/crypto"
-	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
-	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/tyler-smith/go-bip39"
 )
@@ -164,9 +159,9 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 
 	pub := secp256k1.PrivKeyFromBytes(derivedPriv).PubKey()
 
-	// 2) Shell out the new Wallet + WalletKey rows. Threshold = 0 is
-	//    a scratch value while we reshare; we set it to newThreshold
-	//    after the protocol completes.
+	// 2) Shell out the new Wallet + thin WalletKey rows. dkls23 doesn't
+	//    need Paillier preparams; the shares are materialised by the
+	//    reshare below. Threshold is scratch until reshare completes.
 	name := c.Name
 	if strings.TrimSpace(name) == "" {
 		name = w.Name + " / " + c.Network
@@ -176,6 +171,7 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 		Id:        xuid.New("wlet"),
 		Name:      name,
 		Curve:     "secp256k1",
+		Protocol:  ProtocolDKLS,
 		Threshold: 0,
 		Pubkey:    base64.RawURLEncoding.EncodeToString(pub.SerializeCompressed()),
 		Chaincode: base64.RawURLEncoding.EncodeToString(derivedCC),
@@ -193,112 +189,26 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 		default:
 			return nil, fmt.Errorf("unsupported key type %s for new key #%d", kInfo.Type, i+1)
 		}
-		k, err := nw.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
-		if err != nil {
-			return nil, fmt.Errorf("create new committee key %d: %w", i, err)
+		newWKeys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: nw.Id,
+			Type:   kInfo.Type,
+			Gen:    1,
 		}
-		k.Wallet = nw.Id
-		newWKeys[i] = k
+		root.sub(i, nk+1).report(1)
 	}
 	finalScope := root.sub(nk, nk+1)
 	finalScope.report(0)
 
-	// 3) Synthesize the 1-of-1 ecdsatss.Key with Xi = derivedPriv.
-	oldPartyKey := new(big.Int).SetInt64(1)
-	oldParty := tss.NewPartyID("migrated-source", "migrated-source", oldPartyKey)
-	synth, err := synthesizeMnemonicECDSAKey(derivedPriv, oldPartyKey)
-	if err != nil {
-		return nil, fmt.Errorf("synthesize 1-of-1 share: %w", err)
+	// 3) Stand up an importer WalletKey for promoteToDkls23 so the
+	//    helper can build a deterministic importer PartyID. The row is
+	//    in-memory only — it never reaches the database.
+	importerShell := &WalletKey{Id: xuid.New("wkey")}
+	if err := promoteToDkls23(ctx, derivedPriv, importerShell, newWKeys, newThreshold); err != nil {
+		return nil, err
 	}
 
-	// 4) Run resharing: old committee = [oldParty], new = newWKeys' IDs.
-	oldSorted := tss.SortPartyIDs(tss.UnSortedPartyIDs{oldParty})
-	oldTssCtx := tss.NewPeerContext(oldSorted)
-
-	var newIds tss.UnSortedPartyIDs
-	newIdMap := make(map[int]*tss.PartyID)
-	for n, p := range newWKeys {
-		key := new(big.Int).SetBytes(p.Id.UUID[:])
-		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
-		newIds = append(newIds, id)
-		newIdMap[n] = id
-	}
-	newSorted := tss.SortPartyIDs(newIds)
-	newTssCtx := tss.NewPeerContext(newSorted)
-
-	curve, ok := tss.GetCurveByName(tss.CurveName("secp256k1"))
-	if !ok {
-		return nil, errors.New("tss: unknown curve secp256k1")
-	}
-
-	hub := newTssHub()
-	hub.addLocal(oldParty)
-	for _, p := range newWKeys {
-		hub.addLocal(newIdMap[indexOfWKey(newWKeys, p)])
-	}
-
-	var wg sync.WaitGroup
-	var reshareErr error
-	var once sync.Once
-
-	for n, p := range newWKeys {
-		params := tss.NewReSharingParameters(
-			curve, oldTssCtx, newTssCtx, newIdMap[n],
-			1, 0,
-			nk, newThreshold,
-		)
-		params.SetBroker(hub.local[newIdMap[n].Id])
-		rs, err := ecdsatss.NewResharing(ctx, params, nil, *p.pre)
-		if err != nil {
-			return nil, fmt.Errorf("start new-committee resharing for party %d: %w", n, err)
-		}
-		wg.Add(1)
-		go func(p *WalletKey, rs *ecdsatss.Resharing) {
-			defer wg.Done()
-			select {
-			case k := <-rs.Done:
-				p.sdata = k
-			case err := <-rs.Err:
-				once.Do(func() { reshareErr = err })
-			case <-ctx.Done():
-				once.Do(func() { reshareErr = ctx.Err() })
-			}
-		}(p, rs)
-	}
-	{
-		params := tss.NewReSharingParameters(
-			curve, oldTssCtx, newTssCtx, oldParty,
-			1, 0,
-			nk, newThreshold,
-		)
-		params.SetBroker(hub.local[oldParty.Id])
-		rs, err := ecdsatss.NewResharing(ctx, params, synth)
-		if err != nil {
-			return nil, fmt.Errorf("start old-committee resharing: %w", err)
-		}
-		wg.Add(1)
-		go func(rs *ecdsatss.Resharing) {
-			defer wg.Done()
-			select {
-			case <-rs.Done:
-			case err := <-rs.Err:
-				once.Do(func() { reshareErr = err })
-			case <-ctx.Done():
-				once.Do(func() { reshareErr = ctx.Err() })
-			}
-		}(rs)
-	}
-	wg.Wait()
-	if reshareErr != nil {
-		return nil, reshareErr
-	}
-	for i, p := range newWKeys {
-		if p.sdata == nil {
-			return nil, fmt.Errorf("new committee key %d missing share data", i)
-		}
-	}
-
-	// 5) Encrypt + attach the committee, finalize the wallet's threshold.
+	// 4) Encrypt + attach the committee, finalize the wallet's threshold.
 	for i, kInfo := range newKeys {
 		if err := newWKeys[i].encrypt(kInfo); err != nil {
 			return nil, fmt.Errorf("encrypt new committee key %d: %w", i, err)
@@ -308,24 +218,4 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 	nw.Threshold = newThreshold
 	finalScope.report(1)
 	return nw, nil
-}
-
-// synthesizeMnemonicECDSAKey is a copy of synthesizeOneOfOneECDSAKey
-// from promote.go — separate only because Go's package-level helpers
-// can't safely collide with different test expectations. Consolidate
-// in a follow-up cleanup.
-func synthesizeMnemonicECDSAKey(privkey []byte, partyKey *big.Int) (*ecdsatss.Key, error) {
-	priv := secp256k1.PrivKeyFromBytes(privkey)
-	pub := priv.PubKey()
-	ecdsaPub, err := tsscrypto.NewECPoint(secp256k1.S256(), pub.X(), pub.Y())
-	if err != nil {
-		return nil, fmt.Errorf("compute ECDSAPub point: %w", err)
-	}
-	k := ecdsatss.NewKey(1)
-	k.Xi = new(big.Int).SetBytes(privkey)
-	k.ShareID = partyKey
-	k.Ks = []*big.Int{partyKey}
-	k.BigXj = []*tsscrypto.ECPoint{ecdsaPub}
-	k.ECDSAPub = ecdsaPub
-	return k, nil
 }
