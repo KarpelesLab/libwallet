@@ -17,14 +17,6 @@ func init() {
 }
 
 func TestRemoteWallet(t *testing.T) {
-	// New wallets are now created with DKLs23, but Wallet.Reshare doesn't
-	// yet know how to drive dklstss.NewResharing. Until the modern-
-	// reshare adapter lands, this end-to-end test (which validates
-	// keygen → sign → reshare → re-sign against a real RemoteKey
-	// endpoint) cannot run. Re-enable once Reshare gains the dkls23
-	// branch.
-	t.Skip("Reshare for dkls23 wallets not yet implemented — follow-up to the Step 5 default flip")
-
 	// generate a new remote id
 	log.Printf("generating remote ID...")
 	remote, err := remoteNew(context.Background(), "+14045551234") // "unit_test"
@@ -102,13 +94,6 @@ func TestRemoteWallet(t *testing.T) {
 }
 
 func TestEdDSALocalToRemoteReshare(t *testing.T) {
-	// New ed25519 wallets are now FROST-based; Wallet.Reshare doesn't
-	// yet know how to drive frosttss resharing. Until the modern-
-	// reshare adapter lands, this end-to-end test (which depends on
-	// reshare flipping a Plain share into a RemoteKey share) cannot
-	// run. Re-enable once Reshare gains the frost branch.
-	t.Skip("Reshare for frost wallets not yet implemented — follow-up to the Step 5 default flip")
-
 	// Step 1: create ed25519 wallet with 3 local (Plain) shares
 	wallet := &Wallet{
 		Id:       xuid.New("wlt"),

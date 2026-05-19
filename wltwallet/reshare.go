@@ -9,29 +9,35 @@ import (
 	"sync"
 	"time"
 
+	"encoding/base64"
+
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
+	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/spotlib"
+	"github.com/KarpelesLab/tss-lib/v2/crypto"
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
+	"github.com/KarpelesLab/xuid"
 )
 
 // Reshare will produce new keys for the given wallet.
 //
-// Modern-protocol wallets (Protocol="dkls23" or "frost") are NOT yet
-// supported here — the ecdsatss / eddsatss resharing primitives below
-// only know how to consume sdata / eddata, so calling Reshare on a
-// modern wallet would either panic on a nil-pointer dereference or
-// silently produce a broken share set. Surface a clean error instead;
-// a follow-up will wire dklstss.NewResharing / frosttss.NewResharing
-// into this dispatch.
+// Dispatches on Wallet.Protocol so each TSS family runs its own
+// resharing primitive: dklstss.NewResharing for dkls23, frosttss
+// resharing for frost, eddsatss for legacy ed25519, and ecdsatss
+// (GG18) for legacy secp256k1. The dispatch keeps the public Reshare
+// signature stable so callers don't need to know which protocol a
+// wallet was generated under.
 func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription, newKeys []*wltsign.KeyDescription) error {
 	switch w.resolveProtocol() {
 	case ProtocolDKLS:
-		return fmt.Errorf("Reshare: dkls23 wallets are not yet reshareable through this entry point (pending integration of dklstss.NewResharing)")
+		return w.ReshareDkls(ctx, oldKeys, newKeys)
 	case ProtocolFROST:
-		return fmt.Errorf("Reshare: frost wallets are not yet reshareable through this entry point (pending integration of frosttss resharing)")
+		return w.ReshareFrost(ctx, oldKeys, newKeys)
 	}
 	if w.Curve == "ed25519" {
 		return w.ReshareEdDSA(ctx, oldKeys, newKeys)
@@ -459,6 +465,437 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 
 	edReshareFinalScope.report(1)
 	return nil
+}
+
+// ReshareFrost reshares a FROST(Ed25519) wallet. The orchestration is
+// structurally identical to ReshareEdDSA — same combined-committee
+// broker hub, same OLD/NEW party split — only the underlying TSS
+// primitive changes from eddsatss.NewResharing to frosttss.NewResharing.
+//
+// FROST resharing preserves the GroupPublicKey, so wallet.Pubkey stays
+// valid for any address derived from it. The new committee size and
+// threshold can both differ from the old.
+func (w *Wallet) ReshareFrost(ctx context.Context, oldKeys []*wltsign.KeyDescription, newKeys []*wltsign.KeyDescription) error {
+	if w.Curve != "ed25519" {
+		return errors.New("ReshareFrost requires an ed25519 wallet")
+	}
+	if w.Threshold == 0 {
+		w.Threshold = 1
+	}
+	nk := len(newKeys)
+	if nk == 0 {
+		return errors.New("at least one key is required")
+	}
+	if w.Threshold >= nk {
+		return errors.New("threshold too high")
+	}
+	if w.Threshold < 0 {
+		return errors.New("threshold too low")
+	}
+
+	var oldids tss.UnSortedPartyIDs
+	oldidmap := make(map[int]*tss.PartyID)
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p == nil {
+			return fmt.Errorf("could not find key id=%s", kd.Id)
+		}
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		oldids = append(oldids, id)
+		oldidmap[n] = id
+	}
+	oldsids := tss.SortPartyIDs(oldids)
+
+	curve := tss.Edwards()
+	oldtssctx := tss.NewPeerContext(oldsids)
+
+	newWKeys := make([]*WalletKey, nk)
+	rootEd := newProgressScope(ctx)
+	rootEd.report(0)
+
+	for i, kInfo := range newKeys {
+		switch kInfo.Type {
+		case "StoreKey", "Plain", "RemoteKey", "Password":
+		default:
+			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
+		}
+		// frost shares are quick to materialise: no Paillier preparams.
+		// Use a thin allocator rather than createWalletKey (which still
+		// runs Paillier for secp256k1 share rows).
+		newWKeys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: w.Id,
+			Type:   kInfo.Type,
+			Gen:    w.Gen + 1,
+		}
+		rootEd.sub(i, nk+1).report(1)
+	}
+
+	frostReshareFinalScope := rootEd.sub(nk, nk+1)
+	frostReshareFinalScope.report(0)
+
+	var newids tss.UnSortedPartyIDs
+	newidmap := make(map[int]*tss.PartyID)
+	for n, p := range newWKeys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		newids = append(newids, id)
+		newidmap[n] = id
+	}
+	newsids := tss.SortPartyIDs(newids)
+	newtssctx := tss.NewPeerContext(newsids)
+
+	log.Printf("producing frost reshare; oldids=%v newids=%v", oldsids, newsids)
+
+	hub := newTssHub()
+	for n := range newWKeys {
+		hub.addLocal(newidmap[n])
+	}
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
+		hub.addLocal(oldidmap[n])
+	}
+
+	remotes, err := w.startReshareRemotes(ctx, hub, oldKeys, oldidmap, oldsids, newsids, len(oldKeys), len(newKeys), ProtocolFROST)
+	if err != nil {
+		return err
+	}
+	_ = remotes
+
+	var wg sync.WaitGroup
+	var reshareErr error
+	var reshareErrOnce sync.Once
+
+	for n, p := range newWKeys {
+		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, newidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[newidmap[n].Id])
+		rs, err := frosttss.NewResharing(ctx, params, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start frost reshare for new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rs *frosttss.Resharing) {
+			defer wg.Done()
+			select {
+			case key := <-rs.Done:
+				p.frostData = key
+			case err := <-rs.Err:
+				log.Printf("frost reshare new-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rs)
+	}
+
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
+		params := tss.NewReSharingParameters(curve, oldtssctx, newtssctx, oldidmap[n], len(oldKeys), w.Threshold, len(newKeys), w.Threshold)
+		params.SetBroker(hub.local[oldidmap[n].Id])
+		frostKey, err := p.decryptFrost(kd, keyResharePurpose)
+		if err != nil {
+			return fmt.Errorf("ReshareFrost: failed to decrypt old share %s: %w", kd.Id, err)
+		}
+		rs, err := frosttss.NewResharing(ctx, params, frostKey)
+		if err != nil {
+			return fmt.Errorf("failed to start frost reshare for old party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(rs *frosttss.Resharing) {
+			defer wg.Done()
+			select {
+			case <-rs.Done:
+				// OLD committee: discard the returned key (it has no new share).
+			case err := <-rs.Err:
+				log.Printf("frost reshare old-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(rs)
+	}
+
+	wg.Wait()
+
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for _, p := range newWKeys {
+		if p.frostData == nil {
+			return errors.New("frost reshare failed: missing new committee key data")
+		}
+	}
+
+	w.Keys = newWKeys
+	for i, kInfo := range newKeys {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
+			return err
+		}
+	}
+	frostReshareFinalScope.report(1)
+	return nil
+}
+
+// ReshareDkls reshares a DKLs23 secp256k1 wallet. The dklstss primitive
+// has a different shape from the legacy eddsatss / ecdsatss path:
+//
+//   - The committee is a single combined peer context (oldPIDs ++
+//     newPIDs), not separate old / new contexts.
+//   - oldECDSAPub binds the resharing to a specific public key — every
+//     participant must agree on it. Pulled from wallet.Pubkey.
+//   - oldSubset must be exactly T+1 of the old committee (the active
+//     OLD signers); newSubset is the entire new committee.
+//   - OLD-only parties produce no new share; their Done channel fires
+//     with a nil sentinel after round 1.
+func (w *Wallet) ReshareDkls(ctx context.Context, oldKeys []*wltsign.KeyDescription, newKeys []*wltsign.KeyDescription) error {
+	if w.Curve != "secp256k1" {
+		return errors.New("ReshareDkls requires a secp256k1 wallet")
+	}
+	if w.Threshold == 0 {
+		w.Threshold = 1
+	}
+	nk := len(newKeys)
+	if nk == 0 {
+		return errors.New("at least one key is required")
+	}
+	if w.Threshold >= nk {
+		return errors.New("threshold too high")
+	}
+	if w.Threshold < 0 {
+		return errors.New("threshold too low")
+	}
+	if len(oldKeys) != w.Threshold+1 {
+		return fmt.Errorf("ReshareDkls: dkls23 requires exactly T+1=%d old signers in the active subset, got %d", w.Threshold+1, len(oldKeys))
+	}
+
+	// Decode the wallet's persisted compressed pubkey into an ECPoint
+	// for NewResharing's security binding.
+	pubBytes, err := base64.RawURLEncoding.DecodeString(w.Pubkey)
+	if err != nil {
+		return fmt.Errorf("ReshareDkls: invalid wallet pubkey: %w", err)
+	}
+	secpPub, err := secp256k1.ParsePubKey(pubBytes)
+	if err != nil {
+		return fmt.Errorf("ReshareDkls: parse wallet pubkey: %w", err)
+	}
+	xb, yb := secpPub.X(), secpPub.Y()
+	oldECDSAPub, err := crypto.NewECPoint(tss.S256(), xb, yb)
+	if err != nil {
+		return fmt.Errorf("ReshareDkls: build oldECDSAPub: %w", err)
+	}
+
+	var oldids tss.UnSortedPartyIDs
+	oldidmap := make(map[int]*tss.PartyID)
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p == nil {
+			return fmt.Errorf("could not find key id=%s", kd.Id)
+		}
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		oldids = append(oldids, id)
+		oldidmap[n] = id
+	}
+	oldsids := tss.SortPartyIDs(oldids)
+
+	curve := tss.S256()
+
+	newWKeys := make([]*WalletKey, nk)
+	root := newProgressScope(ctx)
+	root.report(0)
+
+	for i, kInfo := range newKeys {
+		switch kInfo.Type {
+		case "StoreKey", "Plain", "RemoteKey", "Password":
+		default:
+			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
+		}
+		newWKeys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: w.Id,
+			Type:   kInfo.Type,
+			Gen:    w.Gen + 1,
+		}
+		root.sub(i, nk+1).report(1)
+	}
+
+	dklsReshareFinalScope := root.sub(nk, nk+1)
+	dklsReshareFinalScope.report(0)
+
+	var newids tss.UnSortedPartyIDs
+	newidmap := make(map[int]*tss.PartyID)
+	for n, p := range newWKeys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		newids = append(newids, id)
+		newidmap[n] = id
+	}
+	newsids := tss.SortPartyIDs(newids)
+
+	// dkls23 uses a single combined peer context for params.
+	combined := make(tss.UnSortedPartyIDs, 0, len(oldids)+len(newids))
+	combined = append(combined, oldids...)
+	combined = append(combined, newids...)
+	combinedSorted := tss.SortPartyIDs(combined)
+	combinedCtx := tss.NewPeerContext(combinedSorted)
+
+	log.Printf("producing dkls23 reshare; oldids=%v newids=%v", oldsids, newsids)
+
+	hub := newTssHub()
+	for n := range newWKeys {
+		hub.addLocal(newidmap[n])
+	}
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
+		hub.addLocal(oldidmap[n])
+	}
+
+	remotes, err := w.startReshareRemotes(ctx, hub, oldKeys, oldidmap, oldsids, newsids, len(oldKeys), len(newKeys), ProtocolDKLS)
+	if err != nil {
+		return err
+	}
+	_ = remotes
+
+	var wg sync.WaitGroup
+	var reshareErr error
+	var reshareErrOnce sync.Once
+
+	// NEW-side parties (no oldKey).
+	for n, p := range newWKeys {
+		params := tss.NewParameters(curve, combinedCtx, newidmap[n], len(combinedSorted), w.Threshold)
+		params.SetBroker(hub.local[newidmap[n].Id])
+		rp, err := dklstss.NewResharing(ctx, params, oldECDSAPub, nil, oldsids, newsids, w.Threshold)
+		if err != nil {
+			return fmt.Errorf("failed to start dkls23 reshare for new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rp *dklstss.ResharingParty) {
+			defer wg.Done()
+			select {
+			case key := <-rp.Done:
+				p.dklsData = key
+			case err := <-rp.Err:
+				log.Printf("dkls23 reshare new-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rp)
+	}
+
+	// OLD-side parties (with oldKey). Skip RemoteKey shares — those run
+	// on the wdrone side via the spotPeer transport.
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p.Type == "RemoteKey" {
+			continue
+		}
+		params := tss.NewParameters(curve, combinedCtx, oldidmap[n], len(combinedSorted), w.Threshold)
+		params.SetBroker(hub.local[oldidmap[n].Id])
+		dklsKey, err := p.decryptDkls(kd, keyResharePurpose)
+		if err != nil {
+			return fmt.Errorf("ReshareDkls: failed to decrypt old share %s: %w", kd.Id, err)
+		}
+		rp, err := dklstss.NewResharing(ctx, params, oldECDSAPub, dklsKey, oldsids, newsids, w.Threshold)
+		if err != nil {
+			return fmt.Errorf("failed to start dkls23 reshare for old party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(rp *dklstss.ResharingParty) {
+			defer wg.Done()
+			select {
+			case <-rp.Done:
+				// OLD-only: discard the nil-sentinel result.
+			case err := <-rp.Err:
+				log.Printf("dkls23 reshare old-committee err: %s", err)
+				reshareErrOnce.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				reshareErrOnce.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(rp)
+	}
+
+	wg.Wait()
+
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for _, p := range newWKeys {
+		if p.dklsData == nil {
+			return errors.New("dkls23 reshare failed: missing new committee key data")
+		}
+	}
+
+	w.Keys = newWKeys
+	for i, kInfo := range newKeys {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
+			return err
+		}
+	}
+	dklsReshareFinalScope.report(1)
+	return nil
+}
+
+// startReshareRemotes opens spotPeer connections for every RemoteKey
+// share in oldKeys. Identical to the inline block in ReshareEdDSA but
+// factored out so the modern protocol entry points don't have to clone
+// it. Returns the started peers in case the caller needs them later
+// (they're already registered with the hub).
+func (w *Wallet) startReshareRemotes(ctx context.Context, hub *tssHub, oldKeys []*wltsign.KeyDescription, oldidmap map[int]*tss.PartyID, oldsids, newsids tss.SortedPartyIDs, oldPartyCount, newPartyCount int, protocol string) ([]*spotPeer, error) {
+	var remotes []*spotPeer
+	for n, kd := range oldKeys {
+		p := w.getKey(kd.Id)
+		if p == nil {
+			return nil, fmt.Errorf("could not find key id=%s", kd.Id)
+		}
+		if p.Type != "RemoteKey" {
+			continue
+		}
+		info := &walletSignReshareInit{
+			OldPeers:      oldsids,
+			NewPeers:      newsids,
+			Name:          oldidmap[n],
+			OldPartycount: oldPartyCount,
+			NewPartycount: newPartyCount,
+			OldThreshold:  w.Threshold,
+			NewThreshold:  w.Threshold,
+			Curve:         w.Curve,
+			Protocol:      protocol,
+		}
+		spot, err := envSpot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := waitOnlineSpot(spot); err != nil {
+			return nil, err
+		}
+		log.Printf("initializing %s remote peer %s with info=%+v", protocol, p.Id.String(), info)
+		rp := &spotPeer{
+			hub:     hub,
+			partyId: oldidmap[n],
+			info:    info,
+			spot:    spot,
+			sid:     kd.Key,
+		}
+		hub.addRemote(rp)
+		remotes = append(remotes, rp)
+	}
+	for _, rp := range remotes {
+		if err := rp.Start(); err != nil {
+			return nil, fmt.Errorf("failed to start remote peer %s: %w", rp.partyId.Id, err)
+		}
+	}
+	return remotes, nil
 }
 
 // envSpot returns the environment's Spot client, creating a fresh one if none

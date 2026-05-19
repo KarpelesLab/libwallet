@@ -28,6 +28,11 @@ type walletSignReshareInit struct {
 	OldThreshold  int                `json:"old_threshold"`
 	NewThreshold  int                `json:"new_threshold"`
 	Curve         string             `json:"curve"` // "secp256k1" or "ed25519"
+	// Protocol selects which TSS resharing implementation the remote
+	// side should run. "" / "legacy" → legacy ecdsatss / eddsatss
+	// (kept for backwards compatibility with existing wallets);
+	// "dkls23" → dklstss.NewResharing; "frost" → frosttss.NewResharing.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 type remoteKeyNewResult struct {
