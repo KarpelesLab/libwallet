@@ -20,8 +20,13 @@ import (
 // testPhone is a known invalid phone number but just valid enough so it can be input in a phone number input field
 const testPhone = "+14045551234" // code=000000
 
+// TestWalletCreate exercises the legacy GG18 (ecdsatss) path end-to-end:
+// keygen, sign, reshare. It opts into the legacy protocol explicitly so
+// the default flip (which now points new wallets at DKLs23) does not
+// reroute the test — modern dkls23 coverage lives in
+// TestDklsWalletEndToEnd, and dkls23 reshare is still a follow-up.
 func TestWalletCreate(t *testing.T) {
-	w := &Wallet{}
+	w := &Wallet{Protocol: ProtocolLegacyECDSA}
 
 	log.Printf("storeKey = %+v", must(storekeyCreate()))
 
@@ -148,8 +153,12 @@ func TestWalletCreate(t *testing.T) {
 	// all good
 }
 
+// TestEdDSAWalletCreate exercises the legacy eddsatss path end-to-end.
+// Pinned to ProtocolLegacyEdDSA so the default flip (which routes empty
+// Protocol to FROST) doesn't bypass the legacy assertions; modern FROST
+// coverage lives in TestFrostWalletEndToEnd.
 func TestEdDSAWalletCreate(t *testing.T) {
-	w := &Wallet{}
+	w := &Wallet{Protocol: ProtocolLegacyEdDSA}
 
 	kd := []*wltsign.KeyDescription{
 		{Type: "Plain"},

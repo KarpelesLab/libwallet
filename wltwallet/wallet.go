@@ -177,12 +177,15 @@ func (w *Wallet) ApiDelete(ctx *apirouter.Context) error {
 //   - kDesc: array of key descriptions for wallet creation
 //
 // Dispatches on Wallet.Protocol:
-//   - empty / "gg18" → the historical ecdsatss (GG18) keygen below
-//   - "dkls23"      → initializeDklsWallet (modern DKLs23, no Paillier)
+//   - empty / "dkls23" → initializeDklsWallet (default for new wallets;
+//     modern DKLs23, no Paillier)
+//   - "gg18"           → the historical ecdsatss (GG18) keygen below,
+//     used only when a caller explicitly opts in for backwards-
+//     compatible behaviour
 //
 // Returns any error encountered during wallet initialization
 func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
-	if w.Protocol == ProtocolDKLS {
+	if w.Protocol == "" || w.Protocol == ProtocolDKLS {
 		return w.initializeDklsWallet(ctx, kDesc)
 	}
 	if w.Threshold == 0 {
@@ -440,17 +443,16 @@ func (w *Wallet) initializeDklsWallet(ctx context.Context, kDesc []*wltsign.KeyD
 
 // initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS.
 // Dispatches on Wallet.Protocol:
-//   - empty / "eddsa" → the historical eddsatss (GG18-style Schnorr) keygen
-//     below
-//   - "frost"          → initializeFrostWallet (modern FROST, RFC 9591)
+//   - empty / "frost" → initializeFrostWallet (default for new wallets;
+//     modern FROST, RFC 9591)
+//   - "eddsa"          → the historical eddsatss (GG18-style Schnorr) keygen
+//     below, used only when a caller explicitly opts in for
+//     backwards-compatible behaviour
 func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
-	if w.Protocol == ProtocolFROST {
+	if w.Protocol == "" || w.Protocol == ProtocolFROST {
 		return w.initializeFrostWallet(ctx, kDesc)
 	}
 	w.Curve = "ed25519"
-	if w.Protocol == "" {
-		w.Protocol = ProtocolLegacyEdDSA
-	}
 	if w.Threshold == 0 {
 		w.Threshold = 1
 	}
