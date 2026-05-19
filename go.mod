@@ -16,13 +16,15 @@ require (
 	github.com/KarpelesLab/secp256k1 v0.2.8
 	github.com/KarpelesLab/spotlib v0.3.0
 	github.com/KarpelesLab/spotproto v0.3.0
-	github.com/KarpelesLab/tss-lib/v2 v2.2.4
+	github.com/KarpelesLab/tss-lib/v2 v2.2.6
 	github.com/KarpelesLab/typutil v0.2.34
 	github.com/KarpelesLab/xuid v1.0.10
 	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/portablesql/psql v0.5.8
 	github.com/portablesql/psql-sqlite v0.5.0
+	github.com/tyler-smith/go-bip39 v1.1.0
 	golang.org/x/crypto v0.49.0
 )
 
@@ -33,7 +35,6 @@ require (
 	github.com/KarpelesLab/countrydb v0.1.3 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
 	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
-	github.com/KarpelesLab/evmabiless v0.1.15 // indirect
 	github.com/KarpelesLab/lngdb v1.0.1 // indirect
 	github.com/KarpelesLab/mldsa v0.2.0 // indirect
 	github.com/KarpelesLab/putil v1.0.0 // indirect
@@ -41,17 +42,10 @@ require (
 	github.com/KarpelesLab/rlp v0.1.4 // indirect
 	github.com/KarpelesLab/slhdsa v0.1.0 // indirect
 	github.com/KarpelesLab/webutil v0.2.7 // indirect
-	github.com/ModChain/base58 v1.1.0 // indirect
-	github.com/ModChain/bech32m v0.1.4 // indirect
-	github.com/ModChain/edwards25519 v1.1.5 // indirect
-	github.com/ModChain/rlp v0.1.3 // indirect
-	github.com/ModChain/secp256k1 v0.2.7 // indirect
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/ipfs/go-log v1.0.5 // indirect
 	github.com/ipfs/go-log/v2 v2.9.1 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
@@ -61,7 +55,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/tyler-smith/go-bip39 v1.1.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
