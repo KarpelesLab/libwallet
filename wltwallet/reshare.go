@@ -18,7 +18,21 @@ import (
 )
 
 // Reshare will produce new keys for the given wallet.
+//
+// Modern-protocol wallets (Protocol="dkls23" or "frost") are NOT yet
+// supported here — the ecdsatss / eddsatss resharing primitives below
+// only know how to consume sdata / eddata, so calling Reshare on a
+// modern wallet would either panic on a nil-pointer dereference or
+// silently produce a broken share set. Surface a clean error instead;
+// a follow-up will wire dklstss.NewResharing / frosttss.NewResharing
+// into this dispatch.
 func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription, newKeys []*wltsign.KeyDescription) error {
+	switch w.resolveProtocol() {
+	case ProtocolDKLS:
+		return fmt.Errorf("Reshare: dkls23 wallets are not yet reshareable through this entry point (pending integration of dklstss.NewResharing)")
+	case ProtocolFROST:
+		return fmt.Errorf("Reshare: frost wallets are not yet reshareable through this entry point (pending integration of frosttss resharing)")
+	}
 	if w.Curve == "ed25519" {
 		return w.ReshareEdDSA(ctx, oldKeys, newKeys)
 	}
