@@ -164,9 +164,27 @@ jobs:
           # Apple's current Xcode/simctl shipping. Pinning to a
           # specific iOS version would drift as the macos-latest image
           # rolls forward.
+          # Pin the runtime to the major version of Xcode's iphonesimulator
+          # SDK. Xcode 16.4 ships SDK 18.5, but the macos-latest image also
+          # has iOS 26.2 (a preview runtime) installed. Picking "latest"
+          # selects iOS 26.2 — the install lands but the launch deadlocks
+          # in FBSOpenApplicationServiceErrorDomain because the app was
+          # compiled against an SDK older than the runtime expects. Match
+          # the SDK to avoid the cross-version glitch.
+          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          SDK_MAJOR=${SDK_VERSION%%.*}
+          echo "sdkVersion = $SDK_VERSION (matching runtime major version $SDK_MAJOR)"
           RUNTIMES_JSON=$(xcrun simctl list runtimes -j)
           RUNTIME=$(echo "$RUNTIMES_JSON" \
-            | jq -r '.runtimes | map(select(.platform=="iOS" and .isAvailable)) | sort_by(.version) | last | .identifier')
+            | jq -r --arg major "$SDK_MAJOR" '.runtimes | map(select(.platform=="iOS" and .isAvailable and ((.version|split(".")[0])==$major))) | sort_by(.version) | last | .identifier')
+          if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
+            # Fall back to the absolute latest if no version-matched
+            # runtime is installed — better to try than to fail the
+            # setup outright.
+            echo "No iOS runtime found at SDK major $SDK_MAJOR; falling back to latest"
+            RUNTIME=$(echo "$RUNTIMES_JSON" \
+              | jq -r '.runtimes | map(select(.platform=="iOS" and .isAvailable)) | sort_by(.version) | last | .identifier')
+          fi
           if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
             echo "No iOS runtime found"; exit 1
           fi
