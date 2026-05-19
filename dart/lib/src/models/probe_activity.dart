@@ -97,6 +97,14 @@ class ChainMigration {
   /// convention (ed25519 seed == PBKDF2(mnemonic)[:32]).
   final String derivationPath;
 
+  /// Signing curve for the migrated chain wallet.
+  /// `"secp256k1"` → produces a DKLs23 wallet (Bitcoin, Ethereum, …).
+  /// `"ed25519"`   → produces a FROST wallet (Solana, Sui, …).
+  /// Empty defaults to `"secp256k1"` for backwards-compat with
+  /// callers from before the ed25519 fan-out was added; new code
+  /// should always pass an explicit value.
+  final String curve;
+
   /// Optional name for the newly-created MPC wallet. Defaults to
   /// `"<source wallet name> / <network>"` when empty.
   final String name;
@@ -104,21 +112,27 @@ class ChainMigration {
   const ChainMigration({
     required this.network,
     required this.derivationPath,
+    this.curve = '',
     this.name = '',
   });
 
   Map<String, dynamic> toJson() => {
         'network': network,
         'derivationPath': derivationPath,
+        if (curve.isNotEmpty) 'curve': curve,
         if (name.isNotEmpty) 'name': name,
       };
 
   /// Convenience: build a ChainMigration from a probe row the user
-  /// picked. Strips any `/0/0` address-level suffix that ended up in
-  /// the probe path — callers usually want to migrate at the BIP44
-  /// account level (m/44'/.../0'), NOT at the specific first address.
-  /// Pass [stripAddressSuffix: false] to promote exactly the probed
-  /// address instead.
+  /// picked. Carries the row's [ProbeActivityRow.curve] through so
+  /// each migrated chain lands on the right protocol (DKLs23 vs
+  /// FROST) without the caller having to special-case Solana.
+  ///
+  /// Strips any `/0/0` address-level suffix that ended up in the
+  /// probe path — callers usually want to migrate at the BIP44
+  /// account level (m/44'/.../0'), NOT at the specific first
+  /// address. Pass [stripAddressSuffix: false] to promote exactly
+  /// the probed address instead.
   factory ChainMigration.fromProbeRow(
     ProbeActivityRow row, {
     String? name,
@@ -140,6 +154,7 @@ class ChainMigration {
     return ChainMigration(
       network: row.network,
       derivationPath: path,
+      curve: row.curve,
       name: name ?? '',
     );
   }
