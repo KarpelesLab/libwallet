@@ -18,6 +18,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/rest"
 	"github.com/KarpelesLab/spotlib"
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/xuid"
@@ -32,29 +33,42 @@ import (
 //   - Type   — how the encrypted blob is wrapped (StoreKey / Plain /
 //     RemoteKey / Password). This is the "encryption mechanism".
 //   - Schema — what's INSIDE the encrypted blob. Empty (default for
-//     existing rows) means a tss-lib share — `*ecdsatss.Key` for
-//     secp256k1 wallets, `*eddsatss.Key` for ed25519 wallets, picked
-//     by parent Wallet.Curve. Non-empty schemas are used by the
-//     import flow:
+//     existing rows) means a legacy tss-lib share picked by parent
+//     Wallet.Protocol/Curve — `*ecdsatss.Key` for gg18 secp256k1
+//     wallets, `*eddsatss.Key` for eddsa ed25519 wallets. Non-empty
+//     schemas are:
 //       - "raw"      — `*RawKeyShare`, a 32-byte private key + chaincode.
 //       - "mnemonic" — `*MnemonicKeyShare`, a BIP39 mnemonic phrase.
-//     Wallets with a non-empty Schema are 1-of-1 (no TSS) and signable
-//     immediately after import via the raw sign path. They can be
-//     promoted to a normal multi-share TSS wallet via Wallet:promote.
+//       - "dkls23"   — `*dklstss.Key` for modern DKLs23 secp256k1
+//         wallets. Save/Load produces a binary blob (includes OT-
+//         extension state) which is wrapped in [dklsKeyWrapper] so it
+//         flows through the same JSON/CBOR/Bottle pipeline as the
+//         other share types.
+//     Wallets with a "raw" or "mnemonic" Schema are 1-of-1 imports
+//     (signable immediately, promotable via Wallet:promote).
 type WalletKey struct {
 	psql.Name `sql:"WalletKey"`
 	Id        *xuid.XUID `sql:",key=PRIMARY"`
 	Wallet    *xuid.XUID `sql:",type=VARCHAR,size=255"`
 	Type      string     `sql:",type=VARCHAR,size=255"`
-	Schema    string     `sql:",type=VARCHAR,size=64,null=0,default=''"` // "" | "raw" | "mnemonic"
+	Schema    string     `sql:",type=VARCHAR,size=64,null=0,default=''"` // "" | "raw" | "mnemonic" | "dkls23"
 	Key       string     `json:"Key,omitempty" sql:",type=TEXT"`         // (public) key used for encryption
 	Data      []byte     `json:",protect" sql:",type=BLOB"`
 	Gen       uint64     `sql:",type=BIGINT,null=0,default=0"` // key generation
 	pre       *ecdsatss.LocalPreParams
 	sdata     *ecdsatss.Key
 	eddata    *eddsatss.Key
+	dklsData  *dklstss.Key      // populated when Schema == "dkls23"
 	rawData   *RawKeyShare      // populated when Schema == "raw"
 	mnemonic  *MnemonicKeyShare // populated when Schema == "mnemonic"
+}
+
+// dklsKeyWrapper is the wire form for a dklstss share inside the
+// encrypted Bottle. dklstss.Key.Save() emits a binary blob (includes
+// OT-extension setup state) rather than json-marshalling itself, so we
+// box the bytes in a struct that does round-trip through JSON cleanly.
+type dklsKeyWrapper struct {
+	Data []byte `json:"data"`
 }
 
 // RawKeyShare is the decrypted payload for a WalletKey with
@@ -129,10 +143,10 @@ func (w *Wallet) createWalletKey(ctx context.Context, typ string, scope progress
 	return final, nil
 }
 
-// encrypt stores the active in-memory share (sdata/eddata/rawData/mnemonic)
-// into wk.Data, encrypted per the given KeyDescription. Schema is set
-// based on which field is populated so decrypt knows what type to
-// unmarshal back into.
+// encrypt stores the active in-memory share (sdata/eddata/dklsData/
+// rawData/mnemonic) into wk.Data, encrypted per the given
+// KeyDescription. Schema is set based on which field is populated so
+// decrypt knows what type to unmarshal back into.
 func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	var dataToEncrypt any
 	switch {
@@ -142,6 +156,16 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	case wk.rawData != nil:
 		dataToEncrypt = wk.rawData
 		wk.Schema = "raw"
+	case wk.dklsData != nil:
+		// dklstss.Key.Save() is binary; wrap in dklsKeyWrapper so the
+		// rest of the encrypt pipeline (Bottle / cryptutil / CBOR)
+		// doesn't have to learn about a non-JSON share type.
+		var buf bytes.Buffer
+		if err := wk.dklsData.Save(&buf); err != nil {
+			return fmt.Errorf("dklstss.Key.Save: %w", err)
+		}
+		dataToEncrypt = &dklsKeyWrapper{Data: buf.Bytes()}
+		wk.Schema = "dkls23"
 	case wk.eddata != nil:
 		dataToEncrypt = wk.eddata
 		wk.Schema = ""
@@ -229,7 +253,11 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		return err
 	}
 	if kd.Type == "RemoteKey" {
-		// upload bottle
+		// upload bottle. curveParam tells the WalletSign backend which
+		// elliptic curve the share is for — secp256k1 for both legacy
+		// ecdsatss and modern dkls23, ed25519 for both eddsatss and
+		// (future) frost. The protocol distinction is encoded inside
+		// the encrypted blob's Schema, not on the upload side.
 		curveParam := "secp256k1"
 		if wk.eddata != nil {
 			curveParam = "ed25519"
@@ -299,6 +327,32 @@ func (wk *WalletKey) decrypt(kd *wltsign.KeyDescription, purpose keyUsagePurpose
 		return nil, fmt.Errorf("while decrypting key %s: %w", wk.Id, err)
 	}
 	return final, err
+}
+
+// decryptDkls unwraps a Schema=="dkls23" WalletKey into the
+// dklstss.Key share. Errors if the WalletKey wasn't generated by the
+// dklstss path (different Schema, no Save bytes in the bottle, etc.).
+func (wk *WalletKey) decryptDkls(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*dklstss.Key, error) {
+	if wk.Schema != "dkls23" {
+		return nil, fmt.Errorf("walletkey %s is not a dkls23 share (schema=%q)", wk.Id, wk.Schema)
+	}
+	bottle := cryptutil.AsCborBottle(wk.Data)
+	op, err := wk.opener(kd)
+	if err != nil {
+		return nil, err
+	}
+	var wrapper *dklsKeyWrapper
+	if _, err := op.Unmarshal(bottle, &wrapper); err != nil {
+		return nil, fmt.Errorf("while decrypting dkls23 key %s: %w", wk.Id, err)
+	}
+	if wrapper == nil || len(wrapper.Data) == 0 {
+		return nil, fmt.Errorf("dkls23 key %s: empty Save bytes after decrypt", wk.Id)
+	}
+	key, err := dklstss.Load(bytes.NewReader(wrapper.Data))
+	if err != nil {
+		return nil, fmt.Errorf("dklstss.Load on key %s: %w", wk.Id, err)
+	}
+	return key, nil
 }
 
 func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePurpose) (*eddsatss.Key, error) {

@@ -19,6 +19,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/secp256k1"
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
@@ -174,8 +175,15 @@ func (w *Wallet) ApiDelete(ctx *apirouter.Context) error {
 //   - ctx: context for progress reporting and cancellation
 //   - kDesc: array of key descriptions for wallet creation
 //
+// Dispatches on Wallet.Protocol:
+//   - empty / "gg18" → the historical ecdsatss (GG18) keygen below
+//   - "dkls23"      → initializeDklsWallet (modern DKLs23, no Paillier)
+//
 // Returns any error encountered during wallet initialization
 func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
+	if w.Protocol == ProtocolDKLS {
+		return w.initializeDklsWallet(ctx, kDesc)
+	}
 	if w.Threshold == 0 {
 		w.Threshold = 1
 	}
@@ -299,6 +307,132 @@ func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescr
 		}
 	}
 
+	finalScope.report(1)
+	return nil
+}
+
+// initializeDklsWallet creates a new secp256k1 wallet using DKLs23 TSS.
+//
+// Mirrors initializeWallet's orchestration — N parties, local
+// in-process broker hub, each share lands in WalletKey.dklsData and
+// is encrypted into WalletKey.Data via the Schema="dkls23" path.
+//
+// Differences from the ecdsatss path:
+//   - No LocalPreParams stage (dklstss doesn't use Paillier/MtA).
+//   - dklstss.NewKeygen takes (ctx, params) only.
+//   - The resulting share lives in WalletKey.dklsData (binary-Save
+//     wrapped via dklsKeyWrapper at encrypt time).
+//   - The joint public key is still on key.ECDSAPub (same field
+//     name as ecdsatss).
+//
+// Caller responsibility: w.Protocol must be set to ProtocolDKLS before
+// invoking this. initializeWallet dispatches here when that's true;
+// direct callers should set the field explicitly.
+func (w *Wallet) initializeDklsWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
+	if w.Threshold == 0 {
+		w.Threshold = 1
+	}
+	nk := len(kDesc)
+	w.Keys = make([]*WalletKey, nk)
+	if nk == 0 {
+		return errors.New("at least one key is required")
+	}
+	if w.Threshold >= nk {
+		return errors.New("threshold too high")
+	}
+	if w.Threshold < 0 {
+		return errors.New("threshold too low")
+	}
+
+	root := newProgressScope(ctx)
+	root.report(0)
+
+	// Allocate per-share WalletKey entries. DKLs23 doesn't need the
+	// slow Paillier preparam stage that ecdsatss's createWalletKey
+	// runs, so we don't call it — just stamp the row.
+	for i, kInfo := range kDesc {
+		switch kInfo.Type {
+		case "StoreKey", "Plain", "RemoteKey", "Password":
+			// OK
+		default:
+			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
+		}
+		w.Keys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: w.Id,
+			Type:   kInfo.Type,
+			Gen:    w.Gen + 1,
+		}
+		root.sub(i, nk+1).report(1)
+	}
+
+	finalScope := root.sub(nk, nk+1)
+	finalScope.report(0)
+
+	var ids tss.UnSortedPartyIDs
+	idmap := make(map[int]*tss.PartyID)
+	for n, p := range w.Keys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		ids = append(ids, id)
+		idmap[n] = id
+	}
+	sids := tss.SortPartyIDs(ids)
+
+	curve := tss.S256()
+	tssctx := tss.NewPeerContext(sids)
+
+	hub := newTssHub()
+	for n := range w.Keys {
+		hub.addLocal(idmap[n])
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(w.Keys))
+	for n, p := range w.Keys {
+		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
+		params.SetBroker(hub.local[idmap[n].Id])
+		kg, err := dklstss.NewKeygen(ctx, params)
+		if err != nil {
+			return fmt.Errorf("failed to start dkls23 keygen for party %d: %w", n, err)
+		}
+		go func(p *WalletKey, kg *dklstss.KeygenParty) {
+			defer wg.Done()
+			select {
+			case key := <-kg.Done:
+				p.dklsData = key
+			case err := <-kg.Err:
+				log.Printf("dkls23 keygen err = %s", err)
+				p.dklsData = nil
+			case <-ctx.Done():
+				p.dklsData = nil
+			}
+		}(p, kg)
+	}
+
+	// Random chaincode for HD derivation — same as the ecdsatss path.
+	chaincode := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, chaincode); err != nil {
+		return fmt.Errorf("failed to generate secure chaincode for wallet: %w", err)
+	}
+
+	wg.Wait()
+
+	if w.Keys[0].dklsData == nil {
+		return errors.New("dkls23 key generation failed")
+	}
+
+	pk := w.Keys[0].dklsData.ECDSAPub.ToSecp256k1PubKey()
+	w.Pubkey = base64.RawURLEncoding.EncodeToString(pk.SerializeCompressed())
+	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
+	w.Curve = "secp256k1"
+	w.Protocol = ProtocolDKLS
+
+	for i, kInfo := range kDesc {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
+			return fmt.Errorf("failed to encrypt dkls23 wallet key %d/%d of type %s: %w", i+1, len(w.Keys), kInfo.Type, err)
+		}
+	}
 	finalScope.report(1)
 	return nil
 }
@@ -567,7 +701,47 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 
 	res := make(chan any, len(keys))
 
-	if w.Curve == "ed25519" {
+	if w.resolveProtocol() == ProtocolDKLS {
+		wltlog.Debugf("wallet-sign: dkls23 id=%s threshold=%d keys_provided=%d msg_len=%d", w.Id, w.Threshold, len(keys), len(digest))
+		// dklstss requires the subset to be exactly T+1; surface that
+		// here rather than letting NewSigning return a less obvious
+		// "subset size N, expected T+1=M" error per party.
+		if len(keys) != w.Threshold+1 {
+			return nil, fmt.Errorf("dkls23: signing requires exactly T+1=%d signers, got %d", w.Threshold+1, len(keys))
+		}
+		for n, kd := range keys {
+			p := w.getKey(kd.Id)
+			if p == nil {
+				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
+			}
+			// dklstss only reads PartyID/EC/Broker/Rand from params; N/T
+			// come from the embedded key. The shared idmap/sids/hub set
+			// up above already represent this subset.
+			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			params.SetBroker(hub.local[idmap[n].Id])
+			dklsKey, err := p.decryptDkls(kd, keySignPurpose)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt dkls23 key %s for signing: %w", kd.Id, err)
+			}
+			sp, err := dklstss.NewSigning(signCtx, params, dklsKey, digest, sids, aopt.IL)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start dkls23 signing for key %s: %w", kd.Id, err)
+			}
+			go func() {
+				defer func() {
+					wltcrash.Log(signCtx, recover(), "dkls23 signing party thread")
+				}()
+				select {
+				case sig := <-sp.Done:
+					res <- dklsDERFromSignature(sig)
+				case err := <-sp.Err:
+					res <- err
+				case <-signCtx.Done():
+					res <- signCtx.Err()
+				}
+			}()
+		}
+	} else if w.Curve == "ed25519" {
 		wltlog.Debugf("wallet-sign: ed25519 id=%s threshold=%d keys_provided=%d msg_len=%d", w.Id, w.Threshold, len(keys), len(digest))
 		// Self-heal Pubkey for wallets created before the X-coord →
 		// compressed-Y encoding fix. The persisted Pubkey is
@@ -706,4 +880,14 @@ func ecdsaDERFromSigData(sd *ecdsatss.SignatureData) []byte {
 	r.SetByteSlice(sd.R)
 	s.SetByteSlice(sd.S)
 	return secp256k1.NewSignatureWithRecoveryCode(&r, &s, sd.Recovery&1).Serialize()
+}
+
+// dklsDERFromSignature emits the same DER shape as ecdsaDERFromSigData so
+// callers (Account.Sign, SignEthereumDigest, etc.) don't branch on the
+// underlying TSS protocol.
+func dklsDERFromSignature(sig *dklstss.Signature) []byte {
+	var r, s secp256k1.ModNScalar
+	r.SetByteSlice(sig.R.Bytes())
+	s.SetByteSlice(sig.S.Bytes())
+	return secp256k1.NewSignatureWithRecoveryCode(&r, &s, sig.V&1).Serialize()
 }
