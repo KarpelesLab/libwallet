@@ -1,5 +1,29 @@
 ## 0.4.35
 
+- **Modernized: TSS protocols.** All new wallets are now created
+  with modern threshold protocols — DKLs23 for secp256k1
+  (Bitcoin / Ethereum / …) and FROST per RFC 9591 for ed25519
+  (Solana / Sui / …). The legacy GG18 / eddsatss keygen paths are
+  no longer reachable; existing wallets created under those
+  protocols keep working (sign + reshare + promote all detect the
+  protocol and use the matching primitive). `Wallet.protocol`
+  surfaces `"dkls23"` or `"frost"` for new wallets; existing rows
+  with empty `protocol` are interpreted per their curve. Modern
+  resharing, modern promote, and the ClawdWallet keygen handshake
+  all run through the new protocols transparently — no Dart-side
+  API change beyond the optional `ChainMigration.curve` below.
+
+- **Added: `ChainMigration.curve`** for the modern `Wallet:promoteMnemonic`
+  fan-out. The Go side now dispatches each chain on its curve —
+  `"secp256k1"` lands on a DKLs23 wallet (Bitcoin, Ethereum, …) and
+  `"ed25519"` lands on a FROST wallet (Solana, Sui, …) — so one
+  BIP39 mnemonic can produce wallets on both curves in the same
+  call. The Dart model picks the field up automatically when you
+  build via `ChainMigration.fromProbeRow(row)`; manual constructions
+  should pass `curve: 'secp256k1'` or `curve: 'ed25519'` explicitly.
+  Empty defaults to `"secp256k1"` for backwards compatibility with
+  pre-modern callers.
+
 - **Added: `SwapQuote.status` + `SwapQuote.statusMessage` + `SwapQuote.isExecutable`.**
   `SwapApi.maxSpendable` previously errored out on two soft-failure
   paths — the wallet's spendable balance can't cover network fee +
@@ -16,32 +40,6 @@
   `SwapApi.execute` until the conditions change. `SwapApi.quote` /
   `SwapApi.quotes` still error on no-route (the user is asking
   for a specific trade and a silent no-route would be misleading).
-
-## 0.4.34
-
-- **Added: `ChainMigration.curve`** for the modern `Wallet:promoteMnemonic`
-  fan-out. The Go side now dispatches each chain on its curve —
-  `"secp256k1"` lands on a DKLs23 wallet (Bitcoin, Ethereum, …) and
-  `"ed25519"` lands on a FROST wallet (Solana, Sui, …) — so one
-  BIP39 mnemonic can produce wallets on both curves in the same
-  call. The Dart model picks the field up automatically when you
-  build via `ChainMigration.fromProbeRow(row)`; manual constructions
-  should pass `curve: 'secp256k1'` or `curve: 'ed25519'` explicitly.
-  Empty defaults to `"secp256k1"` for backwards compatibility with
-  pre-modern callers.
-
-- **Modernized: TSS protocols.** All new wallets are now created
-  with modern threshold protocols — DKLs23 for secp256k1
-  (Bitcoin / Ethereum / …) and FROST per RFC 9591 for ed25519
-  (Solana / Sui / …). The legacy GG18 / eddsatss keygen paths are
-  no longer reachable; existing wallets created under those
-  protocols keep working (sign + reshare + promote all detect the
-  protocol and use the matching primitive). `Wallet.protocol`
-  surfaces `"dkls23"` or `"frost"` for new wallets; existing rows
-  with empty `protocol` are interpreted per their curve. Modern
-  resharing, modern promote, and the ClawdWallet keygen handshake
-  all run through the new protocols transparently — no Dart-side
-  API change beyond the optional `ChainMigration.curve` above.
 
 ## 0.4.33
 
