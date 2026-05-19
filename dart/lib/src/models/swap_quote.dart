@@ -86,6 +86,33 @@ class SwapQuote {
   /// a token-in swap; null otherwise.
   final Amount? neededAllowance;
 
+  /// When non-empty, this quote is NOT executable — passing it (or
+  /// its [quoteId]) to [SwapApi.execute] will fail. Returned only by
+  /// [SwapApi.maxSpendable] today, on two soft-failure paths that
+  /// would otherwise hide an asset from source-list UIs:
+  ///
+  ///   - `"balance_too_small"` — the wallet's spendable balance
+  ///     can't cover the network fee + any required rent reservation.
+  ///     [amountIn] is zero; show `"needs more <native> to swap"` in
+  ///     the row instead of dropping it.
+  ///
+  ///   - `"no_route"` — the provider (typically Jupiter Ultra on
+  ///     tiny SOL trades) reported "Failed to get quotes" at the
+  ///     resolved [amountIn]. The amount is real and reflects what
+  ///     the user could send if a route existed; show the row with
+  ///     a hint and re-quote when conditions change.
+  ///
+  /// [SwapApi.quote] / [SwapApi.quotes] still bubble these up as
+  /// errors — the user is asking for a specific trade and a silent
+  /// "no route" would be misleading there.
+  final String status;
+
+  /// Human-readable explanation when [status] is non-empty. Either
+  /// libwallet's own description ("balance does not cover network
+  /// fee + rent") or the provider's verbatim error
+  /// ("Jupiter: Failed to get quotes"). Empty when [status] is.
+  final String statusMessage;
+
   const SwapQuote({
     required this.quoteId,
     required this.provider,
@@ -107,6 +134,8 @@ class SwapQuote {
     this.approvalSpender = '',
     this.currentAllowance,
     this.neededAllowance,
+    this.status = '',
+    this.statusMessage = '',
   });
 
   factory SwapQuote.fromJson(Map<String, dynamic> json) {
@@ -143,11 +172,21 @@ class SwapQuote {
       approvalSpender: (json['approvalSpender'] as String?) ?? '',
       currentAllowance: parseAmount(json['currentAllowance']),
       neededAllowance: parseAmount(json['neededAllowance']),
+      status: (json['status'] as String?) ?? '',
+      statusMessage: (json['statusMessage'] as String?) ?? '',
     );
   }
 
   /// True when the quote has passed its server-side TTL.
   bool get isExpired => DateTime.now().isAfter(expiresAt);
+
+  /// True when this quote can be passed to [SwapApi.execute]. False
+  /// for advisory quotes returned by [SwapApi.maxSpendable] when
+  /// the wallet's balance is too small to swap or the provider has
+  /// no route at the current amount — those are returned so the UI
+  /// can keep the asset visible with a clear reason, not because
+  /// the user can act on them right now.
+  bool get isExecutable => status.isEmpty;
 }
 
 /// A token by address + decimals. Pass `address: "NATIVE"` for the

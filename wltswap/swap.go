@@ -112,11 +112,56 @@ type Quote struct {
 	// swap — equal to AmountIn.
 	NeededAllowance *wltobj.Amount `json:"neededAllowance,omitempty"`
 
+	// Status indicates whether this Quote is executable. Empty value
+	// means executable (the normal happy path). A non-empty value
+	// describes why Swap:execute will refuse to run on this quote;
+	// callers should treat such results as advisory and surface
+	// [StatusMessage] in the UI. Only Swap:maxSpendable populates
+	// this — Swap:quote / Swap:quotes still fail loudly when no
+	// route exists, because the user is asking for a specific
+	// amount and a silent "no route" would be misleading.
+	//
+	// Stable values: see the QuoteStatus* constants.
+	Status QuoteStatus `json:"status,omitempty"`
+	// StatusMessage is the provider's or libwallet's human-readable
+	// explanation for a non-empty Status (e.g. "Jupiter: Failed to
+	// get quotes — amount likely below the aggregator's floor", or
+	// "balance does not cover network fee + rent"). Empty when
+	// Status is empty.
+	StatusMessage string `json:"statusMessage,omitempty"`
+
 	// provider-internal fields — not JSON-exposed.
 	providerBlob any       `json:"-"`
 	createdAt    time.Time `json:"-"`
 	from         string    `json:"-"` // account address the quote was issued to
 }
+
+// QuoteStatus tags non-executable maxSpendable results so the host
+// can keep an asset visible in source-list UIs without trying to
+// execute. Empty means executable.
+type QuoteStatus string
+
+const (
+	// QuoteStatusOK is the implicit "no problem" status — a normal,
+	// executable Quote. Encoded as the empty string so it's omitted
+	// from JSON output entirely.
+	QuoteStatusOK QuoteStatus = ""
+	// QuoteStatusBalanceTooSmall fires when the resolved max-spendable
+	// amount is zero because the wallet's balance can't cover the
+	// network fee plus any required rent reservations. The Quote
+	// carries TokenIn, TokenOut, AmountIn=0, and a StatusMessage
+	// explaining the shortfall. Hosts should show the asset with a
+	// "needs more SOL to swap" hint rather than hiding it.
+	QuoteStatusBalanceTooSmall QuoteStatus = "balance_too_small"
+	// QuoteStatusNoRoute fires when the provider explicitly reported
+	// no route (Jupiter Ultra's "Failed to get quotes" on dust-sized
+	// trades is the canonical case). The Quote carries the resolved
+	// AmountIn and a StatusMessage but no AmountOut / Route /
+	// providerBlob — Swap:execute would fail on it, so the host
+	// should treat it as informational and re-quote if conditions
+	// change (price moves, user adds funds, etc.).
+	QuoteStatusNoRoute QuoteStatus = "no_route"
+)
 
 // RouteHop is one step in a multi-hop swap path. Purely informative
 // — the aggregator decides the actual routing.
@@ -337,6 +382,16 @@ func swapQuotes(ctx context.Context, req *QuoteRequest) (any, error) {
 // Equivalent to calling Swap:quote with amountIn="MAX". Provided as
 // a discrete endpoint so callers don't need to special-case the
 // sentinel string in their typed clients.
+//
+// Unlike Swap:quote, soft failures land as Quote results carrying
+// a non-empty [QuoteStatus] instead of an error: the wallet's
+// balance can't cover fees + rent (QuoteStatusBalanceTooSmall), or
+// the provider had no route at the resolved amount (typically
+// dust-sized trades — QuoteStatusNoRoute). The intent is to let
+// host source-list UIs keep the asset visible with a clear
+// explanation instead of having to filter on error type. Hard
+// failures (invalid request, transport error, provider unavailable)
+// still surface as errors.
 func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
@@ -367,10 +422,87 @@ func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 		return nil, err
 	}
 	if amt == "0" || amt == "" {
-		return nil, newErr(ErrCodeInvalidRequest, "max-spendable amount is zero — balance does not cover network fee + ATA rent")
+		// Balance can't cover fee + rent. Return an informational
+		// Quote so the asset stays visible in source-list UIs; the
+		// host can render the StatusMessage as a hint and prompt
+		// the user to top up rather than silently hiding the row.
+		return buildAdvisoryQuote(n, req, "0", QuoteStatusBalanceTooSmall,
+			"balance does not cover network fee + rent"), nil
 	}
 	req.AmountIn = amt
-	return runQuote(ctx, n, acct, req)
+	q, err := runQuote(ctx, n, acct, req)
+	if err != nil {
+		// Distinguish "no route at this amount" (a soft failure —
+		// the asset is technically swappable) from hard errors that
+		// the caller really does need to surface as failures.
+		if isNoRouteError(err) {
+			return buildAdvisoryQuote(n, req, amt, QuoteStatusNoRoute, err.Error()), nil
+		}
+		return nil, err
+	}
+	return q, nil
+}
+
+// buildAdvisoryQuote constructs a non-executable Quote that carries
+// the resolved AmountIn and a [QuoteStatus] so the host can keep the
+// asset visible without trying to execute. The result is NOT inserted
+// into the quoteCache (no QuoteId — Swap:execute would refuse it
+// anyway), and Route / providerBlob are deliberately nil.
+//
+// AmountOut and MinAmountOut are populated with zero-valued Amounts
+// carrying tokenOut's decimals — the advisory has no estimated
+// output, but a fully-typed Amount keeps the wire shape valid for
+// typed clients that expect non-null fields. The status field is
+// the load-bearing signal; clients should branch on it rather than
+// inspecting the placeholder zero-out values.
+func buildAdvisoryQuote(n *wltnet.Network, req *QuoteRequest, amountIn string, status QuoteStatus, message string) *Quote {
+	var providerName, providerLabel string
+	if provider, err := selectProvider(n, req.Provider); err == nil && provider != nil {
+		providerName = provider.Name()
+		providerLabel = providerDisplayLabel(provider.Name())
+	}
+	amount, _ := new(big.Int).SetString(amountIn, 10)
+	if amount == nil {
+		amount = new(big.Int)
+	}
+	zeroOut := wltobj.NewAmountRaw(new(big.Int), req.TokenOut.Decimals)
+	return &Quote{
+		Provider:      providerName,
+		ProviderLabel: providerLabel,
+		Chain:         n.Type,
+		TokenIn:       req.TokenIn,
+		TokenOut:      req.TokenOut,
+		AmountIn:      wltobj.NewAmountRaw(amount, req.TokenIn.Decimals),
+		AmountOut:     zeroOut,
+		MinAmountOut:  zeroOut,
+		SlippageBps:   req.SlippageBps,
+		Status:        status,
+		StatusMessage: message,
+	}
+}
+
+// isNoRouteError returns true when err carries the canonical
+// provider "no route" signal — Jupiter Ultra's "Failed to get
+// quotes" (HTTP 400 wrapped as ErrCodeProviderBadRequest) and the
+// equivalent dFlow / 1inch surfaces. Used by Swap:maxSpendable to
+// downgrade these to an advisory Quote rather than a hard error.
+func isNoRouteError(err error) bool {
+	sw, ok := AsSwapError(err)
+	if !ok {
+		return false
+	}
+	if sw.Code != ErrCodeProviderBadRequest {
+		return false
+	}
+	msg := strings.ToLower(sw.Message)
+	// Tolerate variants across providers: "failed to get quotes"
+	// (Jupiter), "no route" (1inch generic), "no liquidity" (dFlow
+	// fallback wording). Matching on substrings keeps the check
+	// stable against minor wording tweaks upstream.
+	return strings.Contains(msg, "failed to get quotes") ||
+		strings.Contains(msg, "no route") ||
+		strings.Contains(msg, "no liquidity") ||
+		strings.Contains(msg, "insufficient liquidity")
 }
 
 // runQuote drives the provider call + cache, after the caller has

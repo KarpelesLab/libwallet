@@ -1,3 +1,22 @@
+## 0.4.35
+
+- **Added: `SwapQuote.status` + `SwapQuote.statusMessage` + `SwapQuote.isExecutable`.**
+  `SwapApi.maxSpendable` previously errored out on two soft-failure
+  paths — the wallet's spendable balance can't cover network fee +
+  rent, or the provider returned no route at the resolved amount
+  (Jupiter's "Failed to get quotes" on dust-sized SOL trades).
+  Hosts that built source-list UIs by hiding any asset that
+  errored ended up hiding assets the user actually held: e.g.,
+  swap most of your SOL → USDC, end up with 0.0061 SOL, and SOL
+  disappears from the "from" picker even though the wallet still
+  owns it. `maxSpendable` now returns a `SwapQuote` with
+  `status == "balance_too_small"` or `status == "no_route"` and a
+  human-readable `statusMessage` instead. `isExecutable` returns
+  false for these — show the row with the message and skip
+  `SwapApi.execute` until the conditions change. `SwapApi.quote` /
+  `SwapApi.quotes` still error on no-route (the user is asking
+  for a specific trade and a silent no-route would be misleading).
+
 ## 0.4.34
 
 - **Added: `ChainMigration.curve`** for the modern `Wallet:promoteMnemonic`
