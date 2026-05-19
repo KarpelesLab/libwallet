@@ -148,27 +148,44 @@ jobs:
         with:
           channel: stable
 
-      - name: Boot iOS simulator
+      - name: Create + boot fresh iOS simulator
         run: |
-          DEVICE_ID=$(xcrun simctl list devices available -j | \
-            python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          for runtime, devices in data['devices'].items():
-              if 'iOS' in runtime:
-                  for d in devices:
-                      if 'iPhone' in d['name'] and d['isAvailable']:
-                          print(d['udid'])
-                          sys.exit(0)
-          sys.exit(1)
-          ")
+          set -euo pipefail
+          # Create a NEW simulator per job rather than reusing whatever
+          # Xcode preinstalled in the runner image. Preinstalled sims
+          # carry stale state from the image build (and from prior runs
+          # on the same hosted runner) — including a corrupted
+          # installd / FrontBoard mapping that surfaces as "Application
+          # ... is unknown to FrontBoard" at flutter test's launch.
+          # A fresh sim is the canonical "known clean state".
+          #
+          # Picks the latest available iOS runtime + latest iPhone
+          # device type the runner has, so we automatically track
+          # Apple's current Xcode/simctl shipping. Pinning to a
+          # specific iOS version would drift as the macos-latest image
+          # rolls forward.
+          RUNTIME=$(xcrun simctl list runtimes -j \
+            | jq -r '.runtimes | map(select(.platform=="iOS" and .isAvailable)) | sort_by(.version) | last | .identifier')
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j \
+            | jq -r '.devicetypes | map(select(.identifier | startswith("com.apple.CoreSimulator.SimDeviceType.iPhone"))) | sort_by(.identifier) | last | .identifier')
+          if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
+            echo "No iOS runtime found"; exit 1
+          fi
+          if [ -z "$DEVICE_TYPE" ] || [ "$DEVICE_TYPE" = "null" ]; then
+            echo "No iPhone device type found"; exit 1
+          fi
+          echo "runtime    = $RUNTIME"
+          echo "deviceType = $DEVICE_TYPE"
+
+          DEVICE_ID=$(xcrun simctl create "libwallet-test-sim" "$DEVICE_TYPE" "$RUNTIME")
           echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
+          echo "deviceId   = $DEVICE_ID"
+
           xcrun simctl boot "$DEVICE_ID"
-          # Block until the simulator is fully booted. Without this,
-          # `simctl boot` returns as soon as the boot process starts
-          # but services (including the Dart VM discovery path) may
-          # not yet be ready — flutter test's attach can then silently
-          # retry-then-timeout. This matches ~40% of the flaky runs.
+          # Block until launchd reports Status=Booted, Status Type=Usable.
+          # Without this, simctl boot returns as soon as the boot
+          # process starts, but installd / SpringBoard may not yet be
+          # ready and the subsequent flutter test install/launch races.
           xcrun simctl bootstatus "$DEVICE_ID" -b
 
       - name: Install Flutter dependencies
@@ -177,160 +194,74 @@ jobs:
 
       - name: Run iOS integration tests
         working-directory: dart/test_app
-        # `flutter test` on the iOS simulator periodically hangs at
-        # "Waiting for VM Service port to be available" — a known
-        # Flutter + sim mDNS / port-publish race that has nothing to
-        # do with libwallet (confirmed: setUpAll never starts on hung
-        # runs).
-        #
-        # Originally we relied on Flutter's internal ~7m43s timeout
-        # to fire with '0 tests passed', and our retry loop scanned
-        # the log for that signature. As of recent stable channels
-        # that timeout no longer fires — the process just hangs
-        # indefinitely until the GHA job-level 30-min cap kills the
-        # whole step (no chance for the retry to engage).
-        #
-        # Fix: a per-attempt watchdog (PER_ATTEMPT_TIMEOUT). Each
-        # attempt forks `flutter test` in the background and a
-        # sleep-then-kill subshell guards it. If the watchdog fires
-        # we treat the result identically to the old "0 tests
-        # passed" signature: assume attach hang, reboot sim, retry.
+        # Single attempt — the fresh-sim setup above gives us a
+        # clean install database / FrontBoard state, which was the
+        # root cause of the recurring "unknown to FrontBoard"
+        # failure. The per-attempt watchdog stays so the job doesn't
+        # hang for the 30-min GHA cap if flutter test deadlocks on
+        # the VM Service attach (the secondary mDNS race); if that
+        # happens we surface a clean failure with the captured sim
+        # log instead of timing out the whole job.
         run: |
           set +e
           LOG=$RUNNER_TEMP/flutter-test.log
           SIMLOG=$RUNNER_TEMP/sim-console.log
-          PER_ATTEMPT_TIMEOUT=600   # 10 minutes per attempt → 2 attempts well under the 30-min job cap
+          PER_ATTEMPT_TIMEOUT=900   # 15 minutes; integration test typically lands in ~3-8 min
 
-          # Dump what `flutter test` actually accepts so we can see
-          # if --host-vmservice-port / --dds-port are recognized
-          # (they're `flutter run` flags historically — some Flutter
-          # versions forward them through integration_test, others
-          # reject). Captured once; not fatal if it errors.
-          echo "::group::flutter test --help"
-          flutter test --help 2>&1 | head -80
-          echo "::endgroup::"
+          # Stream the sim's console in the background so failure
+          # diagnostics can show what the test app actually printed
+          # — crucial for any VM Service attach hang where flutter's
+          # own logs go silent.
+          xcrun simctl spawn "$DEVICE_ID" log stream \
+            --style compact \
+            --level debug \
+            --predicate 'subsystem CONTAINS "flutter" OR processImagePath CONTAINS "Runner" OR eventMessage CONTAINS "Dart VM"' \
+            > "$SIMLOG" 2>&1 &
+          SIMLOG_PID=$!
 
-          for attempt in 1 2; do
-            echo "::group::flutter test attempt $attempt (timeout ${PER_ATTEMPT_TIMEOUT}s)"
-            : > "$LOG"
-            : > "$SIMLOG"
+          # Direct redirect (not piped through tee) so $! captures the
+          # flutter PID — the watchdog needs to kill that PID, not a
+          # tee process buffering its output.
+          flutter test --verbose \
+            --dds-port=50301 \
+            integration_test/libwallet_test.dart \
+            -d "$DEVICE_ID" > "$LOG" 2>&1 &
+          FLUTTER_PID=$!
+          tail -f "$LOG" &
+          TAIL_PID=$!
 
-            # Stream the sim's console in the background so we can see
-            # what the test app actually printed — crucial for the
-            # "VM Service never advertised" hang, where flutter's own
-            # logs go silent during the attach wait but the app may
-            # still be logging via os_log / print inside the sim.
-            # `log stream --predicate` filters to our app's process +
-            # the dartvm / DartWorker categories where the VM Service
-            # bootstrap prints "The Dart VM Service is listening on ..."
-            xcrun simctl spawn "$DEVICE_ID" log stream \
-              --style compact \
-              --level debug \
-              --predicate 'subsystem CONTAINS "flutter" OR processImagePath CONTAINS "Runner" OR eventMessage CONTAINS "Dart VM"' \
-              > "$SIMLOG" 2>&1 &
-            SIMLOG_PID=$!
+          # Watchdog: SIGTERM after the budget, SIGKILL 5 s later if
+          # flutter ignores TERM. Cancelled below as soon as flutter
+          # exits naturally so a clean run doesn't sleep out the budget.
+          ( sleep "$PER_ATTEMPT_TIMEOUT" && \
+            kill -TERM $FLUTTER_PID 2>/dev/null && \
+            sleep 5 && \
+            kill -KILL $FLUTTER_PID 2>/dev/null ) &
+          WATCHDOG_PID=$!
 
-            # Run flutter test with output going DIRECTLY to the log,
-            # not through a tee pipeline. Putting tee in the pipeline
-            # makes `$!` capture tee's PID instead of flutter's, which
-            # broke the previous attempt at this watchdog (kill targeted
-            # tee, flutter kept running). With a direct redirect, $! is
-            # genuinely the flutter PID and the watchdog can take it
-            # down. We get live console output via a background `tail
-            # -f` of the same log.
-            #
-            # `flutter test --help` confirmed --dds-port is supported
-            # but --host-vmservice-port is `flutter run`-only; prior
-            # attempt errored fast with "Could not find an option named
-            # '--host-vmservice-port'". We still pass --dds-port so DDS
-            # doesn't fight over a random port, but VM Service discovery
-            # continues to rely on Bonjour/mDNS — which is the actual
-            # thing that breaks on macos-latest + iOS 18.5 sim. The
-            # SIMLOG capture above will tell us what the app actually
-            # prints on startup so we can see whether the VM Service is
-            # even coming up on the sim side.
-            flutter test --verbose \
-              --dds-port=50301 \
-              integration_test/libwallet_test.dart \
-              -d "$DEVICE_ID" > "$LOG" 2>&1 &
-            FLUTTER_PID=$!
-            tail -f "$LOG" &
-            TAIL_PID=$!
+          wait $FLUTTER_PID 2>/dev/null
+          EXIT=$?
+          kill $WATCHDOG_PID 2>/dev/null
+          wait $WATCHDOG_PID 2>/dev/null
+          kill $SIMLOG_PID 2>/dev/null
+          wait $SIMLOG_PID 2>/dev/null
+          kill $TAIL_PID 2>/dev/null
+          wait $TAIL_PID 2>/dev/null
 
-            # Watchdog: SIGTERM after the budget, SIGKILL 5 s later if
-            # flutter ignores TERM. The trailing `wait $FLUTTER_PID`
-            # below returns as soon as flutter exits, then we cancel
-            # the watchdog so a clean run doesn't sleep out the budget.
-            ( sleep "$PER_ATTEMPT_TIMEOUT" && \
-              kill -TERM $FLUTTER_PID 2>/dev/null && \
-              sleep 5 && \
-              kill -KILL $FLUTTER_PID 2>/dev/null ) &
-            WATCHDOG_PID=$!
-
-            wait $FLUTTER_PID 2>/dev/null
-            EXIT=$?
-            kill $WATCHDOG_PID 2>/dev/null
-            wait $WATCHDOG_PID 2>/dev/null
-            kill $SIMLOG_PID 2>/dev/null
-            wait $SIMLOG_PID 2>/dev/null
-            kill $TAIL_PID 2>/dev/null
-            wait $TAIL_PID 2>/dev/null
+          if [ "$EXIT" != "0" ]; then
+            echo "::group::iOS simulator console (last 200 lines)"
+            tail -200 "$SIMLOG" 2>/dev/null || echo "(no sim log captured)"
             echo "::endgroup::"
+          fi
+          exit "$EXIT"
 
-            # Dump the captured sim console log so failures are
-            # diagnosable. Filtered on boot so we're not drowning
-            # in unrelated system-process output.
-            if [ "$EXIT" != "0" ]; then
-              echo "::group::iOS simulator console (last 200 lines)"
-              tail -200 "$SIMLOG" 2>/dev/null || echo "(no sim log captured)"
-              echo "::endgroup::"
-            fi
-
-            if [ "$EXIT" = "0" ]; then
-              exit 0
-            fi
-
-            # Classify: genuine test failure vs. infra glitch.
-            #
-            # The only reliable "genuine failure" signal is flutter's
-            # canonical end-of-run line `Some tests failed.` — it's
-            # printed iff the run actually executed tests and at least
-            # one assertion failed. Everything else that exits non-zero
-            # WITHOUT reaching that line never got a test to run:
-            #   - watchdog SIGTERM/SIGKILL (exit 143/137) — VM Service
-            #     attach hang, the app launched but flutter couldn't
-            #     attach to the Dart VM;
-            #   - "unknown to FrontBoard" / FBSOpenApplicationService
-            #     ErrorDomain — the simulator's install database lost
-            #     the app bundle, so the launch itself failed;
-            #   - a plain crash before setUpAll.
-            # All three are macos-runner / iOS-simulator infra flakes
-            # unrelated to libwallet; they clear on a fresh simulator.
-            #
-            # Retrying a genuine compile error or a deterministic test
-            # failure just burns one extra cycle then fails the same
-            # way — no bug is masked — so the worst case of this
-            # broader retry is slightly slower red CI, never a green
-            # CI that should be red.
-            if grep -q "Some tests failed\." "$LOG"; then
-              echo "flutter test: genuine test failure (exit $EXIT) — not retrying"
-              exit "$EXIT"
-            fi
-            if [ "$attempt" = "1" ]; then
-              echo "Attempt 1 failed without running tests (exit $EXIT) — likely a"
-              echo "simulator infra flake. Erasing the sim to a pristine state and retrying."
-              # Full erase, not just reboot: the "unknown to FrontBoard"
-              # failure is a corrupt install database — only `erase`
-              # clears it. erase requires the device shut down first.
-              xcrun simctl shutdown "$DEVICE_ID" || true
-              xcrun simctl erase "$DEVICE_ID" || true
-              xcrun simctl boot "$DEVICE_ID"
-              xcrun simctl bootstatus "$DEVICE_ID" -b
-              continue
-            fi
-          done
-          echo "Both attempts failed before any test ran — persistent simulator infra issue"
-          exit 1
+      - name: Cleanup simulator
+        if: always()
+        run: |
+          if [ -n "${DEVICE_ID:-}" ]; then
+            xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
+            xcrun simctl delete "$DEVICE_ID" 2>/dev/null || true
+          fi
 
   # Android emulator integration tests (FFI via c-shared)
   test-android:
