@@ -57,7 +57,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 )
@@ -140,9 +140,18 @@ type joinSignResult struct {
 // wdrone falls back to the same shape stored in the Verify row's Data
 // column.
 type initPayload struct {
-	Sid       string      `json:"sid"`
-	Type      string      `json:"type"`
-	Curve     string      `json:"curve"`
+	Sid string `json:"sid"`
+	Type string `json:"type"`
+	// Curve is the TSS curve ("secp256k1" or "ed25519"). Wdrone uses
+	// this to validate the share material on disk matches.
+	Curve string `json:"curve"`
+	// Protocol selects the TSS protocol the peers should run. Recognised
+	// values are "" / "legacy" (gg18 / eddsatss — kept only for existing
+	// wallet sign / reshare paths), "dkls23" (secp256k1, DKLs23), and
+	// "frost" (ed25519, FROST per RFC 9591). Empty is treated as legacy
+	// for backwards compatibility; new ceremonies should pass an
+	// explicit modern value.
+	Protocol  string      `json:"protocol,omitempty"`
 	Threshold int         `json:"threshold"`
 	Peers     []*joinPeer `json:"peers"`
 	Digest    string      `json:"digest,omitempty"`
@@ -311,10 +320,7 @@ func apiInitiateKeygen(ctx *apirouter.Context, in initiateKeygenInput) (any, err
 		Id:        xuid.New("wlt"),
 		Name:      in.Name,
 		Curve:     "ed25519",
-		// ClawdWallet keygen still runs through eddsatss in Stage 1;
-		// Step 4 of the protocol-modernization track will swap this
-		// for ProtocolFROST once the dispatch + frosttss adapter land.
-		Protocol:  ProtocolLegacyEdDSA,
+		Protocol:  ProtocolFROST,
 		Threshold: 1,
 		Created:   now,
 		Modified:  now,
@@ -387,6 +393,7 @@ func apiInitiateKeygen(ctx *apirouter.Context, in initiateKeygenInput) (any, err
 		Sid:       sid,
 		Type:      "keygen",
 		Curve:     "ed25519",
+		Protocol:  "frost",
 		Threshold: wallet.Threshold,
 		Peers:     in.Peers,
 	}
@@ -406,14 +413,13 @@ func apiInitiateKeygen(ctx *apirouter.Context, in initiateKeygenInput) (any, err
 	}
 	sendCancel()
 
-	// PartyCount = total committee, threshold = 1 (Stage 1 — same as
-	// existing initializeEdDSAWallet).
+	// PartyCount = total committee, threshold = 1 (Stage 1).
 	params := tss.NewParameters(curveEC, tssctx, mePartyID, len(sids), wallet.Threshold)
 	params.SetBroker(hub.local[mePartyID.Id])
 
-	kg, err := eddsatss.NewKeygen(ctx, params)
+	kg, err := frosttss.NewKeygen(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("initiateKeygen: failed to start eddsa keygen: %w", err)
+		return nil, fmt.Errorf("initiateKeygen: failed to start frost keygen: %w", err)
 	}
 
 	// Bound the wait so a missing peer doesn't pin the request forever.
@@ -422,28 +428,26 @@ func apiInitiateKeygen(ctx *apirouter.Context, in initiateKeygenInput) (any, err
 	timer := time.NewTimer(5 * time.Minute)
 	defer timer.Stop()
 
-	var keyData *eddsatss.Key
+	var keyData *frosttss.Key
 	select {
 	case keyData = <-kg.Done:
 		// fallthrough
 	case err := <-kg.Err:
-		return nil, fmt.Errorf("initiateKeygen: eddsa keygen failed: %w", err)
+		return nil, fmt.Errorf("initiateKeygen: frost keygen failed: %w", err)
 	case <-ctx.Done():
 		return nil, fmt.Errorf("initiateKeygen: cancelled: %w", ctx.Err())
 	case <-timer.C:
 		return nil, errors.New("initiateKeygen: timed out waiting for committee")
 	}
 	if keyData == nil {
-		return nil, errors.New("initiateKeygen: eddsa keygen produced no key")
+		return nil, errors.New("initiateKeygen: frost keygen produced no key")
 	}
-	wk.eddata = keyData
+	wk.frostData = keyData
 
-	// Persist the canonical compressed Ed25519 pubkey (the on-curve
-	// serialization tss-lib actually signs with). The historical X-coord
-	// encoding bug is repaired centrally by EnsureEd25519Pubkey, which we
-	// call below after save — but we set the right value here too so
-	// fresh wallets don't need the repair path.
-	pubBytes := keyData.EDDSAPub.ToEd25519PubKey().Serialize()
+	// FROST emits the canonical compressed Ed25519 public key directly
+	// from key.GroupPublicKey — no X-coord repair path to worry about
+	// the way the legacy eddsatss code did.
+	pubBytes := keyData.GroupPublicKey.ToEd25519PubKey().Serialize()
 	wallet.Pubkey = base64.RawURLEncoding.EncodeToString(pubBytes)
 
 	// Encrypt the share. For Type=RemoteKey this uploads the share blob
@@ -571,13 +575,13 @@ func apiJoinSign(ctx *apirouter.Context, in joinSignInput) (any, error) {
 	sid := sidFromRemoteKey(in.RemoteKey)
 
 	// Self-heal the persisted pubkey before signing — see the analogous
-	// repair inside Wallet.subSign. Cheap and safe to run every time.
+	// repair inside Wallet.subSign. The repair is only meaningful for
+	// legacy eddsatss wallets where the original X-coord encoding bug
+	// could land. FROST wallets always persist the canonical key, so
+	// the call is a no-op there but still cheap.
 	_, _ = EnsureEd25519Pubkey(e, wallet, []*wltsign.KeyDescription{{Id: localKey.Id.String(), Type: "RemoteKey", Key: in.RemoteKey}})
 
-	eddata, err := localKey.decryptEdDSA(&wltsign.KeyDescription{Id: localKey.Id.String(), Type: "RemoteKey", Key: in.RemoteKey}, keySignPurpose)
-	if err != nil {
-		return nil, fmt.Errorf("joinSign: failed to decrypt local share: %w", err)
-	}
+	kd := &wltsign.KeyDescription{Id: localKey.Id.String(), Type: "RemoteKey", Key: in.RemoteKey}
 
 	curveEC := tss.Edwards()
 	tssctx := tss.NewPeerContext(sids)
@@ -616,23 +620,54 @@ func apiJoinSign(ctx *apirouter.Context, in joinSignInput) (any, error) {
 	params := tss.NewParameters(curveEC, tssctx, mePartyID, len(sids), wallet.Threshold)
 	params.SetBroker(hub.local[mePartyID.Id])
 
+	timer := time.NewTimer(2 * time.Minute)
+	defer timer.Stop()
+
+	// Dispatch on the wallet's protocol so FROST wallets call
+	// frostKey.NewSigning(ctx, msg, params) while legacy eddsatss
+	// wallets keep using eddata.NewSigning. Both emit a 64-byte
+	// Ed25519 signature.
+	if wallet.resolveProtocol() == ProtocolFROST {
+		frostKey, err := localKey.decryptFrost(kd, keySignPurpose)
+		if err != nil {
+			return nil, fmt.Errorf("joinSign: failed to decrypt frost share: %w", err)
+		}
+		sg, err := frostKey.NewSigning(ctx, digest, params)
+		if err != nil {
+			return nil, fmt.Errorf("joinSign: failed to start frost signing: %w", err)
+		}
+		select {
+		case sd := <-sg.Done:
+			if len(sd.Signature) != 64 {
+				return nil, fmt.Errorf("joinSign: expected 64-byte signature, got %d", len(sd.Signature))
+			}
+			return &joinSignResult{Signature: base64.StdEncoding.EncodeToString(sd.Signature)}, nil
+		case err := <-sg.Err:
+			return nil, fmt.Errorf("joinSign: frost signing failed: %w", err)
+		case <-ctx.Done():
+			return nil, fmt.Errorf("joinSign: cancelled: %w", ctx.Err())
+		case <-timer.C:
+			return nil, errors.New("joinSign: timed out waiting for committee")
+		}
+	}
+
+	// Legacy eddsatss path — kept for wallets created before FROST
+	// landed. Existing shares can still sign here.
+	eddata, err := localKey.decryptEdDSA(kd, keySignPurpose)
+	if err != nil {
+		return nil, fmt.Errorf("joinSign: failed to decrypt local share: %w", err)
+	}
 	msg := new(big.Int).SetBytes(digest)
 	sg, err := eddata.NewSigning(ctx, msg, params)
 	if err != nil {
 		return nil, fmt.Errorf("joinSign: failed to start eddsa signing: %w", err)
 	}
-
-	timer := time.NewTimer(2 * time.Minute)
-	defer timer.Stop()
-
 	select {
 	case sd := <-sg.Done:
 		if len(sd.Signature) != 64 {
 			return nil, fmt.Errorf("joinSign: expected 64-byte signature, got %d", len(sd.Signature))
 		}
-		return &joinSignResult{
-			Signature: base64.StdEncoding.EncodeToString(sd.Signature),
-		}, nil
+		return &joinSignResult{Signature: base64.StdEncoding.EncodeToString(sd.Signature)}, nil
 	case err := <-sg.Err:
 		return nil, fmt.Errorf("joinSign: eddsa signing failed: %w", err)
 	case <-ctx.Done():
