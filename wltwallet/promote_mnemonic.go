@@ -23,7 +23,6 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/secp256k1/ecckd"
 	"github.com/KarpelesLab/xuid"
 	"github.com/tyler-smith/go-bip39"
@@ -34,9 +33,16 @@ import (
 // migrate. Typically populated from a Wallet:probeActivity row the
 // user ticked.
 type ChainMigration struct {
-	Network        string `json:"network"`        // display label (e.g. "ethereum", "bitcoin"); copied through to the result
-	DerivationPath string `json:"derivationPath"` // BIP32 path at which to derive the privkey; empty = Sollet Solana convention
+	Network        string `json:"network"`        // display label (e.g. "ethereum", "bitcoin", "solana"); copied through to the result
+	DerivationPath string `json:"derivationPath"` // BIP32 (secp256k1) or SLIP-0010 (ed25519) path; empty = Sollet Solana convention for ed25519, master for secp256k1
 	Name           string `json:"name,omitempty"` // optional name for the newly-created wallet
+	// Curve selects the chain's signing curve. Empty defaults to
+	// "secp256k1" for backwards-compat with callers from before the
+	// ed25519 migration path existed. Set to "ed25519" to materialise
+	// a FROST(Ed25519) wallet — Solana, Sui, etc. Each chain in the
+	// list can pick independently, so a single mnemonic can fan out
+	// to a Bitcoin/Ethereum wallet AND a Solana wallet in one call.
+	Curve string `json:"curve,omitempty"`
 }
 
 // apiWalletPromoteMnemonic implements Wallet/{id}:promoteMnemonic.
@@ -83,13 +89,13 @@ func apiWalletPromoteMnemonic(ctx *apirouter.Context, in struct {
 // caller is expected to delete it once they've validated each
 // migrated wallet is operational.
 //
-// secp256k1 only. Ed25519 mnemonic migration ships in a follow-up.
+// The source wallet's Curve is irrelevant — the same BIP39 PBKDF2
+// seed feeds both BIP32 (secp256k1) and SLIP-0010 (ed25519)
+// derivation, so one mnemonic can migrate to chains on either curve
+// independently. Each ChainMigration picks via its Curve field.
 func (w *Wallet) PromoteMnemonic(ctx context.Context, oldKeys []*wltsign.KeyDescription, chains []ChainMigration, newKeys []*wltsign.KeyDescription, newThreshold int) ([]*Wallet, error) {
 	if len(w.Keys) != 1 || w.Keys[0].Schema != "mnemonic" {
 		return nil, errors.New("PromoteMnemonic requires a mnemonic-backed source wallet")
-	}
-	if w.Curve != "secp256k1" {
-		return nil, fmt.Errorf("PromoteMnemonic currently supports secp256k1 source wallets only (got %q)", w.Curve)
 	}
 	if len(oldKeys) != 1 {
 		return nil, fmt.Errorf("PromoteMnemonic: Old must contain exactly 1 KeyDescription (got %d)", len(oldKeys))
@@ -133,47 +139,82 @@ func (w *Wallet) PromoteMnemonic(ctx context.Context, oldKeys []*wltsign.KeyDesc
 // TSS resharing with the derived privkey as Xi, and returns the new
 // Wallet with its committee Keys populated and encrypted.
 func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigration, newKeys []*wltsign.KeyDescription, newThreshold int) (*Wallet, error) {
-	// 1) Derive privkey + chaincode at the target path via full BIP32
-	//    (hardened steps supported — that's the whole point of the
-	//    migration flow).
-	xk, err := ecckd.FromBitcoinSeed(seed)
+	curve := c.Curve
+	if curve == "" {
+		curve = "secp256k1"
+	}
+	switch curve {
+	case "secp256k1", "ed25519":
+	default:
+		return nil, fmt.Errorf("migrateOneChain: unsupported curve %q for chain %q", curve, c.Network)
+	}
+
+	// 1) Derive the privkey + chaincode at the target path. derivePrivkeyFromSeed
+	//    handles both BIP32 (secp256k1) and SLIP-0010 (ed25519 hardened-only).
+	//    The chaincode lives on the parent for secp256k1; for ed25519 we
+	//    compute it via the same SLIP-0010 master walk so HD child
+	//    derivation off the resulting wallet stays consistent.
+	derivedPriv, err := derivePrivkeyFromSeed(seed, curve, c.DerivationPath)
 	if err != nil {
-		return nil, fmt.Errorf("bip32 master: %w", err)
+		return nil, fmt.Errorf("derive %s privkey at %q: %w", curve, c.DerivationPath, err)
 	}
-	if steps, err := parseBip32Path(c.DerivationPath); err != nil {
-		return nil, err
-	} else if len(steps) > 0 {
-		xk, err = xk.Derive(steps)
-		if err != nil {
-			return nil, fmt.Errorf("bip32 derive %q: %w", c.DerivationPath, err)
-		}
-	}
-	if !xk.IsPrivate() || len(xk.KeyData) != 32 {
-		return nil, fmt.Errorf("bip32 derive %q produced non-private key data", c.DerivationPath)
-	}
-	derivedPriv := make([]byte, 32)
-	copy(derivedPriv, xk.KeyData)
 	defer zero(derivedPriv)
-	derivedCC := make([]byte, len(xk.ChainCode))
-	copy(derivedCC, xk.ChainCode)
 
-	pub := secp256k1.PrivKeyFromBytes(derivedPriv).PubKey()
+	// Chaincode: for secp256k1, BIP32 returns it alongside the privkey
+	// at the derivation step. For ed25519 we use the SLIP-0010 master
+	// chaincode (Solana wallets typically don't rely on the chaincode
+	// for further non-hardened derivation, but persisting it keeps the
+	// wallet's HD metadata complete).
+	var derivedCC []byte
+	switch curve {
+	case "secp256k1":
+		xk, err := ecckd.FromBitcoinSeed(seed)
+		if err != nil {
+			return nil, fmt.Errorf("bip32 master: %w", err)
+		}
+		if steps, err := parseBip32Path(c.DerivationPath); err != nil {
+			return nil, err
+		} else if len(steps) > 0 {
+			xk, err = xk.Derive(steps)
+			if err != nil {
+				return nil, fmt.Errorf("bip32 derive %q: %w", c.DerivationPath, err)
+			}
+		}
+		derivedCC = make([]byte, len(xk.ChainCode))
+		copy(derivedCC, xk.ChainCode)
+	case "ed25519":
+		_, cc, err := masterFromSeed(seed, "ed25519")
+		if err != nil {
+			return nil, fmt.Errorf("slip-0010 master: %w", err)
+		}
+		derivedCC = cc
+	}
 
-	// 2) Shell out the new Wallet + thin WalletKey rows. dkls23 doesn't
-	//    need Paillier preparams; the shares are materialised by the
-	//    reshare below. Threshold is scratch until reshare completes.
+	pubBytes, err := derivePub(curve, derivedPriv)
+	if err != nil {
+		return nil, fmt.Errorf("derive pub: %w", err)
+	}
+
+	// 2) Shell out the new Wallet + thin WalletKey rows. Modern
+	//    protocols don't need Paillier preparams; the shares are
+	//    materialised by the reshare below. Threshold is scratch
+	//    until reshare completes.
 	name := c.Name
 	if strings.TrimSpace(name) == "" {
 		name = w.Name + " / " + c.Network
 	}
 	now := time.Now()
+	protocol := ProtocolDKLS
+	if curve == "ed25519" {
+		protocol = ProtocolFROST
+	}
 	nw := &Wallet{
 		Id:        xuid.New("wlet"),
 		Name:      name,
-		Curve:     "secp256k1",
-		Protocol:  ProtocolDKLS,
+		Curve:     curve,
+		Protocol:  protocol,
 		Threshold: 0,
-		Pubkey:    base64.RawURLEncoding.EncodeToString(pub.SerializeCompressed()),
+		Pubkey:    base64.RawURLEncoding.EncodeToString(pubBytes),
 		Chaincode: base64.RawURLEncoding.EncodeToString(derivedCC),
 		Created:   now,
 		Modified:  now,
@@ -200,12 +241,19 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 	finalScope := root.sub(nk, nk+1)
 	finalScope.report(0)
 
-	// 3) Stand up an importer WalletKey for promoteToDkls23 so the
-	//    helper can build a deterministic importer PartyID. The row is
-	//    in-memory only — it never reaches the database.
+	// 3) Stand up an importer WalletKey for the curve-appropriate
+	//    promote helper. The shell row is in-memory only — never
+	//    reaches the database.
 	importerShell := &WalletKey{Id: xuid.New("wkey")}
-	if err := promoteToDkls23(ctx, derivedPriv, importerShell, newWKeys, newThreshold); err != nil {
-		return nil, err
+	switch curve {
+	case "secp256k1":
+		if err := promoteToDkls23(ctx, derivedPriv, importerShell, newWKeys, newThreshold); err != nil {
+			return nil, err
+		}
+	case "ed25519":
+		if err := promoteToFrost(ctx, derivedPriv, importerShell, newWKeys, newThreshold); err != nil {
+			return nil, err
+		}
 	}
 
 	// 4) Encrypt + attach the committee, finalize the wallet's threshold.

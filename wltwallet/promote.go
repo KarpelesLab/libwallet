@@ -6,7 +6,8 @@
 // "M shares with T-threshold reconstruction".
 //
 // Scope:
-//   - secp256k1 only in this commit; ed25519 (frost) follow-up.
+//   - secp256k1 → DKLs23 (dkls23 protocol)
+//   - ed25519   → FROST (frost protocol)
 //   - No optional DerivationPath: we always promote at the wallet's
 //     existing master, so the post-promote address is identical.
 //     Promoting a mnemonic at a sub-path is a v2 feature.
@@ -16,6 +17,7 @@ package wltwallet
 import (
 	"context"
 	"crypto/elliptic"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"log"
@@ -29,6 +31,7 @@ import (
 	"github.com/KarpelesLab/secp256k1"
 	tsscrypto "github.com/KarpelesLab/tss-lib/v2/crypto"
 	"github.com/KarpelesLab/tss-lib/v2/dklstss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
@@ -62,13 +65,16 @@ func apiWalletPromote(ctx *apirouter.Context, in struct {
 }
 
 // Promote converts an imported 1-of-1 wallet (Schema "raw" or
-// "mnemonic") into a DKLs23 N-of-T TSS wallet. The master pubkey and
-// chaincode are preserved; only the storage of the signing key
-// changes. After successful promote, the original imported WalletKey
-// row is deleted and wallet.Protocol becomes "dkls23".
+// "mnemonic") into a modern N-of-T TSS wallet — DKLs23 for secp256k1,
+// FROST for ed25519. The master pubkey and chaincode are preserved;
+// only the storage of the signing key changes. After successful
+// promote, the original imported WalletKey row is deleted and
+// wallet.Protocol becomes "dkls23" or "frost".
 func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDescription, newThreshold int) error {
-	if w.Curve != "secp256k1" {
-		return fmt.Errorf("Promote currently supports secp256k1 wallets only (got %q); ed25519 promote follow-up pending", w.Curve)
+	switch w.Curve {
+	case "secp256k1", "ed25519":
+	default:
+		return fmt.Errorf("Promote: unsupported curve %q", w.Curve)
 	}
 	if len(w.Keys) != 1 {
 		return fmt.Errorf("Promote requires a 1-of-1 imported wallet (got %d keys)", len(w.Keys))
@@ -118,18 +124,28 @@ func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDes
 	finalScope := root.sub(nk, nk+1)
 	finalScope.report(0)
 
-	// 3) Run the modern import + reshare. The dkls23 path delivers fresh
-	//    dklsData on every new WalletKey; the public key is preserved by
-	//    construction (dklstss.NewResharing's oldECDSAPub binding).
-	if err := promoteToDkls23(ctx, masterPriv, imported, newWKeys, newThreshold); err != nil {
-		return err
+	// 3) Run the modern import + reshare. The path is curve-dispatched:
+	//    secp256k1 → DKLs23 (dklsData populated on each new WalletKey),
+	//    ed25519   → FROST  (frostData populated). Either way the
+	//    wallet's public key is preserved by the reshare protocol's
+	//    constant-term binding.
+	switch w.Curve {
+	case "secp256k1":
+		if err := promoteToDkls23(ctx, masterPriv, imported, newWKeys, newThreshold); err != nil {
+			return err
+		}
+		w.Protocol = ProtocolDKLS
+	case "ed25519":
+		if err := promoteToFrost(ctx, masterPriv, imported, newWKeys, newThreshold); err != nil {
+			return err
+		}
+		w.Protocol = ProtocolFROST
 	}
 
 	// 4) Encrypt + persist. wallet.Pubkey / Chaincode stay (they were
 	//    already correct on the imported wallet); we only advance the
 	//    protocol marker so the sign / reshare dispatchers route the
-	//    new shares through the dkls23 paths.
-	w.Protocol = ProtocolDKLS
+	//    new shares through the modern paths.
 	for i, kInfo := range newKeys {
 		if err := newWKeys[i].encrypt(kInfo); err != nil {
 			return fmt.Errorf("encrypt new committee key %d: %w", i, err)
@@ -275,6 +291,156 @@ func promoteToDkls23(ctx context.Context, masterPriv []byte, imported *WalletKey
 		}
 	}
 	return nil
+}
+
+// promoteToFrost is the ed25519 / FROST counterpart of
+// promoteToDkls23. The seed bytes recovered from the imported share
+// are interpreted per RFC 8032 §5.1.5: SHA-512 expansion then the
+// standard Ed25519 scalar clamp, then big-endian-rebased for big.Int
+// consumption. Passing the seed scalar directly to frosttss.ImportKey
+// would diverge from the public key Wallet.Pubkey was originally
+// computed against — every downstream Solana / Sui address would
+// break. The clamp-derived scalar is exactly what crypto/ed25519
+// signs with internally, so the GroupPublicKey lands on the same
+// curve point as the imported wallet.
+func promoteToFrost(ctx context.Context, seed []byte, imported *WalletKey, newWKeys []*WalletKey, newThreshold int) error {
+	scalar, err := ed25519SeedToScalar(seed)
+	if err != nil {
+		return err
+	}
+	defer scalar.SetInt64(0)
+
+	importerKey := new(big.Int).SetBytes(imported.Id.UUID[:])
+	importerParty := tss.NewPartyID(imported.Id.String(), imported.Id.String(), importerKey)
+
+	oldKey, err := frosttss.ImportKey(scalar, importerParty)
+	if err != nil {
+		return fmt.Errorf("frosttss.ImportKey: %w", err)
+	}
+	originalPub := oldKey.GroupPublicKey
+
+	// frosttss.NewResharing uses the legacy ReSharingParameters shape
+	// (separate old/new contexts), so the orchestration mirrors
+	// ReshareEdDSA / ReshareFrost rather than the dkls23 combined-
+	// context path.
+	oldSorted := tss.SortPartyIDs(tss.UnSortedPartyIDs{importerParty})
+	oldCtx := tss.NewPeerContext(oldSorted)
+
+	var newIds tss.UnSortedPartyIDs
+	newIdMap := make(map[int]*tss.PartyID)
+	for n, p := range newWKeys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		newIds = append(newIds, id)
+		newIdMap[n] = id
+	}
+	newSorted := tss.SortPartyIDs(newIds)
+	newCtx := tss.NewPeerContext(newSorted)
+
+	hub := newTssHub()
+	hub.addLocal(importerParty)
+	for _, id := range newSorted {
+		hub.addLocal(id)
+	}
+
+	curve := tss.Edwards()
+	var wg sync.WaitGroup
+	var reshareErr error
+	var once sync.Once
+
+	for n, p := range newWKeys {
+		params := tss.NewReSharingParameters(
+			curve, oldCtx, newCtx, newIdMap[n],
+			1, 0, // old: 1 party, threshold 0
+			len(newWKeys), newThreshold, // new
+		)
+		params.SetBroker(hub.local[newIdMap[n].Id])
+		rs, err := frosttss.NewResharing(ctx, params, nil)
+		if err != nil {
+			return fmt.Errorf("start frost promote new party %d: %w", n, err)
+		}
+		wg.Add(1)
+		go func(p *WalletKey, rs *frosttss.Resharing) {
+			defer wg.Done()
+			select {
+			case key := <-rs.Done:
+				p.frostData = key
+			case err := <-rs.Err:
+				log.Printf("Promote: frost new-committee err: %s", err)
+				once.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				once.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(p, rs)
+	}
+
+	{
+		params := tss.NewReSharingParameters(
+			curve, oldCtx, newCtx, importerParty,
+			1, 0,
+			len(newWKeys), newThreshold,
+		)
+		params.SetBroker(hub.local[importerParty.Id])
+		rs, err := frosttss.NewResharing(ctx, params, oldKey)
+		if err != nil {
+			return fmt.Errorf("start frost promote old party: %w", err)
+		}
+		wg.Add(1)
+		go func(rs *frosttss.Resharing) {
+			defer wg.Done()
+			select {
+			case <-rs.Done:
+				// importer discards: no new share for the old role.
+			case err := <-rs.Err:
+				log.Printf("Promote: frost old-committee err: %s", err)
+				once.Do(func() { reshareErr = err })
+			case <-ctx.Done():
+				once.Do(func() { reshareErr = ctx.Err() })
+			}
+		}(rs)
+	}
+
+	wg.Wait()
+	if reshareErr != nil {
+		return reshareErr
+	}
+	for i, p := range newWKeys {
+		if p.frostData == nil {
+			return fmt.Errorf("Promote: frost new committee key %d missing share data", i)
+		}
+		if p.frostData.GroupPublicKey == nil || !p.frostData.GroupPublicKey.Equals(originalPub) {
+			return fmt.Errorf("Promote: frost new committee key %d has mismatched GroupPublicKey", i)
+		}
+	}
+	return nil
+}
+
+// ed25519SeedToScalar converts a 32-byte Ed25519 seed into the
+// little-endian scalar `a` defined by RFC 8032 §5.1.5: SHA-512 the
+// seed, clamp the first 32 output bytes (clear low 3 bits, clear top
+// bit, set second-from-top bit), then read as little-endian and
+// return as a *big.Int suitable for frosttss.ImportKey.
+//
+// This MUST match exactly what crypto/ed25519's signer derives
+// internally; any divergence would make the FROST GroupPublicKey
+// differ from ed25519.NewKeyFromSeed(seed)'s public half, and every
+// downstream address would silently break.
+func ed25519SeedToScalar(seed []byte) (*big.Int, error) {
+	if len(seed) != 32 {
+		return nil, fmt.Errorf("ed25519 seed must be 32 bytes, got %d", len(seed))
+	}
+	digest := sha512.Sum512(seed)
+	a := digest[:32]
+	// RFC 8032 §5.1.5 step 1 — clamp.
+	a[0] &= 248
+	a[31] &= 127
+	a[31] |= 64
+	// a is little-endian; big.Int.SetBytes is big-endian, so reverse.
+	be := make([]byte, 32)
+	for i := 0; i < 32; i++ {
+		be[i] = a[31-i]
+	}
+	return new(big.Int).SetBytes(be), nil
 }
 
 // importedMasterPrivkey decrypts an imported WalletKey and returns
