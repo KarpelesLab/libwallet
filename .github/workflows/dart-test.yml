@@ -164,15 +164,22 @@ jobs:
           # Apple's current Xcode/simctl shipping. Pinning to a
           # specific iOS version would drift as the macos-latest image
           # rolls forward.
-          RUNTIME=$(xcrun simctl list runtimes -j \
+          RUNTIMES_JSON=$(xcrun simctl list runtimes -j)
+          RUNTIME=$(echo "$RUNTIMES_JSON" \
             | jq -r '.runtimes | map(select(.platform=="iOS" and .isAvailable)) | sort_by(.version) | last | .identifier')
-          DEVICE_TYPE=$(xcrun simctl list devicetypes -j \
-            | jq -r '.devicetypes | map(select(.identifier | startswith("com.apple.CoreSimulator.SimDeviceType.iPhone"))) | sort_by(.identifier) | last | .identifier')
           if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
             echo "No iOS runtime found"; exit 1
           fi
+          # Pick from the runtime's supportedDeviceTypes — sorting all
+          # iPhone identifiers lexically picks "iPhone-XS-Max" (an old
+          # device) ahead of newer ones, then simctl create errors with
+          # "Incompatible device" because iOS 26+ doesn't support it.
+          # supportedDeviceTypes is the runtime's own allow-list and is
+          # ordered chronologically, so `last` gives the newest model.
+          DEVICE_TYPE=$(echo "$RUNTIMES_JSON" \
+            | jq -r --arg id "$RUNTIME" '.runtimes[] | select(.identifier==$id) | .supportedDeviceTypes | map(select(.name | startswith("iPhone"))) | last | .identifier')
           if [ -z "$DEVICE_TYPE" ] || [ "$DEVICE_TYPE" = "null" ]; then
-            echo "No iPhone device type found"; exit 1
+            echo "No iPhone device type supported by runtime $RUNTIME"; exit 1
           fi
           echo "runtime    = $RUNTIME"
           echo "deviceType = $DEVICE_TYPE"
