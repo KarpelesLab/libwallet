@@ -29,6 +29,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/BottleFmt/gobottle v1.0.1 // indirect
 	github.com/KarpelesLab/bech32m v0.1.5 // indirect
 	github.com/KarpelesLab/contexter v1.0.2 // indirect
@@ -45,6 +46,7 @@ require (
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/gtank/ristretto255 v0.2.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/ipfs/go-log v1.0.5 // indirect
 	github.com/ipfs/go-log/v2 v2.9.1 // indirect

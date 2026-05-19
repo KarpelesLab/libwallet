@@ -22,6 +22,7 @@ import (
 	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
 	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
@@ -437,11 +438,16 @@ func (w *Wallet) initializeDklsWallet(ctx context.Context, kDesc []*wltsign.KeyD
 	return nil
 }
 
-// initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS
+// initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS.
+// Dispatches on Wallet.Protocol:
+//   - empty / "eddsa" → the historical eddsatss (GG18-style Schnorr) keygen
+//     below
+//   - "frost"          → initializeFrostWallet (modern FROST, RFC 9591)
 func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
+	if w.Protocol == ProtocolFROST {
+		return w.initializeFrostWallet(ctx, kDesc)
+	}
 	w.Curve = "ed25519"
-	// Stamp Protocol so resolveProtocol() returns it directly on
-	// reload. Step 4 will add a Protocol=="frost" branch.
 	if w.Protocol == "" {
 		w.Protocol = ProtocolLegacyEdDSA
 	}
@@ -558,6 +564,117 @@ func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.Key
 	}
 
 	edFinalScope.report(1)
+	return nil
+}
+
+// initializeFrostWallet creates a new Ed25519 wallet using the FROST
+// threshold Schnorr protocol (RFC 9591). Mirrors initializeEdDSAWallet
+// but uses frosttss instead of eddsatss; the resulting signature is a
+// stock 64-byte Ed25519 signature verifiable by any Ed25519 verifier.
+func (w *Wallet) initializeFrostWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
+	if w.Threshold == 0 {
+		w.Threshold = 1
+	}
+	nk := len(kDesc)
+	w.Keys = make([]*WalletKey, nk)
+	if nk == 0 {
+		return errors.New("at least one key is required")
+	}
+	if w.Threshold >= nk {
+		return errors.New("threshold too high")
+	}
+	if w.Threshold < 0 {
+		return errors.New("threshold too low")
+	}
+
+	root := newProgressScope(ctx)
+	root.report(0)
+
+	// Frost shares are quick to materialise (no Paillier / NTilde stage);
+	// just stamp the row for each requested type.
+	for i, kInfo := range kDesc {
+		switch kInfo.Type {
+		case "StoreKey", "Plain", "RemoteKey", "Password":
+			// OK
+		default:
+			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
+		}
+		w.Keys[i] = &WalletKey{
+			Id:     xuid.New("wkey"),
+			Wallet: w.Id,
+			Type:   kInfo.Type,
+			Gen:    w.Gen + 1,
+		}
+		root.sub(i, nk+1).report(1)
+	}
+
+	finalScope := root.sub(nk, nk+1)
+	finalScope.report(0)
+
+	var ids tss.UnSortedPartyIDs
+	idmap := make(map[int]*tss.PartyID)
+	for n, p := range w.Keys {
+		key := new(big.Int).SetBytes(p.Id.UUID[:])
+		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
+		ids = append(ids, id)
+		idmap[n] = id
+	}
+	sids := tss.SortPartyIDs(ids)
+
+	curve := tss.Edwards()
+	tssctx := tss.NewPeerContext(sids)
+
+	hub := newTssHub()
+	for n := range w.Keys {
+		hub.addLocal(idmap[n])
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(w.Keys))
+	for n, p := range w.Keys {
+		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
+		params.SetBroker(hub.local[idmap[n].Id])
+		kg, err := frosttss.NewKeygen(ctx, params)
+		if err != nil {
+			return fmt.Errorf("failed to start frost keygen for party %d: %w", n, err)
+		}
+		go func(p *WalletKey, kg *frosttss.Keygen) {
+			defer wg.Done()
+			select {
+			case key := <-kg.Done:
+				p.frostData = key
+			case err := <-kg.Err:
+				log.Printf("frost keygen err = %s", err)
+				p.frostData = nil
+			case <-ctx.Done():
+				p.frostData = nil
+			}
+		}(p, kg)
+	}
+
+	chaincode := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, chaincode); err != nil {
+		return fmt.Errorf("failed to generate secure chaincode for wallet: %w", err)
+	}
+
+	wg.Wait()
+
+	if w.Keys[0].frostData == nil {
+		return errors.New("frost key generation failed")
+	}
+
+	pubBytes := w.Keys[0].frostData.GroupPublicKey.ToEd25519PubKey().Serialize()
+	w.Pubkey = base64.RawURLEncoding.EncodeToString(pubBytes)
+	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
+	w.Curve = "ed25519"
+	w.Protocol = ProtocolFROST
+
+	for i, kInfo := range kDesc {
+		if err := w.Keys[i].encrypt(kInfo); err != nil {
+			return fmt.Errorf("failed to encrypt frost wallet key %d/%d of type %s: %w", i+1, len(w.Keys), kInfo.Type, err)
+		}
+	}
+	finalScope.report(1)
 	return nil
 }
 
@@ -735,6 +852,45 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 				case sig := <-sp.Done:
 					res <- dklsDERFromSignature(sig)
 				case err := <-sp.Err:
+					res <- err
+				case <-signCtx.Done():
+					res <- signCtx.Err()
+				}
+			}()
+		}
+	} else if w.resolveProtocol() == ProtocolFROST {
+		wltlog.Debugf("wallet-sign: frost id=%s threshold=%d keys_provided=%d msg_len=%d", w.Id, w.Threshold, len(keys), len(digest))
+		// frosttss.Signing's subset is taken from params.Parties().IDs()
+		// — the shared tssctx/sids set up above already represent the
+		// signing committee. Committee size must be ≥ T+1; surface a
+		// short message rather than the bare NewSigning error so the
+		// caller can tell which guard tripped.
+		if len(keys) < w.Threshold+1 {
+			return nil, fmt.Errorf("frost: signing requires at least T+1=%d signers, got %d", w.Threshold+1, len(keys))
+		}
+		for n, kd := range keys {
+			p := w.getKey(kd.Id)
+			if p == nil {
+				return nil, fmt.Errorf("could not find key id=%s", kd.Id)
+			}
+			params := tss.NewParameters(curve, tssctx, idmap[n], len(keys), w.Threshold)
+			params.SetBroker(hub.local[idmap[n].Id])
+			frostKey, err := p.decryptFrost(kd, keySignPurpose)
+			if err != nil {
+				return nil, fmt.Errorf("failed to decrypt frost key %s for signing: %w", kd.Id, err)
+			}
+			sg, err := frostKey.NewSigning(signCtx, digest, params)
+			if err != nil {
+				return nil, fmt.Errorf("failed to start frost signing for key %s: %w", kd.Id, err)
+			}
+			go func() {
+				defer func() {
+					wltcrash.Log(signCtx, recover(), "frost signing party thread")
+				}()
+				select {
+				case sig := <-sg.Done:
+					res <- sig.Signature
+				case err := <-sg.Err:
 					res <- err
 				case <-signCtx.Done():
 					res <- signCtx.Err()
