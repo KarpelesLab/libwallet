@@ -21,7 +21,6 @@ import (
 	"github.com/KarpelesLab/secp256k1"
 	"github.com/KarpelesLab/tss-lib/v2/dklstss"
 	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
-	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
 	"github.com/KarpelesLab/tss-lib/v2/frosttss"
 	"github.com/KarpelesLab/tss-lib/v2/tss"
 	"github.com/KarpelesLab/xuid"
@@ -170,149 +169,17 @@ func (w *Wallet) ApiDelete(ctx *apirouter.Context) error {
 	return nil
 }
 
-// initializeWallet creates a new wallet with the specified key descriptions
-// Implements Threshold Signature Scheme (TSS) for distributed key generation
-// Parameters:
-//   - ctx: context for progress reporting and cancellation
-//   - kDesc: array of key descriptions for wallet creation
+// initializeWallet creates a new secp256k1 TSS wallet. All new wallets
+// use DKLs23 — the legacy GG18 (ecdsatss) keygen path was retired
+// because Paillier-based threshold ECDSA is considered insecure relative
+// to modern OT-based protocols. Existing GG18 wallets remain loadable,
+// signable, and (eventually) reshareable; only new keygen is blocked
+// from that branch.
 //
-// Dispatches on Wallet.Protocol:
-//   - empty / "dkls23" → initializeDklsWallet (default for new wallets;
-//     modern DKLs23, no Paillier)
-//   - "gg18"           → the historical ecdsatss (GG18) keygen below,
-//     used only when a caller explicitly opts in for backwards-
-//     compatible behaviour
-//
-// Returns any error encountered during wallet initialization
+// The wallet's Protocol field is set by the keygen path itself; any
+// value the caller pre-populates is ignored.
 func (w *Wallet) initializeWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
-	if w.Protocol == "" || w.Protocol == ProtocolDKLS {
-		return w.initializeDklsWallet(ctx, kDesc)
-	}
-	if w.Threshold == 0 {
-		w.Threshold = 1
-	}
-	nk := len(kDesc)
-	w.Keys = make([]*WalletKey, nk)
-
-	if nk == 0 {
-		return errors.New("at least one key is required")
-	}
-	if w.Threshold >= nk {
-		return errors.New("threshold too high")
-	}
-	if w.Threshold < 0 {
-		return errors.New("threshold too low")
-	}
-
-	// Progress tree: [0, nk/(nk+1)) = per-key pre-params, [nk/(nk+1), 1] = final keygen.
-	root := newProgressScope(ctx)
-	root.report(0)
-
-	// Create wallet keys for each key description
-	for i, kInfo := range kDesc {
-		switch kInfo.Type {
-		case "StoreKey", "Plain", "RemoteKey", "Password":
-			// OK
-		default:
-			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
-		}
-		log.Printf("generating key %d/%d", i, nk)
-
-		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
-		if err != nil {
-			return fmt.Errorf("failed to create wallet key of type %s (key %d/%d): %w", kInfo.Type, i+1, nk, err)
-		}
-		w.Keys[i] = k
-	}
-
-	log.Printf("producing final")
-
-	// Final keygen phase: its own slice of the progress range.
-	finalScope := root.sub(nk, nk+1)
-	finalScope.report(0)
-
-	// Set up TSS parties for distributed key generation
-	var ids tss.UnSortedPartyIDs
-	idmap := make(map[int]*tss.PartyID)
-	for n, p := range w.Keys {
-		key := new(big.Int).SetBytes(p.Id.UUID[:])
-		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
-		ids = append(ids, id)
-		idmap[n] = id
-	}
-	sids := tss.SortPartyIDs(ids)
-
-	curve := tss.EC()
-	tssctx := tss.NewPeerContext(sids)
-
-	// Register every local broker in the hub before any party starts so
-	// round1 messages from an early party can queue on later parties.
-	hub := newTssHub()
-	for n := range w.Keys {
-		hub.addLocal(idmap[n])
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(w.Keys))
-
-	for n, p := range w.Keys {
-		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
-		params.SetBroker(hub.local[idmap[n].Id])
-		kg, err := ecdsatss.NewKeygen(ctx, params, *p.pre)
-		if err != nil {
-			return fmt.Errorf("failed to start keygen for party %d: %w", n, err)
-		}
-		go func(p *WalletKey, kg *ecdsatss.Keygen) {
-			defer wg.Done()
-			select {
-			case key := <-kg.Done:
-				p.sdata = key
-			case err := <-kg.Err:
-				log.Printf("keygen err = %s", err)
-				p.sdata = nil
-			case <-ctx.Done():
-				p.sdata = nil
-			}
-		}(p, kg)
-	}
-
-	// Generate random chaincode for HD wallet derivation
-	chaincode := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, chaincode)
-	if err != nil {
-		return fmt.Errorf("failed to generate secure chaincode for wallet: %w", err)
-	}
-
-	// Wait for all key generation to complete
-	wg.Wait()
-
-	if w.Keys[0].sdata == nil {
-		return errors.New("ecdsa key generation failed")
-	}
-
-	// Set wallet properties from generated keys
-	pk := w.Keys[0].sdata.ECDSAPub.ToSecp256k1PubKey()
-	w.Pubkey = base64.RawURLEncoding.EncodeToString(pk.SerializeCompressed())
-	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
-	w.Curve = curve.Params().Name
-	// Stamp the persisted Protocol so resolveProtocol() doesn't need
-	// to infer it. New wallets created today still go through the
-	// ecdsatss path; Step 3 of the protocol-modernization track will
-	// add a Protocol=="dkls23" branch above this point.
-	if w.Protocol == "" {
-		w.Protocol = ProtocolLegacyECDSA
-	}
-
-	// Encrypt keys with their respective key descriptions
-	for i, kInfo := range kDesc {
-		err = w.Keys[i].encrypt(kInfo)
-		if err != nil {
-			return fmt.Errorf("failed to encrypt wallet key %d/%d of type %s: %w", i+1, len(w.Keys), kInfo.Type, err)
-		}
-	}
-
-	finalScope.report(1)
-	return nil
+	return w.initializeDklsWallet(ctx, kDesc)
 }
 
 // initializeDklsWallet creates a new secp256k1 wallet using DKLs23 TSS.
@@ -441,132 +308,16 @@ func (w *Wallet) initializeDklsWallet(ctx context.Context, kDesc []*wltsign.KeyD
 	return nil
 }
 
-// initializeEdDSAWallet creates a new Ed25519 wallet using EdDSA TSS.
-// Dispatches on Wallet.Protocol:
-//   - empty / "frost" → initializeFrostWallet (default for new wallets;
-//     modern FROST, RFC 9591)
-//   - "eddsa"          → the historical eddsatss (GG18-style Schnorr) keygen
-//     below, used only when a caller explicitly opts in for
-//     backwards-compatible behaviour
+// initializeEdDSAWallet creates a new Ed25519 TSS wallet. All new
+// wallets use FROST (RFC 9591) — the legacy eddsatss path was retired
+// alongside the GG18 secp256k1 path. Existing eddsatss wallets remain
+// loadable, signable, and (eventually) reshareable; only new keygen is
+// blocked from that branch.
+//
+// The wallet's Protocol field is set by the keygen path itself; any
+// value the caller pre-populates is ignored.
 func (w *Wallet) initializeEdDSAWallet(ctx context.Context, kDesc []*wltsign.KeyDescription) error {
-	if w.Protocol == "" || w.Protocol == ProtocolFROST {
-		return w.initializeFrostWallet(ctx, kDesc)
-	}
-	w.Curve = "ed25519"
-	if w.Threshold == 0 {
-		w.Threshold = 1
-	}
-	nk := len(kDesc)
-	w.Keys = make([]*WalletKey, nk)
-
-	if nk == 0 {
-		return errors.New("at least one key is required")
-	}
-	if w.Threshold >= nk {
-		return errors.New("threshold too high")
-	}
-	if w.Threshold < 0 {
-		return errors.New("threshold too low")
-	}
-
-	root := newProgressScope(ctx)
-	root.report(0)
-
-	for i, kInfo := range kDesc {
-		switch kInfo.Type {
-		case "StoreKey", "Plain", "RemoteKey", "Password":
-			// OK
-		default:
-			return fmt.Errorf("unsupported key type %s for key #%d", kInfo.Type, i+1)
-		}
-		log.Printf("generating eddsa key %d/%d", i, nk)
-
-		k, err := w.createWalletKey(ctx, kInfo.Type, root.sub(i, nk+1))
-		if err != nil {
-			return fmt.Errorf("failed to create eddsa wallet key of type %s (key %d/%d): %w", kInfo.Type, i+1, nk, err)
-		}
-		w.Keys[i] = k
-	}
-
-	log.Printf("producing eddsa final")
-	edFinalScope := root.sub(nk, nk+1)
-	edFinalScope.report(0)
-
-	var ids tss.UnSortedPartyIDs
-	idmap := make(map[int]*tss.PartyID)
-	for n, p := range w.Keys {
-		key := new(big.Int).SetBytes(p.Id.UUID[:])
-		id := tss.NewPartyID(p.Id.String(), p.Id.String(), key)
-		ids = append(ids, id)
-		idmap[n] = id
-	}
-	sids := tss.SortPartyIDs(ids)
-
-	curve := tss.Edwards()
-	tssctx := tss.NewPeerContext(sids)
-
-	hub := newTssHub()
-	for n := range w.Keys {
-		hub.addLocal(idmap[n])
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(w.Keys))
-
-	for n, p := range w.Keys {
-		params := tss.NewParameters(curve, tssctx, idmap[n], nk, w.Threshold)
-		params.SetBroker(hub.local[idmap[n].Id])
-		kg, err := eddsatss.NewKeygen(ctx, params)
-		if err != nil {
-			return fmt.Errorf("failed to start eddsa keygen for party %d: %w", n, err)
-		}
-		go func(p *WalletKey, kg *eddsatss.Keygen) {
-			defer wg.Done()
-			select {
-			case key := <-kg.Done:
-				p.eddata = key
-			case err := <-kg.Err:
-				log.Printf("eddsa keygen err = %s", err)
-				p.eddata = nil
-			case <-ctx.Done():
-				p.eddata = nil
-			}
-		}(p, kg)
-	}
-
-	chaincode := make([]byte, 32)
-	_, err := io.ReadFull(rand.Reader, chaincode)
-	if err != nil {
-		return fmt.Errorf("failed to generate secure chaincode for wallet: %w", err)
-	}
-
-	wg.Wait()
-
-	if w.Keys[0].eddata == nil {
-		return errors.New("eddsa key generation failed")
-	}
-
-	// Extract Ed25519 public key using the standard compressed
-	// encoding (32-byte little-endian Y with X-sign bit in MSB of
-	// byte 31). Writing the X coordinate alone — what an earlier
-	// version of this code did — produced an address that wasn't
-	// the on-curve pubkey the TSS actually signs with, so Solana
-	// rejected every send with "Transaction did not pass signature
-	// verification" and balance queries hit a different address
-	// from the one the TSS controls.
-	pubBytes := w.Keys[0].eddata.EDDSAPub.ToEd25519PubKey().Serialize()
-	w.Pubkey = base64.RawURLEncoding.EncodeToString(pubBytes)
-	w.Chaincode = base64.RawURLEncoding.EncodeToString(chaincode)
-
-	for i, kInfo := range kDesc {
-		err = w.Keys[i].encrypt(kInfo)
-		if err != nil {
-			return fmt.Errorf("failed to encrypt eddsa wallet key %d/%d of type %s: %w", i+1, len(w.Keys), kInfo.Type, err)
-		}
-	}
-
-	edFinalScope.report(1)
-	return nil
+	return w.initializeFrostWallet(ctx, kDesc)
 }
 
 // initializeFrostWallet creates a new Ed25519 wallet using the FROST
