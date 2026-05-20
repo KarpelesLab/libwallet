@@ -148,63 +148,91 @@ jobs:
         with:
           channel: stable
 
-      - name: Create + boot fresh iOS simulator
+      - name: Reset CoreSimulator + boot iOS simulator
         run: |
           set -euo pipefail
-          # Create a NEW simulator per job rather than reusing whatever
-          # Xcode preinstalled in the runner image. Preinstalled sims
-          # carry stale state from the image build (and from prior runs
-          # on the same hosted runner) — including a corrupted
-          # installd / FrontBoard mapping that surfaces as "Application
-          # ... is unknown to FrontBoard" at flutter test's launch.
-          # A fresh sim is the canonical "known clean state".
-          #
-          # Picks the latest available iOS runtime + latest iPhone
-          # device type the runner has, so we automatically track
-          # Apple's current Xcode/simctl shipping. Pinning to a
-          # specific iOS version would drift as the macos-latest image
-          # rolls forward.
-          # Pin the runtime to the major version of Xcode's iphonesimulator
-          # SDK. Xcode 16.4 ships SDK 18.5, but the macos-latest image also
-          # has iOS 26.2 (a preview runtime) installed. Picking "latest"
-          # selects iOS 26.2 — the install lands but the launch deadlocks
-          # in FBSOpenApplicationServiceErrorDomain because the app was
-          # compiled against an SDK older than the runtime expects. Match
-          # the SDK to avoid the cross-version glitch.
-          SDK_VERSION=$(xcrun --sdk iphonesimulator --show-sdk-version)
-          SDK_MAJOR=${SDK_VERSION%%.*}
-          echo "sdkVersion = $SDK_VERSION (matching runtime major version $SDK_MAJOR)"
-          RUNTIMES_JSON=$(xcrun simctl list runtimes -j)
-          RUNTIME=$(echo "$RUNTIMES_JSON" \
-            | jq -r --arg major "$SDK_MAJOR" '.runtimes | map(select(.platform=="iOS" and .isAvailable and ((.version|split(".")[0])==$major))) | sort_by(.version) | last | .identifier')
-          if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
-            # Fall back to the absolute latest if no version-matched
-            # runtime is installed — better to try than to fail the
-            # setup outright.
-            echo "No iOS runtime found at SDK major $SDK_MAJOR; falling back to latest"
-            RUNTIME=$(echo "$RUNTIMES_JSON" \
-              | jq -r '.runtimes | map(select(.platform=="iOS" and .isAvailable)) | sort_by(.version) | last | .identifier')
-          fi
-          if [ -z "$RUNTIME" ] || [ "$RUNTIME" = "null" ]; then
-            echo "No iOS runtime found"; exit 1
-          fi
-          # Pick from the runtime's supportedDeviceTypes — sorting all
-          # iPhone identifiers lexically picks "iPhone-XS-Max" (an old
-          # device) ahead of newer ones, then simctl create errors with
-          # "Incompatible device" because iOS 26+ doesn't support it.
-          # supportedDeviceTypes is the runtime's own allow-list and is
-          # ordered chronologically, so `last` gives the newest model.
-          DEVICE_TYPE=$(echo "$RUNTIMES_JSON" \
-            | jq -r --arg id "$RUNTIME" '.runtimes[] | select(.identifier==$id) | .supportedDeviceTypes | map(select(.name | startswith("iPhone"))) | last | .identifier')
-          if [ -z "$DEVICE_TYPE" ] || [ "$DEVICE_TYPE" = "null" ]; then
-            echo "No iPhone device type supported by runtime $RUNTIME"; exit 1
-          fi
-          echo "runtime    = $RUNTIME"
-          echo "deviceType = $DEVICE_TYPE"
+          # The "Application ... is unknown to FrontBoard" / "Simulator
+          # device failed to launch" failures we kept hitting were
+          # NOT caused by a stale device — they were caused by stale
+          # state inside the CoreSimulator service itself, which
+          # survives across jobs on the hosted-runner pool and even
+          # across simctl create/delete cycles. The fix shipped by
+          # thousands of mature iOS CI configs is just:
+          #   1. shutdown every booted sim
+          #   2. erase the device contents (clears installd / DB /
+          #      FrontBoard mapping per-device)
+          #   3. let CoreSimulator restart with a clean device pool
+          # That's strictly enough — no need to invent a new sim.
+          xcrun simctl shutdown all 2>/dev/null || true
+          xcrun simctl erase all
+          # Kill any orphan Simulator.app processes from prior runs
+          # so the rebooted CoreSimulator service comes up clean.
+          killall Simulator 2>/dev/null || true
 
-          DEVICE_ID=$(xcrun simctl create "libwallet-test-sim" "$DEVICE_TYPE" "$RUNTIME")
+          # Pick the most recent iPhone available from the preinstalled
+          # device pool. Sorting by numeric model number (parsed out of
+          # "iPhone 15 Pro Max" etc.) is robust against Apple's
+          # alphabetic / array-order quirks that previously selected
+          # iPhone XS Max. Filter to runtimes whose major version
+          # matches Xcode's iphonesimulator SDK so we never land on a
+          # preview runtime whose deployment-target gates the test
+          # app's launch (the FBOpenApplicationServiceErrorDomain
+          # failure we kept seeing).
+          SDK_MAJOR=$(xcrun --sdk iphonesimulator --show-sdk-version | cut -d. -f1)
+          echo "Xcode iphonesimulator SDK major = $SDK_MAJOR"
+
+          DEVICES_JSON=$(xcrun simctl list devices available -j)
+          # jq pipeline:
+          #   1. Walk every runtime key whose name starts with
+          #      "iOS-<SDK_MAJOR>" (matches "iOS-18-0" / "iOS-18-5"
+          #      but not "iOS-26-0") so we never land on a preview
+          #      runtime whose deployment target gates the test
+          #      app's launch.
+          #   2. Filter to available iPhones whose name parses as
+          #      "iPhone N", "iPhone N Plus", "iPhone N Pro", or
+          #      "iPhone N Pro Max".
+          #   3. Sort by [model_number, variant_rank] so ties on
+          #      model number resolve to the higher variant
+          #      (base < Plus < Pro < Pro Max). Without the variant
+          #      rank, jq's stable sort can land on the base model
+          #      depending on Apple's array order.
+          PICK_PIPELINE='
+            map(select(.isAvailable and (.name | test("^iPhone [0-9]+($| Plus$| Pro$| Pro Max$)")))
+                | { udid, name,
+                    model: (.name | capture("iPhone (?<n>[0-9]+)") | .n | tonumber),
+                    variant: (
+                      if (.name | endswith(" Pro Max")) then 3
+                      elif (.name | endswith(" Pro"))     then 2
+                      elif (.name | endswith(" Plus"))    then 1
+                      else 0 end)
+                  })
+            | sort_by([.model, .variant])
+            | last // empty
+          '
+          PICK=$(echo "$DEVICES_JSON" | jq -r --arg major "$SDK_MAJOR" '
+            .devices
+            | to_entries
+            | map(select(.key | test("iOS-" + $major + "(-|$)")))
+            | map(.value[])
+          ' | jq -r "$PICK_PIPELINE")
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
+            # No preinstalled device of the right runtime / model
+            # shape — fall back to the highest-numbered iPhone of any
+            # runtime so the job at least attempts to run.
+            echo "No iPhone matching iOS-$SDK_MAJOR runtime; falling back to any iPhone"
+            PICK=$(echo "$DEVICES_JSON" | jq -r '
+              .devices
+              | to_entries
+              | map(.value[])
+            ' | jq -r "$PICK_PIPELINE")
+          fi
+          if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
+            echo "No usable iPhone simulator found"; exit 1
+          fi
+          DEVICE_ID=$(echo "$PICK" | jq -r '.udid')
+          DEVICE_NAME=$(echo "$PICK" | jq -r '.name')
           echo "DEVICE_ID=$DEVICE_ID" >> "$GITHUB_ENV"
-          echo "deviceId   = $DEVICE_ID"
+          echo "Using simulator: $DEVICE_NAME ($DEVICE_ID)"
 
           xcrun simctl boot "$DEVICE_ID"
           # Block until launchd reports Status=Booted, Status Type=Usable.
@@ -212,6 +240,19 @@ jobs:
           # process starts, but installd / SpringBoard may not yet be
           # ready and the subsequent flutter test install/launch races.
           xcrun simctl bootstatus "$DEVICE_ID" -b
+          # Extra paranoia after the boot reports Usable — wait for
+          # SpringBoard to actually appear in the running-process
+          # list. simctl bootstatus has historically returned a
+          # micro-second before SpringBoard finishes its first
+          # bringup, and flutter's install-then-launch sequence is
+          # tight enough to race that gap on hot runners.
+          for i in $(seq 1 30); do
+            if xcrun simctl spawn "$DEVICE_ID" launchctl print system 2>/dev/null | grep -q 'com.apple.SpringBoard$'; then
+              echo "SpringBoard ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Install Flutter dependencies
         working-directory: dart/test_app
@@ -283,9 +324,12 @@ jobs:
       - name: Cleanup simulator
         if: always()
         run: |
+          # Just shutdown the preinstalled device we used — DON'T
+          # delete it (the runner image owns the device pool; the next
+          # job on the same hosted runner reuses + erases). simctl
+          # erase at the start of the next run handles state cleanup.
           if [ -n "${DEVICE_ID:-}" ]; then
             xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
-            xcrun simctl delete "$DEVICE_ID" 2>/dev/null || true
           fi
 
   # Android emulator integration tests (FFI via c-shared)
