@@ -1,3 +1,20 @@
+## 0.4.36
+
+- **Added: device-to-device wallet transfer.** New endpoints
+  `Wallet:exportToDevice` (old device, paints a QR),
+  `Wallet:exportToDevice:confirm` / `:cancel` (decision callback
+  after the user confirms on the source device), and
+  `Wallet:importFromDevice` (new device, takes the scanned code).
+  Single Spot round trip per transfer, 5-minute single-use
+  pairing token, AES-256-GCM payload sealed with a key derived
+  from the QR-borne token, includes the wallet JSON + device
+  share private keys in one shot so the destination can sign
+  immediately without a reshare. Dart surface ships
+  `DeviceTransferSession`, `DeviceShareEntry`, and
+  `DeviceTransferImportResult` models. Full implementor guide in
+  `doc/device_share.md` under the "Device-to-device transfer"
+  section.
+
 ## 0.4.35
 
 - **Modernized: TSS protocols.** All new wallets are now created

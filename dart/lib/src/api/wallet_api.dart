@@ -2,11 +2,13 @@ import 'package:atonline_api/atonline_api.dart' show AtOnline;
 
 import '../client/transport.dart';
 import '../client/response.dart';
+import '../models/device_transfer.dart';
 import '../models/key_description.dart';
 import '../models/probe_activity.dart';
 import '../models/wallet.dart';
 import '../models/wallet_backup.dart';
 
+export '../models/device_transfer.dart';
 export '../models/probe_activity.dart';
 
 /// Wallet CRUD, backup, restore, reshare, and multi-create operations.
@@ -129,6 +131,100 @@ class WalletApi {
       'files': files,
     });
     return data as Map<String, dynamic>;
+  }
+
+  /// Open a device-to-device transfer session for [walletId]. The old
+  /// device (where the wallet lives) calls this, paints the returned
+  /// [DeviceTransferSession.pairingCode] as a QR code, and the user
+  /// scans it on the new device which then calls [importFromDevice].
+  ///
+  /// The pairing code is opaque — treat it as a single string,
+  /// don't try to parse it. It encodes a 5-minute single-use
+  /// session; an attacker who reads the QR before the new device
+  /// scans can still attempt a request, but the user is shown a
+  /// confirmation prompt on the OLD device before the payload is
+  /// released, so a misdirected scan can be denied.
+  ///
+  /// Subscribe to the `wallet:transfer:pair_received` event on the
+  /// host to know when the new device has connected — the event
+  /// payload carries `sid`, `wallet_id`, `peer_spot_id`, and an
+  /// optional `peer_fingerprint`. Then run your biometric prompt,
+  /// read the device share's private key from your platform
+  /// keystore, and call [exportToDeviceConfirm] with the resulting
+  /// [DeviceShareEntry] list. The host MUST call either
+  /// [exportToDeviceConfirm] or [exportToDeviceCancel] within
+  /// 90 s of the pair-received event; the handler times out after
+  /// that.
+  ///
+  /// Full flow documented in `doc/device_share.md` (the "device
+  /// transfer" section).
+  Future<DeviceTransferSession> exportToDevice(String walletId) async {
+    final data = await _conn.request(
+      'Wallet/$walletId:exportToDevice',
+      'POST',
+      {'WalletId': walletId},
+    );
+    return DeviceTransferSession.fromJson(
+        Map<String, dynamic>.from(data as Map));
+  }
+
+  /// Approve a pending device transfer started by [exportToDevice].
+  /// Pass the [sid] from the [DeviceTransferSession] you opened and
+  /// the device shares you just read from your platform keystore
+  /// (one [DeviceShareEntry] per StoreKey-typed share on the wallet).
+  ///
+  /// After this call returns, libwallet seals and ships the wallet
+  /// JSON + device-share bytes to the new device over Spot. The
+  /// session is single-use — the second call returns
+  /// `bad_request`.
+  Future<void> exportToDeviceConfirm({
+    required String sid,
+    required List<DeviceShareEntry> deviceShares,
+  }) async {
+    await _conn.request('Wallet:exportToDevice:confirm', 'POST', {
+      'Sid': sid,
+      'DeviceShares': deviceShares.map((d) => d.toJson()).toList(),
+    });
+  }
+
+  /// Cancel a pending device-transfer session opened by
+  /// [exportToDevice]. Safe to call at any point — the new device
+  /// will receive a `declined` error on its waiting [importFromDevice]
+  /// call. Idempotent.
+  Future<void> exportToDeviceCancel(String sid) async {
+    await _conn.request('Wallet:exportToDevice:cancel', 'POST', {
+      'Sid': sid,
+    });
+  }
+
+  /// Drive the new device's side of a device-to-device transfer.
+  /// [pairingCode] is the opaque string scanned from the QR painted
+  /// by the old device's [exportToDevice] call. This method blocks
+  /// for up to ~2 minutes: it sends the pair request to the old
+  /// device over Spot, the old device prompts its user to confirm,
+  /// and on approval ships back the encrypted payload.
+  ///
+  /// On success the wallet has already been written to libwallet's
+  /// local store (same path `Wallet:restore` uses, so the same
+  /// `wallet:restored` host event fires). The host's only remaining
+  /// job is to write each [DeviceShareEntry.privateKey] into the
+  /// platform keystore BEFORE the next `unlock(password)` call —
+  /// the keys are returned base64url-encoded and match the
+  /// `private` field shape `StoreKey:create` produces.
+  ///
+  /// Throws on each closed error code the wire contract defines:
+  /// `url_malformed` (bad pairing code), `token_invalid`,
+  /// `token_expired`, `declined` (user said no), `timeout`,
+  /// `bad_request`, `session_not_found`, `peer_unreachable` (Spot
+  /// couldn't reach the old device). Map these to typed exceptions
+  /// in your UI layer the way ClawdWallet pairing already does.
+  Future<DeviceTransferImportResult> importFromDevice(
+      String pairingCode) async {
+    final data = await _conn.request('Wallet:importFromDevice', 'POST', {
+      'PairingCode': pairingCode,
+    });
+    return DeviceTransferImportResult.fromJson(
+        Map<String, dynamic>.from(data as Map));
   }
 
   /// Import an existing private key (hex or WIF) as a 1-of-1 wallet.

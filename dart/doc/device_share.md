@@ -104,6 +104,115 @@ unlock the wallet" — and retry. Do **not** prompt the user to
 that only applies when the wallet itself is gone, not just one of
 its shares.
 
+## Device-to-device transfer — QR-driven, no reshare needed
+
+When the user has both phones in hand at the same time (the "I'm
+moving to my new iPhone" case), the cleanest UX is to skip the
+file-export step entirely and copy the wallet directly between
+devices over a transient encrypted channel. libwallet ships this
+as a first-party flow:
+
+| Side | Endpoint | What the host does |
+|---|---|---|
+| Old device | `client.wallets.exportToDevice(walletId)` | Receive an opaque pairing code, paint it as a QR. |
+| New device | `client.wallets.importFromDevice(scannedCode)` | Scan the QR, hand the string back; wait for the import to land. |
+| Old device | `client.wallets.exportToDeviceConfirm(sid: …, deviceShares: [...])` | After biometric, read the device share private from the OS keystore and approve. |
+| Old device | `client.wallets.exportToDeviceCancel(sid)` | Optional — user declines. |
+
+The session is single-use, lasts 5 minutes, and ships the wallet
+JSON + the device share private key in one AES-256-GCM-sealed
+payload over Spot. The new device's host receives both pieces back
+from the `importFromDevice` future and only needs to:
+
+1. Write each `DeviceShareEntry.privateKey` to its platform
+   keystore (Keychain on iOS, Keystore on Android, …) before the
+   next `unlock(password)` call.
+2. Surface the wallet — it has already been written to libwallet's
+   local store by the time the future returns (the standard
+   `wallet:restored` host event fires).
+
+Recommended UX (old device):
+
+```dart
+// 1. Open the session, paint the QR.
+final session = await client.wallets.exportToDevice(walletId);
+showQrSheet(session.pairingCode, expiresAt: session.expiresAt);
+
+// 2. Listen for the new device's pair request. The handler emits
+//    `wallet:transfer:pair_received` carrying { sid, wallet_id,
+//    peer_spot_id, peer_fingerprint } — render the peer info in a
+//    confirmation prompt so the user can verify they're scanning
+//    on their own new phone.
+events.on('wallet:transfer:pair_received').listen((evt) async {
+  final ok = await showConfirmDialog(
+    'Send your wallet to a new device?',
+    fingerprint: evt['peer_fingerprint'],
+  );
+  if (!ok) {
+    await client.wallets.exportToDeviceCancel(evt['sid']);
+    return;
+  }
+
+  // 3. Biometric prompt + keystore read. Biometric gates the
+  //    keystore on iOS/Android; libwallet never sees the prompt.
+  final shares = await keystore.readAllStoreKeyShares(
+    walletKeyIds: [evt['wallet_id_storekey']],
+    biometricReason: 'Confirm transfer to your new device',
+  );
+  await client.wallets.exportToDeviceConfirm(
+    sid: evt['sid'],
+    deviceShares: shares,
+  );
+});
+```
+
+New device:
+
+```dart
+final code = await scanQrCode();
+try {
+  final result = await client.wallets.importFromDevice(code);
+  // Wallet JSON already restored locally. Write the device shares
+  // BEFORE the user is offered any signing UI.
+  for (final share in result.deviceShares) {
+    await keystore.writeDeviceShare(
+      walletKeyId: share.walletKeyId,
+      value: share.privateKey,
+      password: password,
+    );
+  }
+  // Now ready to unlock + sign.
+} on PairingDeclinedException {
+  showToast("Transfer declined on the other device.");
+} on PairingTokenExpiredException {
+  showToast("QR code expired. Generate a new one and try again.");
+} on PairingPeerUnreachableException {
+  showToast("Couldn't reach the other device. Both online?");
+}
+```
+
+### Why this is safe to ship as the default migration UX
+
+- **Out-of-band pairing token.** The QR carries a fresh 32-byte
+  random; the payload is encrypted with a key derived from that
+  token via HKDF-SHA-256. An attacker on the Spot transport can't
+  decrypt without the QR.
+- **Old-device user confirmation.** Even with a stolen QR, the
+  payload is only released after the user on the source device
+  approves the prompt + passes biometric. A QR snapshot taken
+  through someone's shoulder doesn't bypass that.
+- **5-minute single-use.** Once the new device's request lands,
+  the session burns; a captured QR can't be replayed against a
+  later session.
+- **Same security model as the manual-export case below**, but
+  without a file ever touching disk. No "where did I save the
+  backup?" forgetfulness, no third-party storage in the threat
+  model.
+
+The auto-rotation path (Reshare on missing device share) stays in
+place as the fallback for users who lost their old device — they
+can't run a device-to-device flow without it.
+
 ## When to export the device share with the backup — the manual transfer case
 
 There's one legitimate case for including the device share's
