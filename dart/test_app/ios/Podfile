@@ -44,5 +44,19 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # Force every pod's simulator slice to include arm64 (Apple
+    # Silicon native) and x86_64 (Intel + Rosetta). Some transitively-
+    # pulled pods — notably `objective_c` via the flutter_secure_storage
+    # Darwin plugin — ship arm64e-only simulator binaries by default,
+    # and the M-series GitHub Actions runner refuses to load them with
+    # "fat file, but missing compatible architecture (have 'arm64e',
+    # need 'arm64')" at flutter test's app launch.
+    target.build_configurations.each do |config|
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+      config.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
+      config.build_settings['ARCHS[sdk=iphonesimulator*]']      = 'arm64 x86_64'
+      config.build_settings['VALID_ARCHS[sdk=iphonesimulator*]'] = 'arm64 x86_64'
+    end
   end
 end
