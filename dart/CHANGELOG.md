@@ -1,3 +1,26 @@
+## 0.4.37
+
+- **Docs: cross-device-import recovery flow.** The
+  `doc/device_share.md` "Restoring a backup on a fresh device —
+  auto-rotation" section now explicitly walks through the
+  `RemoteKey:reshare` → `RemoteKey:validate` →
+  `Wallet:reshare` sequence with the load-bearing detail that was
+  tripping every host wiring this for the first time: the
+  wallet's stored `WalletKey.key` is a server-side WalletSign
+  session that's `done` once the wallet was created, and calling
+  `Wallet:reshare` against it returns `invalid status for wallet
+  sign session: done`. The fix is to run `RemoteKey:reshare` +
+  `:validate` first to mint a fresh session, then pass the
+  resulting id on **both** old-committee and new-committee
+  `RemoteKey` `KeyDescription`s. `RemoteKeyApi.reshare`'s
+  docstring now spells out that its `key` parameter is the
+  `crws-…:crwsv-…` resource id (`WalletKey.key`), NOT the
+  `wkey-…` uuid (`WalletKey.id`) — passing the wrong one returned
+  a vague "Invalid key" from the server.
+  `RemoteKeyValidation.remoteKey`'s docstring carries the
+  reshare-with-new-id example inline so the IDE hover surfaces
+  it. No runtime change; documentation only.
+
 ## 0.4.36
 
 - **Added: device-to-device wallet transfer.** New endpoints

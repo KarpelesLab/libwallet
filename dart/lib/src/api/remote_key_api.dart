@@ -30,7 +30,21 @@ class RemoteKeyApi {
   }
 
   /// Start a key reshare for an existing remote key. Returns a session
-  /// descriptor; complete the reshare by calling [validate].
+  /// descriptor (SMS/email code sent to the user); complete the
+  /// reshare by calling [validate] with the code the user entered.
+  ///
+  /// **CRITICAL**: [key] is the value of `WalletKey.key` on the
+  /// RemoteKey-typed share — the `crws-…:crwsv-…` server resource
+  /// identifier — **NOT** `WalletKey.id` (the `wkey-…` wallet share
+  /// uuid). The server rejects `wkey-…` with `[rest] error from
+  /// server: Invalid key` because it only understands resource ids;
+  /// the share uuid is purely a libwallet-local identifier.
+  ///
+  /// The act of calling this endpoint transitions the *old* session
+  /// to `done` on the server and mints a fresh session. The new
+  /// session's identifier is returned by [validate] as
+  /// `RemoteKeyValidation.remoteKey`; see that field's docstring
+  /// for how to thread it into `Wallet:reshare`.
   Future<RemoteKeySession> reshare({
     required String key,
     required String curve,

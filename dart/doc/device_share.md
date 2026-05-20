@@ -43,7 +43,31 @@ committee**, so the right response is to **reshare immediately
 with a freshly-minted `StoreKey`** before the user signs anything.
 This is sometimes called "device-share rotation".
 
-Reference flow:
+### The non-obvious step: the wallet's stored RemoteKey session is `done`
+
+Before getting into the code, one trap that has burned every host
+that's wired this flow: the `crws-…:crwsv-…` resource id stored
+on the wallet's RemoteKey share (`WalletKey.key`) is **the
+identifier of the original keygen session, which the server
+marked `done` once the wallet was created**. You can't reshare
+against a `done` session — the server rejects the OLD-committee
+RemoteKey participant with:
+
+```
+failed to start remote peer wkey-…: failed to init remote:
+invalid status for wallet sign session: done
+```
+
+The fix is to run `RemoteKey:reshare` + `RemoteKey:validate`
+**first**, which mints a fresh session and returns its new
+`crws-…:crwsv-NEW` resource id. That new id replaces the old one
+in the wallet's RemoteKey share — and crucially, **it must be
+passed on both the old-committee and new-committee RemoteKey
+descriptors when calling `Wallet:reshare`**. See
+`RemoteKeyValidation.remoteKey`'s docstring for the explanation
+of the server-side session lifecycle.
+
+### Reference flow
 
 ```dart
 // 1. User restored the wallet JSON via Wallet:restore. Try to load
@@ -51,32 +75,69 @@ Reference flow:
 final devicePriv = await keystore.readDeviceShare(password: password);
 if (devicePriv != null) {
   // Happy path — backup was made before app data was wiped on the
-  // SAME device, or user used the opt-in transfer flow (below).
+  // SAME device, or user used the device-transfer flow (below).
   return; // device share is reachable, sign normally.
 }
 
-// 2. Mint a fresh device-share pair for this device.
+// 2. Mint a NEW RemoteKey session. This sends an SMS/email code
+//    to the user; once they enter it and validate, we get a fresh
+//    crws-…:crwsv-NEW id that supersedes the wallet's stored one.
+//    NOTE: key must be WalletKey.key (the crws-…:crwsv-… string),
+//    NOT WalletKey.id (the wkey-… uuid).
+final wallet = await client.wallets.get(walletId);
+final oldRemoteKey = wallet.keys.firstWhere((k) => k.type == 'RemoteKey');
+final remoteSession = await client.remoteKeys.reshare(
+  key: oldRemoteKey.key,     // ← the crws-…:crwsv-… resource id
+  curve: wallet.curve,
+);
+
+// 2a. Prompt the user for the code, then validate.
+final validation = await client.remoteKeys.validate(
+  session: remoteSession.session,
+  code: userEnteredSmsCode,
+);
+final newRemoteKey = validation.remoteKey;   // crws-…:crwsv-NEW
+
+// 3. Mint a fresh device-share pair for this device.
 final freshPair = await client.storeKeys.create();
 // freshPair = { private: <64-byte base64>, public: <X.509 PKIX b64> }
 await keystore.writeDeviceShare(value: freshPair.private, password: password);
 
-// 3. Reshare to a NEW committee with the same shape, swapping in the
-//    fresh StoreKey public. oldKeys lists the two reachable shares
-//    (Remote + Password); newKeys lists the new committee.
+// 3a. Derive the Password share's pubkey for this wallet's WalletKey
+//     id (the password's pubkey is salted with the WalletKey uuid
+//     server-side — see StoreKeyApi.derivePassword).
+final oldPassword = wallet.keys.firstWhere((k) => k.type == 'Password');
+final passwordPub = await client.storeKeys.derivePassword(
+  password: password,
+  walletKeyId: oldPassword.id,
+);
+
+// 4. Reshare. The same newRemoteKey value goes on BOTH the
+//    old-committee RemoteKey AND the new-committee RemoteKey
+//    descriptors — the server has internally bound the new
+//    session to the wallet's RemoteKey share for the duration of
+//    the reshare ceremony.
 await client.wallets.reshare(
   walletId: wallet.id,
   old: [
-    KeyDescription(id: remoteWalletKeyId, type: 'RemoteKey', key: remoteSessionKey),
-    KeyDescription(id: passwordWalletKeyId, type: 'Password', key: passwordPublicForKeyId),
+    // Local Plain / StoreKey shares — id is enough, no key needed.
+    // We list the StoreKey here even though its private is gone,
+    // so libwallet knows about the share we're replacing.
+    KeyDescription(id: oldRemoteKey.id,
+                   key: newRemoteKey,        // ← NEW id, NOT oldRemoteKey.key
+                   type: 'RemoteKey'),
+    KeyDescription(id: oldPassword.id,
+                   key: passwordPub.publicKey,
+                   type: 'Password'),
   ],
   newKeys: [
-    KeyDescription(type: 'StoreKey', key: freshPair.public),
-    KeyDescription(type: 'RemoteKey', key: remoteSessionKey),
-    KeyDescription(type: 'Password', key: passwordPublicForKeyId),
+    KeyDescription(type: 'StoreKey',  key: freshPair.public),
+    KeyDescription(type: 'RemoteKey', key: newRemoteKey),       // ← same NEW id
+    KeyDescription(type: 'Password',  key: passwordPub.publicKey),
   ],
 );
 
-// 4. Wallet.modified is now newer; the wallet's address (Pubkey /
+// 5. Wallet.modified is now newer; the wallet's address (Pubkey /
 //    Chaincode) is preserved by the reshare, so existing
 //    on-chain assets stay where they are.
 ```
@@ -95,14 +156,20 @@ the keys you actually hold.
 
 ### What if reshare fails?
 
-A reshare can fail if either `RemoteKey` (server unreachable) or
-`Password` (user mistyped) is currently unusable. Surface a
-specific error per failure mode — "couldn't reach WalletSign
-backend, try again on a stable connection" vs. "password didn't
-unlock the wallet" — and retry. Do **not** prompt the user to
-"restore from another backup"; that's a different remediation
-that only applies when the wallet itself is gone, not just one of
-its shares.
+A reshare can fail if either `RemoteKey` (server unreachable, or
+the SMS code was wrong / expired) or `Password` (user mistyped)
+is currently unusable. Surface a specific error per failure mode
+— "couldn't reach WalletSign backend, try again on a stable
+connection" vs. "password didn't unlock the wallet" — and retry.
+Do **not** prompt the user to "restore from another backup";
+that's a different remediation that only applies when the wallet
+itself is gone, not just one of its shares.
+
+If you see `invalid status for wallet sign session: done`, you
+skipped step 2 — the wallet's stored RemoteKey id is the OLD
+(done) session and you need to run `RemoteKey:reshare` +
+`:validate` to get a fresh one. The error is the server
+correctly refusing to re-engage a retired session.
 
 ## Device-to-device transfer — QR-driven, no reshare needed
 
