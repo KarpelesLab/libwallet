@@ -6,7 +6,6 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:libwallet/libwallet.dart';
-import 'package:path_provider/path_provider.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -22,13 +21,17 @@ void main() {
     final t0 = DateTime.now();
     String elapsed() =>
         '${DateTime.now().difference(t0).inMilliseconds}ms';
-    print('[setUpAll T+0] getApplicationDocumentsDirectory…');
-    final appDir = await getApplicationDocumentsDirectory();
-    print('[setUpAll T+${elapsed()}] appDir=${appDir.path}');
-    tempDir = Directory('${appDir.path}/libwallet-test');
-    if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
-    tempDir.createSync();
-    print('[setUpAll T+${elapsed()}] tempDir ready');
+    // Use `dart:io`'s sandboxed temp dir instead of path_provider's
+    // `getApplicationDocumentsDirectory()`. On iOS+Android the latter
+    // pulls in `path_provider_foundation` → `objective_c`, which
+    // ships an arm64e-only simulator framework that the Apple Silicon
+    // GitHub runner refuses to load (the framework's fat binary has
+    // arm64e but the sim process is plain arm64). systemTemp resolves
+    // to `NSTemporaryDirectory()` on iOS — writable inside the
+    // sandbox, no plugin needed.
+    print('[setUpAll T+0] Directory.systemTemp.createTempSync…');
+    tempDir = Directory.systemTemp.createTempSync('libwallet-test-');
+    print('[setUpAll T+${elapsed()}] tempDir=${tempDir.path}');
 
     // Load the c-shared library via FFI — no platform channel needed.
     // On iOS the lib is statically linked into the app binary.

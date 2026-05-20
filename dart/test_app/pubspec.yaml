@@ -12,7 +12,6 @@ dependencies:
     sdk: flutter
   libwallet:
     path: ..
-  path_provider: ^2.1.0
 
 dev_dependencies:
   flutter_test:
@@ -20,6 +19,20 @@ dev_dependencies:
   integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+
+# Pin objective_c to 9.2.4. The library is pulled in transitively
+# via atonline_api → flutter_secure_storage_windows → path_provider
+# → path_provider_foundation; objective_c's Dart `hook/build.dart`
+# produces the framework binary. On macos-latest GitHub Actions
+# (M-series host) the 9.2.5+ build hook output is `arm64e`-only for
+# the iphonesimulator slice, which the arm64 simulator process
+# refuses to dlopen with "(fat file, but missing compatible
+# architecture (have 'arm64e', need 'arm64'))" at app launch.
+# 9.2.4 is the last version whose hook produced a plain `arm64`
+# simulator slice that the runner can load. Re-evaluate when
+# objective_c ships a fix upstream.
+dependency_overrides:
+  objective_c: 9.2.4
 
 flutter:
   uses-material-design: true
