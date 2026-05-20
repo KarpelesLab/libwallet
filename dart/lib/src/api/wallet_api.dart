@@ -91,6 +91,18 @@ class WalletApi {
   /// a suggested filename and base64url-encoded encrypted payload. Pass the
   /// entries (as a list of `{filename, data}` maps) back to [restore] to
   /// restore a wallet.
+  ///
+  /// **The device share is deliberately NOT included.** A `Wallet:backup`
+  /// blob is safe to store in iCloud / Drive / a flash drive — its three
+  /// encrypted key shares are still useless without one of (a) the device
+  /// share private key (held in your platform keystore), (b) a successful
+  /// `RemoteKey` authentication against the WalletSign backend, or
+  /// (c) the user's wallet password. Restoring on a fresh device leaves
+  /// the device share unreachable; the host is expected to mint a fresh
+  /// device share and call [reshare] to rotate the committee onto it.
+  /// See `doc/device_share.md` for the full restore-and-rotate flow plus
+  /// the narrow case where bundling the device share alongside the
+  /// backup (an opt-in user-driven device-transfer export) is OK.
   Future<List<WalletBackupEntry>> backup(String walletId) async {
     final data = await _conn.request('Wallet/$walletId:backup', 'GET');
     if (data == null) return [];
@@ -100,6 +112,17 @@ class WalletApi {
   }
 
   /// Restore wallets from backup files.
+  ///
+  /// After this call returns, the wallet's encrypted key shares are back
+  /// in libwallet's local store but the device share's private key isn't
+  /// — `Wallet:backup` excludes it by design (see [backup]). On a fresh
+  /// device the host MUST mint a new device share via
+  /// `client.storeKeys.create()` and call [reshare] to rotate the
+  /// committee onto it BEFORE offering any signing UI. The wallet's
+  /// public key / address survives the reshare, so on-chain funds stay
+  /// at the same address. Skipping this step leaves the user with a
+  /// wallet that can read but can't sign. Full flow in
+  /// `doc/device_share.md`.
   Future<Map<String, dynamic>> restore(
       List<Map<String, String>> files) async {
     final data = await _conn.request('Wallet:restore', 'POST', {

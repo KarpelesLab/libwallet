@@ -160,6 +160,22 @@ final result = await client.swap.execute(quoteId: quote.quoteId, keys: keys);
 Full walkthrough with UI patterns, copy guidelines, and error
 handling: **[`doc/swap_integration.md`](doc/swap_integration.md)**.
 
+## Backup, restore, and the device share
+
+Every libwallet wallet is 1-of-3 threshold-signed (StoreKey +
+RemoteKey + Password — any two can sign). `Wallet:backup`
+returns a JSON blob that's safe to store anywhere; it does NOT
+include the device share's private key, which lives in your
+platform keystore. After restoring on a fresh device, the host
+must mint a new device share and reshare onto it before signing
+— the wallet's address is preserved by the reshare so funds stay
+put. There's also an opt-in path to bundle the device share with
+the backup for a device transfer, with the obvious security
+tradeoff.
+
+Full guidance for implementors:
+**[`doc/device_share.md`](doc/device_share.md)**.
+
 ## Native Library
 
 **No Go toolchain required.** This package ships with a Dart build hook
