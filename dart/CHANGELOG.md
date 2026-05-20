@@ -15,6 +15,42 @@
   `doc/device_share.md` under the "Device-to-device transfer"
   section.
 
+- **Security: tss-lib v2.2.8 → v2.2.9.** Big upstream hardening
+  release covering both DKLs23 and FROST. Highlights: FROST round-2
+  shares are now wire-encrypted (X25519 + HKDF + ChaCha20-Poly1305)
+  instead of relying on broker-layer encryption alone; FROST nonce
+  generation follows RFC 9591 §4.1 verbatim; FROST DKG round 1 has
+  identity + sid binding hardened, and resharing carries a
+  per-dealer Schnorr PoK on `wi` with deep `Xi` scrub via
+  `Key.Zeroize`; DKLs23 signing gets a broker-driven Mul-then-check
+  party (`SigningCheckedParty`) with identifiable abort, plus an
+  echo-broadcast defense against K_i equivocation, an
+  echo-coverage fix that closes the omitted-dealer hole, and
+  sid-binding hardening that mixes `T` into keygen/refresh
+  sessions; format-magic-byte + hash validation on
+  `dklstss.ImportKey`. All-additive on the libwallet side — every
+  existing sign / reshare / promote / device-transfer test passes
+  against 2.2.9 without code changes.
+
+- **CI: iOS simulator integration tests no longer flake.** The
+  "Application … is unknown to FrontBoard" / "Simulator device
+  failed to launch" failures that hit ~20% of runs since the
+  macos-latest image moved to M-series were two underlying bugs:
+  the dart-test workflow's device-type picker landed on iPhone
+  XS Max under iOS 18.x (which trips
+  `FBOpenApplicationServiceErrorDomain` at launch), and the
+  "fresh sim per job" workaround didn't reset the shared
+  CoreSimulator service's stale state. Picker now sorts by
+  parsed iPhone model number + variant rank
+  (base < Plus < Pro < Pro Max) so it always picks the most
+  recent iPhone the runtime supports, and the workflow runs
+  `simctl shutdown all` + `simctl erase all` + `killall
+  Simulator` to reset the service cleanly. Also pinned
+  `objective_c` to 9.2.4 in the test_app (pre-arm64e-regression)
+  + dropped the test's `path_provider` dependency in favour of
+  `Directory.systemTemp` so the objective_c framework never
+  enters the iOS build closure.
+
 ## 0.4.35
 
 - **Modernized: TSS protocols.** All new wallets are now created
