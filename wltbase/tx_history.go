@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/big"
@@ -36,13 +37,71 @@ import (
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/libwallet/wlttx"
+	"github.com/KarpelesLab/pobj"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
+
+func init() {
+	pobj.RegisterStatic("Transaction:backfill", apiTransactionBackfill)
+}
+
+// apiTransactionBackfill exposes the otherwise-implicit tx-history
+// backfill machinery to hosts that want to force a sweep without
+// relying on the `account:current_changed` / `network:current_changed`
+// side-effects. Idempotent — if a sweep is already in flight for
+// (currentAccount, currentNetwork) the call is a no-op and returns
+// `{started: false}`. Otherwise schedules a fresh sweep against the
+// network's `TxHistoryProvider` and returns `{started: true,
+// provider: <name>}` immediately; the sweep runs in the background
+// and emits `tx:history_updated` on completion just like the
+// implicit path does.
+//
+// Useful for "Pull to refresh" UIs and post-import flows where the
+// host knows there's new history to pick up but hasn't toggled the
+// current account / network.
+func apiTransactionBackfill(ctx context.Context, in *struct{}) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	envv, ok := e.(*env)
+	if !ok {
+		return nil, errors.New("env is not the wltbase env type")
+	}
+	acct, err := wltacct.CurrentAccount(e)
+	if err != nil {
+		return nil, fmt.Errorf("no current account: %w", err)
+	}
+	n, err := wltnet.CurrentNetwork(e)
+	if err != nil {
+		return nil, fmt.Errorf("no current network: %w", err)
+	}
+	provider := n.TxHistoryProvider()
+	if provider == "" {
+		return map[string]any{
+			"started":  false,
+			"provider": "",
+			"reason":   "no tx-history provider implemented for " + n.Type,
+		}, nil
+	}
+	// scheduleTxHistoryBackfill is idempotent via the in-flight
+	// LoadOrStore map; second concurrent call lands as a no-op.
+	key := acct.Id.String() + "/" + n.Id.String()
+	v, _ := txHistoryBackfillInFlight.LoadOrStore(key, new(atomic.Bool))
+	flag := v.(*atomic.Bool)
+	alreadyRunning := flag.Load()
+	scheduleTxHistoryBackfill(envv, acct, n)
+	return map[string]any{
+		"started":  !alreadyRunning,
+		"provider": provider,
+	}, nil
+}
 
 const (
 	// txHistoryTimeout caps one full backfill sweep. We don't want a
@@ -105,10 +164,10 @@ func scheduleTxHistoryBackfill(e *env, acct *wltacct.Account, n *wltnet.Network)
 	if e == nil || acct == nil || acct.Id == nil || n == nil || n.Id == nil {
 		return
 	}
-	if n.Type != "evm" {
-		// v1: EVM only. BTC and Solana have their own indexing
-		// stories (xpub-scan + getSignaturesForAddress respectively)
-		// and can come in follow-up commits.
+	if n.TxHistoryProvider() == "" {
+		// No on-chain indexer wired for this chain — skip silently.
+		// Bitcoin family still falls in this bucket; its xpub-scan
+		// story can come in a follow-up.
 		return
 	}
 	if acct.GetAddress() == "" || acct.GetAddress() == "N/A" {
@@ -133,24 +192,44 @@ func scheduleTxHistoryBackfill(e *env, acct *wltacct.Account, n *wltnet.Network)
 func runTxHistoryBackfill(ctx context.Context, e *env, acct *wltacct.Account, n *wltnet.Network) {
 	log := slog.Default().With("component", "tx_history", "account", acct.Id.String(), "network", n.Id.String())
 
-	count, err := backfillEVMFromModchain(ctx, e, acct, n)
-	if err == nil && count > 0 {
-		log.Info("backfilled from modchain", "count", count)
-		broadcastTxHistoryUpdated(acct, n, count)
+	switch n.Type {
+	case "solana":
+		count, err := backfillSolanaFromSignatures(ctx, e, acct, n)
+		if err == nil {
+			if count > 0 {
+				log.Info("backfilled from getSignaturesForAddress", "count", count)
+				broadcastTxHistoryUpdated(acct, n, count)
+			}
+			return
+		}
+		log.Debug("getSignaturesForAddress unavailable", "err", err)
 		return
-	}
-	if err != nil {
-		log.Debug("modchain_historyByAddress unavailable", "err", err)
-	}
 
-	count, err = backfillEVMFromOtterscan(ctx, e, acct, n)
-	if err == nil && count > 0 {
-		log.Info("backfilled from ots_searchTransactionsAfter", "count", count)
-		broadcastTxHistoryUpdated(acct, n, count)
-		return
-	}
-	if err != nil {
-		log.Debug("ots_searchTransactionsAfter unavailable", "err", err)
+	case "evm":
+		count, err := backfillEVMFromModchain(ctx, e, acct, n)
+		if err == nil && count > 0 {
+			log.Info("backfilled from modchain", "count", count)
+			broadcastTxHistoryUpdated(acct, n, count)
+			return
+		}
+		if err != nil {
+			log.Debug("modchain_historyByAddress unavailable", "err", err)
+		}
+
+		count, err = backfillEVMFromOtterscan(ctx, e, acct, n)
+		if err == nil && count > 0 {
+			log.Info("backfilled from ots_searchTransactionsAfter", "count", count)
+			broadcastTxHistoryUpdated(acct, n, count)
+			return
+		}
+		if err != nil {
+			log.Debug("ots_searchTransactionsAfter unavailable", "err", err)
+		}
+	default:
+		// bitcoin family / future chains — no tx-history provider
+		// implemented yet. Surfaced via Network.TxHistoryProvider so
+		// hosts can tell "indexer empty" from "indexer not
+		// implemented".
 	}
 }
 

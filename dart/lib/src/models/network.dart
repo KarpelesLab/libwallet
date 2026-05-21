@@ -68,6 +68,24 @@ class Network {
   /// Timestamp when the network was last updated.
   final DateTime updated;
 
+  /// Name of the on-chain transaction-history provider libwallet
+  /// uses to populate the local Transaction table for this
+  /// network, or empty when no provider is implemented yet. Use
+  /// this to distinguish "indexer hasn't returned anything yet"
+  /// (provider non-empty + Transaction list empty) from "indexer
+  /// not implemented on this chain" (provider empty + Transaction
+  /// list always empty). Stable values:
+  ///
+  ///   - `"modchain"`   — EVM (primary), via modchain_historyByAddress
+  ///   - `"otterscan"`  — EVM (fallback), via ots_searchTransactionsAfter
+  ///   - `"signatures"` — Solana, via getSignaturesForAddress + getTransaction
+  ///   - `""`           — no provider (bitcoin family, custom chains, …)
+  ///
+  /// Hosts that render a "Powered by …" badge can read this; UIs
+  /// that want to hide the tx tab on chains without an indexer
+  /// should check for `txHistoryProvider.isEmpty`.
+  final String txHistoryProvider;
+
   const Network({
     required this.id,
     required this.type,
@@ -82,6 +100,7 @@ class Network {
     required this.priority,
     required this.created,
     required this.updated,
+    this.txHistoryProvider = '',
   });
 
   factory Network.fromJson(Map<String, dynamic> json) {
@@ -100,6 +119,7 @@ class Network {
       priority: json['Priority'] as int? ?? 0,
       created: DateTime.parse(json['Created'] as String),
       updated: DateTime.parse(json['Updated'] as String),
+      txHistoryProvider: json['TxHistoryProvider'] as String? ?? '',
     );
   }
 
@@ -118,6 +138,8 @@ class Network {
         'Priority': priority,
         'Created': created.toIso8601String(),
         'Updated': updated.toIso8601String(),
+        if (txHistoryProvider.isNotEmpty)
+          'TxHistoryProvider': txHistoryProvider,
       };
 
   /// Block-explorer URL for [txHash] on this network. Returns `""`

@@ -278,6 +278,7 @@ func (n *Network) MarshalJSON() ([]byte, error) {
 		"TestNet":               n.TestNet,
 		"Created":               n.Created,
 		"Updated":               n.Updated,
+		"TxHistoryProvider":     n.TxHistoryProvider(),
 	}
 
 	switch n.Type {
@@ -291,6 +292,34 @@ func (n *Network) MarshalJSON() ([]byte, error) {
 
 func (n *Network) String() string {
 	return n.Type + "." + n.ChainId
+}
+
+// TxHistoryProvider returns the name of the on-chain transaction-
+// history provider that libwallet's `Transaction:backfill`
+// machinery uses for this network, or empty when no provider is
+// implemented yet. Hosts use this to distinguish "indexer hasn't
+// returned anything yet" (provider non-empty + Transaction list
+// empty) from "indexer not implemented on this chain" (provider
+// empty + Transaction list always empty). Stable values:
+//
+//   - `"modchain"`  — EVM, via modchain_historyByAddress (primary)
+//   - `"otterscan"` — EVM, via ots_searchTransactionsAfter (fallback)
+//   - `"signatures"` — Solana, via getSignaturesForAddress + getTransaction
+//   - `""`           — no provider (bitcoin family, …)
+//
+// The actual provider used per call may differ when the primary
+// errors (e.g. EVM falls back from modchain to Otterscan); the
+// returned string is the *advertised* primary so hosts can render
+// "Powered by …" or hide the tx tab on chains with no indexer.
+func (n *Network) TxHistoryProvider() string {
+	switch n.Type {
+	case "evm":
+		return "modchain"
+	case "solana":
+		return "signatures"
+	default:
+		return ""
+	}
 }
 
 func (n *Network) GetChainInfo() (*chains.ChainInfo, error) {
@@ -645,6 +674,19 @@ func (n *Network) DoRPCNamed(method string, args map[string]any) (json.RawMessag
 }
 
 // DoRPCNamedCtx lets the caller pass a context for timeout / cancellation.
+//
+// Bypasses [ethrpc.RPC.DoNamedCtx]: that method calls
+// `NewRequest(method, args)` which uses variadic packing — the
+// single map argument gets wrapped into a one-element slice, so the
+// wire shape lands as `"params": [{...}]` (positional with one
+// object), not `"params": {...}` (true named-params). Helius DAS
+// reads positionally for unknown methods and rejects the leading
+// object with `invalid type: map, expected a string at line 1
+// column 1`, breaking every Solana DAS call. `NewRequestMap` is the
+// helper that produces the correct shape; call SendCtx with it
+// directly until upstream ships
+// https://github.com/KarpelesLab/ethrpc fix that points DoNamedCtx
+// at NewRequestMap.
 func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[string]any) (json.RawMessage, error) {
 	e, err := n.getRPC()
 	if err != nil {
@@ -653,7 +695,7 @@ func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[str
 	start := time.Now()
 	var res json.RawMessage
 	if r, ok := e.(*ethrpc.RPC); ok {
-		res, err = r.DoNamedCtx(ctx, method, args)
+		res, err = r.SendCtx(ctx, ethrpc.NewRequestMap(method, args))
 	} else {
 		// Fallback (shouldn't happen with current ethrpc.New): use positional.
 		res, err = e.DoCtx(ctx, method, args)

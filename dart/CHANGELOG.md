@@ -1,3 +1,59 @@
+## 0.4.38
+
+- **Added: Solana on-chain transaction-history backfill.** The
+  `Account:setCurrent` / `Network:setCurrent` side-effect that
+  already populated the Dart `Transaction` table for EVM accounts
+  (via `modchain_historyByAddress` / `ots_searchTransactionsAfter`)
+  now also covers Solana, via
+  `getSignaturesForAddress` + `getTransaction` (`jsonParsed`).
+  Hosts that already wired up `client.transactions.list(from: …)`
+  / `LibwalletClient.txHistoryUpdates` for EVM get the wallet's
+  Solana history with no additional changes — the rows just land
+  in the same table on the same `tx:history_updated` event. Each
+  signature condenses into one row: native SOL transfers and SPL
+  token transfers are detected by walking the parsed instruction
+  list (system-program `transfer`, spl-token / spl-token-2022
+  `transfer` / `transferChecked`); anything else (DEX swaps, NFT
+  mints, multi-step program calls) gets surfaced as
+  `type: "other"` with the account's net SOL balance delta as the
+  amount.
+
+- **Added: `Network.txHistoryProvider`.** New JSON field on the
+  Network model (and a `Network.txHistoryProvider()` Go method
+  feeding it) so hosts can tell "indexer hasn't returned anything
+  yet" from "no indexer implemented on this chain". Stable
+  values: `"modchain"` (EVM, primary), `"otterscan"` (EVM,
+  fallback), `"signatures"` (Solana), `""` (no provider — Bitcoin
+  family, custom chains). Hosts that want to hide the
+  transactions tab on chains without indexer support can check
+  `network.txHistoryProvider.isEmpty`.
+
+- **Added: `Transaction:backfill` endpoint** /
+  `client.transactions.backfill()`. Forces a tx-history sweep for
+  the current (account, network) without juggling
+  `Account:setCurrent` / `Network:setCurrent` to retrigger the
+  side-effect path. Useful for pull-to-refresh in the
+  transactions tab, post-import refreshes, and retry-after-blip
+  flows. Idempotent — concurrent calls are deduped via the
+  in-flight map the existing backfill already uses. Returns
+  `{started, provider, reason?}` so the caller can render an
+  immediate "Refreshing…" state and know whether to wait for the
+  `tx:history_updated` event or fall through (no provider).
+
+- **Fixed: Solana `getAssetsByOwner` and other DAS calls.**
+  `wltnet.Network.DoRPCNamedCtx` was routing through
+  `ethrpc.RPC.DoNamedCtx`, which has a variadic-packing bug that
+  serialised the named-params map as a one-element positional
+  array (`"params": [{ownerAddress: "…"}]`) instead of a true
+  named object (`"params": {ownerAddress: "…"}`). Helius returns
+  `jsonrpc error -32602: invalid type: map, expected a string at
+  line 1 column 1` for the wrong shape. Now bypasses the wrapper
+  by calling `r.SendCtx(ctx, ethrpc.NewRequestMap(method, args))`
+  directly. Unblocks Solana token auto-discovery on every Helius
+  endpoint. Upstream fix has been dispatched to the ethrpc
+  maintainer; the libwallet-side workaround stays in place
+  regardless.
+
 ## 0.4.37
 
 - **Docs: cross-device-import recovery flow.** The

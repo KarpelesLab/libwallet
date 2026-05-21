@@ -115,6 +115,43 @@ class TransactionApi {
     return Transaction.fromJson(data as Map<String, dynamic>);
   }
 
+  /// Force a tx-history backfill sweep for the current
+  /// (account, network) without waiting for the implicit
+  /// `setCurrent`-side-effect path.
+  ///
+  /// libwallet already kicks one of these off whenever the current
+  /// account or network changes, so most hosts never need to call
+  /// this directly. Reach for it when:
+  ///
+  ///   - **Pull-to-refresh in the transactions tab** — the user
+  ///     expects an immediate sweep, but the active (account,
+  ///     network) hasn't actually changed.
+  ///   - **Post-import** — `Wallet:restore` or device-transfer
+  ///     just landed a wallet, and you want to populate the
+  ///     transactions list before the user navigates into it.
+  ///   - **Recovering from a network blip** — an earlier sweep
+  ///     failed (no rows landed, no `tx:history_updated` fired);
+  ///     this lets you retry without touching the current pointer.
+  ///
+  /// The call returns immediately with `{started, provider, …}`:
+  ///
+  ///   - `started: true` — a fresh sweep is now running in the
+  ///     background. Watch [LibwalletClient.txHistoryUpdates] for
+  ///     the resulting `tx:history_updated` event when it lands.
+  ///   - `started: false` — either a sweep was already in flight
+  ///     for this (account, network) (idempotent dedup), OR the
+  ///     network has no tx-history provider implemented (check
+  ///     `Network.txHistoryProvider` to disambiguate; the
+  ///     response carries a `reason` field on the no-provider
+  ///     path).
+  ///   - `provider` — the same string [Network.txHistoryProvider]
+  ///     returns; mirrored back so the caller doesn't need a
+  ///     separate fetch.
+  Future<Map<String, dynamic>> backfill() async {
+    final data = await _conn.request('Transaction:backfill', 'POST', {});
+    return Map<String, dynamic>.from(data as Map);
+  }
+
   /// Compute the maximum amount sendable from [from] in the given
   /// [asset], accounting for network fees and, on Solana, the
   /// rent-exempt minimums the sender must retain and a new recipient
