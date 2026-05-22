@@ -7,7 +7,7 @@ require (
 	github.com/KarpelesLab/base58 v1.1.1
 	github.com/KarpelesLab/cryptutil v0.3.0
 	github.com/KarpelesLab/emitter v0.3.1
-	github.com/KarpelesLab/ethrpc v0.2.11
+	github.com/KarpelesLab/ethrpc v0.2.12
 	github.com/KarpelesLab/feapi v0.2.7
 	github.com/KarpelesLab/outscript v0.3.29
 	github.com/KarpelesLab/pjson v0.2.0

@@ -1,3 +1,14 @@
+## 0.4.39
+
+- **ethrpc v0.2.11 → v0.2.12.** Upstream landed the
+  `DoNamedCtx` fix that 0.4.38's `Network.DoRPCNamedCtx` was
+  working around (the variadic-packing bug that serialised
+  named-params as `"params":[{...}]` instead of `"params":{...}`).
+  `Network.DoRPCNamedCtx` reverts to its natural one-liner
+  (`r.DoNamedCtx(ctx, method, args)`); the workaround is no
+  longer needed. No behaviour change for callers — Solana
+  `getAssetsByOwner` and other DAS calls keep working.
+
 ## 0.4.38
 
 - **Added: Solana on-chain transaction-history backfill.** The

@@ -674,19 +674,6 @@ func (n *Network) DoRPCNamed(method string, args map[string]any) (json.RawMessag
 }
 
 // DoRPCNamedCtx lets the caller pass a context for timeout / cancellation.
-//
-// Bypasses [ethrpc.RPC.DoNamedCtx]: that method calls
-// `NewRequest(method, args)` which uses variadic packing — the
-// single map argument gets wrapped into a one-element slice, so the
-// wire shape lands as `"params": [{...}]` (positional with one
-// object), not `"params": {...}` (true named-params). Helius DAS
-// reads positionally for unknown methods and rejects the leading
-// object with `invalid type: map, expected a string at line 1
-// column 1`, breaking every Solana DAS call. `NewRequestMap` is the
-// helper that produces the correct shape; call SendCtx with it
-// directly until upstream ships
-// https://github.com/KarpelesLab/ethrpc fix that points DoNamedCtx
-// at NewRequestMap.
 func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[string]any) (json.RawMessage, error) {
 	e, err := n.getRPC()
 	if err != nil {
@@ -695,7 +682,7 @@ func (n *Network) DoRPCNamedCtx(ctx context.Context, method string, args map[str
 	start := time.Now()
 	var res json.RawMessage
 	if r, ok := e.(*ethrpc.RPC); ok {
-		res, err = r.SendCtx(ctx, ethrpc.NewRequestMap(method, args))
+		res, err = r.DoNamedCtx(ctx, method, args)
 	} else {
 		// Fallback (shouldn't happen with current ethrpc.New): use positional.
 		res, err = e.DoCtx(ctx, method, args)
