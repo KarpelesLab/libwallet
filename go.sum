@@ -23,8 +23,8 @@ github.com/KarpelesLab/edwards25519 v1.1.7 h1:03Yr0HxxIvzuupdqLKRjC9P6Em3rl+CpgD
 github.com/KarpelesLab/edwards25519 v1.1.7/go.mod h1:NikirayExusFY4vgi5ENCCMxOjkcF8uD6yA/y+a2iJ8=
 github.com/KarpelesLab/emitter v0.3.1 h1:3uLKPoX+pNv4lQp0T/eD1gNkS/yakuKR0poZ9vUQIgI=
 github.com/KarpelesLab/emitter v0.3.1/go.mod h1:JOaQADpNVN0OJfhkDurRCUkMEotPM8Pukh3DadTOY+4=
-github.com/KarpelesLab/ethrpc v0.2.12 h1:ek54yj962tZL6iZ2zmgY20ubw6v9f08y9y0glQW8RdI=
-github.com/KarpelesLab/ethrpc v0.2.12/go.mod h1:YovY3YaYAtl5awPXlDTP6tPP8PJRKqoBx4dSJx2q6ro=
+github.com/KarpelesLab/ethrpc v0.2.13 h1:wVxwBjQJi0qC6tn0IT9bk07dkzIxfI/9oL1gHHy24dU=
+github.com/KarpelesLab/ethrpc v0.2.13/go.mod h1:YovY3YaYAtl5awPXlDTP6tPP8PJRKqoBx4dSJx2q6ro=
 github.com/KarpelesLab/feapi v0.2.7 h1:1+ftJLAqAcCZAbGObNRNlH/oSfg7d7ao0OY9ArXAGDI=
 github.com/KarpelesLab/feapi v0.2.7/go.mod h1:1rQ3TA2zgVxHcQf+3At3oeS8jVkuK471SxoNXbP1aT8=
 github.com/KarpelesLab/lngdb v1.0.1 h1:vJcjRN0/4IaAbCWBrXN9YpGs7ZmmReAZA3B0bbRs5RE=
