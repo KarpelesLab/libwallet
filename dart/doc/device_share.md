@@ -88,7 +88,6 @@ final wallet = await client.wallets.get(walletId);
 final oldRemoteKey = wallet.keys.firstWhere((k) => k.type == 'RemoteKey');
 final remoteSession = await client.remoteKeys.reshare(
   key: oldRemoteKey.key,     // ← the crws-…:crwsv-… resource id
-  curve: wallet.curve,
 );
 
 // 2a. Prompt the user for the code, then validate.

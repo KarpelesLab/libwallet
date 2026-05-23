@@ -66,7 +66,14 @@ class Wallet {
     return Wallet(
       id: json['Id'] as String,
       name: json['Name'] as String? ?? '',
-      curve: json['Curve'] as String? ?? 'secp256k1',
+      // Curve carries through verbatim. The pre-0.4.41 default of
+      // `'secp256k1'` for a missing field was a foot-gun: an ed25519
+      // wallet whose serialised JSON dropped or blanked `Curve`
+      // appeared as a secp256k1 wallet to the host, then mis-routed
+      // the next ceremony (notably reshare) into the wrong protocol
+      // family. Hosts that need a default should pick one explicitly
+      // with the wallet's full context.
+      curve: json['Curve'] as String? ?? '',
       protocol: json['Protocol'] as String? ?? '',
       threshold: json['Threshold'] as int? ?? 0,
       gen: json['Gen'] as int? ?? 0,

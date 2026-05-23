@@ -45,13 +45,15 @@ class RemoteKeyApi {
   /// session's identifier is returned by [validate] as
   /// `RemoteKeyValidation.remoteKey`; see that field's docstring
   /// for how to thread it into `Wallet:reshare`.
-  Future<RemoteKeySession> reshare({
-    required String key,
-    required String curve,
-  }) async {
+  ///
+  /// As of 0.4.41 this no longer takes a `curve` argument — the
+  /// server records the remote key's curve at issue time so the
+  /// caller doesn't need to (and shouldn't) pass it back in.
+  /// Previously a host-side defaulted `wallet.curve` could mis-route
+  /// the reshare into the wrong ceremony.
+  Future<RemoteKeySession> reshare({required String key}) async {
     final data = await _conn.request('RemoteKey:reshare', 'POST', {
       'key': key,
-      'curve': curve,
     });
     return RemoteKeySession.fromJson(data as Map<String, dynamic>);
   }

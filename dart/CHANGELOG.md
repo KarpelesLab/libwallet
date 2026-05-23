@@ -1,3 +1,30 @@
+## 0.4.41
+
+- **Fixed: reshare ceremony was mis-routed when the host had a
+  stale/defaulted `wallet.curve`.** Two layers conspired:
+
+  - `Wallet.fromJson` silently defaulted a missing `Curve` to
+    `'secp256k1'`. An ed25519 wallet whose serialised payload
+    dropped or blanked the field appeared as secp256k1 to the host,
+    which then chose the wrong protocol for the next ceremony. The
+    factory now keeps an empty string instead — the host can pick
+    a default with full context if it needs one.
+  - `RemoteKey:reshare` (Go endpoint + `RemoteKeyApi.reshare` Dart
+    wrapper) accepted a `curve` parameter and forwarded it to
+    `Crypto/WalletSign:reshare`. The backend already records the
+    remote key's curve at issue time, so the right answer is to let
+    the backend pick — passing curve back in just opened the
+    foot-gun. The argument is removed on both sides; hosts that
+    used to call `remoteKeys.reshare(key: …, curve: wallet.curve)`
+    should drop the `curve:` argument (breaking change for that
+    one endpoint).
+
+  Net effect: a wallet's curve/protocol now flow from where they're
+  authoritative — the Wallet row server-side and the remote key
+  record on Crypto/WalletSign — instead of being re-derived from a
+  host-side cached value that might have lost the field along the
+  way.
+
 ## 0.4.40
 
 - **Fixed: `client.accounts.list(wallet: id)` now actually scopes to

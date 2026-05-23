@@ -72,16 +72,23 @@ func remoteSign(ctx context.Context, key string, hash []byte, il []byte, curve s
 	return res, restApplyRetry(withClientID(ctx), "Crypto/WalletSign:sign", "POST", rest.Param{"key": key, "hash": hex.EncodeToString(hash), "il": hex.EncodeToString(il), "curve": curve}, &res)
 }
 
-func remoteReshare(ctx context.Context, key string, curve string) (*remoteKeyNewResult, error) {
+// remoteReshare kicks a Crypto/WalletSign:reshare cycle for an
+// existing RemoteKey. The remote key's curve is recorded server-side
+// at first-issue time, so the caller does not — and should not — pass
+// it back in. Passing a curve here historically created a foot-gun
+// where a wrong/defaulted host-side value (e.g. `wallet.curve`
+// silently defaulting to `secp256k1` for an ed25519 wallet) routed the
+// reshare into the wrong ceremony and the new share refused to
+// validate.
+func remoteReshare(ctx context.Context, key string) (*remoteKeyNewResult, error) {
 	var res *remoteKeyNewResult
-	return res, restApplyRetry(withClientID(ctx), "Crypto/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3, "curve": curve}, &res)
+	return res, restApplyRetry(withClientID(ctx), "Crypto/WalletSign:reshare", "POST", rest.Param{"key": key, "threshold": 1, "count": 3}, &res)
 }
 
 func remotekeyReshare(ctx context.Context, in struct {
-	Key   string `json:"key"`
-	Curve string `json:"curve"`
+	Key string `json:"key"`
 }) (any, error) {
-	res, err := restDoRetry(withClientID(ctx), "Crypto/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3, "curve": in.Curve})
+	res, err := restDoRetry(withClientID(ctx), "Crypto/WalletSign:reshare", "POST", rest.Param{"key": in.Key, "threshold": 1, "count": 3})
 	if err != nil {
 		return nil, err
 	}
