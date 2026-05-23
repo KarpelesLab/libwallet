@@ -1,3 +1,42 @@
+## 0.4.42
+
+- **OKX adapter: migrated from V5 to V6 of OKX's DEX aggregator
+  API.** OKX deprecated V5 on the day 0.4.41 shipped, so every
+  `Crypto/Okx:quote` round-trip was returning HTTP 50050 ("V5 API
+  is being deprecated") and surfacing to the host as
+  `OKX: provider_unavailable`. The platform's `Crypto/Okx:*` proxy
+  was rewritten against `/api/v6/dex/aggregator/...`; libwallet
+  caught up here:
+
+  - request param `chainId` → `chainIndex` on `/quote`, `/swap`,
+    `/approveTransaction`;
+  - `/quote` no longer accepts a slippage parameter (V6 applies
+    slippage only at `/swap`);
+  - `/swap` param `slippage` (fraction, e.g. `0.005`) → `slippagePercent`
+    (percent, e.g. `0.5`);
+  - response field `chainId` → `chainIndex` on every entry;
+  - response field `priceImpactPercentage` → `priceImpactPercent`;
+  - response field `slippage` on `tx` → `slippagePercent`, plus new
+    `maxSpendAmount`;
+  - `dexRouterList` flattened: the V5 nested
+    `router/routerPercent/subRouterList/dexProtocol[]` tree
+    collapsed to a flat list of per-hop entries, each carrying a
+    single `dexProtocol` object plus its hop's from/to token
+    decoration. The route builder walks entries in order and emits
+    one `RouteHop` per entry.
+
+  No host-side changes. Quote / Execute / availability surfaces and
+  the `okx_solana` / `okx_evm` provider names are unchanged.
+
+- **Better diagnostics on empty OKX responses.** When OKX has no
+  route for a pair, the proxy returns a `[{}]` envelope and the
+  entry decodes into the zero value. Pre-0.4.42 this surfaced as
+  `provider_unavailable: okx: parse toTokenAmount`; now it surfaces
+  as `no_liquidity: okx: no route for <amount> <from> → <to> on
+  chain <chainIndex>` — both code and message reflect what
+  actually happened, so the host UI can downgrade to an advisory
+  instead of erroring.
+
 ## 0.4.41
 
 - **Fixed: reshare ceremony was mis-routed when the host had a

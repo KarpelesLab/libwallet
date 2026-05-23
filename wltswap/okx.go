@@ -117,16 +117,17 @@ type okxDexProtocol struct {
 	Percent string `json:"percent"`
 }
 
-type okxSubRouter struct {
-	DexProtocol []okxDexProtocol `json:"dexProtocol"`
-	FromToken   okxToken         `json:"fromToken"`
-	ToToken     okxToken         `json:"toToken"`
-}
-
+// okxRouter is one hop of OKX's flat V6 dexRouterList. V5 had a
+// nested router/subRouter tree with arrays of dexProtocols; V6
+// collapsed it: each entry carries a single dexProtocol object and
+// the from/to token decoration for that hop. Build the libwallet
+// RouteHop list by walking the entries in order.
 type okxRouter struct {
-	Router        string         `json:"router"`
-	RouterPercent string         `json:"routerPercent"`
-	SubRouterList []okxSubRouter `json:"subRouterList"`
+	DexProtocol    okxDexProtocol `json:"dexProtocol"`
+	FromToken      okxToken       `json:"fromToken"`
+	ToToken        okxToken       `json:"toToken"`
+	FromTokenIndex string         `json:"fromTokenIndex"`
+	ToTokenIndex   string         `json:"toTokenIndex"`
 }
 
 // okxPlatformFee is the platform's echo of the feePercent + referrer
@@ -141,16 +142,19 @@ type okxPlatformFee struct {
 }
 
 type okxQuoteEntry struct {
-	ChainId               string          `json:"chainId"`
-	FromTokenAmount       string          `json:"fromTokenAmount"`
-	ToTokenAmount         string          `json:"toTokenAmount"`
-	TradeFee              string          `json:"tradeFee"`
-	EstimateGasFee        string          `json:"estimateGasFee"`
-	PriceImpactPercentage string          `json:"priceImpactPercentage"`
-	FromToken             okxToken        `json:"fromToken"`
-	ToToken               okxToken        `json:"toToken"`
-	DexRouterList         []okxRouter     `json:"dexRouterList"`
-	PlatformFee           *okxPlatformFee `json:"platformFee,omitempty"`
+	ChainIndex         string          `json:"chainIndex"`
+	SwapMode           string          `json:"swapMode"`
+	ContextSlot        int64           `json:"contextSlot"`
+	Router             string          `json:"router"`
+	FromTokenAmount    string          `json:"fromTokenAmount"`
+	ToTokenAmount      string          `json:"toTokenAmount"`
+	TradeFee           string          `json:"tradeFee"`
+	EstimateGasFee     string          `json:"estimateGasFee"`
+	PriceImpactPercent string          `json:"priceImpactPercent"`
+	FromToken          okxToken        `json:"fromToken"`
+	ToToken            okxToken        `json:"toToken"`
+	DexRouterList      []okxRouter     `json:"dexRouterList"`
+	PlatformFee        *okxPlatformFee `json:"platformFee,omitempty"`
 }
 
 type okxSwapTx struct {
@@ -161,8 +165,9 @@ type okxSwapTx struct {
 	Gas                  string   `json:"gas"`
 	GasPrice             string   `json:"gasPrice"`
 	MaxPriorityFeePerGas string   `json:"maxPriorityFeePerGas"`
+	MaxSpendAmount       string   `json:"maxSpendAmount"`
 	MinReceiveAmount     string   `json:"minReceiveAmount"`
-	Slippage             string   `json:"slippage"`
+	SlippagePercent      string   `json:"slippagePercent"`
 	SignatureData        []string `json:"signatureData"`
 }
 
@@ -180,7 +185,7 @@ type okxApproveEntry struct {
 }
 
 type okxSupportedChain struct {
-	ChainId                string `json:"chainId"`
+	ChainIndex             string `json:"chainIndex"`
 	ChainName              string `json:"chainName"`
 	DexTokenApproveAddress string `json:"dexTokenApproveAddress"`
 }
@@ -188,19 +193,20 @@ type okxSupportedChain struct {
 // okxBlob caches what Execute needs from Quote: the raw tx pieces
 // returned by /swap so Execute doesn't have to re-quote.
 type okxBlob struct {
-	Tx          okxSwapTx
-	IsEVM       bool
-	NativeDec   int    // chain's native decimals — for parsing tx.value
-	ChainIdNum  string // OKX numeric chain id (501, 1, 56, …)
+	Tx            okxSwapTx
+	IsEVM         bool
+	NativeDec     int    // chain's native decimals — for parsing tx.value
+	ChainIndexNum string // OKX numeric chain index (501, 1, 56, …)
 }
 
 // ── shared helpers ──────────────────────────────────────────────
 
-// okxChainIdFor maps libwallet's Network.Type+ChainId pair onto
-// OKX's numeric chain id. Solana mainnet → "501", devnet → "103";
-// for EVM we forward n.ChainId verbatim because chainlist already
-// stores it numerically.
-func okxChainIdFor(n *wltnet.Network) (string, error) {
+// okxChainIndexFor maps libwallet's Network.Type+ChainId pair onto
+// OKX's numeric chain index (V6 vocabulary; same value space as V5's
+// `chainId`). Solana mainnet → "501", devnet → "103"; for EVM we
+// forward n.ChainId verbatim because chainlist already stores it
+// numerically.
+func okxChainIndexFor(n *wltnet.Network) (string, error) {
 	switch n.Type {
 	case "evm":
 		if n.ChainId == "" {
@@ -242,15 +248,16 @@ func okxTokenAddrFor(n *wltnet.Network, addr string) string {
 	return addr
 }
 
-// okxSlippageFraction converts libwallet's bps slippage into the
-// fraction OKX expects (0.005 = 0.5%). Cap at the documented
-// upper bound the OKX UI rejects above.
-func okxSlippageFraction(bps uint16) string {
+// okxSlippagePercent converts libwallet's bps slippage into the
+// percent string OKX's V6 /swap expects (50bps → "0.5"). V5 used a
+// fraction (0.005); V6 renamed the param to `slippagePercent` and
+// switched the units.
+func okxSlippagePercent(bps uint16) string {
 	if bps == 0 {
 		bps = DefaultSlippageBps
 	}
-	f := float64(bps) / 10_000.0
-	return strconv.FormatFloat(f, 'f', -1, 64)
+	pct := float64(bps) / 100.0
+	return strconv.FormatFloat(pct, 'f', -1, 64)
 }
 
 // okxCallEntry runs one Crypto/Okx:* endpoint and decodes the
@@ -276,7 +283,7 @@ func okxCallEntry[T any](ctx context.Context, endpoint string, params rest.Param
 // Quote.Provider / Quote.ProviderLabel so the UI keeps consistent
 // branding regardless of which chain the user is on.
 func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest, providerName, providerLabel string) (*Quote, error) {
-	chainId, err := okxChainIdFor(n)
+	chainIndex, err := okxChainIndexFor(n)
 	if err != nil {
 		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
 	}
@@ -289,11 +296,13 @@ func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 
 	var entry okxQuoteEntry
 	if err := okxCallEntry(ctx, "Crypto/Okx:quote", rest.Param{
-		"chainId":          chainId,
+		"chainIndex":       chainIndex,
 		"fromTokenAddress": fromAddr,
 		"toTokenAddress":   toAddr,
 		"amount":           req.AmountIn,
-		"slippage":         okxSlippageFraction(req.SlippageBps),
+		// V6 /quote takes no slippage parameter — slippage applies
+		// only at /swap. Pass req.SlippageBps through to the swap
+		// call instead.
 	}, &entry); err != nil {
 		return nil, err
 	}
@@ -302,9 +311,23 @@ func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 	if !ok {
 		amountIn, _ = new(big.Int).SetString(req.AmountIn, 10)
 	}
+	// When OKX has no route for the pair, the proxy still returns a
+	// `[{}]` envelope and the entry decodes into the zero value —
+	// every numeric field is the empty string. Distinguish that from
+	// a "parse error" so the host sees `no_liquidity` (which the UI
+	// downgrades to an advisory) rather than `provider_unavailable`
+	// (which surfaces as a hard error). The address / amount echo is
+	// useful when forwarding to OKX support.
+	if entry.ToTokenAmount == "" || entry.ToTokenAmount == "0" {
+		return nil, newErr(ErrCodeNoLiquidity, fmt.Sprintf(
+			"okx: no route for %s %s → %s on chain %s",
+			req.AmountIn, fromAddr, toAddr, chainIndex))
+	}
 	amountOut, ok := new(big.Int).SetString(entry.ToTokenAmount, 10)
 	if !ok {
-		return nil, newErr(ErrCodeProviderUnavailable, "okx: parse toTokenAmount "+entry.ToTokenAmount)
+		return nil, newErr(ErrCodeProviderUnavailable, fmt.Sprintf(
+			"okx: parse toTokenAmount %q for %s→%s on chain %s",
+			entry.ToTokenAmount, fromAddr, toAddr, chainIndex))
 	}
 
 	// minReceive: amountOut * (1 - slippage). OKX echoes the
@@ -319,10 +342,12 @@ func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 	minOut := new(big.Int).Mul(amountOut, bpsFactor)
 	minOut.Quo(minOut, big.NewInt(10_000))
 
-	// PriceImpact: percent string → fraction.
+	// PriceImpact: percent string → fraction. V6 renamed the field
+	// from V5's `priceImpactPercentage`; the unit (percent) is the
+	// same.
 	var priceImpact float64
-	if entry.PriceImpactPercentage != "" {
-		if pf, err := strconv.ParseFloat(entry.PriceImpactPercentage, 64); err == nil {
+	if entry.PriceImpactPercent != "" {
+		if pf, err := strconv.ParseFloat(entry.PriceImpactPercent, 64); err == nil {
 			priceImpact = pf / 100
 		}
 	}
@@ -363,7 +388,7 @@ func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 	// /supportedChains. Cache the lookup; same spender for every
 	// quote on a given chain.
 	if n.Type == "evm" && !okxIsNativeEVMInput(req.TokenIn.Address) {
-		spender, serr := okxApproveAddress(ctx, chainId)
+		spender, serr := okxApproveAddress(ctx, chainIndex)
 		if serr == nil && spender != "" {
 			q.ApprovalSpender = spender
 			q.NeededAllowance = wltobj.NewAmountRaw(new(big.Int).Set(amountIn), req.TokenIn.Decimals)
@@ -405,33 +430,42 @@ func okxApplyPlatformFee(q *Quote, fee *okxPlatformFee, req *QuoteRequest) {
 	}
 }
 
-// okxBuildRoute flattens OKX's nested dexRouterList → libwallet's
-// flat []RouteHop. We take the dominant router's first sub-router
-// (the one with the most weight, or just the first if percents
-// aren't populated) and emit one hop per dexProtocol entry inside
-// it. Display-only; the underlying route is already locked in by
-// /swap.
+// okxBuildRoute flattens OKX's V6 dexRouterList → libwallet's
+// []RouteHop. V6 collapsed the previous router/subRouter tree: each
+// entry now carries a single dexProtocol object plus its hop's
+// from/to token decoration, so we just walk the list in order. Each
+// hop's symbols come from the entry's tokens (falling back to the
+// caller-supplied request symbols when the hop omits them); share
+// comes from each dexProtocol.percent. Display-only; the underlying
+// route is locked in by /swap.
 func okxBuildRoute(routers []okxRouter, inSym, outSym string) []RouteHop {
 	if len(routers) == 0 {
 		return nil
 	}
-	r := routers[0]
-	if len(r.SubRouterList) == 0 {
-		return nil
-	}
-	sub := r.SubRouterList[0]
-	hops := make([]RouteHop, 0, len(sub.DexProtocol))
-	for _, dp := range sub.DexProtocol {
+	hops := make([]RouteHop, 0, len(routers))
+	for i, r := range routers {
 		share := 0.0
-		if dp.Percent != "" {
-			if pf, err := strconv.ParseFloat(dp.Percent, 64); err == nil {
+		if r.DexProtocol.Percent != "" {
+			if pf, err := strconv.ParseFloat(r.DexProtocol.Percent, 64); err == nil {
 				share = pf / 100
 			}
 		}
+		// Prefer the hop's own token symbols; only fall back to the
+		// caller's overall request symbols when the entry hasn't been
+		// populated by OKX (multi-hop intermediates almost always
+		// carry their own symbols on V6).
+		hopIn := r.FromToken.TokenSymbol
+		hopOut := r.ToToken.TokenSymbol
+		if hopIn == "" && i == 0 {
+			hopIn = inSym
+		}
+		if hopOut == "" && i == len(routers)-1 {
+			hopOut = outSym
+		}
 		hops = append(hops, RouteHop{
-			Venue:     dp.DexName,
-			InSymbol:  inSym,
-			OutSymbol: outSym,
+			Venue:     r.DexProtocol.DexName,
+			InSymbol:  hopIn,
+			OutSymbol: hopOut,
 			Share:     share,
 		})
 	}
@@ -474,11 +508,11 @@ type okxApproveCacheEntry struct {
 const okxApproveCacheTTL = 30 * time.Minute
 
 // okxApproveAddress returns OKX's ERC-20 approve spender contract
-// for the given chain id. Uses Crypto/Okx:supportedChains (TTL
+// for the given chain index. Uses Crypto/Okx:supportedChains (TTL
 // cached). Returns ("", err) on lookup failure — caller treats as
 // "spender unknown" and the approval flow degrades gracefully.
-func okxApproveAddress(ctx context.Context, chainId string) (string, error) {
-	if v, ok := okxApproveCache.Load(chainId); ok {
+func okxApproveAddress(ctx context.Context, chainIndex string) (string, error) {
+	if v, ok := okxApproveCache.Load(chainIndex); ok {
 		entry := v.(okxApproveCacheEntry)
 		if time.Since(entry.fetchedAt) < okxApproveCacheTTL && entry.addr != "" {
 			return entry.addr, nil
@@ -489,15 +523,15 @@ func okxApproveAddress(ctx context.Context, chainId string) (string, error) {
 		return "", fmt.Errorf("Crypto/Okx:supportedChains: %w", err)
 	}
 	for _, c := range chains {
-		if c.ChainId == chainId {
-			okxApproveCache.Store(chainId, okxApproveCacheEntry{
+		if c.ChainIndex == chainIndex {
+			okxApproveCache.Store(chainIndex, okxApproveCacheEntry{
 				addr:      c.DexTokenApproveAddress,
 				fetchedAt: time.Now(),
 			})
 			return c.DexTokenApproveAddress, nil
 		}
 	}
-	return "", fmt.Errorf("okx: chain %s not in supportedChains", chainId)
+	return "", fmt.Errorf("okx: chain %s not in supportedChains", chainIndex)
 }
 
 // ── Execute (Solana) ────────────────────────────────────────────
@@ -608,7 +642,7 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 // okxFetchSwapTx hits Crypto/Okx:swap once and returns the inner tx
 // block. Shared between the Solana and EVM execute paths.
 func okxFetchSwapTx(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote) (*okxSwapTx, error) {
-	chainId, err := okxChainIdFor(n)
+	chainIndex, err := okxChainIndexFor(n)
 	if err != nil {
 		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
 	}
@@ -622,12 +656,14 @@ func okxFetchSwapTx(ctx context.Context, n *wltnet.Network, acct *wltacct.Accoun
 
 	var entry okxSwapEntry
 	if err := okxCallEntry(ctx, "Crypto/Okx:swap", rest.Param{
-		"chainId":           chainId,
+		"chainIndex":        chainIndex,
 		"fromTokenAddress":  fromAddr,
 		"toTokenAddress":    toAddr,
 		"amount":            amountInRaw,
 		"userWalletAddress": acct.GetAddress(),
-		"slippage":          okxSlippageFraction(q.SlippageBps),
+		// V6 renamed the param from `slippage` (fraction) to
+		// `slippagePercent` (percent units, 0.5 = 0.5%).
+		"slippagePercent": okxSlippagePercent(q.SlippageBps),
 	}, &entry); err != nil {
 		return nil, err
 	}
