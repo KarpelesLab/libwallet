@@ -124,90 +124,47 @@ Pod::Spec.new do |s|
   CMD
 
   # vendored_frameworks with an .xcframework: CocoaPods picks the
-  # right slice for the active SDK at build time and copies it into
-  # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a, then
-  # adds the appropriate -L / -l flags automatically. No more
-  # per-SDK conditionals, no more wrong-SDK "ignoring file" warning.
+  # right slice for the active SDK at build time. The slice is a
+  # static .a; CocoaPods links it into the libwallet pod's
+  # dynamic framework (use_frameworks! default) so the Go runtime
+  # and all libwallet entry points end up inside libwallet.framework's
+  # binary, in exactly one place. Runner does NOT need a separate
+  # -force_load of the same .a — see the long history block in the
+  # pod_target_xcconfig comment below.
   s.ios.vendored_frameworks = 'libwallet.xcframework'
 
-  # Force CocoaPods to treat this pod as a static framework even
-  # when the host Podfile declares `use_frameworks!` (Flutter's
-  # default for Swift-using projects). Without this directive,
-  # CocoaPods wraps the pod into a dynamic libwallet.framework
-  # dylib AND the host Runner target still gets the static archive
-  # linked in via `-force_load` from user_target_xcconfig below —
-  # the Go runtime ends up initialised twice in the same process,
-  # and the two instances fight for signal-handler ownership.
-  # Symptom: SIGABRT inside `runtime.raise_trampoline.abi0` on
-  # one Go-runtime-bearing thread while another Go-runtime-bearing
-  # thread is mid-syscall (typically getaddrinfo during a chain
-  # RPC lookup). Reported as a TestFlight crash signature on
-  # net.tibane.tibaneapp; resolved by keeping Go in exactly one
-  # place — the static slice that `-force_load` already brings
-  # into Runner.
-  s.static_framework = true
-
-  # Pod sources default to `-fvisibility=hidden` under CocoaPods
-  # (`GCC_SYMBOLS_PRIVATE_EXTERN = YES`). With static_framework =
-  # true the bridge .m gets compiled into a static library that's
-  # linked into Runner, but if its symbols are hidden the linker
-  # refuses to add them to Runner's export trie — `dlsym` then
-  # can't find `libwallet_init` at FFI initialisation. Flip the
-  # flag off for this pod's target so default visibility wins.
-  # `LibwalletBridge.m` also marks each bridge function
-  # `__attribute__((visibility("default")))` for the same reason;
-  # both layers together cover the case where someone tweaks the
-  # xcconfig later and forgets the bridge.
+  # Why this pod target's xcconfig overrides instead of
+  # user_target_xcconfig:
+  #
+  # Until 0.4.42 we shipped a `-force_load` of the xcframework
+  # slice via user_target_xcconfig — i.e. we asked Xcode to
+  # statically link the libwallet .a into the host Runner binary.
+  # CocoaPods (with the standard Flutter use_frameworks! Podfile)
+  # SEPARATELY wraps this pod into a dynamic libwallet.framework
+  # dylib that ALSO contains the same .a. End result: Go runtime
+  # gets initialised twice in the same process. The two runtimes
+  # fight for signal-handler ownership and SIGABRT inside
+  # `runtime.raise_trampoline.abi0` on a worker thread (reported
+  # as a recurring TestFlight crash on net.tibane.tibaneapp).
+  #
+  # Fix: stop linking libwallet.a into Runner. The dynamic
+  # framework already has it; dlsym(RTLD_DEFAULT, libwallet_init)
+  # walks every loaded image and finds the bridge symbol in
+  # libwallet.framework's export trie. No -force_load on Runner
+  # = no second Go runtime.
+  #
+  # We still need to keep the bridge symbols from being
+  # dead-stripped when the framework links. The bridge functions
+  # in Classes/LibwalletBridge.m call into Libwallet* (statically
+  # referenced from C), which provides linker roots for the
+  # underlying Go symbols. `__attribute__((used,
+  # visibility("default")))` on each bridge function ensures the
+  # bridge itself stays kept and exported with default visibility.
+  # `GCC_SYMBOLS_PRIVATE_EXTERN = NO` here is the pod-wide
+  # backstop in case anyone adds another .m later and forgets
+  # the per-symbol attribute.
   s.pod_target_xcconfig = {
     'GCC_SYMBOLS_PRIVATE_EXTERN' => 'NO',
-  }
-
-  # `-force_load` pulls every object file from the static archive
-  # into the binary. The bridge in Classes/LibwalletBridge.m gives
-  # the linker static references from app source to each FFI entry
-  # point, which keeps both the bridge AND the underlying Go
-  # symbols in the host binary's export trie under default
-  # visibility — no `-u` / `-exported_symbol` escape hatches needed.
-  # Dart-side dart:ffi looks up the snake_case bridge names
-  # (`libwallet_init`, …) which are defined in the bridge.
-  #
-  # We want to point -force_load at
-  # $(PODS_XCFRAMEWORKS_BUILD_DIR)/libwallet/libwallet.a (where
-  # CocoaPods' [CP] Copy XCFrameworks phase places the active
-  # slice), but Xcode validates link-phase input files before
-  # respecting cross-target build order — Runner's link sees the
-  # path as missing because Pods_Runner's Copy XCFrameworks phase
-  # hasn't run yet at validation time.
-  #
-  # Workaround: reach into the xcframework's source location, where
-  # the slice already exists (prepare_command above wrote it there).
-  # That brings back per-SDK conditionals because xcframework slices
-  # are named after their SDK+arch combination — but the paths are
-  # stable and present from pod install onward.
-  xcframework_slice_device = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"'
-  xcframework_slice_sim    = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"'
-
-  # `-Wl,-export_dynamic` adds every default-visibility symbol the
-  # linker kept to Runner's export trie — the structure
-  # `dlsym(RTLD_DEFAULT, ...)` walks. Required as of 0.4.43 when
-  # `static_framework = true` made the pod a static library: the
-  # bridge .m gets compiled into the static lib and linked into
-  # Runner, but Apple's linker only puts `_main`-reachable globals
-  # in the export trie of executables by default. Without this flag
-  # the bridge functions sit in Runner's binary (`__attribute__((used))`
-  # keeps them from dead-strip) but aren't visible to dlsym — Dart's
-  # FFI lookup of `libwallet_init` fails immediately at startup.
-  #
-  # Earlier sessions tried `-exported_symbol _libwallet_init …` here
-  # (exclusive allowlist) and discovered it strips `_main` — Xcode 16's
-  # debug launcher then breaks. `-export_dynamic` is additive: the
-  # default-exported set still includes `_main`, the bridge symbols
-  # get added alongside.
-  s.user_target_xcconfig = {
-    'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      "$(inherited) -force_load #{xcframework_slice_device} -Wl,-export_dynamic",
-    'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      "$(inherited) -force_load #{xcframework_slice_sim} -Wl,-export_dynamic",
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /

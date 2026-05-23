@@ -1,3 +1,30 @@
+## 0.4.45
+
+- **iOS: corrected approach for "Go runtime initialised twice".**
+  0.4.43's `s.static_framework = true` fixed the dual-runtime but
+  broke dlsym(libwallet_init) because the bridge `.m` ended up
+  linked into Runner with no visibility into the export trie. The
+  real fix is simpler: stop force-loading the libwallet `.a` into
+  Runner at all. The pod stays a normal dynamic framework (Flutter
+  default under `use_frameworks!`), the framework contains the Go
+  static archive and the bridge in exactly one place, and
+  `dlsym(RTLD_DEFAULT, libwallet_init)` walks the loaded
+  frameworks and finds the bridge symbol in
+  libwallet.framework's export trie. Runner no longer carries any
+  Go code, so there's no second runtime to fight the first one.
+
+  Net podspec change vs 0.4.42: removed `s.user_target_xcconfig`
+  entirely (the `-force_load` it added was the source of the
+  duplicate). The pod target keeps
+  `GCC_SYMBOLS_PRIVATE_EXTERN = NO` plus the per-function
+  `__attribute__((visibility("default")))` on each bridge
+  function so the dlsym path doesn't regress if anyone tweaks
+  the linker flags later.
+
+  Tibane should still pick this up — net.tibane.tibaneapp's
+  recurring SIGABRT in `runtime.raise_trampoline.abi0` will stop
+  on next rebuild against the new pod, with no host changes.
+
 ## 0.4.44
 
 - **Fixed: iOS `dlsym(libwallet_init): symbol not found` regression
