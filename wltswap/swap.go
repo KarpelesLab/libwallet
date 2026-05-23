@@ -607,6 +607,8 @@ func runQuotes(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, re
 // labels each adapter populates on a successful Quote.ProviderLabel.
 func providerDisplayLabel(name string) string {
 	switch name {
+	case "okx_solana", "okx_evm":
+		return "OKX"
 	case "jupiter_ultra":
 		return "Jupiter Ultra"
 	case "dflow":

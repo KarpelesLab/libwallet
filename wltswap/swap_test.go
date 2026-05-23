@@ -177,9 +177,13 @@ func withStubProviders(t *testing.T, stubs []*stubProvider, fn func()) {
 }
 
 func TestRunQuotes_CollectsPerProviderAttempts(t *testing.T) {
+	// Two stubs registered under the names providerOrderForChain
+	// returns for solana. As of the OKX migration this is just
+	// "okx_solana"; the test previously exercised the Jupiter +
+	// dFlow fan-out and is now reduced to a single attempt.
 	goodQuote := &Quote{
-		Provider:      "jupiter_ultra",
-		ProviderLabel: "Jupiter Ultra",
+		Provider:      "okx_solana",
+		ProviderLabel: "OKX",
 		Chain:         "solana",
 		TokenIn:       TokenRef{Address: "NATIVE", Symbol: "SOL", Decimals: 9},
 		TokenOut:      TokenRef{Address: "EPjFW", Symbol: "USDC", Decimals: 6},
@@ -187,8 +191,7 @@ func TestRunQuotes_CollectsPerProviderAttempts(t *testing.T) {
 		AmountOut:     wltobj.NewAmountRaw(big.NewInt(200_000), 6),
 	}
 	stubs := []*stubProvider{
-		{name: "jupiter_ultra", chain: "solana", q: goodQuote},
-		{name: "dflow", chain: "solana", err: newErr(ErrCodeNoLiquidity, "no route")},
+		{name: "okx_solana", chain: "solana", q: goodQuote},
 	}
 	withStubProviders(t, stubs, func() {
 		n := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
@@ -198,20 +201,18 @@ func TestRunQuotes_CollectsPerProviderAttempts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runQuotes: %v", err)
 		}
-		if len(res.Attempts) != 2 {
-			t.Fatalf("got %d attempts, want 2", len(res.Attempts))
+		if len(res.Attempts) != 1 {
+			t.Fatalf("got %d attempts, want 1", len(res.Attempts))
 		}
-		if res.Attempts[0].Provider != "jupiter_ultra" || res.Attempts[0].Quote == nil {
-			t.Errorf("attempt 0 = %+v, want jupiter_ultra with quote", res.Attempts[0])
+		if res.Attempts[0].Provider != "okx_solana" || res.Attempts[0].Quote == nil {
+			t.Errorf("attempt 0 = %+v, want okx_solana with quote", res.Attempts[0])
 		}
-		if res.Attempts[0].ProviderLabel != "Jupiter Ultra" {
-			t.Errorf("attempt 0 label = %q, want Jupiter Ultra", res.Attempts[0].ProviderLabel)
+		if res.Attempts[0].ProviderLabel != "OKX" {
+			t.Errorf("attempt 0 label = %q, want OKX", res.Attempts[0].ProviderLabel)
 		}
-		if res.Attempts[1].Provider != "dflow" || res.Attempts[1].Error == nil {
-			t.Errorf("attempt 1 = %+v, want dflow with error", res.Attempts[1])
-		}
-		if res.Attempts[1].Error.Code != ErrCodeNoLiquidity {
-			t.Errorf("attempt 1 code = %q, want %q", res.Attempts[1].Error.Code, ErrCodeNoLiquidity)
+		// Sanity: error-path field stays nil when a provider succeeds.
+		if res.Attempts[0].Error != nil {
+			t.Errorf("attempt 0 error should be nil on success, got %+v", res.Attempts[0].Error)
 		}
 		// The successful attempt must have its QuoteId stamped so
 		// the host can immediately call Swap:execute with it.

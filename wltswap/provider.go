@@ -63,15 +63,18 @@ func computeReferralFee(amountIn *big.Int, bps uint16, decimals int) *wltobj.Amo
 
 // providerOrderForChain returns the priority-ordered provider names
 // libwallet attempts for n's chain family. Out-of-order callers get
-// the same list; the order is the historical "first-pick" preference
-// (Jupiter before dFlow on Solana) but no caller is obligated to use
-// position 0 over position 1.
+// the same list; the order is the historical "first-pick"
+// preference. As of the OKX migration, every chain routes through
+// `Crypto/Okx:*` exclusively — Jupiter, dFlow, and 1inch are still
+// in the tree but unregistered (see init.go) for licensing
+// reasons. To flip back, re-enable the legacy RegisterProvider
+// lines and restore the original per-chain ordering here.
 func providerOrderForChain(n *wltnet.Network) ([]string, error) {
 	switch n.Type {
 	case "solana":
-		return []string{"jupiter_ultra", "dflow"}, nil
+		return []string{"okx_solana"}, nil
 	case "evm":
-		return []string{"1inch"}, nil
+		return []string{"okx_evm"}, nil
 	default:
 		return nil, newErr(ErrCodeUnsupportedChain, fmt.Sprintf("swap not supported on %s networks", n.Type))
 	}

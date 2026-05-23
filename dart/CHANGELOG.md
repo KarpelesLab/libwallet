@@ -1,3 +1,23 @@
+## 0.4.40
+
+- **Swap aggregator: switched to OKX DEX (under `Crypto/Okx:*`).**
+  Licensing forced the move off Jupiter / dFlow (Solana) and 1inch
+  (EVM); every chain libwallet supported swaps on now routes through
+  the platform's server-side OKX proxy. The legacy adapters stay in
+  the tree behind unregistered `RegisterProvider` lines — the
+  flip-back is two `//` removals in `wltswap/init.go` plus restoring
+  `wltswap/provider.go`'s per-chain ordering. EVM swap coverage
+  expanded from 11 chains (1inch's list) to 22 (OKX's), notably
+  picking up Cronos / Manta / X Layer / World Chain / Polygon
+  zkEVM / Mantle / Klaytn / Mode / Celo / Blast / Scroll. The
+  50bps platform fee is now applied server-side (the libwallet
+  binary no longer carries an API key) and echoed back in the
+  response so the UI's "Platform fee" line still renders. No host
+  changes required — `Swap:availability` / `Swap:quote` /
+  `Swap:execute` surface is unchanged; `Quote.Provider` becomes
+  `"okx_solana"` / `"okx_evm"` and `Quote.ProviderLabel` becomes
+  `"OKX"`.
+
 ## 0.4.39
 
 - **ethrpc v0.2.11 → v0.2.12.** Upstream landed the
