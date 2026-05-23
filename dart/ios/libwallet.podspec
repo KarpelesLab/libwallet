@@ -147,6 +147,21 @@ Pod::Spec.new do |s|
   # into Runner.
   s.static_framework = true
 
+  # Pod sources default to `-fvisibility=hidden` under CocoaPods
+  # (`GCC_SYMBOLS_PRIVATE_EXTERN = YES`). With static_framework =
+  # true the bridge .m gets compiled into a static library that's
+  # linked into Runner, but if its symbols are hidden the linker
+  # refuses to add them to Runner's export trie — `dlsym` then
+  # can't find `libwallet_init` at FFI initialisation. Flip the
+  # flag off for this pod's target so default visibility wins.
+  # `LibwalletBridge.m` also marks each bridge function
+  # `__attribute__((visibility("default")))` for the same reason;
+  # both layers together cover the case where someone tweaks the
+  # xcconfig later and forgets the bridge.
+  s.pod_target_xcconfig = {
+    'GCC_SYMBOLS_PRIVATE_EXTERN' => 'NO',
+  }
+
   # `-force_load` pulls every object file from the static archive
   # into the binary. The bridge in Classes/LibwalletBridge.m gives
   # the linker static references from app source to each FFI entry

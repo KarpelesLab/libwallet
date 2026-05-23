@@ -28,10 +28,21 @@
 // linker see them as genuinely used and emits both the bridge AND
 // its callees into the host's export trie under default visibility.
 //
-// `__attribute__((used))` keeps each bridge function from being
-// dead-stripped itself — the compiler doesn't know Dart will dlsym
-// them at runtime, so without `used` the same dead-strip pass that
-// removed the Go symbols would remove the bridges too.
+// `__attribute__((used, visibility("default")))` does two jobs:
+//   - `used` keeps each bridge function from being dead-stripped:
+//     the compiler doesn't know Dart will dlsym them at runtime, so
+//     without `used` the same dead-strip pass that removed the Go
+//     symbols would remove the bridges too.
+//   - `visibility("default")` defeats CocoaPods' default
+//     `GCC_SYMBOLS_PRIVATE_EXTERN = YES` setting (which compiles
+//     pod sources with `-fvisibility=hidden`). Without the explicit
+//     default visibility on each bridge function, the compiler
+//     emits them with hidden visibility and the linker refuses to
+//     put them in Runner's export trie even with
+//     `-Wl,-export_dynamic`. `dlsym(RTLD_DEFAULT, libwallet_init)`
+//     then returns NULL and FFI initialisation fails immediately.
+//     The podspec also forces `GCC_SYMBOLS_PRIVATE_EXTERN = NO`
+//     for this pod as a backstop; both are belt-and-suspenders.
 //
 // Signatures must stay byte-identical to the corresponding Go
 // `//export` declarations in cshared/ffi.go — Dart's FFI marshalling
@@ -60,36 +71,36 @@ extern void LibwalletFree(char *ptr);
 // Bridge wrappers — exposed via default visibility, kept alive
 // across dead-strip via `used`.
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 uintptr_t libwallet_init(const char *dataDir) {
     return LibwalletInit(dataDir);
 }
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 void libwallet_request(uintptr_t h, const char *requestJson,
                        libwallet_response_callback cb,
                        uintptr_t userData) {
     LibwalletRequest(h, requestJson, cb, userData);
 }
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 void libwallet_set_event_callback(uintptr_t h,
                                   libwallet_event_callback cb,
                                   uintptr_t userData) {
     LibwalletSetEventCallback(h, cb, userData);
 }
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 void libwallet_show_debug(void) {
     LibwalletShowDebug();
 }
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 void libwallet_destroy(uintptr_t h) {
     LibwalletDestroy(h);
 }
 
-__attribute__((used))
+__attribute__((used, visibility("default")))
 void libwallet_free(char *ptr) {
     LibwalletFree(ptr);
 }
