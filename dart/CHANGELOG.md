@@ -1,5 +1,18 @@
 ## 0.4.40
 
+- **Fixed: `client.accounts.list(wallet: id)` now actually scopes to
+  the wallet.** The Go-side `wltintf.ListHelper` accepted a
+  `searchKey` list naming which request params should drive the
+  `WHERE` clause, but never read those params — `psql.Fetch` was
+  always called with `where=nil`. Result: every list endpoint that
+  passed a `searchKey` (Account by `Wallet`, Network by `TestNet`,
+  Token by `Name`/`Symbol`/`Address`/`Type`, Contact by `Name`/etc.,
+  WalletKey, Crash) silently returned every row in the table
+  regardless of the filter. Apps either lived with the noise or
+  workaround-filtered client-side. Wired up here so `Account?Wallet=…`
+  returns only that wallet's accounts; tibaneapp PR #6 (client-side
+  defensive filter) is no longer needed.
+
 - **Swap aggregator: switched to OKX DEX (under `Crypto/Okx:*`).**
   Licensing forced the move off Jupiter / dFlow (Solana) and 1inch
   (EVM); every chain libwallet supported swaps on now routes through
