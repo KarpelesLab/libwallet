@@ -1,48 +1,36 @@
-## 0.4.45
-
-- **iOS: corrected approach for "Go runtime initialised twice".**
-  0.4.43's `s.static_framework = true` fixed the dual-runtime but
-  broke dlsym(libwallet_init) because the bridge `.m` ended up
-  linked into Runner with no visibility into the export trie. The
-  real fix is simpler: stop force-loading the libwallet `.a` into
-  Runner at all. The pod stays a normal dynamic framework (Flutter
-  default under `use_frameworks!`), the framework contains the Go
-  static archive and the bridge in exactly one place, and
-  `dlsym(RTLD_DEFAULT, libwallet_init)` walks the loaded
-  frameworks and finds the bridge symbol in
-  libwallet.framework's export trie. Runner no longer carries any
-  Go code, so there's no second runtime to fight the first one.
-
-  Net podspec change vs 0.4.42: removed `s.user_target_xcconfig`
-  entirely (the `-force_load` it added was the source of the
-  duplicate). The pod target keeps
-  `GCC_SYMBOLS_PRIVATE_EXTERN = NO` plus the per-function
-  `__attribute__((visibility("default")))` on each bridge
-  function so the dlsym path doesn't regress if anyone tweaks
-  the linker flags later.
-
-  Tibane should still pick this up — net.tibane.tibaneapp's
-  recurring SIGABRT in `runtime.raise_trampoline.abi0` will stop
-  on next rebuild against the new pod, with no host changes.
-
 ## 0.4.44
 
-- **Fixed: iOS `dlsym(libwallet_init): symbol not found` regression
-  from 0.4.43.** Making the pod a `static_framework = true` moved
-  the Objective-C bridge (`Classes/LibwalletBridge.m`) from a
-  dynamic libwallet.framework dylib (where its symbols were
-  auto-exported) into a static lib linked into Runner — but Apple's
-  linker only puts `_main`-reachable globals in an executable's
-  export trie by default, so the bridge functions sat in Runner's
-  binary unreferenced and invisible to `dlsym(RTLD_DEFAULT, …)`.
-  Dart FFI's first symbol lookup at startup failed and the test app
-  crashed in `setUpAll` before any test ran. Fixed by adding
-  `-Wl,-export_dynamic` to `user_target_xcconfig.OTHER_LDFLAGS` —
-  every default-visibility kept symbol lands in the export trie
-  alongside `_main`, and dlsym resolves cleanly. Both directives
-  (`static_framework = true` for the dual-runtime fix, plus
-  `-export_dynamic` for symbol visibility) are now load-bearing
-  together.
+- **iOS: actually fixed the dual Go runtime that caused Tibane's
+  TestFlight SIGABRT in `runtime.raise_trampoline.abi0`.** 0.4.43's
+  attempt (`s.static_framework = true`) was the wrong tree — it
+  killed the duplicate framework, but moved the Objective-C bridge
+  into Runner as a hidden-visibility static-lib symbol that dlsym
+  couldn't find, so iOS wouldn't initialise at all. The real fix
+  is to stop force-loading the libwallet `.a` into Runner at all:
+
+  - Removed `s.user_target_xcconfig` from the podspec. The
+    `-force_load` it added is what made Xcode link the Go static
+    archive into Runner alongside the dynamic libwallet.framework
+    that CocoaPods builds under `use_frameworks!` (Flutter
+    default). Pre-0.4.43, both copies initialised their own Go
+    runtime; the two fought over signal-handler ownership and
+    occasionally aborted.
+  - The pod is back to a normal dynamic framework. The Go static
+    archive (`libwallet.xcframework`) is linked into that
+    framework via `vendored_frameworks`. The bridge `.m` is
+    compiled into the same framework. Every libwallet entry point
+    — bridge and underlying Go symbols — lives in
+    libwallet.framework's export trie, in exactly one place.
+    `dlsym(RTLD_DEFAULT, libwallet_init)` walks all loaded images
+    and finds it there.
+  - Kept `s.pod_target_xcconfig['GCC_SYMBOLS_PRIVATE_EXTERN'] =
+    'NO'` and per-function `__attribute__((visibility("default")))`
+    on each bridge function as belt-and-suspenders, so a future
+    podspec/linker tweak doesn't silently re-hide the symbols.
+
+  Net for hosts: no API changes; a `pod install` rebuild against
+  the new framework eliminates the duplicate runtime. Tibane's
+  recurring crash will stop without any host-side edits.
 
 ## 0.4.43
 
