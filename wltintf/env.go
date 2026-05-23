@@ -68,19 +68,29 @@ func ListHelper[T any](ctx context.Context, sort string, searchKey ...string) (a
 	// dropped — e.g. `Account?Wallet=<id>` returned every account on
 	// the device regardless of which wallet was asked for (reported
 	// by the tibaneapp wallet-detail screen).
+	//
+	// We read through the *apirouter.Context directly rather than
+	// `apirouter.GetParam[any]` because the typed wrapper panics when
+	// the requested param is absent and T is the bare `any` (a
+	// reflect.Zero on an interface type round-trips as an untyped nil
+	// that fails the final type assertion).
+	var arc *apirouter.Context
+	ctx.Value(&arc)
 	var where map[string]any
-	for _, k := range searchKey {
-		v, ok := apirouter.GetParam[any](ctx, k)
-		if !ok || v == nil {
-			continue
+	if arc != nil {
+		for _, k := range searchKey {
+			v := arc.GetParam(k)
+			if v == nil {
+				continue
+			}
+			if s, isStr := v.(string); isStr && s == "" {
+				continue
+			}
+			if where == nil {
+				where = make(map[string]any)
+			}
+			where[k] = v
 		}
-		if s, isStr := v.(string); isStr && s == "" {
-			continue
-		}
-		if where == nil {
-			where = make(map[string]any)
-		}
-		where[k] = v
 	}
 	return psql.Fetch[T](e, where, opts...)
 }
