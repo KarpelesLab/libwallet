@@ -172,11 +172,27 @@ Pod::Spec.new do |s|
   xcframework_slice_device = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64/libwallet.a"'
   xcframework_slice_sim    = '"$(PODS_ROOT)/../.symlinks/plugins/libwallet/ios/libwallet.xcframework/ios-arm64_x86_64-simulator/libwallet.a"'
 
+  # `-Wl,-export_dynamic` adds every default-visibility symbol the
+  # linker kept to Runner's export trie — the structure
+  # `dlsym(RTLD_DEFAULT, ...)` walks. Required as of 0.4.43 when
+  # `static_framework = true` made the pod a static library: the
+  # bridge .m gets compiled into the static lib and linked into
+  # Runner, but Apple's linker only puts `_main`-reachable globals
+  # in the export trie of executables by default. Without this flag
+  # the bridge functions sit in Runner's binary (`__attribute__((used))`
+  # keeps them from dead-strip) but aren't visible to dlsym — Dart's
+  # FFI lookup of `libwallet_init` fails immediately at startup.
+  #
+  # Earlier sessions tried `-exported_symbol _libwallet_init …` here
+  # (exclusive allowlist) and discovered it strips `_main` — Xcode 16's
+  # debug launcher then breaks. `-export_dynamic` is additive: the
+  # default-exported set still includes `_main`, the bridge symbols
+  # get added alongside.
   s.user_target_xcconfig = {
     'OTHER_LDFLAGS[sdk=iphoneos*]' =>
-      "$(inherited) -force_load #{xcframework_slice_device}",
+      "$(inherited) -force_load #{xcframework_slice_device} -Wl,-export_dynamic",
     'OTHER_LDFLAGS[sdk=iphonesimulator*]' =>
-      "$(inherited) -force_load #{xcframework_slice_sim}",
+      "$(inherited) -force_load #{xcframework_slice_sim} -Wl,-export_dynamic",
   }
 
   # Go runtime needs CoreFoundation + Security for entropy /

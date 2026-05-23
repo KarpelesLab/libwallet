@@ -1,3 +1,22 @@
+## 0.4.44
+
+- **Fixed: iOS `dlsym(libwallet_init): symbol not found` regression
+  from 0.4.43.** Making the pod a `static_framework = true` moved
+  the Objective-C bridge (`Classes/LibwalletBridge.m`) from a
+  dynamic libwallet.framework dylib (where its symbols were
+  auto-exported) into a static lib linked into Runner — but Apple's
+  linker only puts `_main`-reachable globals in an executable's
+  export trie by default, so the bridge functions sat in Runner's
+  binary unreferenced and invisible to `dlsym(RTLD_DEFAULT, …)`.
+  Dart FFI's first symbol lookup at startup failed and the test app
+  crashed in `setUpAll` before any test ran. Fixed by adding
+  `-Wl,-export_dynamic` to `user_target_xcconfig.OTHER_LDFLAGS` —
+  every default-visibility kept symbol lands in the export trie
+  alongside `_main`, and dlsym resolves cleanly. Both directives
+  (`static_framework = true` for the dual-runtime fix, plus
+  `-export_dynamic` for symbol visibility) are now load-bearing
+  together.
+
 ## 0.4.43
 
 - **Fixed: iOS TestFlight crash from two Go runtimes in the same
