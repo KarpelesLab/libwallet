@@ -130,6 +130,23 @@ Pod::Spec.new do |s|
   # per-SDK conditionals, no more wrong-SDK "ignoring file" warning.
   s.ios.vendored_frameworks = 'libwallet.xcframework'
 
+  # Force CocoaPods to treat this pod as a static framework even
+  # when the host Podfile declares `use_frameworks!` (Flutter's
+  # default for Swift-using projects). Without this directive,
+  # CocoaPods wraps the pod into a dynamic libwallet.framework
+  # dylib AND the host Runner target still gets the static archive
+  # linked in via `-force_load` from user_target_xcconfig below —
+  # the Go runtime ends up initialised twice in the same process,
+  # and the two instances fight for signal-handler ownership.
+  # Symptom: SIGABRT inside `runtime.raise_trampoline.abi0` on
+  # one Go-runtime-bearing thread while another Go-runtime-bearing
+  # thread is mid-syscall (typically getaddrinfo during a chain
+  # RPC lookup). Reported as a TestFlight crash signature on
+  # net.tibane.tibaneapp; resolved by keeping Go in exactly one
+  # place — the static slice that `-force_load` already brings
+  # into Runner.
+  s.static_framework = true
+
   # `-force_load` pulls every object file from the static archive
   # into the binary. The bridge in Classes/LibwalletBridge.m gives
   # the linker static references from app source to each FFI entry

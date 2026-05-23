@@ -1,3 +1,20 @@
+## 0.4.43
+
+- **Fixed: iOS TestFlight crash from two Go runtimes in the same
+  process.** When the host app's Podfile declared `use_frameworks!`
+  (Flutter's default for Swift-using projects), CocoaPods wrapped
+  the libwallet pod into a dynamic `libwallet.framework` dylib —
+  while the same static archive *also* got linked into the host
+  Runner target via `-force_load` from `s.user_target_xcconfig`.
+  Both copies initialised their own Go runtime; the runtimes
+  fought for signal-handler ownership and SIGABRT'd inside
+  `runtime.raise_trampoline.abi0` (typically while another goroutine
+  was mid-`getaddrinfo` for a chain RPC). Reported as a TestFlight
+  crash on `net.tibane.tibaneapp` (build 54). The podspec now
+  declares `s.static_framework = true`, which forces CocoaPods to
+  treat the pod as static regardless of `use_frameworks!` — the
+  Go runtime ends up exactly once, inside Runner.
+
 ## 0.4.42
 
 - **OKX adapter: migrated from V5 to V6 of OKX's DEX aggregator
