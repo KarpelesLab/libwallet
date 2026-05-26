@@ -88,6 +88,29 @@ void main(List<String> args) async {
     final outputDir = input.outputDirectoryShared;
     final cachedFile = outputDir.resolve(cachedName);
 
+    // Prune stale binaries for this platform from previous package versions.
+    // The cache key embeds the version, so old downloads (e.g. from 0.3.23)
+    // otherwise linger forever in the shared cache.
+    final prefix = 'liblibwallet-$dartName-v';
+    final suffix = '.$ext';
+    final cacheDir = Directory.fromUri(outputDir);
+    if (cacheDir.existsSync()) {
+      for (final entry in cacheDir.listSync()) {
+        if (entry is! File) continue;
+        final base = entry.uri.pathSegments.last;
+        if (base != cachedName &&
+            base.startsWith(prefix) &&
+            base.endsWith(suffix)) {
+          try {
+            entry.deleteSync();
+            stderr.writeln('Removed stale binary $base');
+          } catch (_) {
+            // Best-effort cleanup; a failure here must not break the build.
+          }
+        }
+      }
+    }
+
     if (!File.fromUri(cachedFile).existsSync()) {
       final url = Uri.parse(
         'https://github.com/$_repo/releases/download/v$version/$remoteName',
