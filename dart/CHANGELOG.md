@@ -1,3 +1,12 @@
+## 0.4.45
+
+- **Build hook prunes stale-version binaries from the shared cache.**
+  The cache key embeds the package version (`liblibwallet-<platform>-v<version>.<ext>`),
+  so bumping the package left the previous version's binary sitting in the
+  shared output cache forever. The hook now deletes other-version binaries
+  for the current platform before serving the downloaded one. Best-effort:
+  a deletion failure never breaks the build.
+
 ## 0.4.44
 
 - **iOS: actually fixed the dual Go runtime that caused Tibane's
