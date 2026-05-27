@@ -55,17 +55,17 @@ var chainAllowlist = map[string]struct {
 	chainId  string
 	fileName string
 }{
-	"evm.1":         {"evm", "1", "evm-1.json"},
-	"evm.10":        {"evm", "10", "evm-10.json"},
-	"evm.56":        {"evm", "56", "evm-56.json"},
-	"evm.100":       {"evm", "100", "evm-100.json"},
-	"evm.137":       {"evm", "137", "evm-137.json"},
-	"evm.250":       {"evm", "250", "evm-250.json"},
-	"evm.324":       {"evm", "324", "evm-324.json"},
-	"evm.8453":      {"evm", "8453", "evm-8453.json"},
-	"evm.42161":     {"evm", "42161", "evm-42161.json"},
-	"evm.43114":     {"evm", "43114", "evm-43114.json"},
-	"evm.59144":     {"evm", "59144", "evm-59144.json"},
+	"evm.1":          {"evm", "1", "evm-1.json"},
+	"evm.10":         {"evm", "10", "evm-10.json"},
+	"evm.56":         {"evm", "56", "evm-56.json"},
+	"evm.100":        {"evm", "100", "evm-100.json"},
+	"evm.137":        {"evm", "137", "evm-137.json"},
+	"evm.250":        {"evm", "250", "evm-250.json"},
+	"evm.324":        {"evm", "324", "evm-324.json"},
+	"evm.8453":       {"evm", "8453", "evm-8453.json"},
+	"evm.42161":      {"evm", "42161", "evm-42161.json"},
+	"evm.43114":      {"evm", "43114", "evm-43114.json"},
+	"evm.59144":      {"evm", "59144", "evm-59144.json"},
 	"solana.mainnet": {"solana", "mainnet", "solana-mainnet.json"},
 }
 
@@ -153,13 +153,13 @@ func main() {
 func fetchUniswap() (map[string][]*token, error) {
 	var wrapper struct {
 		Tokens []struct {
-			ChainID  int               `json:"chainId"`
-			Address  string            `json:"address"`
-			Symbol   string            `json:"symbol"`
-			Name     string            `json:"name"`
-			Decimals int               `json:"decimals"`
-			LogoURI  string            `json:"logoURI"`
-			Tags     []string          `json:"tags"`
+			ChainID    int            `json:"chainId"`
+			Address    string         `json:"address"`
+			Symbol     string         `json:"symbol"`
+			Name       string         `json:"name"`
+			Decimals   int            `json:"decimals"`
+			LogoURI    string         `json:"logoURI"`
+			Tags       []string       `json:"tags"`
 			Extensions map[string]any `json:"extensions"`
 		} `json:"tokens"`
 	}
@@ -298,11 +298,11 @@ func filterTags(in []string) []string {
 // rely on tag-priority for the frontend sort order — so we fill
 // them in from the symbol. Only runs when upstream tags are empty.
 var stablecoinSymbols = map[string]bool{
-	"USDT":   true, "USDC": true, "DAI": true, "BUSD": true, "TUSD": true,
-	"FRAX":   true, "USDP": true, "GUSD": true, "LUSD": true, "MIM": true,
-	"sUSD":   true, "USDD": true, "USD1": true, "RLUSD": true, "PYUSD": true,
+	"USDT": true, "USDC": true, "DAI": true, "BUSD": true, "TUSD": true,
+	"FRAX": true, "USDP": true, "GUSD": true, "LUSD": true, "MIM": true,
+	"sUSD": true, "USDD": true, "USD1": true, "RLUSD": true, "PYUSD": true,
 	"crvUSD": true, "FDUSD": true, "USDE": true, "USDS": true, "USDV": true,
-	"USD0":   true, "USDtb": true, "USDY": true, "EURC": true, "EURS": true,
+	"USD0": true, "USDtb": true, "USDY": true, "EURC": true, "EURS": true,
 	"USDC.e": true, "USDT.e": true, "DAI.e": true, "USDbC": true,
 }
 

@@ -97,13 +97,22 @@ func ForChain(netType, chainId string) []*CuratedToken {
 // when the address is not on the curated list for that chain. Case is
 // normalized: EVM addresses are matched on their lowercased form,
 // Solana mints are compared as-is (base58 is case-sensitive).
+//
+// For solana.mainnet, falls back to the dynamic ChiefStaker snapshot
+// when the embedded registry has no entry — this lets balance-list
+// enrichment surface pump-pool tokens that aren't on the Jupiter
+// verified list (most don't clear the embedded mcap floor).
 func Lookup(netType, chainId, address string) *CuratedToken {
 	ensureLoaded()
-	m, ok := byAddress[netType+"."+chainId]
-	if !ok {
-		return nil
+	if m, ok := byAddress[netType+"."+chainId]; ok {
+		if t := m[normalizeAddress(netType, address)]; t != nil {
+			return t
+		}
 	}
-	return m[normalizeAddress(netType, address)]
+	if netType == "solana" && chainId == "mainnet" {
+		return chiefStakerLookup(address)
+	}
+	return nil
 }
 
 // LookupBySymbol resolves a symbol ("USDT", "usdc", "WETH") to the

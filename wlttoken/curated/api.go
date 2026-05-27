@@ -37,6 +37,9 @@ func apiListCurated(ctx *apirouter.Context, in struct {
 		return nil, err
 	}
 	list := ForChain(netType, chainId)
+	if netType == "solana" && chainId == "mainnet" {
+		list = appendChiefStaker(list)
+	}
 	if list == nil {
 		// Never return nil — the Dart client expects a JSON
 		// array so it can always `.map(...)` over the response
@@ -44,4 +47,31 @@ func apiListCurated(ctx *apirouter.Context, in struct {
 		return []*CuratedToken{}, nil
 	}
 	return list, nil
+}
+
+// appendChiefStaker folds the latest ChiefStaker snapshot into the
+// embedded curated list. Embedded entries win on address collision so
+// generator-curated metadata (Jupiter / overlays) is never silently
+// overridden by the dynamic feed. Allocates a fresh slice — the
+// embedded list returned by [ForChain] is shared and must not be
+// mutated.
+func appendChiefStaker(base []*CuratedToken) []*CuratedToken {
+	extra := chiefStakerSolanaTokens()
+	if len(extra) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base))
+	for _, t := range base {
+		seen[t.Address] = true
+	}
+	out := make([]*CuratedToken, 0, len(base)+len(extra))
+	out = append(out, base...)
+	for _, t := range extra {
+		if seen[t.Address] {
+			continue
+		}
+		seen[t.Address] = true
+		out = append(out, t)
+	}
+	return out
 }
