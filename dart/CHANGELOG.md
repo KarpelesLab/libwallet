@@ -1,3 +1,14 @@
+## 0.4.46
+
+- **Fix `lib/src/version.dart` drift in 0.4.45.** The 0.4.45 release
+  shipped with `libwalletPackageVersion` still at `0.4.44`, because the
+  release commit edited `pubspec.yaml` directly instead of going through
+  `tools/bump_version.dart`. At runtime this made `LibwalletClient.initialize`
+  see a stale-binary mismatch on every 0.4.45 install — the very condition
+  the constant exists to detect. Both files are now bumped together.
+- Bundles the latest Go core, which adds Solana ChiefStaker mint
+  pulls to the curated wlttoken set.
+
 ## 0.4.45
 
 - **Build hook prunes stale-version binaries from the shared cache.**
