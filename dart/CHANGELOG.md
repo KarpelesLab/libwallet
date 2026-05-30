@@ -1,3 +1,17 @@
+## 0.4.47
+
+- **Fix `EXC_BAD_ACCESS` segfault in `(*ECPoint).ToEd25519PubKey` when
+  switching to a FROST wallet.** `EnsureEd25519Pubkey` (and the legacy
+  ed25519 sign-path self-heal) gated only on `Wallet.Curve == "ed25519"`,
+  not on `Protocol`. FROST wallets carry `Curve == "ed25519"` too, so
+  the helper ran `decryptEdDSA` against a FROST share. fxamacker/cbor
+  silently zero-filled the unknown fields, leaving `*eddsatss.Key`'s
+  `EDDSAPub` nil; the chained `.ToEd25519PubKey()` then dereferenced a
+  nil `*ECPoint` and segfaulted at offset 0x10. Now both self-heal sites
+  gate on `resolveProtocol() == ProtocolLegacyEdDSA`, and
+  `decryptEdDSA` fails loudly when EDDSAPub is missing so future
+  miswired callers raise an error instead of crashing the process.
+
 ## 0.4.46
 
 - **Fix `lib/src/version.dart` drift in 0.4.45.** The 0.4.45 release

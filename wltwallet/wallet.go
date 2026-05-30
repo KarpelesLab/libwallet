@@ -459,6 +459,15 @@ func EnsureEd25519Pubkey(e wltintf.Env, w *Wallet, keys []*wltsign.KeyDescriptio
 		}
 		return "", nil
 	}
+	// FROST wallets carry Curve="ed25519" too, but their share isn't
+	// an *eddsatss.Key. decryptEdDSA would silently CBOR-decode into a
+	// zero-valued *eddsatss.Key with nil EDDSAPub, and the chained
+	// ToEd25519PubKey() below would segfault on a nil *ECPoint receiver.
+	// FROST emits the canonical compressed pubkey at keygen (join.go),
+	// so there's no legacy X-coord encoding to repair.
+	if w.resolveProtocol() != ProtocolLegacyEdDSA {
+		return w.Pubkey, nil
+	}
 	kd := keys[0]
 	wk := w.getKey(kd.Id)
 	if wk == nil {
@@ -650,7 +659,7 @@ func (w *Wallet) subSign(rand io.Reader, digest []byte, opts crypto.SignerOpts) 
 				}
 			}()
 		}
-	} else if w.Curve == "ed25519" {
+	} else if w.resolveProtocol() == ProtocolLegacyEdDSA {
 		wltlog.Debugf("wallet-sign: ed25519 id=%s threshold=%d keys_provided=%d msg_len=%d", w.Id, w.Threshold, len(keys), len(digest))
 		// Self-heal Pubkey for wallets created before the X-coord →
 		// compressed-Y encoding fix. The persisted Pubkey is

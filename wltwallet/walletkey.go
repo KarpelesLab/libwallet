@@ -393,7 +393,15 @@ func (wk *WalletKey) decryptEdDSA(kd *wltsign.KeyDescription, purpose keyUsagePu
 	if err != nil {
 		return nil, fmt.Errorf("while decrypting eddsa key %s: %w", wk.Id, err)
 	}
-	return final, err
+	// Fail loudly on a malformed share instead of letting callers
+	// segfault inside (*ECPoint).ToEd25519PubKey on a nil receiver.
+	// Hits when a non-eddsa share (e.g. a FROST payload routed through
+	// the wrong helper) gets CBOR-decoded into *eddsatss.Key — fxamacker
+	// silently zero-fills unknown fields, so the unmarshal returns nil.
+	if final == nil || final.EDDSAPub == nil {
+		return nil, fmt.Errorf("eddsa key %s decoded without EDDSAPub (wrong share schema for this helper?)", wk.Id)
+	}
+	return final, nil
 }
 
 // decryptRaw unwraps a Schema=="raw" WalletKey into the imported
