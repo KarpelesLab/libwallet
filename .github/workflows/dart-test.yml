@@ -260,65 +260,121 @@ jobs:
 
       - name: Run iOS integration tests
         working-directory: dart/test_app
-        # Single attempt — the fresh-sim setup above gives us a
-        # clean install database / FrontBoard state, which was the
-        # root cause of the recurring "unknown to FrontBoard"
-        # failure. The per-attempt watchdog stays so the job doesn't
-        # hang for the 30-min GHA cap if flutter test deadlocks on
-        # the VM Service attach (the secondary mDNS race); if that
-        # happens we surface a clean failure with the captured sim
-        # log instead of timing out the whole job.
+        # Up to 3 attempts. Reasoning: `flutter test` on the iOS
+        # simulator periodically hangs at "awaiting connection to test
+        # device" — a Flutter + Bonjour/mDNS service-discovery race
+        # where the app launches and starts the Dart VM Service, but
+        # the host's flutter tool can't discover it. CoreSimulator
+        # reset fixed the older "unknown to FrontBoard" install-db
+        # corruption (commit 4109493), but the Bonjour race lives in
+        # the host's mDNSResponder + the runner's network stack and
+        # no amount of sim hygiene clears it. Surfacing the watchdog
+        # failure (the previous single-attempt strategy) burned a
+        # whole CI run + a manual rerun on every hit — 3 attempts
+        # plus the classifier below clear that without ever masking
+        # a genuine test failure.
+        #
+        # Classifier — `Some tests failed.` is the ONE reliable
+        # genuine-failure signal flutter prints, iff tests actually
+        # ran and an assertion failed. Anything else (watchdog kill,
+        # FrontBoard launch failure, pre-setUpAll crash) never got a
+        # test to run, so retry is safe.
+        #
+        # Budget: 3 × 7 min watchdog = 21 min, fits in the 30-min job
+        # cap with ~5 min of sim/build setup overhead.
         run: |
           set +e
           LOG=$RUNNER_TEMP/flutter-test.log
           SIMLOG=$RUNNER_TEMP/sim-console.log
-          PER_ATTEMPT_TIMEOUT=900   # 15 minutes; integration test typically lands in ~3-8 min
+          PER_ATTEMPT_TIMEOUT=420   # 7 minutes per attempt; a healthy run lands in ~3-5 min
+          MAX_ATTEMPTS=3
 
-          # Stream the sim's console in the background so failure
-          # diagnostics can show what the test app actually printed
-          # — crucial for any VM Service attach hang where flutter's
-          # own logs go silent.
-          xcrun simctl spawn "$DEVICE_ID" log stream \
-            --style compact \
-            --level debug \
-            --predicate 'subsystem CONTAINS "flutter" OR processImagePath CONTAINS "Runner" OR eventMessage CONTAINS "Dart VM"' \
-            > "$SIMLOG" 2>&1 &
-          SIMLOG_PID=$!
+          attempt=1
+          while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+            echo "::group::flutter test attempt $attempt/$MAX_ATTEMPTS (timeout ${PER_ATTEMPT_TIMEOUT}s)"
+            : > "$LOG"
+            : > "$SIMLOG"
 
-          # Direct redirect (not piped through tee) so $! captures the
-          # flutter PID — the watchdog needs to kill that PID, not a
-          # tee process buffering its output.
-          flutter test --verbose \
-            --dds-port=50301 \
-            integration_test/libwallet_test.dart \
-            -d "$DEVICE_ID" > "$LOG" 2>&1 &
-          FLUTTER_PID=$!
-          tail -f "$LOG" &
-          TAIL_PID=$!
+            # Stream the sim's console so failure diagnostics show
+            # what the test app actually printed — crucial when
+            # flutter's own logs go silent during a VM Service attach
+            # hang but the app's Dart side is still emitting.
+            xcrun simctl spawn "$DEVICE_ID" log stream \
+              --style compact \
+              --level debug \
+              --predicate 'subsystem CONTAINS "flutter" OR processImagePath CONTAINS "Runner" OR eventMessage CONTAINS "Dart VM"' \
+              > "$SIMLOG" 2>&1 &
+            SIMLOG_PID=$!
 
-          # Watchdog: SIGTERM after the budget, SIGKILL 5 s later if
-          # flutter ignores TERM. Cancelled below as soon as flutter
-          # exits naturally so a clean run doesn't sleep out the budget.
-          ( sleep "$PER_ATTEMPT_TIMEOUT" && \
-            kill -TERM $FLUTTER_PID 2>/dev/null && \
-            sleep 5 && \
-            kill -KILL $FLUTTER_PID 2>/dev/null ) &
-          WATCHDOG_PID=$!
+            # Direct redirect (not piped through tee) so $! captures
+            # the flutter PID — the watchdog needs that PID, not a
+            # tee buffering its output.
+            flutter test --verbose \
+              --dds-port=50301 \
+              integration_test/libwallet_test.dart \
+              -d "$DEVICE_ID" > "$LOG" 2>&1 &
+            FLUTTER_PID=$!
+            tail -f "$LOG" &
+            TAIL_PID=$!
 
-          wait $FLUTTER_PID 2>/dev/null
-          EXIT=$?
-          kill $WATCHDOG_PID 2>/dev/null
-          wait $WATCHDOG_PID 2>/dev/null
-          kill $SIMLOG_PID 2>/dev/null
-          wait $SIMLOG_PID 2>/dev/null
-          kill $TAIL_PID 2>/dev/null
-          wait $TAIL_PID 2>/dev/null
+            # Watchdog: SIGTERM after the budget, SIGKILL 5 s later
+            # if flutter ignores TERM. Cancelled below as soon as
+            # flutter exits naturally so a clean run doesn't sleep
+            # out the budget.
+            ( sleep "$PER_ATTEMPT_TIMEOUT" && \
+              kill -TERM $FLUTTER_PID 2>/dev/null && \
+              sleep 5 && \
+              kill -KILL $FLUTTER_PID 2>/dev/null ) &
+            WATCHDOG_PID=$!
 
-          if [ "$EXIT" != "0" ]; then
-            echo "::group::iOS simulator console (last 200 lines)"
+            wait $FLUTTER_PID 2>/dev/null
+            EXIT=$?
+            kill $WATCHDOG_PID 2>/dev/null
+            wait $WATCHDOG_PID 2>/dev/null
+            kill $SIMLOG_PID 2>/dev/null
+            wait $SIMLOG_PID 2>/dev/null
+            kill $TAIL_PID 2>/dev/null
+            wait $TAIL_PID 2>/dev/null
+            echo "::endgroup::"
+
+            if [ "$EXIT" = "0" ]; then
+              exit 0
+            fi
+
+            echo "::group::iOS simulator console (last 200 lines, attempt $attempt)"
             tail -200 "$SIMLOG" 2>/dev/null || echo "(no sim log captured)"
             echo "::endgroup::"
-          fi
+
+            # Genuine assertion failure → don't retry, fail loudly.
+            if grep -q "Some tests failed\." "$LOG"; then
+              echo "flutter test: genuine test failure (exit $EXIT) — not retrying"
+              exit "$EXIT"
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              echo "Attempt $attempt failed without running tests (exit $EXIT) — infra flake."
+              echo "Erasing the sim to a pristine state and retrying."
+              # Full erase, not just reboot: closes the install-db
+              # window and clears any half-finished VM Service ports
+              # the previous attempt may have leaked on Bonjour. Plus
+              # a fresh SpringBoard between attempts often unsticks
+              # mDNSResponder if it was the source of the attach hang.
+              xcrun simctl shutdown "$DEVICE_ID" || true
+              xcrun simctl erase "$DEVICE_ID" || true
+              xcrun simctl boot "$DEVICE_ID"
+              xcrun simctl bootstatus "$DEVICE_ID" -b
+              for i in $(seq 1 30); do
+                if xcrun simctl spawn "$DEVICE_ID" launchctl print system 2>/dev/null | grep -q 'com.apple.SpringBoard$'; then
+                  echo "SpringBoard ready after ${i}s"
+                  break
+                fi
+                sleep 1
+              done
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "All $MAX_ATTEMPTS attempts failed without running tests — surfacing the last exit code."
           exit "$EXIT"
 
       - name: Cleanup simulator
