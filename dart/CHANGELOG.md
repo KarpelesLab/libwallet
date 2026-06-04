@@ -1,3 +1,18 @@
+## 0.4.50
+
+- **`wallet:transfer:pair_received` actually reaches the host now.**
+  0.4.49 fixed the spotlib dispatcher mismatch so the source's
+  handler started firing — but the event was emitted to
+  `e.Emitter()`, which is the in-process Go-side hub used for
+  cross-package signals (e.g. `wallet:pubkey_repaired`). Host
+  events have to go through `apirouter.BroadcastJson` → the FFI
+  socketpair bridge wired up in `cshared/ffi.go`. The receiver's
+  `importFromDevice` was timing out at 90 s — the handler entered
+  the confirm-wait select, but nothing forwarded the pair event to
+  the host, so no `exportToDeviceConfirm` ever came back. Switched
+  the emit to `apirouter.BroadcastJson` with the canonical
+  `{result, event, data}` envelope.
+
 ## 0.4.49
 
 - **Device transfer actually fires `wallet:transfer:pair_received`

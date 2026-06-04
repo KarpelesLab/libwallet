@@ -450,14 +450,26 @@ func transferHandle(e wltintf.Env, msg *spotproto.Message) ([]byte, error) {
 
 	// Notify the host so it can paint a confirmation prompt + run
 	// biometric + read the device share from the platform keystore.
-	if em := e.Emitter(); em != nil {
-		em.Emit(context.Background(), transferEventPairReceived, map[string]any{
+	//
+	// MUST use apirouter.BroadcastJson, not e.Emitter().Emit — the
+	// in-process emitter hub is for cross-package Go signals only
+	// (wltacct subscribes to wallet:pubkey_repaired etc.); host
+	// events reach the FFI bridge through the BroadcastJson →
+	// MakeJsonSocketFD → `client.events` pipe wired up in
+	// cshared/ffi.go. Emitting to e.Emitter() puts the event on a
+	// channel nothing forwards, so the host never sees it — which
+	// is why 0.4.49 receivers were getting transferConfirmTimeout
+	// (90 s) instead of a host prompt + confirm.
+	apirouter.BroadcastJson(context.Background(), map[string]any{
+		"result": "event",
+		"event":  transferEventPairReceived,
+		"data": map[string]any{
 			"sid":              s.Sid,
 			"wallet_id":        s.WalletId,
 			"peer_spot_id":     s.peerSpotID,
 			"peer_fingerprint": req.NewFingerprint,
-		})
-	}
+		},
+	})
 
 	// Wait for the host's decision. Bound the wait by
 	// transferConfirmTimeout — the user is actively looking at the
