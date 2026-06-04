@@ -53,7 +53,6 @@ import (
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/spotlib"
 	"github.com/KarpelesLab/spotproto"
 	"github.com/KarpelesLab/xuid"
 )
@@ -85,8 +84,11 @@ const (
 	// longer than transferConfirmTimeout to give the old device's
 	// handler time to respond once the host approves.
 	transferQueryTimeout = 2 * time.Minute
-	// transferSpotPrefix scopes the Spot endpoint path. Full
-	// endpoint string is "<prefix>/<sid>".
+	// transferSpotPrefix is the single Spot endpoint segment under
+	// which the global transfer handler is registered. Spotlib's
+	// dispatcher only matches the first path segment after the
+	// recipient id, so the sid travels in the request body instead
+	// of in the path.
 	transferSpotPrefix = "transfer"
 	// transferEventPairReceived is the event name emitted when the
 	// new device's request lands on the old device's handler. Hosts
@@ -120,10 +122,17 @@ var (
 // transferQueryBody is what the new device sends to the old device's
 // Spot handler. The token here MUST match the session token; the
 // handler rejects with errTransferTokenInvalid otherwise.
+//
+// Sid MUST be set: spotlib's dispatcher only matches the first path
+// segment after the recipient id, so the handler is installed under
+// the bare "transfer" prefix (no sid in the path) and demuxes
+// sessions out of this field instead. A request without Sid lands
+// on errTransferSessionNotFound.
 type transferQueryBody struct {
-	V            int    `json:"v"`
-	Token        string `json:"token"` // base64url, no padding
-	NewSpotID    string `json:"new_spot_id"`
+	V              int    `json:"v"`
+	Sid            string `json:"sid"`
+	Token          string `json:"token"` // base64url, no padding
+	NewSpotID      string `json:"new_spot_id"`
 	NewFingerprint string `json:"new_fingerprint,omitempty"` // free-text label the host may show in the confirm prompt
 }
 
@@ -353,10 +362,15 @@ func apiWalletExportToDevice(ctx context.Context, in *exportToDeviceInput) (any,
 	transferRegistry.sessions[sid] = s
 	transferRegistry.mu.Unlock()
 
-	endpoint := transferSpotPrefix + "/" + sid
-	spot.SetHandler(endpoint, func(msg *spotproto.Message) ([]byte, error) {
-		return transferHandle(ctx, e, spot, s, endpoint, msg)
-	})
+	// Per-session SetHandler used to live here, keyed at
+	// "transfer/<sid>". Spotlib's connect.go dispatcher only matches
+	// the first path segment after the recipient ("transfer"), so the
+	// lookup always missed and the receiver hung the full
+	// transferQueryTimeout before giving up. The handler is now
+	// installed once at InitEnv time under the bare "transfer"
+	// prefix; this function only registers the session in
+	// transferRegistry, and the global handler looks the session up
+	// by sid from the request body.
 
 	return &exportToDeviceResult{
 		Sid:         sid,
@@ -365,34 +379,23 @@ func apiWalletExportToDevice(ctx context.Context, in *exportToDeviceInput) (any,
 	}, nil
 }
 
-// transferHandle is the Spot handler bound to <selfSpotId>/transfer/<sid>.
-// Runs in a Spot goroutine; emits the pair-received event so the
-// host can prompt for confirmation, then blocks on s.confirm /
-// s.cancel until the host decides (or transferConfirmTimeout
-// fires). On approval, builds + seals the payload and returns it as
-// the Spot response. On rejection or timeout, returns the
-// appropriate sentinel string as an error so Spot wraps it as
-// MsgFlagError back to the requester.
-func transferHandle(ctx context.Context, e wltintf.Env, spot *spotlib.Client, s *transferSession, endpoint string, msg *spotproto.Message) ([]byte, error) {
-	// Whatever happens below, free the session and unregister the
-	// handler — one transfer per session, no replay.
-	defer func() {
-		spot.SetHandler(endpoint, nil)
-		transferRegistry.mu.Lock()
-		delete(transferRegistry.sessions, s.Sid)
-		transferRegistry.mu.Unlock()
-		select {
-		case <-s.done:
-		default:
-			close(s.done)
-		}
-	}()
-
-	// Late arrival after TTL: refuse before even parsing.
-	if time.Since(s.CreatedAt) > transferTTL {
-		return nil, errTransferTokenExpired
-	}
-
+// transferHandle is the single Spot handler bound to the bare
+// "transfer" endpoint at InitEnv time. Demuxes incoming pair
+// requests by the `sid` field of the body, claims the matching
+// session out of transferRegistry, emits the pair-received event
+// so the host can prompt for confirmation, then blocks on
+// s.confirm / s.cancel until the host decides (or
+// transferConfirmTimeout fires). On approval, builds + seals the
+// payload and returns it as the Spot response. On rejection or
+// timeout, returns the appropriate sentinel string as an error so
+// Spot wraps it as MsgFlagError back to the requester.
+//
+// Why a single endpoint instead of "transfer/<sid>": spotlib's
+// dispatcher (spotlib/connect.go) only matches the first path
+// segment after the recipient id, so the deeper key never resolved.
+// Multiple concurrent transfers all land here and are
+// disambiguated by sid.
+func transferHandle(e wltintf.Env, msg *spotproto.Message) ([]byte, error) {
 	var req transferQueryBody
 	if err := json.Unmarshal(msg.Body, &req); err != nil {
 		return nil, errTransferBadRequest
@@ -400,9 +403,39 @@ func transferHandle(ctx context.Context, e wltintf.Env, spot *spotlib.Client, s 
 	if req.V != transferProtocolVersion {
 		return nil, errTransferBadRequest
 	}
+	if req.Sid == "" {
+		return nil, errTransferSessionNotFound
+	}
 	got, err := base64.RawURLEncoding.DecodeString(req.Token)
 	if err != nil {
 		return nil, errTransferBadRequest
+	}
+
+	// Claim the session out of the registry under one lock so a
+	// concurrent valid request for the same sid sees session_not_found
+	// instead of racing on the channels. The defer-removal pattern
+	// from the per-session handler isn't available now that the
+	// handler is global and permanent.
+	transferRegistry.mu.Lock()
+	s, ok := transferRegistry.sessions[req.Sid]
+	if ok {
+		delete(transferRegistry.sessions, req.Sid)
+	}
+	transferRegistry.mu.Unlock()
+	if !ok {
+		return nil, errTransferSessionNotFound
+	}
+	defer func() {
+		select {
+		case <-s.done:
+		default:
+			close(s.done)
+		}
+	}()
+
+	// Late arrival after TTL: refuse before validating token.
+	if time.Since(s.CreatedAt) > transferTTL {
+		return nil, errTransferTokenExpired
 	}
 	if !constantTimeTokenEqual(got, s.Token) {
 		return nil, errTransferTokenInvalid
@@ -419,9 +452,9 @@ func transferHandle(ctx context.Context, e wltintf.Env, spot *spotlib.Client, s 
 	// biometric + read the device share from the platform keystore.
 	if em := e.Emitter(); em != nil {
 		em.Emit(context.Background(), transferEventPairReceived, map[string]any{
-			"sid":             s.Sid,
-			"wallet_id":       s.WalletId,
-			"peer_spot_id":    s.peerSpotID,
+			"sid":              s.Sid,
+			"wallet_id":        s.WalletId,
+			"peer_spot_id":     s.peerSpotID,
 			"peer_fingerprint": req.NewFingerprint,
 		})
 	}
@@ -616,16 +649,21 @@ func apiWalletImportFromDevice(ctx context.Context, in *importFromDeviceInput) (
 	}
 
 	body := &transferQueryBody{
-		V:           transferProtocolVersion,
-		Token:       tokenB64,
-		NewSpotID:   spot.TargetId(),
+		V:         transferProtocolVersion,
+		Sid:       sid,
+		Token:     tokenB64,
+		NewSpotID: spot.TargetId(),
 	}
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("importFromDevice: marshal: %w", err)
 	}
 
-	target := spotID + "/" + transferSpotPrefix + "/" + sid
+	// Single path segment after the spot id: spotlib's dispatcher
+	// only matches the first segment after the recipient, so a deeper
+	// "transfer/<sid>" target never lands on the source's handler.
+	// The sid travels in the body instead.
+	target := spotID + "/" + transferSpotPrefix
 	queryCtx, cancel := context.WithTimeout(ctx, transferQueryTimeout)
 	defer cancel()
 	resp, err := spot.Query(queryCtx, target, buf)

@@ -1,3 +1,23 @@
+## 0.4.49
+
+- **Device transfer actually fires `wallet:transfer:pair_received`
+  now.** The handler endpoint was registered at `"transfer/<sid>"`,
+  but spotlib's dispatcher (`spotlib/connect.go:317-336`) only
+  matches the first path segment after the recipient id —
+  `"transfer"`. The lookup always missed, the source's handler was
+  never invoked, and the receiver hung the full
+  `transferQueryTimeout` before giving up. Refactor:
+  - One permanent handler installed at `InitEnv` under the bare
+    `"transfer"` prefix, the same single-segment shape `pair.go`
+    uses successfully.
+  - Sessions are demuxed by a new `sid` field in the wire body
+    (`transferQueryBody.Sid`). Receiver sends `<spotID>/transfer`
+    as the target; the source's handler claims the matching session
+    out of `transferRegistry` under one lock per request.
+  - 0.4.48's `local_offline` fast-fail on offline Spot still applies.
+  Hosts already on 0.4.48 will see receivers fall through to
+  `peer_unreachable` after 2 minutes — bump both ends together.
+
 ## 0.4.48
 
 - **`Wallet:exportToDevice` now fails fast when Spot isn't online.**
