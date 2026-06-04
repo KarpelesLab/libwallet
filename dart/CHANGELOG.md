@@ -1,3 +1,22 @@
+## 0.4.48
+
+- **`Wallet:exportToDevice` now fails fast when Spot isn't online.**
+  Previously the source painted a syntactically valid pairing QR even
+  when its Spot client hadn't completed the broker handshake — because
+  `spot.TargetId()` returns a static key-derived id that's available
+  whether or not the node is reachable. The receiver's `spot.Query`
+  then hung the full `transferQueryTimeout = 2 minutes` before giving
+  up with `peer_unreachable`. Export now calls `waitOnlineSpot` first
+  (15 s ceiling) and returns `local_offline` if the handshake doesn't
+  finish, so the host can surface a clear "you're offline" error and
+  not paint a dead QR. `client.wallets.exportToDevice` documents the
+  new error code.
+- **New `Spot:status` endpoint, exposed as `client.spot.status()`.**
+  Returns `{online, targetId, connections: {total, online}}`. Lets
+  hosts positively poll Spot connectivity instead of relying on the
+  edge-triggered `online_status` event, which is silently missed when
+  Spot comes online before the host subscribes to events.
+
 ## 0.4.47
 
 - **Fix `EXC_BAD_ACCESS` segfault in `(*ECPoint).ToEd25519PubKey` when

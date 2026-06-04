@@ -158,6 +158,13 @@ class WalletApi {
   ///
   /// Full flow documented in `doc/device_share.md` (the "device
   /// transfer" section).
+  ///
+  /// Throws `local_offline` (as of 0.4.48) when this device's Spot
+  /// client hasn't completed its broker handshake within 15 s. Means
+  /// the source can't be reached by the receiver, so painting a QR
+  /// would just produce a 2-minute hang for the new device. Use
+  /// `client.spot.status()` beforehand to diagnose, or retry after
+  /// a network change.
   Future<DeviceTransferSession> exportToDevice(String walletId) async {
     final data = await _conn.request(
       'Wallet/$walletId:exportToDevice',
@@ -216,8 +223,10 @@ class WalletApi {
   /// `url_malformed` (bad pairing code), `token_invalid`,
   /// `token_expired`, `declined` (user said no), `timeout`,
   /// `bad_request`, `session_not_found`, `peer_unreachable` (Spot
-  /// couldn't reach the old device). Map these to typed exceptions
-  /// in your UI layer the way ClawdWallet pairing already does.
+  /// couldn't reach the old device, OR this device's own Spot
+  /// failed to come online — the import path currently coalesces
+  /// both onto this code). Map these to typed exceptions in your UI
+  /// layer the way ClawdWallet pairing already does.
   Future<DeviceTransferImportResult> importFromDevice(
       String pairingCode) async {
     final data = await _conn.request('Wallet:importFromDevice', 'POST', {

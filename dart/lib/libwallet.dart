@@ -130,6 +130,7 @@ export 'src/client/ffi_transport.dart' show FfiTransport;
 export 'src/api/info_api.dart' show InfoApi, WalletInfo, VersionInfo;
 export 'src/version.dart' show libwalletPackageVersion;
 export 'src/api/lifecycle_api.dart' show LifecycleApi;
+export 'src/api/spot_api.dart' show SpotApi, SpotStatus;
 export 'src/api/name_api.dart' show NameApi;
 export 'src/api/store_key_api.dart' show StoreKeyApi, StoreKeyPair;
 export 'src/api/remote_key_api.dart' show RemoteKeyApi;

@@ -106,6 +106,15 @@ var (
 	errTransferPeerUnreachable = errors.New("peer_unreachable")
 	errTransferSessionNotFound = errors.New("session_not_found")
 	errTransferWalletNotFound  = errors.New("wallet_not_found")
+	// errTransferLocalOffline is returned by Wallet:exportToDevice
+	// when the source's Spot client can't reach the broker within
+	// waitOnlineSpot's 15-second window. Returning early here means
+	// the host doesn't paint a QR for a session that no peer can
+	// reach — without this guard, spot.TargetId() (a static, key-
+	// derived id) still produces a syntactically valid QR while the
+	// receiver's spot.Query hangs the full 2-minute transferQueryTimeout
+	// before giving up with peer_unreachable.
+	errTransferLocalOffline    = errors.New("local_offline")
 )
 
 // transferQueryBody is what the new device sends to the old device's
@@ -309,6 +318,14 @@ func apiWalletExportToDevice(ctx context.Context, in *exportToDeviceInput) (any,
 	spot, err := envSpot(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("exportToDevice: spot: %w", err)
+	}
+	// Refuse to mint a pairing code unless our own Spot is actually
+	// reachable. spot.TargetId() returns the static, key-derived id
+	// even when the broker handshake hasn't completed, so without this
+	// guard the source would happily paint a QR for an unroutable
+	// node and the receiver would hang for the full transferQueryTimeout.
+	if werr := waitOnlineSpot(spot); werr != nil {
+		return nil, errTransferLocalOffline
 	}
 
 	token := make([]byte, transferTokenBytes)
@@ -665,9 +682,9 @@ func apiWalletImportFromDevice(ctx context.Context, in *importFromDeviceInput) (
 
 // mapTransferRemoteError lifts handler-side sentinel strings out of
 // the Spot-transport error wrapper. The host-side sentinel set is
-// closed (the seven errTransfer* values), so a substring check is
-// safe — false positives would require an unrelated error message
-// to embed one of these strings verbatim.
+// closed, so a substring check is safe — false positives would
+// require an unrelated error message to embed one of these strings
+// verbatim.
 func mapTransferRemoteError(err error) error {
 	msg := err.Error()
 	switch {
@@ -683,6 +700,8 @@ func mapTransferRemoteError(err error) error {
 		return errTransferBadRequest
 	case strings.Contains(msg, "session_not_found"):
 		return errTransferSessionNotFound
+	case strings.Contains(msg, "local_offline"):
+		return errTransferLocalOffline
 	}
 	return nil
 }

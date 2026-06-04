@@ -11,4 +11,4 @@
 // failure mode where the Dart side has been bumped but the linked
 // native library is still from the previous release.
 
-const String libwalletPackageVersion = '0.4.47';
+const String libwalletPackageVersion = '0.4.48';

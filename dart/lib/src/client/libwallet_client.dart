@@ -15,6 +15,7 @@ import '../api/network_api.dart';
 import '../api/nft_api.dart';
 import '../api/remote_key_api.dart';
 import '../api/request_api.dart';
+import '../api/spot_api.dart';
 import '../api/store_key_api.dart';
 import '../api/swap_api.dart';
 import '../api/token_api.dart';
@@ -48,6 +49,7 @@ class LibwalletClient {
   // API namespaces
   late final InfoApi info = InfoApi(_transport);
   late final LifecycleApi lifecycle = LifecycleApi(_transport);
+  late final SpotApi spot = SpotApi(_transport);
   late final NameApi names = NameApi(_transport);
   late final StoreKeyApi storeKeys = StoreKeyApi(_transport);
   late final RemoteKeyApi remoteKeys = RemoteKeyApi(_transport);
