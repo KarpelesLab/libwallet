@@ -1,3 +1,20 @@
+## 0.4.51
+
+- **`Wallet:exportToDevice:confirm` now resolves the session it
+  needs.** 0.4.49's "claim out of registry on handler entry" pattern
+  (added to race-protect the new global dispatcher) deleted the
+  session before the host could run its biometric prompt — the
+  confirm endpoint looks the session up by sid in the same registry,
+  found nothing, returned `errTransferSessionNotFound`, and the host
+  saw `LibwalletException(404): Not found`. The session now stays in
+  `transferRegistry` for the full confirm window; race protection
+  moves to a new `claimed` flag on the session itself, so concurrent
+  pair requests for the same sid still resolve as session_not_found
+  without disturbing the confirm path. The registry entry gets
+  removed in the handler's defer once the confirm round trip
+  completes (success / decline / timeout), with the existing 5-min
+  cleanup ticker as the backstop.
+
 ## 0.4.50
 
 - **`wallet:transfer:pair_received` actually reaches the host now.**

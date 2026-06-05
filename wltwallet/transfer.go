@@ -183,6 +183,17 @@ type transferSession struct {
 	// the peer's spot id and to populate the response sender.
 	peerSpotID string
 
+	// claimed flips to true the first time a valid pair request
+	// invokes transferHandle. Subsequent concurrent invocations for
+	// the same sid see this and return errTransferSessionNotFound
+	// instead of racing on s.confirm / s.cancel. Cheaper than
+	// deleting the session from the registry on claim, which the
+	// 0.4.49 refactor tried and broke apiWalletExportToDeviceConfirm
+	// — that endpoint looks the session up by sid while the host
+	// runs its biometric prompt, so the registry entry has to stay
+	// alive through the confirm window.
+	claimed bool
+
 	mu sync.Mutex
 }
 
@@ -411,21 +422,38 @@ func transferHandle(e wltintf.Env, msg *spotproto.Message) ([]byte, error) {
 		return nil, errTransferBadRequest
 	}
 
-	// Claim the session out of the registry under one lock so a
-	// concurrent valid request for the same sid sees session_not_found
-	// instead of racing on the channels. The defer-removal pattern
-	// from the per-session handler isn't available now that the
-	// handler is global and permanent.
+	// Look up the session — do NOT remove it from the registry yet.
+	// apiWalletExportToDeviceConfirm needs to resolve the session by
+	// sid while the host's confirm UI is up; if the registry entry is
+	// gone by then, every confirm returns errTransferSessionNotFound
+	// (which the wire renders as 404). The earlier 0.4.49 refactor
+	// did remove on claim and produced exactly that bug.
 	transferRegistry.mu.Lock()
 	s, ok := transferRegistry.sessions[req.Sid]
-	if ok {
-		delete(transferRegistry.sessions, req.Sid)
-	}
 	transferRegistry.mu.Unlock()
 	if !ok {
 		return nil, errTransferSessionNotFound
 	}
+
+	// Race protection — a concurrent valid pair request for the same
+	// sid sees s.claimed == true and bails out with session_not_found
+	// instead of also racing on s.confirm / s.cancel. The flag
+	// replaces the registry-delete-on-claim pattern.
+	s.mu.Lock()
+	if s.claimed {
+		s.mu.Unlock()
+		return nil, errTransferSessionNotFound
+	}
+	s.claimed = true
+	s.mu.Unlock()
+
 	defer func() {
+		// Remove from the registry now that the handler is done. The
+		// cleanup ticker (transferStartCleanup) backstops this in
+		// case the defer is skipped on a panic / process exit.
+		transferRegistry.mu.Lock()
+		delete(transferRegistry.sessions, s.Sid)
+		transferRegistry.mu.Unlock()
 		select {
 		case <-s.done:
 		default:
