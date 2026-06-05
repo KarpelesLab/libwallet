@@ -1,3 +1,26 @@
+## 0.4.55
+
+- **Fix "Program failed to complete" on SPL transfers with priority
+  fees.** 0.4.53 introduced an SPL transfer path that always emits
+  an `AssociatedToken::CreateIdempotent` prelude (~15,200 CUs) plus
+  `TransferChecked` (~300 CUs). But the existing
+  `solanaDefaultCULimit = 1_000` constant was calibrated for the
+  native SOL System-Program transfer (~200 CUs) — so any SPL
+  transfer that triggered the `ComputeUnitLimit` default
+  (i.e. anyone using `PriorityLevel` or `ComputeUnitPrice`) ran
+  out of compute mid-flight and got back the cryptic
+  `Transaction simulation failed: Error processing Instruction 1:
+  Program failed to complete` from the RPC.
+- **CU limit now comes from `simulateTransaction`.** Before signing,
+  the sign path builds a draft message with a 200k cap, calls
+  `simulateTransaction(sigVerify=false)`, reads `unitsConsumed`,
+  and sets the on-wire CB limit to that value plus a 10%-or-+1000
+  headroom (the larger of the two). Caps at Solana's per-tx 1.4M
+  CU maximum; never lowers a caller-pinned `ComputeUnitLimit`.
+  On RPC failure falls back to a conservative hardcoded default
+  (1k native, 30k SPL) so a network burp doesn't block the
+  transaction. This is the same pattern Phantom and Solflare use.
+
 ## 0.4.54
 
 - **SPL Token-2022 support — including transfer-fee mints.** 0.4.53

@@ -25,11 +25,37 @@ import (
 // for the 200k default Solana assigns when no limit is declared.
 const solanaDefaultCULimit uint32 = 1000
 
+// Default compute-unit limit for an SPL Token transfer. The
+// `TransferChecked` ixn alone is ~300 CUs, but our SPL build
+// always prepends an `AssociatedToken::CreateIdempotent` so a
+// brand-new recipient gets their ATA in the same tx — that
+// instruction consumes ~15,200 CUs end-to-end (allocate, init mint
+// state, init owner, etc.) per mainnet simulation traces. 30,000
+// gives a comfortable ~2x headroom for Token-2022 with a fee
+// extension (~16-20k) without paying for the 200k Solana would
+// pick by default. The 1000 default we use for native SOL is
+// catastrophic here — every priority-enabled SPL transfer ran
+// out of compute mid-flight on 0.4.53 with the cryptic
+// "Program failed to complete" error.
+const solanaSPLDefaultCULimit uint32 = 30_000
+
 // Priority percentile selection for each PriorityLevel.
 var solanaPriorityPercentile = map[string]float64{
 	"low":    0.25,
 	"medium": 0.50,
 	"high":   0.75,
+}
+
+// solanaCULimitDefault picks the right compute-unit budget for the
+// instructions the sign path will actually emit. SPL transfers
+// always include an ATA CreateIdempotent prelude (~15k CUs) so the
+// native 1000-CU default would run them out mid-flight — that was
+// the cryptic 0.4.53 "Program failed to complete" bug.
+func solanaCULimitDefault(tx *Transaction) uint32 {
+	if tx != nil && tx.resolvedToken != nil {
+		return solanaSPLDefaultCULimit
+	}
+	return solanaDefaultCULimit
 }
 
 // resolveSolanaPriority fills ComputeUnitLimit + ComputeUnitPrice on
@@ -43,7 +69,7 @@ func resolveSolanaPriority(n *wltnet.Network, tx *Transaction) error {
 		// price (via ComputeUnitPrice), make sure we have a
 		// limit to pair with it.
 		if tx.ComputeUnitPrice > 0 && tx.ComputeUnitLimit == 0 {
-			tx.ComputeUnitLimit = solanaDefaultCULimit
+			tx.ComputeUnitLimit = solanaCULimitDefault(tx)
 		}
 		return nil
 	case "none":
@@ -61,7 +87,7 @@ func resolveSolanaPriority(n *wltnet.Network, tx *Transaction) error {
 	// have a compute limit set.
 	if tx.ComputeUnitPrice > 0 {
 		if tx.ComputeUnitLimit == 0 {
-			tx.ComputeUnitLimit = solanaDefaultCULimit
+			tx.ComputeUnitLimit = solanaCULimitDefault(tx)
 		}
 		return nil
 	}
@@ -78,7 +104,7 @@ func resolveSolanaPriority(n *wltnet.Network, tx *Transaction) error {
 	}
 	tx.ComputeUnitPrice = price
 	if tx.ComputeUnitLimit == 0 {
-		tx.ComputeUnitLimit = solanaDefaultCULimit
+		tx.ComputeUnitLimit = solanaCULimitDefault(tx)
 	}
 	return nil
 }

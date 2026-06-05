@@ -250,9 +250,15 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// program id; or TransferCheckedWithFee + a pre-computed fee
 	// when the mint has the TransferFeeConfig extension active for
 	// the current epoch.
-	var message []byte
 	var splMintB58 string
 	var splFee uint64
+
+	// Closure that rebuilds the message bytes against the CURRENT
+	// values of tx.ComputeUnitLimit and tx.ComputeUnitPrice. Called
+	// once for the simulation pass and again after the simulation
+	// nails down a tight CU limit, so the final bytes the TSS signs
+	// match what we broadcast.
+	var buildMessage func() []byte
 	if tx.resolvedToken != nil {
 		mintBytes, err := base58.Bitcoin.Decode(tx.resolvedToken.GetAddress())
 		if err != nil || len(mintBytes) != 32 {
@@ -315,16 +321,17 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 			}
 		}
 
-		if useFeePath {
-			message = buildSPLTransferWithFeeMessage(
-				from, to, mint, senderATA, recipientATA,
-				tokenProgram,
-				amount, decimals, splFee,
-				recentBlockhash,
-				tx.ComputeUnitLimit, tx.ComputeUnitPrice,
-			)
-		} else {
-			message = buildSPLTransferMessage(
+		buildMessage = func() []byte {
+			if useFeePath {
+				return buildSPLTransferWithFeeMessage(
+					from, to, mint, senderATA, recipientATA,
+					tokenProgram,
+					amount, decimals, splFee,
+					recentBlockhash,
+					tx.ComputeUnitLimit, tx.ComputeUnitPrice,
+				)
+			}
+			return buildSPLTransferMessage(
 				from, to, mint, senderATA, recipientATA,
 				tokenProgram,
 				amount, decimals,
@@ -347,8 +354,24 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 		}
 		preCancel()
 	} else {
-		message = buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
+		buildMessage = func() []byte {
+			return buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
+		}
 	}
+
+	// Pick a tight ComputeUnit limit via simulation. Hardcoded
+	// defaults were the source of an 0.4.53 footgun where the
+	// 1,000-CU native-SOL default starved every SPL transfer of the
+	// ~15k CUs ATA CreateIdempotent needs ("Program failed to
+	// complete" at instruction 1). simulateTransaction reports the
+	// exact unitsConsumed; we set the on-wire CB limit to that plus
+	// a 10%-or-1000-absolute headroom. Skip simulation entirely when
+	// the caller already pinned a generous CB limit, and fall back
+	// to the conservative SPL default when the RPC simulation
+	// errors so the build still succeeds rather than blocking on
+	// best-effort sizing.
+	tx.ComputeUnitLimit = resolveComputeUnitLimitViaSimulation(ctx, n, tx, buildMessage)
+	message := buildMessage()
 
 	// Sign the message with EdDSA TSS
 	signOpt := &wltsign.Opts{
