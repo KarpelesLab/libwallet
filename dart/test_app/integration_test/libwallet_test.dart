@@ -65,12 +65,25 @@ void main() {
     tempDir.deleteSync(recursive: true);
   });
 
-  testWidgets('Info:ping responds', (tester) async {
+  // Use plain `test()` rather than `testWidgets()` — none of these
+  // tests render any widgets, they just exercise the FFI bridge.
+  // testWidgets installs an end-of-test SemanticsHandle verifier that
+  // intermittently fails on iOS under xcodebuild test because XCTest
+  // enables system accessibility for XCUIElement introspection, which
+  // makes Flutter's renderer ensure semantics asynchronously during
+  // the test body. The handle count goes up between the verifier's
+  // start-of-test snapshot and end-of-test check, and the first
+  // testWidgets case fails with "A SemanticsHandle was active at the
+  // end of the test". integration_test collects results from both
+  // test() and testWidgets() so picking the right primitive sidesteps
+  // the issue entirely.
+
+  test('Info:ping responds', () async {
     final result = await client.info.ping();
     expect(result, isNotNull);
   });
 
-  testWidgets('Info:version returns a string', (tester) async {
+  test('Info:version returns a string', () async {
     // version() may legitimately return '' on non-tag builds (CI on
     // master, local dev) — the tagged release version is only set
     // by ldflags during a `v*` tag build. Just verify it's a String.
@@ -84,24 +97,23 @@ void main() {
         reason: 'gitTag should be set by ldflags on every CI build');
   });
 
-  testWidgets('Info:onboarding returns state', (tester) async {
+  test('Info:onboarding returns state', () async {
     final state = await client.info.onboarding();
     expect(state.hasWallet, false);
   });
 
-  testWidgets('Network list returns networks', (tester) async {
+  test('Network list returns networks', () async {
     final networks = await client.networks.list();
     expect(networks, isA<List<Network>>());
     expect(networks, isNotEmpty);
   });
 
-  testWidgets('Wallet list is initially empty', (tester) async {
+  test('Wallet list is initially empty', () async {
     final wallets = await client.wallets.list();
     expect(wallets, isEmpty);
   });
 
-  testWidgets('create and delete a wallet with password-only keys',
-      (tester) async {
+  test('create and delete a wallet with password-only keys', () async {
     Wallet? createdWallet;
     await for (final event in client.wallets.create(
       name: 'Test Wallet',
