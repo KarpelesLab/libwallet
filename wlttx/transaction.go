@@ -77,6 +77,14 @@ type Transaction struct {
 	// Unexported on purpose: not in the wire shape, never persisted.
 	btcSpentRefs     []string    `json:"-" sql:"-"`
 	btcPendingChange *bitcoinTxo `json:"-" sql:"-"`
+	// resolvedToken is populated by Validate when tx.Asset names a
+	// non-native asset on a chain that supports tokens (EVM / Solana).
+	// signAndSend uses it to pick the right instruction shape — an
+	// ERC-20 transfer() on EVM, an SPL TransferChecked on Solana —
+	// rather than letting the caller's Type string drift out of sync
+	// with the asset they actually meant to send. nil means native.
+	// Unexported: never serialized, never persisted.
+	resolvedToken resolvedTokenAsset `json:"-" sql:"-"`
 	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
 	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
 	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
@@ -251,6 +259,54 @@ func (tx *Transaction) estimateGas(n *wltnet.Network) error {
 	return nil
 }
 
+// resolvedTokenAsset is the subset of wlttoken.token's accessor
+// methods that Validate hands off to signAndSend. Defined as an
+// interface here because wlttoken's concrete type is unexported.
+// `*wlttoken.token` already implicitly satisfies this.
+type resolvedTokenAsset interface {
+	GetAddress() string
+	GetDecimals() int
+	GetType() string
+	GetSymbol() string
+}
+
+// resolveTokenAsset looks up tx.Asset against the local Token table
+// and returns the row when the asset names a non-native token on
+// network n. Returns (nil, nil) when the asset is native (empty,
+// "NATIVE", "<type>.<chainId>.NATIVE"). Returns an error when the
+// asset is non-native but not resolvable — that's a caller mistake
+// we want to surface at Validate time, not at sign/send time.
+//
+// Accepts two shapes for backwards compatibility with the existing
+// erc20_transfer flow:
+//   - canonical "<type>.<chainId>.<mint-or-contract>" key (what
+//     Asset:list returns and what maxSendable's doc-comment uses)
+//   - bare token XUID (the erc20_transfer branch already used this)
+func resolveTokenAsset(e wltintf.Env, n *wltnet.Network, asset string) (resolvedTokenAsset, error) {
+	if isNativeAsset(asset, n) {
+		return nil, nil
+	}
+	// XUID shape ("tk-...") — look up by id.
+	if id, err := xuid.Parse(asset); err == nil {
+		tok, err := wlttoken.TokenById(e, id)
+		if err != nil {
+			return nil, fmt.Errorf("token %s not found: %w", asset, err)
+		}
+		return tok, nil
+	}
+	// Canonical "<type>.<chainId>.<addr>" — the part after the second
+	// dot is the on-chain address / mint.
+	parts := strings.SplitN(asset, ".", 3)
+	if len(parts) != 3 || parts[2] == "" {
+		return nil, fmt.Errorf("asset %q is not a recognised key (expected XUID or \"<type>.<chainId>.<address>\")", asset)
+	}
+	tok, err := wlttoken.LookupTokenByMint(e, n.Id, parts[2])
+	if err != nil {
+		return nil, fmt.Errorf("token %s not registered on network %s: %w", parts[2], n.Id, err)
+	}
+	return tok, nil
+}
+
 func (tx *Transaction) Validate(e wltintf.Env) error {
 	if tx == nil {
 		return errors.New("error: nil tx")
@@ -313,19 +369,39 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 	tx.Network = n.Id
 
-	// For ERC-20 transfers, resolve the token and rewrite tx.To/tx.Data
-	// to the contract address and the transfer() call data.
-	if tx.Type == "erc20_transfer" {
-		tokenId, err := xuid.Parse(tx.Asset)
+	// Resolve tx.Asset against the Token table for any "transfer"-
+	// family tx. Native assets (empty / NATIVE / "*.NATIVE") return
+	// (nil, nil); tokens return the row and nil; anything else is a
+	// caller mistake we surface here rather than letting it through
+	// to the chain-specific build path. resolvedToken is what the
+	// per-chain branches below + signAndSend* read to pick the right
+	// instruction shape.
+	if tx.Type == "transfer" || tx.Type == "erc20_transfer" || tx.Type == "solana_transfer" || tx.Type == "solana_spl_transfer" {
+		tx.resolvedToken, err = resolveTokenAsset(e, n, tx.Asset)
 		if err != nil {
-			return fmt.Errorf("erc20_transfer Asset must be a token XUID: %w", err)
+			return err
 		}
-		tok, err := wlttoken.TokenById(e, tokenId)
-		if err != nil {
-			return fmt.Errorf("erc20 token not found: %w", err)
-		}
+	}
+
+	// Bitcoin-family chains have no contract-level assets in this
+	// codebase; passing a non-native asset is a caller mistake and
+	// must be rejected before the sign/send path goes off and builds
+	// a native-BTC tx with the token amount in the lamports/satoshi
+	// slot.
+	if n.Type == "bitcoin" && tx.resolvedToken != nil {
+		return fmt.Errorf("asset %q is a token; bitcoin-family chains only support native transfers", tx.Asset)
+	}
+
+	// EVM ERC-20 routing — works for both the explicit
+	// "erc20_transfer" type and for the type-agnostic "transfer"
+	// when the resolved asset is an ERC-20. Rewrites tx.To/tx.Data
+	// to the contract address and the transfer() calldata so the
+	// existing EVM sign/send path handles SPL-like tokens
+	// transparently.
+	if n.Type == "evm" && tx.resolvedToken != nil {
+		tok := tx.resolvedToken
 		if tok.GetType() != "erc20" {
-			return fmt.Errorf("token %s is not an ERC-20 (type=%s)", tokenId, tok.GetType())
+			return fmt.Errorf("token %q has type %q; only erc20 is supported on EVM networks", tx.Asset, tok.GetType())
 		}
 		recipient := tx.To
 		data, err := encodeERC20Transfer(recipient, tx.Amount.Value())
@@ -349,7 +425,18 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 		// ceil(cuLimit * cuPrice / 1_000_000) lamport priority
 		// fee. Zero cuLimit/cuPrice collapses to the legacy 5000.
 		tx.Fee = wltobj.NewAmountRaw(big.NewInt(int64(solanaFeeLamports(tx))), 9)
-		if tx.Type == "transfer" || tx.Type == "solana_transfer" {
+		// SPL tokens are still under development for v1: Token-2022
+		// extensions (transfer-fee, hooks) need a different opcode
+		// and on-chain mint introspection. Reject explicitly so a
+		// USDT-Token-2022 mint doesn't silently fall through and get
+		// built as a Token-1 transfer.
+		if tx.resolvedToken != nil && tx.resolvedToken.GetType() != "spl-token" {
+			return fmt.Errorf("solana token %q has type %q; only \"spl-token\" is supported in this build (Token-2022 follow-up)", tx.Asset, tx.resolvedToken.GetType())
+		}
+		// Native-send preflight only when we're actually building a
+		// native SOL transfer. SPL transfers have their own fee +
+		// balance preconditions (handled at sign/send time in v1).
+		if (tx.Type == "transfer" || tx.Type == "solana_transfer") && tx.resolvedToken == nil {
 			if err := preflightSolanaNativeSend(e, n, acct, tx); err != nil {
 				return err
 			}

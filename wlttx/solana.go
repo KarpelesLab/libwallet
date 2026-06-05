@@ -237,7 +237,48 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// set (either explicitly by the caller or via PriorityLevel in
 	// Validate). Zero values reproduce the legacy 3-account layout
 	// so unchanged callers keep their byte-for-byte behaviour.
-	message := buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
+	//
+	// SPL routing: when tx.resolvedToken is non-nil (set by Validate
+	// from tx.Asset), build an SPL TransferChecked message under the
+	// resolved mint instead of a native SOL transfer. The "amount"
+	// stays in tx.Amount as base units of the token (e.g. 1_315_764
+	// for 1.315764 USDT @ 6 decimals); the per-asset interpretation
+	// happens here, not in the caller.
+	var message []byte
+	var splMintB58 string
+	if tx.resolvedToken != nil {
+		mintBytes, err := base58.Bitcoin.Decode(tx.resolvedToken.GetAddress())
+		if err != nil || len(mintBytes) != 32 {
+			return fmt.Errorf("invalid SPL mint address %q: %w (len=%d)", tx.resolvedToken.GetAddress(), err, len(mintBytes))
+		}
+		var mint [32]byte
+		copy(mint[:], mintBytes)
+
+		senderATA, _, err := deriveAssociatedTokenAccount(from, mint, solanaSplTokenProgram)
+		if err != nil {
+			return fmt.Errorf("derive sender ATA: %w", err)
+		}
+		recipientATA, _, err := deriveAssociatedTokenAccount(to, mint, solanaSplTokenProgram)
+		if err != nil {
+			return fmt.Errorf("derive recipient ATA: %w", err)
+		}
+
+		amount := tx.Amount.Value().Uint64()
+		decimals := uint8(tx.resolvedToken.GetDecimals())
+		message = buildSPLTransferMessage(
+			from, to, mint, senderATA, recipientATA,
+			solanaSplTokenProgram,
+			amount, decimals,
+			recentBlockhash,
+			tx.ComputeUnitLimit, tx.ComputeUnitPrice,
+		)
+		splMintB58 = tx.resolvedToken.GetAddress()
+		wltlog.Debugf("solana-send: SPL transfer mint=%s symbol=%s amount=%d decimals=%d sender_ata=%s recipient_ata=%s",
+			splMintB58, tx.resolvedToken.GetSymbol(), amount, decimals,
+			base58.Bitcoin.Encode(senderATA[:]), base58.Bitcoin.Encode(recipientATA[:]))
+	} else {
+		message = buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
+	}
 
 	// Sign the message with EdDSA TSS
 	signOpt := &wltsign.Opts{
@@ -292,8 +333,13 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// State change worth emitting at info level — shows up in
 	// release binaries so the support team can correlate a broadcast
 	// event with on-chain data.
-	wltlog.Infof("solana-send: broadcast OK chain=%s from=%s to=%s lamports=%d hash=%s (broadcast %s)",
-		n.ChainId, acct.Address, tx.To, lamports, txHash, time.Since(broadcastStart).Round(time.Millisecond))
+	if splMintB58 != "" {
+		wltlog.Infof("solana-send: broadcast OK chain=%s from=%s to=%s spl_mint=%s amount=%d (base units) hash=%s (broadcast %s)",
+			n.ChainId, acct.Address, tx.To, splMintB58, tx.Amount.Value().Uint64(), txHash, time.Since(broadcastStart).Round(time.Millisecond))
+	} else {
+		wltlog.Infof("solana-send: broadcast OK chain=%s from=%s to=%s lamports=%d hash=%s (broadcast %s)",
+			n.ChainId, acct.Address, tx.To, lamports, txHash, time.Since(broadcastStart).Round(time.Millisecond))
+	}
 
 	return nil
 }

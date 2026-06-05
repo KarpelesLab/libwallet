@@ -1,3 +1,31 @@
+## 0.4.53
+
+- **`Transaction.type = "transfer"` now actually transfers the asset
+  you asked for.** Previously the Solana sign/send path ignored
+  `tx.Type` and unconditionally built a native SOL transfer, so a
+  USDT/USDC transfer became a SOL transfer with the token base-units
+  (e.g. 1_315_764 = 1.315764 USDT) sent as lamports of SOL (~0.00132
+  SOL). The fix lifts the asset resolution into `Validate` and
+  routes every chain family from there:
+  - **Solana SPL Token-1**: `tx.Asset` resolves to an SPL mint →
+    the sign path derives sender + recipient associated token
+    accounts, attaches an idempotent ATA-create instruction (so the
+    recipient doesn't need a pre-existing token account), and emits
+    an SPL `TransferChecked` (opcode 12). USDT, USDC, and every
+    other Token-1 mint work transparently. **Token-2022 mints are
+    rejected with a clear error** for now — opcode + extension
+    handling is the next bump.
+  - **EVM ERC-20**: `tx.Type = "transfer"` + an ERC-20 asset
+    auto-routes to the existing ERC-20 path (rewrites tx.To /
+    tx.Data to the contract). The explicit `"erc20_transfer"` type
+    still works for callers that prefer it.
+  - **Bitcoin family**: any non-native asset rejected at Validate
+    time. There are no contract-level assets on bitcoin-family
+    chains; the previous code would have silently treated the asset
+    as native.
+  - `solana_transfer` / `solana_spl_transfer` kept as accepted
+    aliases for back-compat.
+
 ## 0.4.52
 
 - **Device-transfer confirm/cancel endpoints are actually reachable
