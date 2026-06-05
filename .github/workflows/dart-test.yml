@@ -293,18 +293,43 @@ jobs:
         # care about signatures and the runner has no provisioning
         # profile to sign with.
         run: |
-          set -e
+          set +e
           # 1. Wire the dart entry point.
-          flutter build ios --config-only --simulator integration_test/libwallet_test.dart
+          flutter build ios --config-only --simulator integration_test/libwallet_test.dart || exit $?
           # 2. Run XCTest against the booted sim.
+          XCRESULT="$RUNNER_TEMP/xcodebuild-test.xcresult"
+          rm -rf "$XCRESULT"
           xcodebuild test \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
             -only-testing:RunnerTests \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
-            -resultBundlePath "$RUNNER_TEMP/xcodebuild-test.xcresult" \
+            -resultBundlePath "$XCRESULT" \
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO
+          EXIT=$?
+          if [ "$EXIT" != "0" ] && [ -d "$XCRESULT" ]; then
+            # XCTAssert failure messages live in the xcresult bundle, not
+            # in xcodebuild's stdout. Dump every failure record so the
+            # log shows WHY each red test died instead of just "failed".
+            echo "::group::xcresulttool — test failures"
+            xcrun xcresulttool get test-results tests --path "$XCRESULT" --format json 2>/dev/null \
+              | jq -r '
+                  def walk_failures:
+                    if type == "object" then
+                      ( select(.failureMessages?) | .name + ":\n  " + (.failureMessages | join("\n  "))),
+                      (values[]? | walk_failures)
+                    elif type == "array" then
+                      (.[] | walk_failures)
+                    else empty
+                    end;
+                  walk_failures
+                ' || \
+              xcrun xcresulttool get --legacy --path "$XCRESULT" --format json 2>/dev/null \
+                | jq -r '.. | objects | select(.failureSummaries?) | .failureSummaries._values[]? | "\(.fileName._value):\(.lineNumber._value): \(.message._value)"'
+            echo "::endgroup::"
+          fi
+          exit "$EXIT"
 
       - name: Cleanup simulator
         if: always()
