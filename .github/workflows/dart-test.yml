@@ -310,23 +310,27 @@ jobs:
           EXIT=$?
           if [ "$EXIT" != "0" ] && [ -d "$XCRESULT" ]; then
             # XCTAssert failure messages live in the xcresult bundle, not
-            # in xcodebuild's stdout. Dump every failure record so the
-            # log shows WHY each red test died instead of just "failed".
-            echo "::group::xcresulttool — test failures"
-            xcrun xcresulttool get test-results tests --path "$XCRESULT" --format json 2>/dev/null \
-              | jq -r '
-                  def walk_failures:
-                    if type == "object" then
-                      ( select(.failureMessages?) | .name + ":\n  " + (.failureMessages | join("\n  "))),
-                      (values[]? | walk_failures)
-                    elif type == "array" then
-                      (.[] | walk_failures)
-                    else empty
-                    end;
-                  walk_failures
-                ' || \
-              xcrun xcresulttool get --legacy --path "$XCRESULT" --format json 2>/dev/null \
-                | jq -r '.. | objects | select(.failureSummaries?) | .failureSummaries._values[]? | "\(.fileName._value):\(.lineNumber._value): \(.message._value)"'
+            # in xcodebuild's stdout. Walk anything in the JSON tree that
+            # carries a failureText / message / failureMessages / details
+            # field; that catches both Xcode 15's legacy schema and
+            # Xcode 16's modern test-results schema regardless of where
+            # the failure record actually lives.
+            echo "::group::xcresulttool — modern test-results"
+            xcrun xcresulttool get test-results tests --path "$XCRESULT" 2>&1 || true
+            echo "::endgroup::"
+            echo "::group::xcresulttool — failure scan"
+            (
+              xcrun xcresulttool get test-results tests --path "$XCRESULT" 2>/dev/null
+              xcrun xcresulttool get --legacy --path "$XCRESULT" --format json 2>/dev/null
+            ) | jq -r '
+                  .. | objects |
+                  ( .failureText? // empty | "FAIL: " + tostring ),
+                  ( .failureMessages? // empty | (if type == "array" then .[] else . end) | "FAIL: " + tostring ),
+                  ( .message? // empty
+                    | (if type == "object" then ._value? else . end)
+                    | select(. != null and . != "")
+                    | "MSG : " + tostring )
+                ' 2>/dev/null | sort -u
             echo "::endgroup::"
           fi
           exit "$EXIT"
