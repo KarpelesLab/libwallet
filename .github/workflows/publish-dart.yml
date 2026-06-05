@@ -4,10 +4,26 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  # workflow_dispatch lets us retry the publish for an already-pushed
+  # tag without deleting + force-pushing it. Required when `dart pub
+  # publish --force` hangs (it has happened — v0.4.51 stuck for 2h+
+  # with no per-attempt timeout, and a re-push of the existing tag
+  # doesn't fire a new push event).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v0.4.51)'
+        required: true
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # 45-minute cap — far above the ~5-8 min a healthy publish takes,
+    # but tight enough that a hung `dart pub publish --force` doesn't
+    # burn the GitHub Actions 6-hour job ceiling before anyone notices.
+    # The per-attempt timeout below handles the same hang at a finer
+    # granularity (15 min × 3 attempts), this is the backstop.
+    timeout-minutes: 45
     # Wait for the Go library release to be created with all binaries,
     # otherwise the Dart package's hook/build.dart would fail on install.
     needs: []
@@ -15,6 +31,11 @@ jobs:
       id-token: write   # Required for OIDC authentication with pub.dev
     steps:
       - uses: actions/checkout@v6
+        with:
+          # workflow_dispatch may point at a tag that isn't HEAD of
+          # master; for tag-triggered runs GITHUB_REF_NAME is already
+          # the tag, so this is a no-op on the normal path.
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       # Two SDKs needed:
       # - subosito/flutter-action installs Flutter (required because
@@ -74,9 +95,18 @@ jobs:
         # and we treat that as success. Three attempts with backoff.
         run: |
           set +e
+          # Per-attempt watchdog. A healthy publish round-trip lands in
+          # 1-3 min, so 15 min is well above the worst observed real
+          # case and tight enough that a stuck attempt (saw 2h+ on
+          # v0.4.51) gets killed and falls through to the next retry.
+          # Without this cap an indefinitely-hung `dart pub publish`
+          # eats the whole job budget and the in-loop retries never
+          # fire.
+          PER_ATTEMPT_TIMEOUT=900
           for attempt in 1 2 3; do
-            echo "::group::dart pub publish attempt $attempt"
-            dart pub publish --force
+            echo "::group::dart pub publish attempt $attempt (timeout ${PER_ATTEMPT_TIMEOUT}s)"
+            timeout --signal=TERM --kill-after=10 "$PER_ATTEMPT_TIMEOUT" \
+              dart pub publish --force
             EXIT=$?
             echo "::endgroup::"
             if [ "$EXIT" = "0" ]; then
@@ -87,15 +117,17 @@ jobs:
             # which means a prior attempt already landed it. Treat as
             # success — better than failing a release that's already live.
             VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
-            if dart pub deps 2>&1 | head -3 >/dev/null; then
-              :
-            fi
             if curl -sf "https://pub.dev/api/packages/libwallet/versions/$VERSION" >/dev/null 2>&1; then
               echo "Version $VERSION is already on pub.dev — treating as success"
               exit 0
             fi
+            # Exit 124 = timeout reached SIGTERM, 137 = follow-up SIGKILL.
+            # Surface those in the log so the cause is grep-able.
+            if [ "$EXIT" = "124" ] || [ "$EXIT" = "137" ]; then
+              echo "publish attempt $attempt timed out at ${PER_ATTEMPT_TIMEOUT}s (exit $EXIT)"
+            fi
             if [ "$attempt" = "3" ]; then
-              echo "publish failed on all 3 attempts (exit $EXIT)"
+              echo "publish failed on all 3 attempts (last exit $EXIT)"
               exit "$EXIT"
             fi
             echo "publish attempt $attempt failed (exit $EXIT); retrying after backoff"
