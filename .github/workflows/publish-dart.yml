@@ -101,16 +101,41 @@ jobs:
         # if the upload already landed on attempt 1 (rare for a 400 path
         # but possible) pub.dev refuses a duplicate version on attempt 2
         # and we treat that as success. Three attempts with backoff.
+        # ACTIONS_ID_TOKEN_REQUEST_TOKEN and ACTIONS_ID_TOKEN_REQUEST_URL
+        # are exported into the step's environment automatically by GHA
+        # because the job declared `id-token: write` permission. No
+        # explicit env: block needed to thread them through.
         run: |
           set +e
-          # Per-attempt watchdog. A healthy publish round-trip lands in
-          # 1-3 min, so 15 min is well above the worst observed real
-          # case and tight enough that a stuck attempt (saw 2h+ on
-          # v0.4.51) gets killed and falls through to the next retry.
-          # Without this cap an indefinitely-hung `dart pub publish`
-          # eats the whole job budget and the in-loop retries never
-          # fire.
-          PER_ATTEMPT_TIMEOUT=900
+          # Per-attempt watchdog. A healthy `dart pub publish` round-trip
+          # lands in seconds (the validate + upload + verify are all
+          # fast); we observed v0.4.51's first attempt return in ~8s with
+          # "Invalid JWT token: invalid timestamps". 3 min is plenty for
+          # the network-bound upload path and still tight enough to
+          # surface a stuck attempt before chewing the job budget.
+          PER_ATTEMPT_TIMEOUT=180
+
+          refresh_pub_oidc_token() {
+            # Pub.dev periodically rejects the OIDC token with "Invalid
+            # timestamps" — a clock-skew or issuer-cache eviction issue.
+            # `dart pub publish` DELETES the cached credential on this
+            # failure ("Invalid token for https://pub.dev deleted."),
+            # so subsequent retries with no credential hang in
+            # interactive-auth-wait until the watchdog kills them.
+            # Mint a fresh OIDC token from GitHub Actions and re-register
+            # it before each retry. The mint endpoint always returns a
+            # token with fresh iat/exp, which should sit inside pub.dev's
+            # accepted skew window.
+            local oidc
+            oidc=$(curl -sf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://pub.dev" | jq -r .value)
+            if [ -z "$oidc" ] || [ "$oidc" = "null" ]; then
+              echo "Failed to fetch OIDC token"
+              return 1
+            fi
+            echo "$oidc" | dart pub token add https://pub.dev
+          }
+
           for attempt in 1 2 3; do
             echo "::group::dart pub publish attempt $attempt (timeout ${PER_ATTEMPT_TIMEOUT}s)"
             timeout --signal=TERM --kill-after=10 "$PER_ATTEMPT_TIMEOUT" \
@@ -129,8 +154,6 @@ jobs:
               echo "Version $VERSION is already on pub.dev — treating as success"
               exit 0
             fi
-            # Exit 124 = timeout reached SIGTERM, 137 = follow-up SIGKILL.
-            # Surface those in the log so the cause is grep-able.
             if [ "$EXIT" = "124" ] || [ "$EXIT" = "137" ]; then
               echo "publish attempt $attempt timed out at ${PER_ATTEMPT_TIMEOUT}s (exit $EXIT)"
             fi
@@ -138,6 +161,7 @@ jobs:
               echo "publish failed on all 3 attempts (last exit $EXIT)"
               exit "$EXIT"
             fi
-            echo "publish attempt $attempt failed (exit $EXIT); retrying after backoff"
+            echo "publish attempt $attempt failed (exit $EXIT); refreshing OIDC + retrying after backoff"
+            refresh_pub_oidc_token
             sleep $((attempt * 10))
           done
