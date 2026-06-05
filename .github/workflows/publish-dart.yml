@@ -55,8 +55,13 @@ jobs:
 
       - name: Verify tag matches pubspec version
         working-directory: dart
+        env:
+          # On a tag push GITHUB_REF_NAME is `v0.4.51`; on a
+          # workflow_dispatch it's the dispatched ref (`master`),
+          # so fall back to the explicit tag input there.
+          TARGET_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${TARGET_TAG#v}"
           PUBSPEC_VERSION=$(grep '^version:' pubspec.yaml | awk '{print $2}')
           if [ "$TAG_VERSION" != "$PUBSPEC_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) doesn't match pubspec.yaml version ($PUBSPEC_VERSION)"
@@ -68,15 +73,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          # See the matching env note on the Verify step — fall back to
+          # the dispatch input on a workflow_dispatch run.
+          TARGET_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # The Build workflow must have already created the GitHub Release
           # with c-shared binaries. Poll for the release to exist.
           for i in {1..60}; do
-            if gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' 2>/dev/null | grep -q 'liblibwallet-'; then
-              echo "Release $GITHUB_REF_NAME has binary assets, proceeding"
+            if gh release view "$TARGET_TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -q 'liblibwallet-'; then
+              echo "Release $TARGET_TAG has binary assets, proceeding"
               break
             fi
-            echo "Waiting for release $GITHUB_REF_NAME binary assets... ($i/60)"
+            echo "Waiting for release $TARGET_TAG binary assets... ($i/60)"
             sleep 30
           done
 
