@@ -59,8 +59,21 @@ import (
 
 func init() {
 	pobj.RegisterStatic("Wallet:exportToDevice", apiWalletExportToDevice)
-	pobj.RegisterStatic("Wallet:exportToDevice:confirm", apiWalletExportToDeviceConfirm)
-	pobj.RegisterStatic("Wallet:exportToDevice:cancel", apiWalletExportToDeviceCancel)
+	// Names below are single-colon ("Wallet:exportToDeviceConfirm",
+	// not "Wallet:exportToDevice:confirm") because apirouter's path
+	// parser splits the request at the LAST `:` to find the method
+	// name, while pobj.RegisterStatic splits at the FIRST `:` to
+	// find the object. With a double-colon name the two parsers
+	// disagree on where the boundary is — pobj stored the handler
+	// at Wallet/static["exportToDevice:confirm"] but apirouter
+	// looks for Wallet:exportToDevice/static["confirm"] — so the
+	// lookup always missed and every call to confirm/cancel returned
+	// 404 "Not found". This wasn't observed until 0.4.49+ because
+	// earlier bugs (transfer/<sid> dispatch in 0.4.48, e.Emitter
+	// vs BroadcastJson in 0.4.49, registry-delete-on-claim in
+	// 0.4.50) kept the flow from ever reaching the confirm endpoint.
+	pobj.RegisterStatic("Wallet:exportToDeviceConfirm", apiWalletExportToDeviceConfirm)
+	pobj.RegisterStatic("Wallet:exportToDeviceCancel", apiWalletExportToDeviceCancel)
 	pobj.RegisterStatic("Wallet:importFromDevice", apiWalletImportFromDevice)
 }
 

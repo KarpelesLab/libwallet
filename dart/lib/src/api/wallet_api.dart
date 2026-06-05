@@ -188,7 +188,7 @@ class WalletApi {
     required String sid,
     required List<DeviceShareEntry> deviceShares,
   }) async {
-    await _conn.request('Wallet:exportToDevice:confirm', 'POST', {
+    await _conn.request('Wallet:exportToDeviceConfirm', 'POST', {
       'Sid': sid,
       'DeviceShares': deviceShares.map((d) => d.toJson()).toList(),
     });
@@ -199,7 +199,7 @@ class WalletApi {
   /// will receive a `declined` error on its waiting [importFromDevice]
   /// call. Idempotent.
   Future<void> exportToDeviceCancel(String sid) async {
-    await _conn.request('Wallet:exportToDevice:cancel', 'POST', {
+    await _conn.request('Wallet:exportToDeviceCancel', 'POST', {
       'Sid': sid,
     });
   }

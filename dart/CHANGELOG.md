@@ -1,3 +1,24 @@
+## 0.4.52
+
+- **Device-transfer confirm/cancel endpoints are actually reachable
+  now.** The session-lifetime fix in 0.4.51 was correct, but the
+  endpoint names `Wallet:exportToDevice:confirm` and
+  `Wallet:exportToDevice:cancel` were structurally unreachable
+  because of a parser disagreement between two libs in the stack:
+  `pobj.RegisterStatic` splits the name at the FIRST `:` to find
+  the object (so the handler ended up at `Wallet/static["exportToDevice:confirm"]`),
+  while `apirouter.Call` splits the request path at the LAST `:`
+  to find the method (so it looked for `Wallet:exportToDevice/static["confirm"]`).
+  Two different keys, lookup always missed, every confirm call
+  produced the `LibwalletException(404): Not found` Tibane was
+  seeing on 0.4.51. The earlier chain of bugs (transfer/<sid>
+  dispatch, e.Emitter vs BroadcastJson, registry-delete-on-claim)
+  kept the flow from ever reaching the confirm endpoint, so the
+  routing miss never surfaced. Renamed to single-colon
+  `Wallet:exportToDeviceConfirm` / `Wallet:exportToDeviceCancel`;
+  pobj and apirouter now agree on the split. Dart-side callers
+  updated to match.
+
 ## 0.4.51
 
 - **`Wallet:exportToDevice:confirm` now resolves the session it
