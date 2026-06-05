@@ -1,3 +1,33 @@
+## 0.4.54
+
+- **SPL Token-2022 support — including transfer-fee mints.** 0.4.53
+  shipped SPL Token-1 (USDT/USDC) and rejected Token-2022 mints
+  outright with a clear error. This release adds the Token-2022
+  program id (`TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`) for
+  both ATA derivation and the SPL instruction, plus on-chain mint
+  introspection for the TransferFeeConfig extension. When the mint
+  has an active transfer-fee for the current epoch, the sign path
+  fetches the mint account, parses the TLV extension data, computes
+  the fee with the on-chain formula (`ceil(amount * bps / 10_000)`
+  capped at `maximum_fee`, with epoch-based newer/older config
+  selection), and emits `TransferCheckedWithFee` (extension
+  instruction 26→1) so the program accepts the pre-computed fee.
+  Plain Token-2022 mints (no fee extension) use the same
+  TransferChecked path as Token-1, just under the Token-2022
+  program id.
+- **SPL transfer preflight.** Before signing an SPL transfer, the
+  sign path now runs a fast precondition check: sender's SOL must
+  cover the network fee plus a conservative ATA-rent reserve
+  (2,039,280 lamports — covers the recipient-ATA-doesn't-exist
+  case; over-reserving when it does exist is recoverable for the
+  user), and sender's SPL token account must hold at least the
+  transfer amount. Surfaces as `PreflightError` codes
+  `insufficient_balance` with a clear message naming the shortfall;
+  the previous behaviour let the RPC's "insufficient funds"
+  bubble through after the TSS sign had already run.
+- Best-effort: RPC failures during preflight are treated as
+  non-blocking; the broadcast surface any real problem.
+
 ## 0.4.53
 
 - **`Transaction.type = "transfer"` now actually transfers the asset

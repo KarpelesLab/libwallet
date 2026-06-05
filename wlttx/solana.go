@@ -239,13 +239,20 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	// so unchanged callers keep their byte-for-byte behaviour.
 	//
 	// SPL routing: when tx.resolvedToken is non-nil (set by Validate
-	// from tx.Asset), build an SPL TransferChecked message under the
+	// from tx.Asset), build an SPL transfer message under the
 	// resolved mint instead of a native SOL transfer. The "amount"
 	// stays in tx.Amount as base units of the token (e.g. 1_315_764
 	// for 1.315764 USDT @ 6 decimals); the per-asset interpretation
 	// happens here, not in the caller.
+	//
+	// Token-1 (spl-token) → TransferChecked + the Token-1 program id.
+	// Token-2022 (spl-token-2022) → TransferChecked + the Token-2022
+	// program id; or TransferCheckedWithFee + a pre-computed fee
+	// when the mint has the TransferFeeConfig extension active for
+	// the current epoch.
 	var message []byte
 	var splMintB58 string
+	var splFee uint64
 	if tx.resolvedToken != nil {
 		mintBytes, err := base58.Bitcoin.Decode(tx.resolvedToken.GetAddress())
 		if err != nil || len(mintBytes) != 32 {
@@ -254,28 +261,91 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 		var mint [32]byte
 		copy(mint[:], mintBytes)
 
-		senderATA, _, err := deriveAssociatedTokenAccount(from, mint, solanaSplTokenProgram)
+		tokenProgram, err := tokenProgramForType(tx.resolvedToken.GetType())
+		if err != nil {
+			return err
+		}
+
+		senderATA, _, err := deriveAssociatedTokenAccount(from, mint, tokenProgram)
 		if err != nil {
 			return fmt.Errorf("derive sender ATA: %w", err)
 		}
-		recipientATA, _, err := deriveAssociatedTokenAccount(to, mint, solanaSplTokenProgram)
+		recipientATA, _, err := deriveAssociatedTokenAccount(to, mint, tokenProgram)
 		if err != nil {
 			return fmt.Errorf("derive recipient ATA: %w", err)
 		}
 
 		amount := tx.Amount.Value().Uint64()
 		decimals := uint8(tx.resolvedToken.GetDecimals())
-		message = buildSPLTransferMessage(
-			from, to, mint, senderATA, recipientATA,
-			solanaSplTokenProgram,
-			amount, decimals,
-			recentBlockhash,
-			tx.ComputeUnitLimit, tx.ComputeUnitPrice,
-		)
 		splMintB58 = tx.resolvedToken.GetAddress()
-		wltlog.Debugf("solana-send: SPL transfer mint=%s symbol=%s amount=%d decimals=%d sender_ata=%s recipient_ata=%s",
-			splMintB58, tx.resolvedToken.GetSymbol(), amount, decimals,
+
+		// Token-2022: introspect the mint to find any active
+		// TransferFee extension. The program checks the supplied
+		// fee against its own computation and reverts on mismatch,
+		// so the caller MUST compute the same fee for the current
+		// epoch using the on-chain config.
+		useFeePath := false
+		if tx.resolvedToken.GetType() == "spl-token-2022" {
+			mintCtx, mintCancel := context.WithTimeout(ctx, 5*time.Second)
+			data, err := solanaFetchMintAccount(mintCtx, n, splMintB58)
+			mintCancel()
+			if err != nil {
+				return fmt.Errorf("fetch token-2022 mint %s: %w", splMintB58, err)
+			}
+			cfg, err := parseToken2022TransferFeeConfig(data)
+			if err != nil {
+				return fmt.Errorf("parse token-2022 mint extensions: %w", err)
+			}
+			if cfg != nil {
+				epochCtx, epochCancel := context.WithTimeout(ctx, 5*time.Second)
+				epoch, err := solanaCurrentEpoch(epochCtx, n)
+				epochCancel()
+				if err != nil {
+					return fmt.Errorf("fetch current epoch: %w", err)
+				}
+				active := cfg.epochFee(epoch)
+				splFee = active.calculateFee(amount)
+				if splFee > 0 || active.TransferFeeBasisPoints > 0 {
+					// A zero fee with bps>0 is legal at amount=0;
+					// still take the fee path so the on-chain
+					// program isn't asked to interpret a plain
+					// TransferChecked against a fee-extension mint.
+					useFeePath = true
+				}
+			}
+		}
+
+		if useFeePath {
+			message = buildSPLTransferWithFeeMessage(
+				from, to, mint, senderATA, recipientATA,
+				tokenProgram,
+				amount, decimals, splFee,
+				recentBlockhash,
+				tx.ComputeUnitLimit, tx.ComputeUnitPrice,
+			)
+		} else {
+			message = buildSPLTransferMessage(
+				from, to, mint, senderATA, recipientATA,
+				tokenProgram,
+				amount, decimals,
+				recentBlockhash,
+				tx.ComputeUnitLimit, tx.ComputeUnitPrice,
+			)
+		}
+		wltlog.Debugf("solana-send: SPL transfer type=%s mint=%s symbol=%s amount=%d decimals=%d fee=%d sender_ata=%s recipient_ata=%s",
+			tx.resolvedToken.GetType(), splMintB58, tx.resolvedToken.GetSymbol(), amount, decimals, splFee,
 			base58.Bitcoin.Encode(senderATA[:]), base58.Bitcoin.Encode(recipientATA[:]))
+
+		// Run SPL preflight: SOL covers fee + potential ATA rent;
+		// sender's SPL balance covers the transfer amount. The check
+		// is best-effort — on RPC failure we let the broadcast surface
+		// any real problem rather than blocking a legitimate tx.
+		preCtx, preCancel := context.WithTimeout(ctx, 5*time.Second)
+		if err := preflightSolanaSplSend(preCtx, n, acct.Address, senderATA, tx, amount); err != nil {
+			preCancel()
+			return err
+		}
+		preCancel()
 	} else {
 		message = buildSOLTransferMessage(from, to, lamports, recentBlockhash, tx.ComputeUnitLimit, tx.ComputeUnitPrice)
 	}

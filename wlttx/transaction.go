@@ -425,13 +425,17 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 		// ceil(cuLimit * cuPrice / 1_000_000) lamport priority
 		// fee. Zero cuLimit/cuPrice collapses to the legacy 5000.
 		tx.Fee = wltobj.NewAmountRaw(big.NewInt(int64(solanaFeeLamports(tx))), 9)
-		// SPL tokens are still under development for v1: Token-2022
-		// extensions (transfer-fee, hooks) need a different opcode
-		// and on-chain mint introspection. Reject explicitly so a
-		// USDT-Token-2022 mint doesn't silently fall through and get
-		// built as a Token-1 transfer.
-		if tx.resolvedToken != nil && tx.resolvedToken.GetType() != "spl-token" {
-			return fmt.Errorf("solana token %q has type %q; only \"spl-token\" is supported in this build (Token-2022 follow-up)", tx.Asset, tx.resolvedToken.GetType())
+		// SPL token routing: spl-token (Token-1) and spl-token-2022
+		// (Token-2022) are both supported. The signAndSend path picks
+		// the right program id and, for Token-2022 mints with the
+		// transfer-fee extension, computes the fee against the active
+		// epoch's TransferFee config and uses TransferCheckedWithFee
+		// instead of TransferChecked.
+		if tx.resolvedToken != nil {
+			tt := tx.resolvedToken.GetType()
+			if tt != "spl-token" && tt != "spl-token-2022" {
+				return fmt.Errorf("solana token %q has type %q; expected \"spl-token\" or \"spl-token-2022\"", tx.Asset, tt)
+			}
 		}
 		// Native-send preflight only when we're actually building a
 		// native SOL transfer. SPL transfers have their own fee +
