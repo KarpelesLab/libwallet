@@ -1,3 +1,30 @@
+## 0.4.56
+
+- **Swap is OKX-only now.** Jupiter Ultra, dFlow, and 1inch
+  adapters are removed from the tree — the OKX migration shipped
+  in earlier bumps left them in as a flip-back safety net behind
+  commented `RegisterProvider` lines, and they've been unreached
+  since. `wltswap/jupiter.go`, `wltswap/dflow.go`, and
+  `wltswap/oneinch.go` are deleted; the Jupiter HTTP regression
+  tests in `wltswap/http_test.go` go with them. `Swap:availability`
+  and the `QuoteAttempt.provider*` fields now advertise only
+  `"okx_solana"` / `"okx_evm"`. Host code that conditioned on the
+  legacy names should switch to the OKX names; the `missing_api_key`
+  reason is no longer emitted (kept defined in `errors.go` as a
+  reserved code for any future adapter that ships keyless).
+- **New `Swap:countryAvailability` endpoint.** Cheap predicate the
+  host can call from settings / onboarding to decide whether the
+  Swap UI should be visible at all for the user's jurisdiction.
+  Takes ISO 3166-1 alpha-2 (case-insensitive); returns
+  `{available, country, reason}` where `reason` is empty on
+  success, `"invalid_country"` on a bad code, or
+  `"country_not_supported"` when the code parses but isn't on the
+  allow-list. Source of truth is OKX's published iOS app
+  availability list at https://www.okx.com/app-availability/ios
+  (121 jurisdictions as of the 2025-05-22 snapshot); refresh by
+  re-fetching the page and reconciling against
+  `okxAvailableCountries` in `wltswap/country_availability.go`.
+
 ## 0.4.55
 
 - **Fix "Program failed to complete" on SPL transfers with priority

@@ -10,12 +10,12 @@ import (
 )
 
 // TestIsNoRouteError pins the substrings the advisory-quote path
-// recognises as "no route at this amount" — Jupiter Ultra's "Failed
-// to get quotes" plus the generic dFlow / 1inch "no route" /
-// "insufficient liquidity" surfaces. False positives here would
-// downgrade real errors into silent no-routes; false negatives
-// would let dust-trade rejections bubble up as hard errors and
-// hide the asset from source-list UIs.
+// recognises as "no route at this amount" — the canonical OKX
+// "no route" / "insufficient liquidity" surfaces, plus the older
+// "Failed to get quotes" phrasing that some upstreams still use.
+// False positives here would downgrade real errors into silent
+// no-routes; false negatives would let dust-trade rejections bubble
+// up as hard errors and hide the asset from source-list UIs.
 func TestIsNoRouteError(t *testing.T) {
 	cases := []struct {
 		name string
@@ -30,18 +30,18 @@ func TestIsNoRouteError(t *testing.T) {
 			&SwapError{Code: ErrCodeProviderUnavailable, Message: "503"}, false},
 		{"provider 4xx — generic",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "validation failed"}, false},
-		{"jupiter dust trade",
+		{"failed to get quotes — dust trade phrasing",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "Failed to get quotes"}, true},
-		{"jupiter dust trade — case-insensitive",
+		{"failed to get quotes — case-insensitive",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "FAILED to GET quotes"}, true},
-		{"1inch no route",
+		{"no route wording",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "no route"}, true},
-		{"dflow no liquidity",
+		{"no liquidity wording",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "no liquidity in pool"}, true},
 		{"insufficient liquidity wording",
 			&SwapError{Code: ErrCodeProviderBadRequest, Message: "insufficient liquidity"}, true},
 		// errors.As chain: a wrapped SwapError still classifies.
-		{"wrapped jupiter dust",
+		{"wrapped no-route error",
 			fmt.Errorf("upstream: %w", &SwapError{Code: ErrCodeProviderBadRequest, Message: "Failed to get quotes"}), true},
 	}
 	for _, tc := range cases {

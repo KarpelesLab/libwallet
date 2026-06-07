@@ -119,17 +119,3 @@ func TestResolveApprovalAmount_DefaultIsExact(t *testing.T) {
 	}
 }
 
-func TestIsNativeEVMInput(t *testing.T) {
-	cases := map[string]bool{
-		"":            true,
-		"NATIVE":      true,
-		OneInchNativeSentinel:                         true,
-		strings.ToUpper(OneInchNativeSentinel):        true,
-		"0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48":  false,
-	}
-	for in, want := range cases {
-		if got := isNativeEVMInput(in); got != want {
-			t.Errorf("isNativeEVMInput(%q) = %v, want %v", in, got, want)
-		}
-	}
-}

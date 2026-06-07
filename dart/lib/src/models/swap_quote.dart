@@ -11,12 +11,12 @@ class SwapQuote {
   /// Opaque server-issued identifier. Pass this to [SwapApi.execute].
   final String quoteId;
 
-  /// Which aggregator produced the quote: `jupiter_ultra`, `dflow`,
-  /// or `1inch`.
+  /// Which aggregator produced the quote: `"okx_solana"` or
+  /// `"okx_evm"`.
   final String provider;
 
-  /// Human-friendly provider name: `"Jupiter Ultra"`, `"dFlow"`,
-  /// `"1inch"`. Safe to show in UI without further mapping.
+  /// Human-friendly provider name: `"OKX"`. Safe to show in UI
+  /// without further mapping.
   final String providerLabel;
 
   /// Chain family: `solana` or `evm`.
@@ -272,8 +272,7 @@ class ApprovalPreview {
   /// aggregator's router contract.
   final String spender;
 
-  /// Human-friendly label for [spender] (e.g. `"1inch Aggregation
-  /// Router"`).
+  /// Human-friendly label for [spender] (e.g. `"OKX DEX Router"`).
   final String spenderLabel;
 
   /// The approval amount in token base units. When
@@ -331,12 +330,13 @@ class ApprovalPreview {
 /// decide whether to render a "Swap" button / nav entry. No RPC
 /// calls are made; the response is purely local policy.
 ///
-/// The check is **per specific chain**, not per family — Jupiter and
-/// dFlow route only on Solana mainnet (devnet / testnet return
-/// `unsupported_chain`), and 1inch supports a fixed list of EVM chain
-/// ids (Ethereum, Polygon, BNB, Arbitrum, Optimism, Base, Avalanche,
-/// Gnosis, Fantom, zkSync Era, Linea). An EVM chain outside that list
-/// returns `unsupported_chain` even when the 1inch API key is set.
+/// The check is **per specific chain**, not per family — OKX routes
+/// only on Solana mainnet (devnet / testnet return
+/// `unsupported_chain`) and on a fixed list of EVM chain ids
+/// (Ethereum, Polygon, BNB, Arbitrum, Optimism, Base, Avalanche,
+/// Gnosis, Fantom, zkSync Era, Linea, Scroll, Mantle, Blast, Mode,
+/// World Chain, X Layer, Manta, Polygon zkEVM, Klaytn/Kaia, Cronos,
+/// Celo). An EVM chain outside that list returns `unsupported_chain`.
 class SwapAvailability {
   /// True when `swap.quote()` / `swap.execute()` can succeed on the
   /// current network in this build. Gate the Swap button on this.
@@ -348,16 +348,14 @@ class SwapAvailability {
   /// get the chain family.
   final String network;
 
-  /// Provider names eligible on this specific chain in fallback
-  /// order (e.g. `["jupiter_ultra", "dflow"]` on Solana mainnet,
-  /// `["1inch"]` on Ethereum). Empty when no provider covers this
-  /// chain.
+  /// Provider names eligible on this specific chain. With OKX as
+  /// the only routed provider this is always either
+  /// `["okx_solana"]` / `["okx_evm"]` or empty.
   final List<String> providers;
 
   /// Stable machine-readable reason when [available] is false:
   /// - `"unsupported_chain"` — chain family / specific chainId has
   ///   no provider (Bitcoin family, Solana devnet, unlisted EVM)
-  /// - `"missing_api_key"` — 1inch key not compiled in (EVM only)
   ///
   /// Empty when [available] is true.
   final String reason;
@@ -438,12 +436,12 @@ class SwapResult {
 ///   `"[providerLabel]: [SwapError.message]"` so the user understands
 ///   why a route is missing.
 class QuoteAttempt {
-  /// Stable provider name — `"jupiter_ultra"`, `"dflow"`, `"1inch"`.
+  /// Stable provider name — `"okx_solana"` or `"okx_evm"`.
   final String provider;
 
-  /// Display label — `"Jupiter Ultra"`, `"dFlow"`, `"1inch"`.
-  /// Pre-populated even on [error] so the picker UI can render
-  /// `"Jupiter Ultra: Failed to get quotes"` without a [quote].
+  /// Display label — `"OKX"`. Pre-populated even on [error] so
+  /// the picker UI can render `"OKX: Failed to get quotes"`
+  /// without a [quote].
   final String providerLabel;
 
   /// The provider's quote when successful. Null when [error] is set.

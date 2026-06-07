@@ -120,22 +120,6 @@ func TestSolanaNativeMintOrAddr(t *testing.T) {
 	}
 }
 
-func TestOneInchTokenOrSentinel(t *testing.T) {
-	cases := map[string]string{
-		"":           OneInchNativeSentinel,
-		"NATIVE":     OneInchNativeSentinel,
-		"0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48": "0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48",
-		// Same prefix-strip behaviour as the Solana adapter.
-		"evm.1.0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48": "0xA0b86991C6218B36c1d19D4A2e9Eb0cE3606eB48",
-		"evm.1.NATIVE": OneInchNativeSentinel,
-	}
-	for in, want := range cases {
-		if got := oneInchTokenOrSentinel(in); got != want {
-			t.Errorf("oneInchTokenOrSentinel(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // stubProvider is a tiny Provider double for tests. Quote returns the
 // canned response without making an HTTP call.
 type stubProvider struct {
@@ -156,8 +140,7 @@ func (s *stubProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wlt
 
 // withStubProviders swaps in stubs for the duration of fn, then
 // restores the original registry. Tests can call this to drive
-// runQuotes without touching the live Jupiter / dFlow / 1inch
-// adapters.
+// runQuotes without touching the live OKX adapters.
 func withStubProviders(t *testing.T, stubs []*stubProvider, fn func()) {
 	t.Helper()
 	saved := make(map[string]Provider, len(providers))
@@ -224,10 +207,9 @@ func TestRunQuotes_CollectsPerProviderAttempts(t *testing.T) {
 
 func TestProviderDisplayLabel(t *testing.T) {
 	cases := map[string]string{
-		"jupiter_ultra": "Jupiter Ultra",
-		"dflow":         "dFlow",
-		"1inch":         "1inch",
-		"unknown":       "unknown",
+		"okx_solana": "OKX",
+		"okx_evm":    "OKX",
+		"unknown":    "unknown",
 	}
 	for in, want := range cases {
 		if got := providerDisplayLabel(in); got != want {

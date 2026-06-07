@@ -2,7 +2,7 @@ package wltswap
 
 // EVM approval helpers.
 //
-// ERC-20 allowance checks and approve-tx building for the 1inch
+// ERC-20 allowance checks and approve-tx building for the OKX EVM
 // adapter. Solana providers don't need this — SPL transfers
 // operate on token accounts, there's no "approve spender" concept.
 
@@ -145,7 +145,7 @@ type ApprovalPreview struct {
 	// Spender is the address receiving the allowance.
 	Spender string `json:"spender"`
 	// SpenderLabel is the aggregator's friendly name (e.g.
-	// "1inch Aggregation Router"). Derived from the quote's
+	// "OKX DEX Router"). Derived from the quote's
 	// ProviderLabel. UIs can map / override as they see fit.
 	SpenderLabel string `json:"spenderLabel,omitempty"`
 	// Amount is the approval amount in token base units.
@@ -279,14 +279,10 @@ func isUnlimitedApprovalAmount(amount *big.Int) bool {
 }
 
 // approvalSpenderLabel maps the quote's provider to a user-facing
-// label for the spender contract. For 1inch the router is their
-// "Aggregation Router V6" on every chain; future adapters with
-// multiple possible spenders would extend the switch.
+// label for the spender contract. Falls back to "<ProviderLabel>
+// Router" when there's no specific match — that covers the OKX
+// adapter, which would otherwise need a per-chain table.
 func approvalSpenderLabel(q *Quote) string {
-	switch q.Provider {
-	case "1inch":
-		return "1inch Aggregation Router"
-	}
 	if q.ProviderLabel != "" {
 		return q.ProviderLabel + " Router"
 	}

@@ -1,10 +1,11 @@
 package wltswap
 
-// Minimal REST helper for the swap adapters. libwallet's existing
+// Minimal REST helper for the swap adapter. libwallet's existing
 // network code is JSON-RPC only (wltnet.DoRPCCtx wraps the ethrpc
-// package), so we need a separate thin wrapper here. Shared across
-// the Jupiter, dFlow, and 1inch adapters so retry / timeout / header-
-// scrubbing live in one place.
+// package), so we need a separate thin wrapper here. Used by the
+// OKX adapter (the only routed swap provider after the licensing
+// migration); the helper stays generic so it's still useful for any
+// future REST-style provider.
 
 import (
 	"bytes"
@@ -18,31 +19,10 @@ import (
 	"time"
 )
 
-// API keys / referral accounts. Hardcoded by design — these are
-// integrator identifiers (what account gets the referral fee), not
-// secrets. Mirrors the wltnet.ModChainApiKey pattern. OneInchAPIKey
-// ships empty per the plan; calls to /swap will return
-// ErrCodeMissingAPIKey until it's populated.
+// Fee / slippage defaults. All routed swaps use 50 bps (0.5%).
 const (
-	JupiterAPIKey         = "88a07ce3-0f5d-44b3-a8d5-8cd2beab86fc"
-	JupiterReferralAccount = "BF436HVWSsrdXkYQU3NAg5W4gqPogEKhdVJBQXPkcXLE"
-	DFlowFeeAccount       = "BF436HVWSsrdXkYQU3NAg5W4gqPogEKhdVJBQXPkcXLE"
-	OneInchAPIKey         = ""
-	OneInchReferrer       = "0x17Ab1f88C4C90E5A5290cFb8550CDa1279E84531"
-
-	// All providers use 50 bps (0.5%).
 	DefaultFeeBps      uint16 = 50
 	DefaultSlippageBps uint16 = 50
-)
-
-// Provider base URLs — mutable so tests can point them at an
-// httptest.Server. Not const for that reason.
-var (
-	JupiterOrderURL   = "https://api.jup.ag/ultra/v1/order"
-	JupiterExecuteURL = "https://api.jup.ag/ultra/v1/execute"
-	DFlowQuoteURL     = "https://dev-quote-api.dflow.net/quote"
-	DFlowSwapURL      = "https://dev-quote-api.dflow.net/swap"
-	OneInchBaseURL    = "https://api.1inch.dev/swap/v6.0"
 )
 
 // httpClient is a shared client with a sensible per-request timeout.

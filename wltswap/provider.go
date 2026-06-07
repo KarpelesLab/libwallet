@@ -18,9 +18,9 @@ import (
 // filled by the central swap.go caller — adapters don't touch those).
 //
 // Execute consumes the Quote's providerBlob to sign and broadcast
-// via whatever the provider requires (Jupiter posts a signed tx
-// back to /execute; dFlow broadcasts to the Solana RPC directly;
-// 1inch broadcasts to the EVM RPC directly).
+// via whatever the provider requires (the OKX Solana adapter
+// broadcasts the signed Solana tx; the OKX EVM adapter broadcasts
+// to the chain's EVM RPC directly).
 type Provider interface {
 	Name() string
 	Chain() string // "solana" | "evm"
@@ -62,13 +62,10 @@ func computeReferralFee(amountIn *big.Int, bps uint16, decimals int) *wltobj.Amo
 }
 
 // providerOrderForChain returns the priority-ordered provider names
-// libwallet attempts for n's chain family. Out-of-order callers get
-// the same list; the order is the historical "first-pick"
-// preference. As of the OKX migration, every chain routes through
-// `Crypto/Okx:*` exclusively — Jupiter, dFlow, and 1inch are still
-// in the tree but unregistered (see init.go) for licensing
-// reasons. To flip back, re-enable the legacy RegisterProvider
-// lines and restore the original per-chain ordering here.
+// libwallet attempts for n's chain family. With OKX as the only
+// routed provider the list is always single-element; the slice
+// shape is kept so the surrounding multi-provider plumbing
+// (Swap:quotes fan-out, fallback retry) doesn't need to know.
 func providerOrderForChain(n *wltnet.Network) ([]string, error) {
 	switch n.Type {
 	case "solana":

@@ -2,13 +2,12 @@ package wltswap
 
 import "testing"
 
-// fullReg mirrors what init.go populates — used as the default
-// "this build has all three adapters" registry.
-func fullReg() map[string]Provider {
+// okxReg mirrors what init.go populates — used as the default
+// "this build has the OKX adapters" registry.
+func okxReg() map[string]Provider {
 	return map[string]Provider{
-		"jupiter_ultra": &jupiterProvider{},
-		"dflow":         &dflowProvider{},
-		"1inch":         &oneInchProvider{},
+		"okx_solana": &okxSolanaProvider{},
+		"okx_evm":    &okxEVMProvider{},
 	}
 }
 
@@ -18,7 +17,6 @@ func TestComputeAvailability(t *testing.T) {
 		netType       string
 		chainId       string
 		reg           map[string]Provider
-		oneInchKey    string
 		wantAvailable bool
 		wantNetwork   string
 		wantProviders []string
@@ -29,16 +27,16 @@ func TestComputeAvailability(t *testing.T) {
 			name:          "solana mainnet — available",
 			netType:       "solana",
 			chainId:       "mainnet",
-			reg:           fullReg(),
+			reg:           okxReg(),
 			wantAvailable: true,
 			wantNetwork:   "solana.mainnet",
-			wantProviders: []string{"jupiter_ultra", "dflow"},
+			wantProviders: []string{"okx_solana"},
 		},
 		{
-			name:        "solana devnet — not supported (Jupiter/dFlow mainnet-only)",
+			name:        "solana devnet — not supported (OKX mainnet-only)",
 			netType:     "solana",
 			chainId:     "devnet",
-			reg:         fullReg(),
+			reg:         okxReg(),
 			wantNetwork: "solana.devnet",
 			wantReason:  "unsupported_chain",
 		},
@@ -46,7 +44,7 @@ func TestComputeAvailability(t *testing.T) {
 			name:        "solana testnet — not supported",
 			netType:     "solana",
 			chainId:     "testnet",
-			reg:         fullReg(),
+			reg:         okxReg(),
 			wantNetwork: "solana.testnet",
 			wantReason:  "unsupported_chain",
 		},
@@ -61,61 +59,46 @@ func TestComputeAvailability(t *testing.T) {
 
 		// ── EVM ────────────────────────────────────────────────
 		{
-			name:        "evm ethereum — missing API key",
-			netType:     "evm",
-			chainId:     "1",
-			reg:         fullReg(),
-			oneInchKey:  "",
-			wantNetwork: "evm.1",
-			wantProviders: []string{"1inch"},
-			wantReason:  "missing_api_key",
-		},
-		{
-			name:          "evm ethereum — key populated",
+			name:          "evm ethereum — available",
 			netType:       "evm",
 			chainId:       "1",
-			reg:           fullReg(),
-			oneInchKey:    "test-key-123",
+			reg:           okxReg(),
 			wantAvailable: true,
 			wantNetwork:   "evm.1",
-			wantProviders: []string{"1inch"},
+			wantProviders: []string{"okx_evm"},
 		},
 		{
-			name:          "evm polygon — key populated",
+			name:          "evm polygon — available",
 			netType:       "evm",
 			chainId:       "137",
-			reg:           fullReg(),
-			oneInchKey:    "test-key-123",
+			reg:           okxReg(),
 			wantAvailable: true,
 			wantNetwork:   "evm.137",
-			wantProviders: []string{"1inch"},
+			wantProviders: []string{"okx_evm"},
 		},
 		{
-			name:          "evm arbitrum — key populated",
+			name:          "evm arbitrum — available",
 			netType:       "evm",
 			chainId:       "42161",
-			reg:           fullReg(),
-			oneInchKey:    "test-key-123",
+			reg:           okxReg(),
 			wantAvailable: true,
 			wantNetwork:   "evm.42161",
-			wantProviders: []string{"1inch"},
+			wantProviders: []string{"okx_evm"},
 		},
 		{
-			name:        "evm chain not in 1inch coverage — key populated but unsupported",
+			name:        "evm chain not in OKX coverage",
 			netType:     "evm",
 			chainId:     "99999",
-			reg:         fullReg(),
-			oneInchKey:  "test-key-123",
+			reg:         okxReg(),
 			wantNetwork: "evm.99999",
 			wantReason:  "unsupported_chain",
 		},
 		{
-			name:        "evm chain not in 1inch coverage + no key — chain-level miss wins",
+			name:        "evm chain supported but no provider registered",
 			netType:     "evm",
-			chainId:     "99999",
-			reg:         fullReg(),
-			oneInchKey:  "",
-			wantNetwork: "evm.99999",
+			chainId:     "1",
+			reg:         map[string]Provider{},
+			wantNetwork: "evm.1",
 			wantReason:  "unsupported_chain",
 		},
 
@@ -124,7 +107,7 @@ func TestComputeAvailability(t *testing.T) {
 			name:        "bitcoin mainnet — not supported",
 			netType:     "bitcoin",
 			chainId:     "bitcoin",
-			reg:         fullReg(),
+			reg:         okxReg(),
 			wantNetwork: "bitcoin.bitcoin",
 			wantReason:  "unsupported_chain",
 		},
@@ -132,7 +115,7 @@ func TestComputeAvailability(t *testing.T) {
 			name:        "dogecoin — not supported",
 			netType:     "bitcoin",
 			chainId:     "dogecoin",
-			reg:         fullReg(),
+			reg:         okxReg(),
 			wantNetwork: "bitcoin.dogecoin",
 			wantReason:  "unsupported_chain",
 		},
@@ -140,7 +123,7 @@ func TestComputeAvailability(t *testing.T) {
 			name:        "litecoin — not supported",
 			netType:     "bitcoin",
 			chainId:     "litecoin",
-			reg:         fullReg(),
+			reg:         okxReg(),
 			wantNetwork: "bitcoin.litecoin",
 			wantReason:  "unsupported_chain",
 		},
@@ -148,7 +131,7 @@ func TestComputeAvailability(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := computeAvailability(tc.netType, tc.chainId, tc.reg, tc.oneInchKey)
+			got := computeAvailability(tc.netType, tc.chainId, tc.reg)
 			if got.Available != tc.wantAvailable {
 				t.Errorf("Available = %v, want %v", got.Available, tc.wantAvailable)
 			}

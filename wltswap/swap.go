@@ -1,9 +1,9 @@
 package wltswap
 
-// Swap: — quote-and-execute endpoint powered by Jupiter Ultra +
-// dFlow (Solana) and 1inch (EVM). See the package doc for the flow
-// shape; this file holds the public API types, the in-memory quote
-// cache, and the top-level Swap:quote / Swap:execute handlers.
+// Swap: — quote-and-execute endpoint powered by OKX DEX on both
+// Solana and EVM families. See the package doc for the flow shape;
+// this file holds the public API types, the in-memory quote cache,
+// and the top-level Swap:quote / Swap:execute handlers.
 
 import (
 	"context"
@@ -45,13 +45,15 @@ type QuoteRequest struct {
 	// Network overrides the current network.
 	Network string `json:"network,omitempty"`
 	// Provider forces a specific aggregator. Empty = auto-select
-	// per chain with fallback (Jupiter → dFlow on Solana).
+	// per chain; today there's only one routed provider per family
+	// (OKX) so the auto-select is single-element, but the field
+	// stays for forward compatibility.
 	Provider string `json:"provider,omitempty"`
 }
 
 // TokenRef identifies a token by address. Address "NATIVE" means
 // the chain's native currency (SOL / ETH); the adapter translates
-// to the provider-specific sentinel (1inch uses 0xeeee…eeee).
+// to the provider-specific representation as needed.
 type TokenRef struct {
 	Address  string `json:"address"`
 	Symbol   string `json:"symbol,omitempty"`
@@ -63,8 +65,8 @@ type TokenRef struct {
 // needed to drive Swap:execute later.
 type Quote struct {
 	QuoteId       string `json:"quoteId"`
-	Provider      string `json:"provider"`      // "jupiter_ultra" | "dflow" | "1inch"
-	ProviderLabel string `json:"providerLabel"` // human-friendly: "Jupiter Ultra" / "dFlow" / "1inch"
+	Provider      string `json:"provider"`      // "okx_solana" | "okx_evm"
+	ProviderLabel string `json:"providerLabel"` // human-friendly: "OKX"
 	Chain         string `json:"chain"`         // "solana" | "evm"
 
 	TokenIn      TokenRef       `json:"tokenIn"`
@@ -93,9 +95,9 @@ type Quote struct {
 	Route     []RouteHop `json:"route,omitempty"`
 	ExpiresAt time.Time  `json:"expiresAt"`
 
-	// ── EVM approval fields (populated by 1inch adapter for non-
-	// native tokenIn; all zero-valued on Solana and for native ETH
-	// swaps) ───────────────────────────────────────────────────────
+	// ── EVM approval fields (populated by the OKX EVM adapter for
+	// non-native tokenIn; all zero-valued on Solana and for native
+	// ETH swaps) ───────────────────────────────────────────────────────
 	//
 	// RequiresApproval is true when the router contract needs a
 	// higher allowance on the input token than what the user
@@ -124,10 +126,9 @@ type Quote struct {
 	// Stable values: see the QuoteStatus* constants.
 	Status QuoteStatus `json:"status,omitempty"`
 	// StatusMessage is the provider's or libwallet's human-readable
-	// explanation for a non-empty Status (e.g. "Jupiter: Failed to
-	// get quotes — amount likely below the aggregator's floor", or
-	// "balance does not cover network fee + rent"). Empty when
-	// Status is empty.
+	// explanation for a non-empty Status (e.g. the OKX
+	// "no_route" payload on dust-sized trades, or "balance does
+	// not cover network fee + rent"). Empty when Status is empty.
 	StatusMessage string `json:"statusMessage,omitempty"`
 
 	// provider-internal fields — not JSON-exposed.
@@ -154,9 +155,9 @@ const (
 	// "needs more SOL to swap" hint rather than hiding it.
 	QuoteStatusBalanceTooSmall QuoteStatus = "balance_too_small"
 	// QuoteStatusNoRoute fires when the provider explicitly reported
-	// no route (Jupiter Ultra's "Failed to get quotes" on dust-sized
-	// trades is the canonical case). The Quote carries the resolved
-	// AmountIn and a StatusMessage but no AmountOut / Route /
+	// no route (OKX's no-route signal on dust-sized trades is the
+	// canonical case). The Quote carries the resolved AmountIn and a
+	// StatusMessage but no AmountOut / Route /
 	// providerBlob — Swap:execute would fail on it, so the host
 	// should treat it as informational and re-quote if conditions
 	// change (price moves, user adds funds, etc.).
@@ -287,8 +288,8 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 		return nil, newErr(ErrCodeInvalidRequest, "tokenIn.address and tokenOut.address are required")
 	}
 	// Normalise Asset.Key-shaped inputs ("solana.mainnet.EPjFW…",
-	// "evm.1.0xA0b8…") to the bare mint / contract Jupiter / 1inch
-	// expect. Hosts get the prefixed form from Asset:list and reasonably
+	// "evm.1.0xA0b8…") to the bare mint / contract OKX expects.
+	// Hosts get the prefixed form from Asset:list and reasonably
 	// pass it through; the adapters only understand the bare form.
 	req.TokenIn.Address = stripChainPrefix(req.TokenIn.Address)
 	req.TokenOut.Address = stripChainPrefix(req.TokenOut.Address)
@@ -482,10 +483,11 @@ func buildAdvisoryQuote(n *wltnet.Network, req *QuoteRequest, amountIn string, s
 }
 
 // isNoRouteError returns true when err carries the canonical
-// provider "no route" signal — Jupiter Ultra's "Failed to get
-// quotes" (HTTP 400 wrapped as ErrCodeProviderBadRequest) and the
-// equivalent dFlow / 1inch surfaces. Used by Swap:maxSpendable to
-// downgrade these to an advisory Quote rather than a hard error.
+// "no route" signal from the upstream — OKX's no-route response
+// surfaces as HTTP 400 wrapped in ErrCodeProviderBadRequest with a
+// message that contains one of the known phrases. Used by
+// Swap:maxSpendable to downgrade these to an advisory Quote rather
+// than a hard error.
 func isNoRouteError(err error) bool {
 	sw, ok := AsSwapError(err)
 	if !ok {
@@ -495,10 +497,10 @@ func isNoRouteError(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(sw.Message)
-	// Tolerate variants across providers: "failed to get quotes"
-	// (Jupiter), "no route" (1inch generic), "no liquidity" (dFlow
-	// fallback wording). Matching on substrings keeps the check
-	// stable against minor wording tweaks upstream.
+	// Substring match keeps the check stable against minor wording
+	// tweaks upstream. "Failed to get quotes" survives because it's
+	// the phrase the older Jupiter-era tests pinned and OKX
+	// occasionally uses it too on dust trades.
 	return strings.Contains(msg, "failed to get quotes") ||
 		strings.Contains(msg, "no route") ||
 		strings.Contains(msg, "no liquidity") ||
@@ -511,9 +513,9 @@ func isNoRouteError(err error) bool {
 //
 // As of 0.4.31 there is no silent fallback — if the primary provider
 // errors, the caller sees that error verbatim. Hosts that want
-// dFlow's quote when Jupiter fails should call Swap:quotes (plural),
-// which returns one attempt per provider and lets the host render
-// both side-by-side instead of guessing which one libwallet picked.
+// multiple providers' quotes side-by-side should call Swap:quotes
+// (plural), which returns one attempt per registered provider for
+// the chain.
 func runQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error) {
 	provider, err := selectProvider(n, req.Provider)
 	if err != nil {
@@ -546,11 +548,11 @@ func finalizeQuote(q *Quote, acct *wltacct.Account) {
 // picker UI so the user understands why a route is missing on one
 // provider but available on another.
 type QuoteAttempt struct {
-	// Provider is the stable name ("jupiter_ultra" | "dflow" | "1inch").
+	// Provider is the stable name ("okx_solana" | "okx_evm").
 	Provider string `json:"provider"`
-	// ProviderLabel is the display string ("Jupiter Ultra", "dFlow",
-	// "1inch"). Pre-populated even on Error so the UI can render
-	// "Jupiter Ultra: Failed to get quotes" without a Quote.
+	// ProviderLabel is the display string ("OKX"). Pre-populated
+	// even on Error so the UI can render "OKX: Failed to get
+	// quotes" without a Quote.
 	ProviderLabel string `json:"providerLabel"`
 	// Quote is the successful price, populated when the provider
 	// returned a viable route. nil when the provider errored.
@@ -609,12 +611,6 @@ func providerDisplayLabel(name string) string {
 	switch name {
 	case "okx_solana", "okx_evm":
 		return "OKX"
-	case "jupiter_ultra":
-		return "Jupiter Ultra"
-	case "dflow":
-		return "dFlow"
-	case "1inch":
-		return "1inch"
 	default:
 		return name
 	}
@@ -633,10 +629,10 @@ func providerDisplayLabel(name string) string {
 // On Solana, when the input is native SOL and the user does not yet
 // hold the output mint, an extra reservation is subtracted to cover
 // the rent-exempt minimum for the new Associated Token Account that
-// Jupiter / dFlow will inject into the swap transaction. Without
-// this Jupiter responds with HTTP 400 "Failed to get quotes" when
-// the wallet's post-swap balance lands at the system-account rent
-// minimum but lacks the ~2.04M lamports for an SPL ATA.
+// the swap transaction injects. Without this reservation the OKX
+// quote reports "Failed to get quotes" when the wallet's
+// post-swap balance lands at the system-account rent minimum but
+// lacks the ~2.04M lamports for an SPL ATA.
 func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (string, error) {
 	tokenInAddress := req.TokenIn.Address
 	asset := n.Type + "." + n.ChainId + ".NATIVE"

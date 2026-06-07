@@ -57,7 +57,8 @@ import (
 
 // okxEVMNativeSentinel is the address OKX uses on every EVM chain
 // to mean "the chain's native currency" (ETH on mainnet, BNB on
-// BSC, MATIC on Polygon, …). Same convention as 1inch.
+// BSC, MATIC on Polygon, …). The 0xeeee…eeee form is the
+// industry-standard sentinel every major EVM aggregator uses.
 const okxEVMNativeSentinel = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 // okxSolanaNativeSentinel is the address OKX uses on Solana for
@@ -672,8 +673,7 @@ func okxFetchSwapTx(ctx context.Context, n *wltnet.Network, acct *wltacct.Accoun
 
 // solanaBase58 — thin alias so the OKX Solana path can re-use the
 // existing base58 helper without poking at the import directly in
-// the Execute method body. dflow.go uses base58.Bitcoin.Encode the
-// same way.
+// the Execute method body.
 func solanaBase58(data []byte) string {
 	return base58.Bitcoin.Encode(data)
 }

@@ -350,27 +350,27 @@ func TestComputeAvailability_Okx(t *testing.T) {
 		"okx_evm":    &okxEVMProvider{},
 	}
 
-	res := computeAvailability("solana", "mainnet", reg, "")
+	res := computeAvailability("solana", "mainnet", reg)
 	if !res.Available || len(res.Providers) != 1 || res.Providers[0] != "okx_solana" {
 		t.Errorf("solana mainnet: %+v", res)
 	}
 
-	res = computeAvailability("solana", "devnet", reg, "")
+	res = computeAvailability("solana", "devnet", reg)
 	if res.Available || res.Reason != "unsupported_chain" {
 		t.Errorf("solana devnet expected unsupported, got %+v", res)
 	}
 
-	res = computeAvailability("evm", "1", reg, "")
+	res = computeAvailability("evm", "1", reg)
 	if !res.Available || len(res.Providers) != 1 || res.Providers[0] != "okx_evm" {
 		t.Errorf("ethereum mainnet: %+v", res)
 	}
 
-	res = computeAvailability("evm", "999999", reg, "")
+	res = computeAvailability("evm", "999999", reg)
 	if res.Available {
 		t.Errorf("unknown chainid expected unavailable, got %+v", res)
 	}
 
-	res = computeAvailability("bitcoin", "dogecoin", reg, "")
+	res = computeAvailability("bitcoin", "dogecoin", reg)
 	if res.Available || res.Reason != "unsupported_chain" {
 		t.Errorf("bitcoin expected unsupported, got %+v", res)
 	}

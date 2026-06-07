@@ -2,7 +2,7 @@ import '../client/transport.dart';
 import '../models/key_description.dart';
 import '../models/swap_quote.dart';
 
-/// Token swaps — Jupiter Ultra / dFlow on Solana, 1inch on EVM.
+/// Token swaps — OKX DEX on both Solana and EVM families.
 ///
 /// Two-step flow:
 ///
@@ -40,15 +40,13 @@ class SwapApi {
   /// RPC calls are made; the response is purely local policy.
   ///
   /// The check is **per specific chain id**, not per family:
-  /// Solana mainnet is available via Jupiter + dFlow, but devnet /
-  /// testnet aren't. 1inch covers a specific list of EVM chains
-  /// (Ethereum / Polygon / BNB / Arbitrum / Optimism / Base /
-  /// Avalanche / Gnosis / Fantom / zkSync Era / Linea) — other EVM
-  /// chains return `unsupported_chain` even with a valid key.
+  /// Solana mainnet routes through OKX; devnet / testnet don't.
+  /// EVM coverage is the OKX-supported chain list (Ethereum,
+  /// Polygon, BNB, Arbitrum, Optimism, Base, Avalanche, Gnosis,
+  /// Fantom, zkSync Era, Linea, Scroll, Mantle, Blast, Mode,
+  /// World Chain, X Layer, Manta, Polygon zkEVM, Klaytn/Kaia,
+  /// Cronos, Celo) — other EVM chains return `unsupported_chain`.
   /// Bitcoin-family chains always return `unsupported_chain`.
-  ///
-  /// In the current build the 1inch API key ships empty, so EVM
-  /// returns `reason: "missing_api_key"` on the supported chains.
   Future<SwapAvailability> availability() async {
     final data = await _conn.request('Swap:availability', 'GET');
     return SwapAvailability.fromJson(data as Map<String, dynamic>);
@@ -72,20 +70,18 @@ class SwapApi {
   /// app if you want tighter control.
   ///
   /// [provider] forces a specific aggregator:
-  /// - `"jupiter_ultra"` / `"dflow"` — Solana only
-  /// - `"1inch"` — EVM only
+  /// - `"okx_solana"` — Solana
+  /// - `"okx_evm"` — EVM
   ///
-  /// Empty [provider] auto-selects the primary provider for the
-  /// chain (Jupiter on Solana, 1inch on EVM). **There is no silent
+  /// Empty [provider] auto-selects the routed provider for the
+  /// chain (currently OKX on both families). **There is no silent
   /// fallback** — if the primary provider errors, the caller sees
-  /// that error. Use [quotes] (plural) when you want side-by-side
-  /// results from every provider for the user to pick.
+  /// that error.
   ///
   /// Known error codes:
   /// - `no_liquidity` — aggregator has no route for this pair/size
   /// - `provider_unavailable` — aggregator returned 5xx or timed out
   /// - `unsupported_chain` — current network doesn't support swap
-  /// - `missing_api_key` — 1inch key not configured in this build
   Future<SwapQuote> quote({
     required SwapTokenRef tokenIn,
     required SwapTokenRef tokenOut,

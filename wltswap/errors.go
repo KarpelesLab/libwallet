@@ -61,9 +61,10 @@ const (
 	// mints, etc.).
 	ErrCodeUnsupportedTokenPair = "unsupported_token_pair"
 
-	// ErrCodeMissingAPIKey — a provider we were asked to use has its
-	// API key left blank in this build. 1inch ships without a key
-	// until the integrator fills it in.
+	// ErrCodeMissingAPIKey — a provider we were asked to use has
+	// its API key left blank in this build. Reserved for any future
+	// adapter that ships without credentials until the integrator
+	// fills them in; the current OKX path doesn't surface it.
 	ErrCodeMissingAPIKey = "missing_api_key"
 
 	// ErrCodeInvalidRequest — the caller passed malformed input
