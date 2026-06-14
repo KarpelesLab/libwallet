@@ -1,3 +1,42 @@
+## 0.4.57
+
+- **Fix FROST reshare timeout for `[StoreKey + RemoteKey]`.**
+  The remote-share upload in `setGeneratedKey` was sending only
+  the `curve` parameter (`ed25519` / `secp256k1`); wdrone keys
+  its `Crypto/WalletSign:pull` lookup by `(sid, curve, protocol)`
+  so FROST shares were filed without their protocol tag and the
+  later reshare pull returned `no payload available for curve
+  ed25519 protocol frost`. The init RPC then sat until
+  `context deadline exceeded`, which surfaced to the field as
+  `failed to init remote: context deadline exceeded`. Upload
+  now sends `protocol` for FROST/DKLs/legacy-EdDSA/legacy-ECDSA,
+  so wdrone can find the share.
+- **Raise reshare init timeout from 15 s to 90 s.** wdrone's
+  `loadShare` has a 60 s internal ceiling for the phplatform
+  `Crypto/WalletSign:pull` fetch. The 15 s client timeout was
+  tripping every slow DB read while wdrone was still happily
+  loading the share. 90 s leaves a 30 s margin over wdrone's
+  ceiling for the local handshake plus broker setup.
+- **`Transaction:validate` no longer panics on missing amount.**
+  The `transfer` and `solana_transfer`/`solana_spl_transfer`
+  branches were calling `tx.Amount.Sign()` without a nil check,
+  matching what `erc20_transfer` and `bitcoin_transfer` already
+  do. A dart caller sending `{type: "transfer", from, to}` with
+  no amount now gets `"invalid amount"` instead of a goroutine
+  panic captured by apirouter.
+- **CI: restore `-short` flag.** `TestNftMetadata` self-skips
+  in short mode because it depends on an external Ethereum
+  contract still implementing `tokenURI`/`uri`/`contractURI`.
+  Tolerate the same transient `eth_getBalance` -32603 in the
+  dart `Asset:list` integration tests as the existing
+  `testRpc`/simulation tests do.
+- Reshare regression tests (`reshare_scenarios_test.go`):
+  reproduce the FROST `[StoreKey + RemoteKey]` and
+  `[Password + RemoteKey]` recovery flows against the real
+  backend; conditionally skip when the GHA runner can't reach
+  phplatform (same `failed to select peer` pattern
+  `TestWalletPeers` already uses).
+
 ## 0.4.56
 
 - **Swap is OKX-only now.** Jupiter Ultra, dFlow, and 1inch
