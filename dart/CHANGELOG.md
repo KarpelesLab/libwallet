@@ -1,3 +1,29 @@
+## 0.4.58
+
+- **Fix OKX Solana swap `illegal base64 at input 1096`.** OKX's
+  Solana adapter returns `tx.data` as standard base64 for most
+  routes but as base64url (URL-safe `-_` instead of `+/`) for
+  versioned (v0) transactions that reference address-lookup-tables —
+  in practice routes whose serialized payload exceeds ~1 KB. The
+  decode path used `base64.StdEncoding.DecodeString` and tripped on
+  the first URL-safe byte. Now normalizes the alphabet (`-` → `+`,
+  `_` → `/`) and re-pads to a multiple of four before decoding, so
+  both shapes round-trip. New `TestOkxDecodeSolanaTxData` covers
+  standard / URL-safe / raw / unpadded variants.
+- **CI: gate publish on `lib/src/version.dart`.** v0.4.57 shipped to
+  pub.dev with a stale `libwalletPackageVersion = '0.4.56'` because
+  the publish workflow's only version gate was tag vs `pubspec.yaml`.
+  `dart-test.yml` already runs `tools/bump_version.dart --check` on
+  every master push, but that's a separate workflow — `publish-dart`
+  now re-runs the same check before doing anything else, so a drifted
+  constant fails the publish job itself.
+- **CI: nil-guard `Transaction.Validate`** (also in 0.4.57; tracked
+  here for completeness because the panic was caught by apirouter and
+  turned into a 500, so 0.4.57's FFI users still saw the bad path).
+  The `transfer` and `solana_transfer`/`solana_spl_transfer`
+  branches were calling `tx.Amount.Sign()` without a nil check; they
+  now match `erc20_transfer` / `bitcoin_transfer`.
+
 ## 0.4.57
 
 - **Fix FROST reshare timeout for `[StoreKey + RemoteKey]`.**

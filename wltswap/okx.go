@@ -537,6 +537,23 @@ func okxApproveAddress(ctx context.Context, chainIndex string) (string, error) {
 
 // ── Execute (Solana) ────────────────────────────────────────────
 
+// okxDecodeSolanaTxData accepts both standard base64 and base64url
+// (URL-safe) variants of OKX's Solana tx.data payload. Most OKX routes
+// return standard base64; routes whose serialized payload exceeds ~1 KB
+// — in practice the versioned (v0) transactions that reference
+// address-lookup-tables — come back URL-safe (`-_` for `+/`). A plain
+// StdEncoding decode of those payloads fails on the first `-`/`_`,
+// surfacing as `illegal base64 at input <n>`. Normalize the alphabet
+// and re-pad to a multiple of four before decoding so we accept both.
+func okxDecodeSolanaTxData(s string) ([]byte, error) {
+	s = strings.ReplaceAll(s, "-", "+")
+	s = strings.ReplaceAll(s, "_", "/")
+	if pad := len(s) % 4; pad != 0 {
+		s += strings.Repeat("=", 4-pad)
+	}
+	return base64.StdEncoding.DecodeString(s)
+}
+
 func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
 	tx, err := okxFetchSwapTx(ctx, n, acct, q)
 	if err != nil {
@@ -545,7 +562,7 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 	if tx.Data == "" {
 		return nil, newErr(ErrCodeProviderUnavailable, "okx: solana swap returned empty tx.data")
 	}
-	rawTx, err := base64.StdEncoding.DecodeString(tx.Data)
+	rawTx, err := okxDecodeSolanaTxData(tx.Data)
 	if err != nil {
 		return nil, newErr(ErrCodeProviderUnavailable, "okx: decode solana tx.data: "+err.Error())
 	}

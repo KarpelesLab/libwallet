@@ -69,6 +69,17 @@ jobs:
           fi
           echo "Publishing libwallet $PUBSPEC_VERSION"
 
+      # Guard against the "bumped pubspec.yaml but forgot lib/src/version.dart"
+      # release footgun (hit on v0.4.57). The Dart Tests workflow already runs
+      # `--check` on every push to master, but that's a separate workflow —
+      # nothing was wiring it into the publish path, so a release tag with a
+      # drifted version constant would happily ship to pub.dev and only
+      # surface as a runtime mismatch in the host app's stale-binary detector.
+      # Re-running --check here makes the publish itself the gate.
+      - name: Verify lib/src/version.dart matches pubspec
+        working-directory: dart
+        run: dart run tools/bump_version.dart --check
+
       - name: Wait for Go release assets
         env:
           GH_TOKEN: ${{ github.token }}

@@ -8,12 +8,49 @@ package wltswap
 // klb-side surface stabilises.
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"math/big"
 	"testing"
 
 	"github.com/KarpelesLab/libwallet/wltnet"
 )
+
+func TestOkxDecodeSolanaTxData(t *testing.T) {
+	// A ~1.1 KB payload — large enough to mirror the v0/ALT case OKX
+	// returns URL-safe and to trip "illegal base64 at input 1096" if
+	// we re-introduce the StdEncoding-only path.
+	raw := make([]byte, 1100)
+	for i := range raw {
+		raw[i] = byte(i & 0xff)
+	}
+
+	cases := []struct {
+		name string
+		enc  string
+	}{
+		{"standard padded", base64.StdEncoding.EncodeToString(raw)},
+		{"url-safe padded", base64.URLEncoding.EncodeToString(raw)},
+		{"url-safe raw (unpadded)", base64.RawURLEncoding.EncodeToString(raw)},
+		{"standard raw (unpadded)", base64.RawStdEncoding.EncodeToString(raw)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := okxDecodeSolanaTxData(tc.enc)
+			if err != nil {
+				t.Fatalf("decode failed: %v", err)
+			}
+			if !bytes.Equal(got, raw) {
+				t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(got), len(raw))
+			}
+		})
+	}
+
+	if _, err := okxDecodeSolanaTxData("this is not base64 at all !@#$"); err == nil {
+		t.Fatalf("expected error on garbage input")
+	}
+}
 
 func TestOkxChainIndexFor(t *testing.T) {
 	cases := []struct {
