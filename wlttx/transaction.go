@@ -313,14 +313,14 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 	switch tx.Type {
 	case "transfer": // transfer of an Asset
-		if tx.Amount.Sign() <= 0 {
+		if tx.Amount == nil || tx.Amount.Sign() <= 0 {
 			return errors.New("invalid amount")
 		}
 		if tx.Asset == "" {
 			return errors.New("asset is required")
 		}
 	case "solana_transfer", "solana_spl_transfer":
-		if tx.Amount.Sign() <= 0 {
+		if tx.Amount == nil || tx.Amount.Sign() <= 0 {
 			return errors.New("invalid amount")
 		}
 	case "evm": // evm raw transaction (for example as sent via eth_sendTransaction)
