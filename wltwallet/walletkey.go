@@ -262,16 +262,44 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		return err
 	}
 	if kd.Type == "RemoteKey" {
-		// upload bottle. curveParam tells the WalletSign backend which
-		// elliptic curve the share is for — secp256k1 for both legacy
-		// ecdsatss and modern dkls23, ed25519 for both eddsatss and
-		// (future) frost. The protocol distinction is encoded inside
-		// the encrypted blob's Schema, not on the upload side.
+		// Upload the encrypted bottle to the WalletSign backend so
+		// wdrone can pull it back at sign or reshare time.
+		//
+		// `curve` is the elliptic curve the share is for:
+		//   - secp256k1 for both legacy ecdsatss (GG18) and modern dkls23
+		//   - ed25519   for both legacy eddsatss and modern frost
+		//
+		// `protocol` tells the server which TSS family the payload is
+		// for. The wdrone reshare endpoint keys its lookup on
+		// (curve, protocol) — sending just curve worked when FROST
+		// didn't exist yet, but now leaves a FROST ed25519 wallet's
+		// share invisible to the reshare path ("no payload available
+		// for curve ed25519 protocol frost"). The comment that used
+		// to live here said the protocol distinction is "inside the
+		// encrypted blob's Schema, not on the upload side" — true on
+		// the libwallet decryption side, but wdrone can't decrypt to
+		// learn that, so the protocol has to ride on the upload too.
 		curveParam := "secp256k1"
-		if wk.eddata != nil || wk.frostData != nil {
-			curveParam = "ed25519"
+		var protocolParam string
+		switch {
+		case wk.frostData != nil:
+			curveParam, protocolParam = "ed25519", ProtocolFROST
+		case wk.dklsData != nil:
+			curveParam, protocolParam = "secp256k1", ProtocolDKLS
+		case wk.eddata != nil:
+			curveParam, protocolParam = "ed25519", ProtocolLegacyEdDSA
+		case wk.sdata != nil:
+			curveParam, protocolParam = "secp256k1", ProtocolLegacyECDSA
 		}
-		_, err = restDoRetry(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", rest.Param{"data": base64.RawURLEncoding.EncodeToString(buf), "key": kd.Key, "curve": curveParam})
+		params := rest.Param{
+			"data":  base64.RawURLEncoding.EncodeToString(buf),
+			"key":   kd.Key,
+			"curve": curveParam,
+		}
+		if protocolParam != "" {
+			params["protocol"] = protocolParam
+		}
+		_, err = restDoRetry(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", params)
 		if err != nil {
 			return err
 		}

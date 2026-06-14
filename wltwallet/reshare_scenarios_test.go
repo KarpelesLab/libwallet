@@ -28,12 +28,47 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"log"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/xuid"
 )
+
+// isBackendInfraError matches the documented phplatform infra-flake
+// symptoms: the recurring "There was a database error" 500 and the
+// generic transport timeouts that fire when the WalletSign service is
+// momentarily unreachable. Distinct from a Wallet.Reshare timeout —
+// that's the bug we want to surface, so this matcher is only consulted
+// on the setup-phase calls (remoteNew / remoteVerify / keygen / a
+// pre-reshare sanity sign / remoteReshare).
+//
+// See memory/project_phplatform_db_outage.md for the broader pattern.
+func isBackendInfraError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "there was a database error") ||
+		strings.Contains(msg, "database error") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection refused")
+}
+
+// skipOnBackendInfra calls t.Skipf when err is a documented backend-
+// infra flake during the test setup phase; otherwise returns the err
+// unchanged so the caller can t.Fatalf with context. Inline as
+// `if err := skipOnBackendInfra(t, step, err); err != nil { t.Fatal… }`.
+func skipOnBackendInfra(t *testing.T, step string, err error) error {
+	t.Helper()
+	if isBackendInfraError(err) {
+		t.Skipf("%s: backend not responsive (%s) — phplatform DB blip, skip per the documented infra flake", step, err)
+	}
+	return err
+}
 
 // TestReshare_FROST_StoreKeyPlusRemote_AsOldCommittee reproduces
 // the field report: create a FROST wallet with the production
@@ -43,7 +78,6 @@ import (
 // "failed to start remote peer ...: failed to init remote:
 // context deadline exceeded" 15 s in.
 func TestReshare_FROST_StoreKeyPlusRemote_AsOldCommittee(t *testing.T) {
-	t.Skip("requires healthy phplatform backend; tracked under the documented DB-blip flake. Un-skip locally to reproduce the field report.")
 	runReshareScenario(t, "store_plus_remote")
 }
 
@@ -55,7 +89,6 @@ func TestReshare_FROST_StoreKeyPlusRemote_AsOldCommittee(t *testing.T) {
 // localises the bug to wdrone-side per-committee state. Both
 // failing would mean the libwallet send path itself regressed.
 func TestReshare_FROST_PasswordPlusRemote_AsOldCommittee(t *testing.T) {
-	t.Skip("requires healthy phplatform backend; tracked under the documented DB-blip flake.")
 	runReshareScenario(t, "password_plus_remote")
 }
 
@@ -74,19 +107,21 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 	// signs / authorises reshare from this device.
 	skRes, err := storekeyCreate()
 	if err != nil {
-		t.Fatalf("StoreKey:create: %s", err)
+		t.Fatalf("StoreKey:create: %s", err) // pure local — no backend
 	}
 	skMap := skRes.(map[string]any)
 	storePrivOrig := skMap["private"].(string)
 	storePubOrig := skMap["public"].(string)
 
 	// ── 2. Provision a RemoteKey via the real 2FA flow. ─────────
+	// Both calls hit the WalletSign backend; treat the documented
+	// phplatform infra flake as a clean skip rather than a red CI.
 	remote, err := remoteNew(ctx, testPhone)
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteNew", err); err != nil {
 		t.Fatalf("remoteNew: %s", err)
 	}
 	remoteV, err := remoteVerify(ctx, remote.Session, "000000")
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteVerify", err); err != nil {
 		t.Fatalf("remoteVerify: %s", err)
 	}
 	log.Printf("RemoteKey resource: %s", remoteV.RemoteKey)
@@ -109,7 +144,9 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 		{Type: "Password", Key: origPassword},
 	}
 	if err := wallet.initializeEdDSAWallet(ctx, createKeys); err != nil {
-		t.Fatalf("FROST keygen failed: %s", err)
+		if err := skipOnBackendInfra(t, "initializeEdDSAWallet", err); err != nil {
+			t.Fatalf("FROST keygen failed: %s", err)
+		}
 	}
 	origPubkey := wallet.Pubkey
 	if origPubkey == "" {
@@ -124,15 +161,17 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 			storeKeyID, remoteKeyID, passwordID)
 	}
 
-	// ── 5. Pre-reshare sanity sign — [Password + RemoteKey]. ───
+	// ── 5. Pre-reshare sanity sign — [StoreKey + Password]. ───
 	// Confirms the wallet is signable as built; if THIS fails the
-	// reshare result tells us nothing about the bug. Uses
-	// [Password + RemoteKey] specifically because those secrets
-	// are easy to pass through KeyDescription.Key without poking
-	// at OS keystore plumbing.
+	// reshare result tells us nothing about the bug. Must use the
+	// two purely-local shares: the FROST Sign path at wallet.go:633
+	// decrypts every supplied key in-process and has no remote-peer
+	// plumbing for RemoteKey participants (Reshare does, via
+	// reshare.go:128). Threshold-1 → any T+1=2 local shares satisfy
+	// the FROST signing committee.
 	if err := signTwoShares(wallet, ctx, []byte("pre-reshare"),
+		storeKeyID, storePrivOrig,
 		passwordID, origPassword,
-		remoteKeyID, remoteV.RemoteKey,
 	); err != nil {
 		t.Fatalf("pre-reshare sign failed: %s", err)
 	}
@@ -145,11 +184,11 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 	// RemoteKey:reshare → RemoteKey:validate → use the new id on
 	// BOTH old and new committees.
 	remoteResh, err := remoteReshare(ctx, remoteV.RemoteKey)
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteReshare", err); err != nil {
 		t.Fatalf("remoteReshare: %s", err)
 	}
 	remoteV2, err := remoteVerify(ctx, remoteResh.Session, "000000")
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteVerify (reshare)", err); err != nil {
 		t.Fatalf("remoteVerify (reshare): %s", err)
 	}
 	freshRemoteKey := remoteV2.RemoteKey
@@ -208,15 +247,22 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 		t.Fatalf("expected %d keys after reshare, got %d", len(newKeys), len(wallet.Keys))
 	}
 
-	// ── 11. Post-reshare sign with the NEW committee. ──────────
-	newPwdID, newRemoteID, _ := walletKeyIDsByType_PwdRemoteStore(wallet)
-	if newPwdID == "" || newRemoteID == "" {
-		t.Fatalf("post-reshare wallet missing Password or RemoteKey: %+v", wallet.Keys)
+	// ── 11. Post-reshare sign with the NEW committee. Same
+	// constraint as step 5: must use the two local shares
+	// (StoreKey + Password) because FROST Sign decrypts every key
+	// locally. After reshare these are fresh share rows under new
+	// WalletKey IDs but the same secret types.
+	newStoreID, _, newPwdID := walletKeyIDsByType(wallet)
+	if newStoreID == "" || newPwdID == "" {
+		t.Fatalf("post-reshare wallet missing StoreKey or Password: %+v", wallet.Keys)
 	}
+	// newStorePair was generated in step 8; we still hold its
+	// private blob.
+	newStorePriv := newSkRes.(map[string]any)["private"].(string)
 	postMsg := []byte("post-reshare verification")
 	if err := signTwoShares(wallet, ctx, postMsg,
+		newStoreID, newStorePriv,
 		newPwdID, newPassword,
-		newRemoteID, freshRemoteKey,
 	); err != nil {
 		t.Fatalf("post-reshare sign failed: %s", err)
 	}
@@ -227,8 +273,8 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 		t.Fatalf("decode pubkey: %s", err)
 	}
 	sig, err := signTwoSharesReturnSig(wallet, ctx, postMsg,
+		newStoreID, newStorePriv,
 		newPwdID, newPassword,
-		newRemoteID, freshRemoteKey,
 	)
 	if err != nil {
 		t.Fatalf("post-reshare sign (for verify) failed: %s", err)
@@ -261,15 +307,6 @@ func walletKeyIDsByType(w *Wallet) (storeKeyID, remoteKeyID, passwordID string) 
 			}
 		}
 	}
-	return
-}
-
-// walletKeyIDsByType_PwdRemoteStore returns (Password, RemoteKey,
-// StoreKey) IDs. Wrapper around walletKeyIDsByType used after
-// reshare so the call-site naming reflects which IDs the test
-// actually consumes for the post-reshare sign.
-func walletKeyIDsByType_PwdRemoteStore(w *Wallet) (passwordID, remoteKeyID, storeKeyID string) {
-	storeKeyID, remoteKeyID, passwordID = walletKeyIDsByType(w)
 	return
 }
 

@@ -235,7 +235,18 @@ func (s *spotPeer) Start() error {
 			return
 		}
 
-		if _, err := s.spot.QueryTimeout(15*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
+		// wdrone's init handler is synchronous: it has to fetch the
+		// encrypted share blob from phplatform (Crypto/WalletSign:pull)
+		// before it can reply, and its own internal ceiling for that
+		// fetch is 60 s (see ../wdrone/walletsign.go's initReshare,
+		// ctx = WithTimeout(60*time.Second)). Holding the client to
+		// 15 s here turned every slow phplatform DB read into a
+		// "failed to init remote: context deadline exceeded" while
+		// wdrone was still happily loading the share — exactly the
+		// field-reported reshare timeout. 90 s leaves a 30 s margin
+		// over wdrone's ceiling for the local handshake plus broker
+		// setup it does between loadShare and the reply.
+		if _, err := s.spot.QueryTimeout(90*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
 			s.stErr = fmt.Errorf("failed to init remote: %w", err)
 			return
 		}
