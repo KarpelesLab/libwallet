@@ -1,3 +1,22 @@
+## 0.4.59
+
+- **Fix legacy WalletSign protocol naming.** 0.4.57's RemoteKey
+  share upload sent the libwallet-internal dispatch tags
+  `protocol=eddsa` (legacy ed25519) and `protocol=gg18` (legacy
+  secp256k1) on the wire — but wdrone's `loadShare`
+  (`walletsign.go:173`) only recognises `""` / `"legacy"` /
+  `"frost"` / `"dkls23"`. Anything else lands in the
+  `"unsupported share protocol %q"` arm and the wallet is
+  unreshareable. Legacy uploads now send `protocol=legacy`,
+  matching wdrone's own `reportResult` convention. The on-wire
+  vocabulary is pinned in a new `TestUploadCurveProtocol` so a
+  future refactor can't re-leak the internal tags. FROST / DKLs
+  uploads are unchanged — they already shipped the right values.
+- Reshare regression tests skip on `failed to init remote: context
+  deadline exceeded` (a backend reachability flake on real-network
+  runs) but still fail loud on `no payload available …` — that's
+  the user-facing protocol-on-upload regression signature.
+
 ## 0.4.58
 
 - **Fix OKX Solana swap `illegal base64 at input 1096`.** OKX's

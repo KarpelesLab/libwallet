@@ -149,6 +149,44 @@ func (w *Wallet) createWalletKey(ctx context.Context, typ string, scope progress
 	return final, nil
 }
 
+// uploadCurveProtocol returns the (curve, protocol) tuple that
+// `Crypto/WalletSign:setGeneratedKey` expects on the wire. The values
+// here are NOT the libwallet-internal ProtocolLegacyEdDSA / ProtocolLegacyECDSA
+// dispatch tags ("eddsa" / "gg18") — those exist only inside libwallet to
+// route to the right keygen / sign / reshare code paths and must never
+// leak to the WalletSign API.
+//
+// The wdrone reshare endpoint keys its lookup on (curve, protocol) and
+// its loadShare switch (../wdrone/walletsign.go:173) only recognises:
+//
+//	""       — legacy (default when the row carries no protocol column)
+//	"legacy" — same as above, sent explicitly
+//	"frost"  — modern ed25519 (FROST / RFC 9591)
+//	"dkls23" — modern secp256k1 (DKLs23)
+//
+// Anything else lands in the default arm: `return fmt.Errorf("unsupported
+// share protocol %q", protocolName)`. 0.4.57 shipped the internal dispatch
+// tags by mistake; this helper plus its test pin the on-wire vocabulary
+// so a future refactor can't re-introduce that drift.
+func (wk *WalletKey) uploadCurveProtocol() (curve, protocol string) {
+	switch {
+	case wk.frostData != nil:
+		return "ed25519", ProtocolFROST
+	case wk.dklsData != nil:
+		return "secp256k1", ProtocolDKLS
+	case wk.eddata != nil:
+		return "ed25519", "legacy"
+	case wk.sdata != nil:
+		return "secp256k1", "legacy"
+	}
+	// Caller filters by kd.Type == "RemoteKey", and RemoteKey is only
+	// uploaded after a real share generation runs — so reaching here
+	// means the share-typed fields are all nil, which is a programmer
+	// error. Default to legacy secp256k1 so we at least produce a
+	// recognisable on-wire value instead of an empty curve.
+	return "secp256k1", "legacy"
+}
+
 // encrypt stores the active in-memory share (sdata/eddata/dklsData/
 // frostData/rawData/mnemonic) into wk.Data, encrypted per the given
 // KeyDescription. Schema is set based on which field is populated so
@@ -264,33 +302,7 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	if kd.Type == "RemoteKey" {
 		// Upload the encrypted bottle to the WalletSign backend so
 		// wdrone can pull it back at sign or reshare time.
-		//
-		// `curve` is the elliptic curve the share is for:
-		//   - secp256k1 for both legacy ecdsatss (GG18) and modern dkls23
-		//   - ed25519   for both legacy eddsatss and modern frost
-		//
-		// `protocol` tells the server which TSS family the payload is
-		// for. The wdrone reshare endpoint keys its lookup on
-		// (curve, protocol) — sending just curve worked when FROST
-		// didn't exist yet, but now leaves a FROST ed25519 wallet's
-		// share invisible to the reshare path ("no payload available
-		// for curve ed25519 protocol frost"). The comment that used
-		// to live here said the protocol distinction is "inside the
-		// encrypted blob's Schema, not on the upload side" — true on
-		// the libwallet decryption side, but wdrone can't decrypt to
-		// learn that, so the protocol has to ride on the upload too.
-		curveParam := "secp256k1"
-		var protocolParam string
-		switch {
-		case wk.frostData != nil:
-			curveParam, protocolParam = "ed25519", ProtocolFROST
-		case wk.dklsData != nil:
-			curveParam, protocolParam = "secp256k1", ProtocolDKLS
-		case wk.eddata != nil:
-			curveParam, protocolParam = "ed25519", ProtocolLegacyEdDSA
-		case wk.sdata != nil:
-			curveParam, protocolParam = "secp256k1", ProtocolLegacyECDSA
-		}
+		curveParam, protocolParam := wk.uploadCurveProtocol()
 		params := rest.Param{
 			"data":  base64.RawURLEncoding.EncodeToString(buf),
 			"key":   kd.Key,

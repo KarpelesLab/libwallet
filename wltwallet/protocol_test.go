@@ -1,6 +1,13 @@
 package wltwallet
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/KarpelesLab/tss-lib/v2/dklstss"
+	"github.com/KarpelesLab/tss-lib/v2/ecdsatss"
+	"github.com/KarpelesLab/tss-lib/v2/eddsatss"
+	"github.com/KarpelesLab/tss-lib/v2/frosttss"
+)
 
 // resolveProtocol drives the dispatch sites in keygen / sign /
 // reshare. The contract:
@@ -46,5 +53,65 @@ func TestResolveProtocol(t *testing.T) {
 	var nilW *Wallet
 	if got := nilW.resolveProtocol(); got != "" {
 		t.Errorf("nil receiver = %q, want empty", got)
+	}
+}
+
+// uploadCurveProtocol is what setGeneratedKey ships to
+// Crypto/WalletSign:setGeneratedKey. The values must match wdrone's
+// loadShare switch (../wdrone/walletsign.go:173) — only "" / "legacy"
+// / "frost" / "dkls23" are recognised. Anything else lands in the
+// "unsupported share protocol" error arm and the wallet is unreshareable.
+//
+// 0.4.57 shipped the libwallet-internal dispatch tags "eddsa" / "gg18"
+// here, which broke reshare for legacy ed25519 and legacy secp256k1
+// wallets generated against that version. This test pins the on-wire
+// vocabulary so a future refactor can't reintroduce the drift.
+func TestUploadCurveProtocol(t *testing.T) {
+	cases := []struct {
+		name         string
+		setup        func() *WalletKey
+		wantCurve    string
+		wantProtocol string
+	}{
+		{
+			name:         "frostData → ed25519/frost",
+			setup:        func() *WalletKey { return &WalletKey{frostData: &frosttss.Key{}} },
+			wantCurve:    "ed25519",
+			wantProtocol: "frost",
+		},
+		{
+			name:         "dklsData → secp256k1/dkls23",
+			setup:        func() *WalletKey { return &WalletKey{dklsData: &dklstss.Key{}} },
+			wantCurve:    "secp256k1",
+			wantProtocol: "dkls23",
+		},
+		{
+			name:         "eddata → ed25519/legacy",
+			setup:        func() *WalletKey { return &WalletKey{eddata: &eddsatss.Key{}} },
+			wantCurve:    "ed25519",
+			wantProtocol: "legacy",
+		},
+		{
+			name:         "sdata → secp256k1/legacy",
+			setup:        func() *WalletKey { return &WalletKey{sdata: &ecdsatss.Key{}} },
+			wantCurve:    "secp256k1",
+			wantProtocol: "legacy",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wk := tc.setup()
+			gotCurve, gotProtocol := wk.uploadCurveProtocol()
+			if gotCurve != tc.wantCurve {
+				t.Errorf("curve = %q, want %q", gotCurve, tc.wantCurve)
+			}
+			if gotProtocol != tc.wantProtocol {
+				t.Errorf("protocol = %q, want %q", gotProtocol, tc.wantProtocol)
+			}
+			// Belt-and-braces against the 0.4.57 footgun.
+			if gotProtocol == "eddsa" || gotProtocol == "gg18" {
+				t.Errorf("protocol = %q — libwallet-internal dispatch tag leaked onto the wire", gotProtocol)
+			}
+		})
 	}
 }
