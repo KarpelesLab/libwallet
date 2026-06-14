@@ -233,7 +233,20 @@ func runReshareScenario(t *testing.T, oldCommittee string) {
 	}
 
 	// ── 9. Reshare. The call under test. ───────────────────────
+	// Wallet.Reshare encapsulates two distinct stages we must
+	// distinguish:
+	//   - selectPeer (broker.go:224) — picks a wdrone peer via
+	//     Crypto/WalletSign:keys + per-peer Spot pings. A timeout
+	//     here means we couldn't reach the backend at all, i.e. the
+	//     same infra wobble TestWalletPeers gates on; treat as skip.
+	//   - init query (broker.go:238) — sends the resharing init to
+	//     the chosen wdrone, which then loadShares synchronously
+	//     before replying. A timeout here is the bug we're testing
+	//     for; fail loud.
 	if err := wallet.Reshare(ctx, oldKeys, newKeys); err != nil {
+		if strings.Contains(err.Error(), "failed to select peer") {
+			t.Skipf("backend not reachable (selectPeer): %s", err)
+		}
 		t.Fatalf("Wallet.Reshare (%s) failed: %s", oldCommittee, err)
 	}
 
