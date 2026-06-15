@@ -211,15 +211,22 @@ type spotPeer struct {
 //
 // Retry policy: a wdrone peer can pass /ping in sub-second yet still
 // hang on /init (loadShare slow, internal goroutine wedged). Without
-// retry, a single bad pick produces a 90-s reshare failure for the
-// user even when other wdrones in the fleet would have served the
-// init promptly. Start now makes up to maxInitAttempts (3) tries,
-// re-running selectPeer with the previously-tried peers excluded so a
-// retry never re-rolls into the same bad peer. The 90-s per-attempt
-// budget is unchanged — wdrone's loadShare ceiling is 60 s and the
-// spare 30 s covers response routing; bumping the per-attempt budget
-// further would just extend the failure tail without improving the
-// common case.
+// retry, a single bad pick produces a reshare failure for the user
+// even when other wdrones in the fleet would have served the init
+// promptly. Start makes up to maxInitAttempts (3) tries, re-running
+// selectPeer with the previously-tried peers excluded so a retry
+// never re-rolls into the same bad peer.
+//
+// Timeouts: a healthy reshare init completes in seconds end-to-end
+// (TestEdDSALocalToRemoteReshare lands in ~2 s including spot
+// connects). 0.4.57 over-corrected the 15-s ceiling up to 90 s based
+// on wdrone's *internal* loadShare worst case (60 s for a slow
+// phplatform DB read), then 0.4.60 stacked the peer-fallback retry on
+// top — which made a hard failure take 3 × 90 s ≈ 4–5 minutes. 0.4.62
+// reverts to a tight 15-s per-attempt budget: well above the ~1–2 s
+// typical, short enough that a wedged wdrone surfaces fast. With the
+// retry on top, a hard failure now exhausts in ~30–45 s instead of
+// 4–5 min, and a single slow peer still gets routed around.
 func (s *spotPeer) Start() error {
 	s.stOnce.Do(func() {
 		s.spot.SetHandler(s.sid, s.messageHandler)
@@ -251,7 +258,7 @@ func (s *spotPeer) Start() error {
 			s.peer = peer
 
 			t0 := time.Now()
-			if _, err := s.spot.QueryTimeout(90*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
+			if _, err := s.spot.QueryTimeout(15*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
 				log.Printf("spotPeer init attempt %d/%d: peer %s failed after %s: %s", attempt, maxInitAttempts, peer, time.Since(t0), err)
 				tried = append(tried, peer)
 				lastErr = fmt.Errorf("failed to init remote: %w", err)

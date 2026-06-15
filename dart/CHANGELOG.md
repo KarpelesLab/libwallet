@@ -1,3 +1,22 @@
+## 0.4.62
+
+- **Reshare init per-attempt timeout: 90 s → 15 s.** 0.4.57 raised
+  the spot init query ceiling to 90 s on the theory that wdrone's
+  internal `loadShare` could take up to its 60 s worst case;
+  0.4.60 then stacked a 3-attempt peer-fallback retry on top.
+  Together that made a hard reshare failure take ~4–5 minutes
+  before surfacing to the user, even though a healthy reshare
+  completes in seconds end-to-end. 0.4.62 reverts the per-attempt
+  budget to 15 s: well above the typical ~1–2 s success, short
+  enough that a wedged wdrone fails fast. With the 3-attempt
+  fallback still in place, a hard failure now exhausts in ~30–45 s
+  instead of 4–5 min, and a single slow peer still gets routed
+  around. Healthy reshare timings are unchanged.
+- **spotlib v0.3.0 → v0.3.2.** Confirmed `TestRemoteWallet` against
+  the live wdrone fleet succeeds with the retry on top of v0.3.2:
+  first peer wedged, second peer succeeds in ~3 s, full TSS reshare
+  completes in ~30 s total.
+
 ## 0.4.61
 
 - **Fix dkls23 RemoteKey share wrapper/raw-bytes mismatch.**

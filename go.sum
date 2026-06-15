@@ -49,8 +49,8 @@ github.com/KarpelesLab/secp256k1 v0.2.8 h1:VNkim4pC82SliqHgpFESGVB1o27F+HYgbTq6z
 github.com/KarpelesLab/secp256k1 v0.2.8/go.mod h1:M2Gltf+zSqq2h164eczlRLdydwZgPDoM0GkTqi+Ep3s=
 github.com/KarpelesLab/slhdsa v0.1.0 h1:5qAT+oWF5ENEXQA6qrgpHNwwt1GXPwjKSjplFSqcEp0=
 github.com/KarpelesLab/slhdsa v0.1.0/go.mod h1:VpvPoyXGXABOX0ahkrS260BZrVZWIt5pD9g5waVWsWw=
-github.com/KarpelesLab/spotlib v0.3.0 h1:kzokOEE7LQ4uaJJxgnkxe+CnOFnbQsVkxSgo9m0N4g4=
-github.com/KarpelesLab/spotlib v0.3.0/go.mod h1:Ub0bNQmRLROygXbuFa1bDae7YJs65b8C52X2/bi1uAY=
+github.com/KarpelesLab/spotlib v0.3.2 h1:a8mXaB2f/InQardxXs0DaykWF0q2cDZY+DU0rK1wbWc=
+github.com/KarpelesLab/spotlib v0.3.2/go.mod h1:UfI0BlLYwFVoQoFfFO4qb5zTA57nhdz2BTQiYTnlCB4=
 github.com/KarpelesLab/spotproto v0.3.0 h1:e823Zlr9fZsjyqXiNhOgp02bJ6WA/GOEECOm5VI8C7E=
 github.com/KarpelesLab/spotproto v0.3.0/go.mod h1:gVj35/deJ2huOTmXNUl57VNWuOPAdoJ3w5rofxjSqHY=
 github.com/KarpelesLab/tss-lib/v2 v2.2.9 h1:hY1N/jE9BpwHxMyXCapdy/6ms+affTD7yn5AISLXCtI=

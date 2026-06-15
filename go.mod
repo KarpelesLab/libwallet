@@ -3,8 +3,10 @@ module github.com/KarpelesLab/libwallet
 go 1.25.0
 
 require (
+	filippo.io/edwards25519 v1.1.1
 	github.com/KarpelesLab/apirouter v0.5.28
 	github.com/KarpelesLab/base58 v1.1.1
+	github.com/KarpelesLab/countrydb v0.1.3
 	github.com/KarpelesLab/cryptutil v0.3.0
 	github.com/KarpelesLab/emitter v0.3.1
 	github.com/KarpelesLab/ethrpc v0.2.13
@@ -14,7 +16,7 @@ require (
 	github.com/KarpelesLab/pobj v0.2.1
 	github.com/KarpelesLab/rest v0.6.17
 	github.com/KarpelesLab/secp256k1 v0.2.8
-	github.com/KarpelesLab/spotlib v0.3.0
+	github.com/KarpelesLab/spotlib v0.3.2
 	github.com/KarpelesLab/spotproto v0.3.0
 	github.com/KarpelesLab/tss-lib/v2 v2.2.9
 	github.com/KarpelesLab/typutil v0.2.34
@@ -29,11 +31,9 @@ require (
 )
 
 require (
-	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/BottleFmt/gobottle v1.0.1 // indirect
 	github.com/KarpelesLab/bech32m v0.1.5 // indirect
 	github.com/KarpelesLab/contexter v1.0.2 // indirect
-	github.com/KarpelesLab/countrydb v0.1.3 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
 	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
 	github.com/KarpelesLab/lngdb v1.0.1 // indirect
