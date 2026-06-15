@@ -5,6 +5,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,29 +18,21 @@ func init() {
 }
 
 func TestRemoteWallet(t *testing.T) {
-	// Skipped: this end-to-end test depends on a healthy phplatform
-	// backend reachable from CI (Crypto/WalletSign:* + RemoteKey
-	// lifecycle). The backend periodically returns "There was a
-	// database error while processing your request" 500s on cold
-	// paths, and the libwallet retry budget (3 attempts, ~1s) is
-	// too short to wait out the blip. The dkls23 keygen / sign /
-	// reshare flows are covered in-process by TestDklsWalletEndToEnd
-	// and TestReshareDklsEndToEnd, so disabling this test does not
-	// reduce protocol coverage. Re-enable once the backend stops
-	// flapping.
-	t.Skip("requires healthy phplatform backend; tracked under the documented DB-blip flake")
-
-	// generate a new remote id
+	// Real-infra end-to-end: drives Crypto/WalletSign:new/verify/
+	// reshare via the testPhone account ("+14045551234" / verify
+	// code "000000"), authenticated as ClientID com.ellipx.walletapp
+	// (registered by TestMain in testmain_test.go). On a backend
+	// blip we skip via skipOnBackendInfra so the build doesn't fail
+	// on documented infra flakes; on a healthy backend this fully
+	// covers the dkls23 RemoteKey lifecycle + reshare.
 	log.Printf("generating remote ID...")
-	remote, err := remoteNew(context.Background(), "+14045551234") // "unit_test"
-	if err != nil {
-		t.Errorf("failed to initialize context: %s", err)
-		return
+	remote, err := remoteNew(context.Background(), testPhone)
+	if err := skipOnBackendInfra(t, "remoteNew", err); err != nil {
+		t.Fatalf("failed to initialize context: %s", err)
 	}
-	remoteV, err := remoteVerify(context.Background(), remote.Session, "000000") // test code
-	if err != nil {
-		t.Errorf("failed to verify remote context: %s", err)
-		return
+	remoteV, err := remoteVerify(context.Background(), remote.Session, "000000")
+	if err := skipOnBackendInfra(t, "remoteVerify", err); err != nil {
+		t.Fatalf("failed to verify remote context: %s", err)
 	}
 
 	log.Printf("created wallet key receiver with id: %s", remoteV.RemoteKey)
@@ -63,54 +56,68 @@ func TestRemoteWallet(t *testing.T) {
 	log.Printf("Generating wallet keys (can take a long time!)")
 
 	err = wallet.initializeWallet(context.Background(), keys)
-	if err != nil {
-		t.Errorf("failed to initialize wallet: %s", err)
-		return
+	if err := skipOnBackendInfra(t, "initializeWallet", err); err != nil {
+		t.Fatalf("failed to initialize wallet: %s", err)
 	}
 
 	// wallet is *ready*
 
 	// now let's try a reshare
 	remote, err = remoteReshare(context.Background(), remoteV.RemoteKey)
-	if err != nil {
-		t.Errorf("failed to initialize reshare: %s", err)
+	if err := skipOnBackendInfra(t, "remoteReshare", err); err != nil {
+		t.Fatalf("failed to initialize reshare: %s", err)
 	}
-	remoteV, err = remoteVerify(context.Background(), remote.Session, "000000") // test code
-	if err != nil {
-		t.Errorf("failed to verify reshare remote context: %s", err)
-		return
+	remoteV, err = remoteVerify(context.Background(), remote.Session, "000000")
+	if err := skipOnBackendInfra(t, "remoteVerify (reshare)", err); err != nil {
+		t.Fatalf("failed to verify reshare remote context: %s", err)
 	}
 
+	// dkls23 reshare requires exactly T+1 = 2 old signers in the
+	// active subset (T=1 here); passing all 3 keys hits the explicit
+	// "got 3" guard in ReshareDkls. Pick one Plain + the RemoteKey
+	// so the reshare actually exercises the wdrone path.
 	var oldKeys []*wltsign.KeyDescription
+	plainIncluded := false
 	for _, k := range wallet.Keys {
-		if k.Type == "RemoteKey" {
+		switch k.Type {
+		case "RemoteKey":
 			oldKeys = append(oldKeys, &wltsign.KeyDescription{Id: k.Id.String(), Key: remoteV.RemoteKey})
-		} else {
-			oldKeys = append(oldKeys, &wltsign.KeyDescription{Id: k.Id.String()})
+		case "Plain":
+			if !plainIncluded {
+				oldKeys = append(oldKeys, &wltsign.KeyDescription{Id: k.Id.String()})
+				plainIncluded = true
+			}
 		}
 	}
 
 	newKeys := []*wltsign.KeyDescription{
-		&wltsign.KeyDescription{Type: "Plain"},
-		&wltsign.KeyDescription{Type: "Plain"},
-		&wltsign.KeyDescription{
+		{Type: "Plain"},
+		{Type: "Plain"},
+		{
 			Type: "RemoteKey",
 			Key:  remoteV.RemoteKey, // using the same ID will allow updating the payload
 		},
 	}
 
-	err = wallet.Reshare(context.Background(), oldKeys, newKeys)
-	if err != nil {
-		t.Errorf("failed to reshare remote wallet: %s", err)
+	if err := wallet.Reshare(context.Background(), oldKeys, newKeys); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "failed to select peer") {
+			t.Skipf("backend not reachable (selectPeer): %s", err)
+		}
+		if strings.Contains(errMsg, "failed to init remote") &&
+			strings.Contains(errMsg, "context deadline exceeded") {
+			t.Skipf("backend not reachable (init timeout): %s", err)
+		}
+		t.Fatalf("failed to reshare remote wallet: %s", err)
 	}
 }
 
 func TestEdDSALocalToRemoteReshare(t *testing.T) {
-	// Skipped for the same reason as TestRemoteWallet — phplatform
-	// backend DB blips trip the reshare's setGeneratedKey call, and
-	// the in-process TestReshareFrostEndToEnd covers the protocol
-	// path without the backend dependency.
-	t.Skip("requires healthy phplatform backend; tracked under the documented DB-blip flake")
+	// Real-infra end-to-end: local FROST keygen → reshare to a real
+	// RemoteKey share served by the live wdrone fleet. Authenticated
+	// as ClientID com.ellipx.walletapp via TestMain. Skips on
+	// documented backend infra flakes; otherwise runs the full path
+	// the field-reported password-reset bug exercises.
 
 	// Step 1: create ed25519 wallet with 3 local (Plain) shares
 	wallet := &Wallet{
@@ -149,11 +156,11 @@ func TestEdDSALocalToRemoteReshare(t *testing.T) {
 
 	// Step 2: set up remote key via 2FA
 	remote, err := remoteNew(context.Background(), testPhone)
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteNew", err); err != nil {
 		t.Fatalf("failed to create remote session: %s", err)
 	}
 	remoteV, err := remoteVerify(context.Background(), remote.Session, "000000")
-	if err != nil {
+	if err := skipOnBackendInfra(t, "remoteVerify", err); err != nil {
 		t.Fatalf("failed to verify remote session: %s", err)
 	}
 	log.Printf("remote key verified: %s", remoteV.RemoteKey)
@@ -170,8 +177,15 @@ func TestEdDSALocalToRemoteReshare(t *testing.T) {
 		{Type: "RemoteKey", Key: remoteV.RemoteKey},
 	}
 
-	err = wallet.Reshare(context.Background(), oldKeys, newKeys)
-	if err != nil {
+	if err := wallet.Reshare(context.Background(), oldKeys, newKeys); err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "failed to select peer") {
+			t.Skipf("backend not reachable (selectPeer): %s", err)
+		}
+		if strings.Contains(errMsg, "failed to init remote") &&
+			strings.Contains(errMsg, "context deadline exceeded") {
+			t.Skipf("backend not reachable (init timeout): %s", err)
+		}
 		t.Fatalf("failed to reshare ed25519 wallet to remote: %s", err)
 	}
 	log.Printf("ed25519 reshare to remote complete, %d new keys", len(wallet.Keys))

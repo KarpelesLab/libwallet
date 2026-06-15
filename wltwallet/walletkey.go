@@ -204,11 +204,29 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		// dklstss.Key.Save() is binary; wrap in dklsKeyWrapper so the
 		// rest of the encrypt pipeline (Bottle / cryptutil / CBOR)
 		// doesn't have to learn about a non-JSON share type.
+		//
+		// RemoteKey uploads bypass the wrapper. wdrone's loadShare
+		// calls `op.UnmarshalCbor(dat, &raw)` with raw = []byte, which
+		// dispatches through cryptutil's Bottle Unmarshal: that reads
+		// the bottle's `ct` header ("json" here because we
+		// MarshalJson) and runs `json.Unmarshal(buf, *[]byte)`. Plain
+		// `[]byte` JSON-marshals to a base64 string and round-trips
+		// straight into []byte; a wrapper object ({"data":"..."})
+		// fails with "cannot unmarshal object into Go value of type
+		// []uint8" (TestRemoteWallet caught exactly this against the
+		// live wdrone fleet). Local StoreKey/Password decrypt keeps
+		// the wrapper because decryptDkls23 expects it; RemoteKey
+		// shares are never decrypted client-side, so dropping the
+		// wrapper there is safe.
 		var buf bytes.Buffer
 		if err := wk.dklsData.Save(&buf); err != nil {
 			return fmt.Errorf("dklstss.Key.Save: %w", err)
 		}
-		dataToEncrypt = &dklsKeyWrapper{Data: buf.Bytes()}
+		if kd.Type == "RemoteKey" {
+			dataToEncrypt = buf.Bytes()
+		} else {
+			dataToEncrypt = &dklsKeyWrapper{Data: buf.Bytes()}
+		}
 		wk.Schema = "dkls23"
 	case wk.frostData != nil:
 		dataToEncrypt = wk.frostData

@@ -1,3 +1,32 @@
+## 0.4.61
+
+- **Fix dkls23 RemoteKey share wrapper/raw-bytes mismatch.**
+  libwallet was uploading dkls23 shares as `{"data":"<base64>"}`
+  (the `dklsKeyWrapper` struct it uses for local round-tripping),
+  but wdrone's `loadShare` decodes the share into a `[]byte`
+  target via the cryptutil bottle pipeline — a wrapped struct
+  produced `json: cannot unmarshal object into Go value of type
+  []uint8` and wedged every dkls23 RemoteKey reshare at the
+  server side. The wrapper is now only used for local
+  StoreKey/Password decrypt (where `decryptDkls23` expects it);
+  RemoteKey uploads ship the raw `dklstss.Save()` bytes directly,
+  which JSON encodes as a base64 string and round-trips into
+  `[]byte` on the wdrone side.
+- **Real-infra reshare tests are now active.** Added a `TestMain`
+  that registers `Sec-ClientId: com.ellipx.walletapp` (the app
+  identifier ellipx-mobile-app ships) so `TestRemoteWallet` and
+  `TestEdDSALocalToRemoteReshare` exercise the live
+  Crypto/WalletSign + wdrone path — previously they were hard-
+  skipped despite the credentials being available. Backend
+  reachability flakes still trigger the documented skip
+  predicates; otherwise these tests fully drive
+  create → keygen → upload → reshare → re-upload.
+- TestRemoteWallet's old-keys subset bug fixed: it was passing all
+  3 wallet keys as the old committee, tripping the dkls23 guard
+  `requires exactly T+1=2 old signers in the active subset, got 3`.
+  Now selects one Plain + the RemoteKey, the same shape an
+  end-user reshare would use.
+
 ## 0.4.60
 
 - **Reshare init retries on a different wdrone peer when the
