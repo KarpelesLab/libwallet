@@ -481,7 +481,13 @@ func (wk *WalletKey) decryptMnemonic(kd *wltsign.KeyDescription) (*MnemonicKeySh
 	return final, nil
 }
 
-func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {
+// selectPeer returns the first wdrone whose /ping round-trips inside
+// the deadline. Optional excludes are peers that were already tried and
+// rejected this session (e.g. a peer that passed /ping but then hung on
+// /init); the caller passes them in via the same canonical "k.<hash>"
+// form returned from prior calls so the retry round skips known-bad
+// peers instead of re-rolling into them.
+func selectPeer(ctx context.Context, spot *spotlib.Client, excludes ...string) (string, error) {
 	ctx = withClientID(ctx)
 	var ids []string
 	err := restApplyRetry(ctx, "Crypto/WalletSign:keys", "GET", nil, &ids)
@@ -490,6 +496,10 @@ func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {
 		if err != nil {
 			return "", err
 		}
+	}
+	excludeSet := make(map[string]struct{}, len(excludes))
+	for _, e := range excludes {
+		excludeSet[e] = struct{}{}
 	}
 	var keys []string
 	for _, idStr := range ids {
@@ -505,7 +515,13 @@ func selectPeer(ctx context.Context, spot *spotlib.Client) (string, error) {
 		}
 
 		key := "k." + base64.RawURLEncoding.EncodeToString(cryptutil.Hash(idC.Self, sha256.New))
+		if _, skip := excludeSet[key]; skip {
+			continue
+		}
 		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return "", fmt.Errorf("no wdrone peers available (after excluding %d)", len(excludeSet))
 	}
 
 	// let's try to ping

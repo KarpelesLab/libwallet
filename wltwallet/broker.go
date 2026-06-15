@@ -208,6 +208,18 @@ type spotPeer struct {
 // init query. The handshake is handled out-of-band — for ClawdWallet the
 // walletsign session row is opened server-side and the joining party just
 // needs to listen for TSS rounds addressed to <my-spot-id>/<sid>/...
+//
+// Retry policy: a wdrone peer can pass /ping in sub-second yet still
+// hang on /init (loadShare slow, internal goroutine wedged). Without
+// retry, a single bad pick produces a 90-s reshare failure for the
+// user even when other wdrones in the fleet would have served the
+// init promptly. Start now makes up to maxInitAttempts (3) tries,
+// re-running selectPeer with the previously-tried peers excluded so a
+// retry never re-rolls into the same bad peer. The 90-s per-attempt
+// budget is unchanged — wdrone's loadShare ceiling is 60 s and the
+// spare 30 s covers response routing; bumping the per-attempt budget
+// further would just extend the failure tail without improving the
+// common case.
 func (s *spotPeer) Start() error {
 	s.stOnce.Do(func() {
 		s.spot.SetHandler(s.sid, s.messageHandler)
@@ -218,39 +230,44 @@ func (s *spotPeer) Start() error {
 			return
 		}
 
-		peerCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		peer, err := selectPeer(peerCtx, s.spot)
-		if err != nil {
-			s.stErr = fmt.Errorf("failed to select peer: %w", err)
-			return
-		}
-		log.Printf("selected peer: %s", peer)
-		s.peer = peer
-
 		buf, err := json.Marshal(s.info)
 		if err != nil {
 			s.stErr = err
 			return
 		}
 
-		// wdrone's init handler is synchronous: it has to fetch the
-		// encrypted share blob from phplatform (Crypto/WalletSign:pull)
-		// before it can reply, and its own internal ceiling for that
-		// fetch is 60 s (see ../wdrone/walletsign.go's initReshare,
-		// ctx = WithTimeout(60*time.Second)). Holding the client to
-		// 15 s here turned every slow phplatform DB read into a
-		// "failed to init remote: context deadline exceeded" while
-		// wdrone was still happily loading the share — exactly the
-		// field-reported reshare timeout. 90 s leaves a 30 s margin
-		// over wdrone's ceiling for the local handshake plus broker
-		// setup it does between loadShare and the reply.
-		if _, err := s.spot.QueryTimeout(90*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
-			s.stErr = fmt.Errorf("failed to init remote: %w", err)
-			return
+		const maxInitAttempts = 3
+		var tried []string
+		var lastErr error
+		for attempt := 1; attempt <= maxInitAttempts; attempt++ {
+			peerCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			peer, err := selectPeer(peerCtx, s.spot, tried...)
+			cancel()
+			if err != nil {
+				lastErr = fmt.Errorf("failed to select peer: %w", err)
+				break
+			}
+			log.Printf("spotPeer init attempt %d/%d: selected %s (excluded %d)", attempt, maxInitAttempts, peer, len(tried))
+			s.peer = peer
+
+			t0 := time.Now()
+			if _, err := s.spot.QueryTimeout(90*time.Second, peer+"/walletsign/"+s.sid+"/init", buf); err != nil {
+				log.Printf("spotPeer init attempt %d/%d: peer %s failed after %s: %s", attempt, maxInitAttempts, peer, time.Since(t0), err)
+				tried = append(tried, peer)
+				lastErr = fmt.Errorf("failed to init remote: %w", err)
+				continue
+			}
+			log.Printf("spotPeer init attempt %d/%d: peer %s succeeded in %s, ready for TSS rounds", attempt, maxInitAttempts, peer, time.Since(t0))
+			lastErr = nil
+			break
 		}
-		log.Printf("remote initialized, ready for TSS rounds")
+		if lastErr != nil {
+			if len(tried) > 0 {
+				s.stErr = fmt.Errorf("%w (tried %d peer(s): %v)", lastErr, len(tried), tried)
+			} else {
+				s.stErr = lastErr
+			}
+		}
 	})
 	return s.stErr
 }

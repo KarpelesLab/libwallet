@@ -1,3 +1,21 @@
+## 0.4.60
+
+- **Reshare init retries on a different wdrone peer when the
+  selected one hangs.** A wdrone can pass `/ping` in sub-second
+  and then hang on `/init` (slow `loadShare`, internal goroutine
+  wedged) — without retry, one bad pick produced a 90-s reshare
+  failure even when other wdrones in the fleet would have served
+  the init promptly. `spotPeer.Start` now makes up to 3 attempts,
+  re-running `selectPeer` with previously-tried peers excluded so
+  a retry never re-rolls into the same bad peer. The 90 s per-
+  attempt budget is unchanged; wdrone's own `loadShare` ceiling
+  is 60 s and the spare 30 s covers response routing. The
+  surfaced error names every peer that was tried so field reports
+  can be matched to specific wdrones.
+- `selectPeer` now accepts a variadic `excludes` list and filters
+  the candidate set before pinging. Zero excludes preserves the
+  original behaviour exactly.
+
 ## 0.4.59
 
 - **Fix legacy WalletSign protocol naming.** 0.4.57's RemoteKey
