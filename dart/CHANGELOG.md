@@ -1,3 +1,33 @@
+## 0.4.63
+
+- **Fix FROST reshare `wi PoK verification failed` against wdrone.**
+  Root cause: `tss-lib` version drift. libwallet was on v2.2.9; wdrone
+  on v2.3.1. v2.3.1 changed `common.SHA512_256i_TAGGED` to bind each
+  big.Int operand's sign (extra `0x00`/`0x01` byte per operand), which
+  is a wire-incompatible hash change. The two sides computed different
+  Schnorr challenges `c` for the same inputs, so wdrone's PoK
+  (built with v2.3.1's `c`) failed verification by the new committee
+  (using v2.2.9's `c`). Sign worked because in-field signing in the
+  current app shape uses `[StoreKey + Password]` (no wdrone). Reshare
+  for password reset requires wdrone in the OLD committee — and that's
+  where the hash drift surfaced as `frost-reshare-round2 round 0,
+  culprits [...] wi PoK verification failed`.
+  - libwallet `tss-lib v2.2.9` → `v2.3.1`. The four real-infra reshare
+    tests (`TestRemoteWallet`, `TestEdDSALocalToRemoteReshare`,
+    `TestReshare_FROST_StoreKeyPlusRemote_AsOldCommittee`,
+    `TestReshare_FROST_PasswordPlusRemote_AsOldCommittee`) all pass
+    end-to-end against the live wdrone fleet.
+- **Wait for the full spot relay mesh before reshare init.**
+  `spot.WaitOnline` returns at `onlineCnt > 0` — i.e. after just the
+  first relay handshake. spotlib typically dials 2 relays in parallel
+  and the second takes ~1–2 s longer; sending peer queries in that
+  window routes via a single relay and can stall when the target peer
+  prefers the other one. `waitOnlineSpot` now polls
+  `ConnectionCount()` until `connCnt` is stable for 1 s (no new
+  connections arriving) or 8 s elapses, then proceeds. Healthy
+  reshare timings are unchanged; only fresh-process flows (test
+  binaries, cold-start hosts) see the small new pre-roll.
+
 ## 0.4.62
 
 - **Reshare init per-attempt timeout: 90 s → 15 s.** 0.4.57 raised

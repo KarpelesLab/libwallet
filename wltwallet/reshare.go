@@ -913,10 +913,53 @@ func envSpot(ctx context.Context) (*spotlib.Client, error) {
 func waitOnlineSpot(spot *spotlib.Client) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	err := spot.WaitOnline(ctx)
-	if err != nil {
+	if err := spot.WaitOnline(ctx); err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
-	return nil
+	// spot.WaitOnline returns at onlineCnt > 0 — i.e. after exactly
+	// ONE relay finishes its handshake. spotlib typically dials
+	// multiple relays in parallel (we observe 2 hosts:
+	// epvjsdy.g-dns.net + ekmcdli.g-dns.net) and the second takes
+	// ~1-2 s longer than the first to authenticate. Firing a peer
+	// init query in that gap means our spot client routes via a
+	// single relay; if the target wdrone is preferentially reached
+	// via the relay we don't have up yet, the query can stall or
+	// take the long way around.
+	//
+	// Wait for the connection mesh to settle: poll ConnectionCount
+	// until connCnt stops growing for `stableFor` AND onlineCnt has
+	// caught up to connCnt. Cap at `maxWait` so a single permanently
+	// unreachable relay doesn't block forever — best-effort fallback
+	// is to proceed with whatever's online.
+	return waitSpotMeshStable(spot, 8*time.Second, 1*time.Second)
+}
+
+// waitSpotMeshStable polls the spot client's connection counts until
+// no new connections arrive for `stableFor`, or `maxWait` elapses.
+// Returns nil even on timeout as long as at least one relay is online —
+// the caller can proceed with degraded routing rather than failing the
+// whole reshare on a partial mesh.
+func waitSpotMeshStable(spot *spotlib.Client, maxWait, stableFor time.Duration) error {
+	deadline := time.Now().Add(maxWait)
+	var lastConn uint32
+	stableSince := time.Time{}
+	for {
+		connCnt, onlineCnt := spot.ConnectionCount()
+		if connCnt != lastConn {
+			lastConn = connCnt
+			stableSince = time.Now()
+		}
+		if connCnt > 0 && connCnt == onlineCnt && !stableSince.IsZero() && time.Since(stableSince) >= stableFor {
+			log.Printf("spot mesh stable: conn=%d online=%d", connCnt, onlineCnt)
+			return nil
+		}
+		if time.Now().After(deadline) {
+			log.Printf("spot mesh wait timed out: conn=%d online=%d (proceeding)", connCnt, onlineCnt)
+			if onlineCnt == 0 {
+				return fmt.Errorf("spot mesh did not come online within %s", maxWait)
+			}
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
