@@ -1,3 +1,19 @@
+## 0.4.65
+
+- **Document the canonical new-committee shape for Promote /
+  PromoteMnemonic.** A field caller (tibaneapp's in-app mnemonic
+  import flow) was calling `Wallet:promoteMnemonic` with
+  `newKeys = [Password]` and surfacing the 500 error
+  `New must contain at least 2 KeyDescriptions (got 1)`. The
+  validation is correct — modern FROST / DKLs23 wallets are
+  inherently multi-party — but the error message gave no hint at
+  the expected shape. Both `Promote` and `PromoteMnemonic` godocs
+  now describe the canonical 3-key committee
+  `[StoreKey, RemoteKey, Password]` with threshold 1 (matching what
+  the standard wallet-create flow uses) and the error messages
+  reference the godoc. No functional change in libwallet; tibaneapp's
+  caller is being updated to mint the full committee in lockstep.
+
 ## 0.4.64
 
 - **Fix `invalid key for wallet: wlet` 500 on imported wallets.**

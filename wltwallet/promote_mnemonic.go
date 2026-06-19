@@ -93,6 +93,40 @@ func apiWalletPromoteMnemonic(ctx *apirouter.Context, in struct {
 // seed feeds both BIP32 (secp256k1) and SLIP-0010 (ed25519)
 // derivation, so one mnemonic can migrate to chains on either curve
 // independently. Each ChainMigration picks via its Curve field.
+//
+// ──────────────────────────────────────────────────────────────────
+//
+// # New committee shape (newKeys + newThreshold)
+//
+// The promoted wallets are real TSS wallets (FROST for ed25519,
+// DKLs23 for secp256k1) and therefore need a real MPC committee. The
+// canonical shape is the same three keys the standard wallet-create
+// flow uses:
+//
+//	newKeys = [
+//	    {Type: "StoreKey", Key: <fresh device-pubkey>},   // device-local
+//	    {Type: "RemoteKey", Key: <wdrone session id>},     // server-side via 2FA
+//	    {Type: "Password",  Key: <user password>},         // user-memorised
+//	]
+//	newThreshold = 1                                       // any 1 of 3 can sign
+//
+// A 1-of-3 committee gives the user three independent recovery paths
+// (lose the device → reset with password + remote 2FA; forget the
+// password → reset with device + remote 2FA; lose 2FA access → reset
+// with device + password). Fewer than three keys is allowed but
+// degrades recovery: a 1-of-2 [StoreKey + Password] loses the
+// password-reset path entirely, and a 1-of-2 [RemoteKey + Password]
+// loses the device-only sign path.
+//
+// Validation:
+//   - len(newKeys) >= 2. Required by the underlying TSS protocol —
+//     a single-party "threshold" scheme isn't a meaningful sharing.
+//     Callers passing exactly 1 KeyDescription are almost always
+//     misusing the API; finish the standard onboarding flow (with
+//     SMS/email 2FA to mint the RemoteKey) and reuse those keys here.
+//   - 1 <= newThreshold < len(newKeys). The strict upper bound
+//     ensures at least one party can be lost without bricking the
+//     wallet.
 func (w *Wallet) PromoteMnemonic(ctx context.Context, oldKeys []*wltsign.KeyDescription, chains []ChainMigration, newKeys []*wltsign.KeyDescription, newThreshold int) ([]*Wallet, error) {
 	if len(w.Keys) != 1 || w.Keys[0].Schema != "mnemonic" {
 		return nil, errors.New("PromoteMnemonic requires a mnemonic-backed source wallet")
@@ -104,7 +138,7 @@ func (w *Wallet) PromoteMnemonic(ctx context.Context, oldKeys []*wltsign.KeyDesc
 		return nil, errors.New("PromoteMnemonic: at least one ChainMigration required")
 	}
 	if len(newKeys) < 2 {
-		return nil, fmt.Errorf("PromoteMnemonic: New must contain at least 2 KeyDescriptions (got %d)", len(newKeys))
+		return nil, fmt.Errorf("PromoteMnemonic: New must contain at least 2 KeyDescriptions (got %d) — canonical shape is [StoreKey, RemoteKey, Password] with threshold 1; see PromoteMnemonic godoc for the full layout", len(newKeys))
 	}
 	if newThreshold < 1 || newThreshold >= len(newKeys) {
 		return nil, fmt.Errorf("PromoteMnemonic: Threshold must be 1 ≤ T < len(New)=%d (got %d)", len(newKeys), newThreshold)

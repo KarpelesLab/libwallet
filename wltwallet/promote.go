@@ -70,6 +70,26 @@ func apiWalletPromote(ctx *apirouter.Context, in struct {
 // only the storage of the signing key changes. After successful
 // promote, the original imported WalletKey row is deleted and
 // wallet.Protocol becomes "dkls23" or "frost".
+//
+// # New committee shape (newKeys + newThreshold)
+//
+// The promoted wallet is a real TSS wallet and therefore needs a real
+// MPC committee. The canonical shape is the same three keys the
+// standard wallet-create flow uses:
+//
+//	newKeys = [
+//	    {Type: "StoreKey",  Key: <fresh device-pubkey>},  // device-local
+//	    {Type: "RemoteKey", Key: <wdrone session id>},    // server-side via 2FA
+//	    {Type: "Password",  Key: <user password>},        // user-memorised
+//	]
+//	newThreshold = 1                                      // any 1 of 3 can sign
+//
+// A 1-of-3 committee gives the user three independent recovery paths;
+// 1-of-2 (e.g. [StoreKey + Password]) is allowed but loses one
+// recovery lane. Pass exactly 1 KeyDescription and Promote rejects —
+// a single-party "threshold" scheme isn't a meaningful sharing.
+// See [PromoteMnemonic] for the same guidance applied to multi-chain
+// migrations.
 func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDescription, newThreshold int) error {
 	switch w.Curve {
 	case "secp256k1", "ed25519":
@@ -87,7 +107,7 @@ func (w *Wallet) Promote(ctx context.Context, oldKeys, newKeys []*wltsign.KeyDes
 		return fmt.Errorf("Promote: Old must contain exactly 1 KeyDescription (the import's encryption descriptor), got %d", len(oldKeys))
 	}
 	if len(newKeys) < 2 {
-		return fmt.Errorf("Promote: New must contain at least 2 KeyDescriptions, got %d", len(newKeys))
+		return fmt.Errorf("Promote: New must contain at least 2 KeyDescriptions, got %d — canonical shape is [StoreKey, RemoteKey, Password] with threshold 1; see Promote godoc for the full layout", len(newKeys))
 	}
 	if newThreshold < 1 || newThreshold >= len(newKeys) {
 		return fmt.Errorf("Promote: Threshold must be between 1 and len(New)-1=%d, got %d", len(newKeys)-1, newThreshold)
