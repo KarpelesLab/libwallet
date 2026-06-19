@@ -333,12 +333,47 @@ class WalletApi {
 
   /// Migrate a mnemonic-backed wallet into N fresh MPC wallets, one
   /// per chain in [chains]. Each migration derives the mnemonic at the
-  /// chain's BIP32 path and reshares the resulting privkey into a new
-  /// TSS committee; the source mnemonic wallet is NOT modified, so the
-  /// caller keeps it until every migrated wallet is validated.
+  /// chain's BIP32 / SLIP-0010 path and reshares the resulting privkey
+  /// into a new TSS committee; the source mnemonic wallet is NOT
+  /// modified, so the caller keeps it until every migrated wallet is
+  /// validated.
   ///
-  /// secp256k1 source wallets only in this release; ed25519 mnemonic
-  /// migration is a follow-up.
+  /// Both curves are supported and can fan out from a single mnemonic
+  /// in one call. Each [ChainMigration] picks its `curve`
+  /// independently:
+  ///
+  /// - `secp256k1` → BIP32 derivation → **DKLs23** MPC wallet
+  ///   (Bitcoin, Ethereum, EVM family).
+  /// - `ed25519`   → SLIP-0010 derivation → **FROST** MPC wallet
+  ///   (Solana, Sui, etc.).
+  ///
+  /// A single BIP39 seed feeds both derivations, so one call can
+  /// produce e.g. an Ethereum MPC wallet AND a Solana MPC wallet
+  /// together. Leave [ChainMigration.curve] empty for the
+  /// backwards-compat default of secp256k1.
+  ///
+  /// ## Committee shape
+  ///
+  /// [newKeys] must contain **at least 2** [KeyDescription]s — modern
+  /// FROST / DKLs23 wallets are inherently multi-party so a single-
+  /// party committee is rejected (`PromoteMnemonic: New must contain
+  /// at least 2 KeyDescriptions`). The canonical and recommended
+  /// shape, identical to what the standard wallet-create flow uses,
+  /// is the 1-of-3 committee:
+  ///
+  /// ```dart
+  /// newKeys: [
+  ///   KeyDescription.storeKey(storePair.publicKey),  // device-local
+  ///   KeyDescription.remoteKey(remoteKeyId),          // 2FA server-side
+  ///   KeyDescription.password(password),              // user-memorised
+  /// ],
+  /// threshold: 1,
+  /// ```
+  ///
+  /// 1-of-2 (e.g. `[StoreKey + Password]`) is allowed but degrades
+  /// recovery — losing the device with no remote key in the committee
+  /// means the password is the only path back to the wallet. Prefer
+  /// 1-of-3 unless you have a specific reason.
   ///
   /// - [walletId]: the source mnemonic wallet's ID.
   /// - [oldKeys]: length 1, decrypts the source mnemonic.
@@ -346,7 +381,8 @@ class WalletApi {
   ///   rows the user selected.
   /// - [newKeys]: the TSS committee shape applied to EACH new
   ///   wallet (same committee, independent shares).
-  /// - [threshold]: TSS threshold for the new committee.
+  /// - [threshold]: TSS threshold for the new committee
+  ///   (1 ≤ threshold < [newKeys].length).
   Future<List<Wallet>> promoteMnemonic(
     String walletId, {
     required List<KeyDescription> oldKeys,
@@ -367,14 +403,37 @@ class WalletApi {
   }
 
   /// Promote an imported 1-of-1 wallet (RawKey / Mnemonic) to a normal
-  /// N-of-T TSS wallet via tss-lib's resharing protocol. The master pubkey
-  /// and chaincode are preserved (the wallet's address does NOT change),
-  /// only the storage of the signing key changes — the imported share
-  /// is replaced by [newKeys] split into TSS shares with a [threshold]-of-N
-  /// reconstruction policy.
+  /// N-of-T TSS wallet via tss-lib's resharing protocol. The master
+  /// pubkey and chaincode are preserved (the wallet's address does NOT
+  /// change), only the storage of the signing key changes — the
+  /// imported share is replaced by [newKeys] split into TSS shares
+  /// with a [threshold]-of-N reconstruction policy.
   ///
-  /// Currently supports secp256k1 wallets only; ed25519 promotion is a
-  /// follow-up.
+  /// Both curves are supported:
+  ///
+  /// - `secp256k1` source → **DKLs23** MPC (Bitcoin, Ethereum, EVM).
+  /// - `ed25519`   source → **FROST**  MPC (Solana, Sui).
+  ///
+  /// ## Committee shape
+  ///
+  /// [newKeys] must contain **at least 2** [KeyDescription]s — modern
+  /// FROST / DKLs23 wallets are inherently multi-party so a single-
+  /// party committee is rejected (`Promote: New must contain at least
+  /// 2 KeyDescriptions`). The canonical and recommended shape,
+  /// identical to what the standard wallet-create flow uses, is the
+  /// 1-of-3 committee:
+  ///
+  /// ```dart
+  /// newKeys: [
+  ///   KeyDescription.storeKey(storePair.publicKey),  // device-local
+  ///   KeyDescription.remoteKey(remoteKeyId),          // 2FA server-side
+  ///   KeyDescription.password(password),              // user-memorised
+  /// ],
+  /// threshold: 1,
+  /// ```
+  ///
+  /// 1-of-2 is allowed (e.g. `[StoreKey + Password]`) but degrades
+  /// recovery. Prefer 1-of-3 unless you have a specific reason.
   ///
   /// - [walletId]: the imported wallet's ID.
   /// - [oldKeys]: a single [KeyDescription] that decrypts the imported

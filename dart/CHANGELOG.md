@@ -1,3 +1,21 @@
+## 0.4.66
+
+- **Doc fix: Dart `promote` and `promoteMnemonic` are no longer
+  documented as secp256k1-only.** The Go side gained FROST/Ed25519
+  support a while back; both Dart wrappers' docstrings still said
+  "secp256k1 source wallets only in this release; ed25519 mnemonic
+  migration is a follow-up" / "Currently supports secp256k1 wallets
+  only; ed25519 promotion is a follow-up", leaving SDK readers to
+  conclude the surface didn't exist. The docs now describe the
+  actual coverage:
+  - `secp256k1` source → DKLs23 MPC.
+  - `ed25519`   source → FROST MPC.
+  - `promoteMnemonic` can fan out from a single BIP39 seed to chains
+    on either curve in one call (per-`ChainMigration.curve`).
+- Same docstrings now spell out the canonical 1-of-3 committee
+  `[StoreKey, RemoteKey, Password]` with threshold 1, matching the
+  godoc and error guidance added on the Go side in 0.4.65.
+
 ## 0.4.65
 
 - **Document the canonical new-committee shape for Promote /
