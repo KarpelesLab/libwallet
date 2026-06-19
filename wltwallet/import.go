@@ -127,7 +127,7 @@ func buildImportedWallet(
 	}
 
 	w := &Wallet{
-		Id:        xuid.New("wlet"),
+		Id:        xuid.New("wlt"),
 		Name:      name,
 		Curve:     curve,
 		Threshold: 0, // 1-of-1 marker; promoted wallets get a real threshold

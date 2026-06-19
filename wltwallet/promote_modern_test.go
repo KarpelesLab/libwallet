@@ -34,7 +34,7 @@ func TestPromoteToDkls23EndToEnd(t *testing.T) {
 
 	// 2) Allocate 3 new committee rows (thin, no Paillier).
 	newWKeys := make([]*WalletKey, 3)
-	walletID := xuid.New("wlet")
+	walletID := xuid.New("wlt")
 	for i := range newWKeys {
 		newWKeys[i] = &WalletKey{
 			Id:     xuid.New("wkey"),
@@ -122,7 +122,7 @@ func TestPromoteToFrostEndToEnd(t *testing.T) {
 
 	// 2) 3-share committee.
 	newWKeys := make([]*WalletKey, 3)
-	walletID := xuid.New("wlet")
+	walletID := xuid.New("wlt")
 	for i := range newWKeys {
 		newWKeys[i] = &WalletKey{
 			Id:     xuid.New("wkey"),

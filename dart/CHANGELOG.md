@@ -1,3 +1,19 @@
+## 0.4.64
+
+- **Fix `invalid key for wallet: wlet` 500 on imported wallets.**
+  `Wallet:importPrivateKey` (`wltwallet/import.go`) and
+  `Wallet:promoteMnemonic` (`wltwallet/promote_mnemonic.go`) were
+  minting the new wallet row with `xuid.New("wlet")` — a typo for
+  the canonical `"wlt"` prefix. Every imported wallet that later
+  flowed back through `WalletById` (and there's no path that
+  doesn't) tripped the strict `Prefix != "wlt"` check at
+  `api.go:36` and returned 500. The typo is corrected at both
+  mint sites and `transfer.go`'s tolerant-prefix workaround (which
+  accepted the bad prefix as a stopgap) is tightened back to
+  strict `"wlt"` only. Wallets persisted with the bad prefix in
+  the field will need to be re-imported — `"wlet"` is illegal at
+  every reader site and must never reach the DB again.
+
 ## 0.4.63
 
 - **Fix FROST reshare `wi PoK verification failed` against wdrone.**

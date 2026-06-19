@@ -209,7 +209,7 @@ func (w *Wallet) migrateOneChain(ctx context.Context, seed []byte, c ChainMigrat
 		protocol = ProtocolFROST
 	}
 	nw := &Wallet{
-		Id:        xuid.New("wlet"),
+		Id:        xuid.New("wlt"),
 		Name:      name,
 		Curve:     curve,
 		Protocol:  protocol,

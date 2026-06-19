@@ -574,7 +574,7 @@ func findWalletByIDString(e wltintf.Env, id string) (*Wallet, error) {
 	if err != nil {
 		return nil, err
 	}
-	if x.Prefix != "wlt" && x.Prefix != "wlet" {
+	if x.Prefix != "wlt" {
 		return nil, fmt.Errorf("transfer: unexpected id prefix %q", x.Prefix)
 	}
 	return WalletById(e, x)
