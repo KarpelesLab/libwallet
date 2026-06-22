@@ -1,3 +1,17 @@
+## 0.4.67
+
+- **Fix OKX Solana swap signing: decode `tx.data` as base58 or
+  base64.** OKX's DEX aggregator `/swap` endpoint returns Solana
+  `tx.data` base58-encoded, but the decoder only ran it through
+  base64. Because base58's alphabet is a subset of base64's, a base64
+  decode of a base58 payload *succeeds* but yields garbage — whose
+  leading byte was read as a 79-signature count, surfacing as
+  `LibwalletException(500): sign okx solana transaction: signatures
+  truncated: declared 79, tx only 708 bytes`. Some routes do return
+  genuine base64 (notably larger v0/ALT transactions), so both
+  encodings occur. The decoder now tries both schemes and returns the
+  candidate that parses as a structurally valid Solana transaction.
+
 ## 0.4.66
 
 - **Doc fix: Dart `promote` and `promoteMnemonic` are no longer
