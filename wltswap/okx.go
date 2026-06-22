@@ -537,21 +537,53 @@ func okxApproveAddress(ctx context.Context, chainIndex string) (string, error) {
 
 // ── Execute (Solana) ────────────────────────────────────────────
 
-// okxDecodeSolanaTxData accepts both standard base64 and base64url
-// (URL-safe) variants of OKX's Solana tx.data payload. Most OKX routes
-// return standard base64; routes whose serialized payload exceeds ~1 KB
-// — in practice the versioned (v0) transactions that reference
-// address-lookup-tables — come back URL-safe (`-_` for `+/`). A plain
-// StdEncoding decode of those payloads fails on the first `-`/`_`,
-// surfacing as `illegal base64 at input <n>`. Normalize the alphabet
-// and re-pad to a multiple of four before decoding so we accept both.
+// okxDecodeSolanaTxData decodes OKX's Solana tx.data payload, which
+// comes back in one of two encodings depending on the route:
+//
+//   - base58 — the encoding the DEX aggregator /swap endpoint
+//     documents for Solana, returned for most routes.
+//   - base64 (standard or URL-safe `-_`) — seen on some routes,
+//     notably the larger v0/address-lookup-table transactions
+//     (>~1 KB), historically surfacing as `illegal base64 at input
+//     <n>` before we normalized the alphabet.
+//
+// The two alphabets overlap: every base58 string is also a
+// syntactically valid base64 string, so a base64 decode of a base58
+// payload SUCCEEDS but yields garbage — downstream this manifested as
+// `signatures truncated: declared 79, tx only 708 bytes`, the garbage
+// leading byte read as a 79-signature count. We therefore decode under
+// each candidate scheme and return the first whose bytes parse as a
+// structurally valid Solana transaction (looksLikeSolanaTx).
 func okxDecodeSolanaTxData(s string) ([]byte, error) {
-	s = strings.ReplaceAll(s, "-", "+")
-	s = strings.ReplaceAll(s, "_", "/")
-	if pad := len(s) % 4; pad != 0 {
-		s += strings.Repeat("=", 4-pad)
+	candidates := make([][]byte, 0, 2)
+	// base58 first — the documented /swap encoding. Decode only
+	// succeeds when every char is in the base58 alphabet, so genuine
+	// base64 payloads (with +/=/-/_) never produce a base58 candidate.
+	if raw, err := base58.Bitcoin.Decode(s); err == nil && len(raw) > 0 {
+		candidates = append(candidates, raw)
 	}
-	return base64.StdEncoding.DecodeString(s)
+	// base64 / base64url — normalize the alphabet and re-pad.
+	b := strings.ReplaceAll(s, "-", "+")
+	b = strings.ReplaceAll(b, "_", "/")
+	if pad := len(b) % 4; pad != 0 {
+		b += strings.Repeat("=", 4-pad)
+	}
+	if raw, err := base64.StdEncoding.DecodeString(b); err == nil {
+		candidates = append(candidates, raw)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("tx.data is neither valid base58 nor base64")
+	}
+	// Prefer a candidate that parses as a Solana transaction; this is
+	// what disambiguates a base58 payload from its garbage base64 twin.
+	for _, raw := range candidates {
+		if looksLikeSolanaTx(raw) {
+			return raw, nil
+		}
+	}
+	// None validated — hand back the first decode so the caller emits a
+	// descriptive structural error rather than a vague decode failure.
+	return candidates[0], nil
 }
 
 func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {

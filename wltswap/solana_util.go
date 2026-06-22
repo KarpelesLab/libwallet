@@ -96,6 +96,28 @@ func decodeCompactU16(b []byte, pos int) (uint16, int, error) {
 	return 0, 0, fmt.Errorf("compact-u16: too many bytes")
 }
 
+// looksLikeSolanaTx reports whether raw is plausibly a serialized
+// Solana transaction: a compact-u16 signature count of at least 1,
+// followed by that many 64-byte signature slots, followed by a
+// non-empty message. Used to disambiguate base58 vs base64 decodes
+// of an aggregator payload — a base58 string is also syntactically
+// valid base64, so a base64 decode of base58 data succeeds but yields
+// garbage whose leading byte reads as an absurd signature count
+// (sigsEnd ≫ len). Only the correct decode satisfies sigsEnd < len.
+func looksLikeSolanaTx(raw []byte) bool {
+	if len(raw) < 1 {
+		return false
+	}
+	numSigs, consumed, err := decodeCompactU16(raw, 0)
+	if err != nil || numSigs < 1 {
+		return false
+	}
+	sigsEnd := consumed + int(numSigs)*64
+	// A valid tx has at least one message byte after the signature
+	// array, so sigsEnd must be strictly inside the buffer.
+	return sigsEnd < len(raw)
+}
+
 // solanaSplicingSignLocal extracts the message from an aggregator-
 // built Solana transaction, signs it via the user's TSS keys, and
 // splices the signature into slot 0. Returns the fully-signed

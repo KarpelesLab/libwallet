@@ -14,22 +14,29 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltnet"
 )
 
 func TestOkxDecodeSolanaTxData(t *testing.T) {
-	// A ~1.1 KB payload — large enough to mirror the v0/ALT case OKX
-	// returns URL-safe and to trip "illegal base64 at input 1096" if
-	// we re-introduce the StdEncoding-only path.
+	// Build a structurally-valid ~1.1 KB Solana tx blob: a compact-u16
+	// signature count of 1, one 64-byte (zeroed) signature slot, then a
+	// message. Large enough to mirror the v0/ALT case OKX returns
+	// URL-safe and to trip "illegal base64 at input 1096" if we
+	// re-introduce the StdEncoding-only path. The leading 0x01 makes
+	// looksLikeSolanaTx accept the correct decode and reject the
+	// garbage produced when base58 data is read as base64 (or v.v.).
 	raw := make([]byte, 1100)
-	for i := range raw {
-		raw[i] = byte(i & 0xff)
+	raw[0] = 0x01 // compact-u16 numSignatures = 1
+	for i := 65; i < len(raw); i++ {
+		raw[i] = byte(i & 0xff) // message bytes
 	}
 
 	cases := []struct {
 		name string
 		enc  string
 	}{
+		{"base58", base58.Bitcoin.Encode(raw)},
 		{"standard padded", base64.StdEncoding.EncodeToString(raw)},
 		{"url-safe padded", base64.URLEncoding.EncodeToString(raw)},
 		{"url-safe raw (unpadded)", base64.RawURLEncoding.EncodeToString(raw)},
