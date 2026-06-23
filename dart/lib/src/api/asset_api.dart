@@ -30,4 +30,18 @@ class AssetApi {
     }
     return [];
   }
+
+  /// Drop libwallet's short-lived balance-snapshot cache so the next [list]
+  /// fetches fresh on-chain balances rather than a memoized snapshot.
+  ///
+  /// libwallet coalesces the burst of near-simultaneous balance reads one
+  /// change produces (its own poller, this `list` endpoint, and the host's
+  /// own refresh) into a single upstream RPC scan for a couple of seconds.
+  /// Call this after an action the host knows changed balances — e.g. a
+  /// confirmed send — when waiting out that TTL isn't acceptable. (A tx
+  /// broadcast already invalidates the cache internally; this is for cases
+  /// libwallet can't observe on its own.)
+  Future<void> invalidateCache() async {
+    await _conn.request('Asset:invalidateCache', 'POST', null);
+  }
 }

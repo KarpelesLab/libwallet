@@ -24,10 +24,22 @@ func init() {
 			List:  pobj.Static(apiListAsset),
 		},
 	)
+	pobj.RegisterStatic("Asset:invalidateCache", apiInvalidateAssetCache)
 }
 
 func apiFetchAsset(ctx *apirouter.Context, in struct{ Id string }) (any, error) {
 	return nil, fs.ErrNotExist
+}
+
+// apiInvalidateAssetCache drops libwallet's short-lived balance-snapshot
+// cache so the next Asset:list fetches fresh on-chain state. The host calls
+// this after an action it knows changed balances (e.g. a confirmed send)
+// when it can't wait for the cache's ~2 s TTL to lapse.
+func apiInvalidateAssetCache(ctx context.Context, _ struct{}) (any, error) {
+	if e, ok := wltintf.GetEnv(ctx).(*env); ok {
+		e.assetCache.invalidate()
+	}
+	return map[string]any{"ok": true}, nil
 }
 
 // assetSnapshot is the `{network, account, assets}` shape returned by
@@ -41,6 +53,12 @@ type assetSnapshot struct {
 // currentAssets builds an assetSnapshot for the current account + network
 // (or the specific ones passed in). Extracted so both the list endpoint
 // and the balance poller can use the same logic.
+//
+// Results are memoized per (account, network) for a short TTL so the burst
+// of near-simultaneous callers one balance change produces — the poller,
+// the Asset:list endpoint, and the host refresh its broadcast triggers —
+// shares ONE upstream RPC scan instead of each issuing its own. See
+// [assetSnapshotCache]; the host can force-bypass via Asset:invalidateCache.
 //
 // ctx is threaded through every RPC call so callers can bound the work
 // (the background poller wraps this in a 15 s timeout; the API endpoint
@@ -65,6 +83,60 @@ func currentAssets(ctx context.Context, e wltintf.Env, n *wltnet.Network, acct *
 		return nil, err
 	}
 
+	// Fall back to a direct (uncached) compute when the env isn't the
+	// concrete *env — e.g. unit tests that stub the Env interface.
+	en, ok := e.(*env)
+	if !ok {
+		return computeAssets(ctx, e, n, acct)
+	}
+	snap, err := en.assetCache.get(assetCacheKey(acct, n), func() (*assetSnapshot, error) {
+		return computeAssets(ctx, e, n, acct)
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Hand callers their own copy: apiListAsset mutates assets in place via
+	// ConvertTo, which must not corrupt the shared cached snapshot.
+	return cloneSnapshot(snap), nil
+}
+
+// assetCacheKey identifies the (account, network) a snapshot belongs to,
+// mirroring the balance poller's diff key so a network/account switch is a
+// cache miss rather than a stale hit.
+func assetCacheKey(acct *wltacct.Account, n *wltnet.Network) string {
+	var b strings.Builder
+	if acct != nil && acct.Id != nil {
+		b.WriteString(acct.Id.String())
+	}
+	b.WriteByte('/')
+	if n != nil && n.Id != nil {
+		b.WriteString(n.Id.String())
+	}
+	return b.String()
+}
+
+// cloneSnapshot returns a snapshot whose Asset entries are independent
+// copies, so a caller's in-place mutation (ConvertTo sets FiatAmount) can't
+// corrupt the shared cached instance. Asset.Amount and the Network/Account
+// pointers are read-only after construction, so they're shared, not copied.
+func cloneSnapshot(s *assetSnapshot) *assetSnapshot {
+	if s == nil {
+		return nil
+	}
+	assets := make([]*wltasset.Asset, len(s.Assets))
+	for i, a := range s.Assets {
+		if a == nil {
+			continue
+		}
+		cp := *a
+		assets[i] = &cp
+	}
+	return &assetSnapshot{Network: s.Network, Account: s.Account, Assets: assets}
+}
+
+// computeAssets is the uncached core of [currentAssets]: it builds a fresh
+// snapshot for an already-resolved (network, account) whose address is set.
+func computeAssets(ctx context.Context, e wltintf.Env, n *wltnet.Network, acct *wltacct.Account) (*assetSnapshot, error) {
 	var assets []*wltasset.Asset
 	if acct.GetAddress() != "N/A" {
 		if nat, err := n.NativeAsset(ctx, e, acct); err == nil {

@@ -34,11 +34,12 @@ import (
 
 type env struct {
 	context.Context
-	dataDir string
-	sqlCtx  context.Context // context with psql backend plugged in
-	spot    *spotlib.Client
-	em      *emitter.Hub
-	poller  *balancePoller // nil until init finishes
+	dataDir    string
+	sqlCtx     context.Context // context with psql backend plugged in
+	spot       *spotlib.Client
+	em         *emitter.Hub
+	poller     *balancePoller     // nil until init finishes
+	assetCache assetSnapshotCache // memoizes currentAssets across its callers
 }
 
 type client struct {
