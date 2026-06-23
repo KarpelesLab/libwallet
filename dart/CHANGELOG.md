@@ -1,3 +1,28 @@
+## 0.4.68
+
+- **Coalesce redundant balance-snapshot RPCs into one upstream scan.**
+  `currentAssets` — shared by the `Asset:list` endpoint and the 60 s
+  balance poller — had no memoization, so each balance refresh fanned
+  out into a fresh `getBalance` + `getMinimumBalanceForRentExemption` +
+  `getTokenAccountsByOwner`, and the poller's `balances_changed`
+  broadcast made the host call `Asset:list` again, multiplying the
+  traffic. A per-`(account, network)` snapshot cache now collapses
+  near-simultaneous callers onto a single scan: a short (2 s) TTL serves
+  callers arriving just after a fetch, and an in-flight latch shares one
+  fetch among truly concurrent callers. `currentAssets` returns a cloned
+  snapshot so `ConvertTo`'s in-place fiat mutation can't corrupt the
+  cache. A tx broadcast invalidates the cache so post-send balances are
+  never served stale, and the host can force a fresh read via the new
+  `Asset:invalidateCache` command (`assets.invalidateCache()` in Dart).
+- **Fix the local-dev native-library override on Android.** When a
+  `testserver/liblibwallet.so` is present the build hook bundled it
+  under its on-disk name, but on Android the host `dlopen()`s the
+  version-stamped `liblibwallet-android-<abi>-v<version>.so`, so the
+  load failed with `library "..." not found`. The hook now stages a
+  correctly-named copy for Android; desktop (which loads the unversioned
+  name) is unchanged. No effect on released builds — the override only
+  activates when a local binary is present.
+
 ## 0.4.67
 
 - **Fix OKX Solana swap signing: decode `tx.data` as base58 or
