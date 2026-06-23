@@ -54,17 +54,39 @@ void main(List<String> args) async {
         return;
     }
 
+    // The Dart package version doubles as the native-library version. The
+    // host opens the binary by a version-stamped name on Android (see
+    // ffi_transport._loadDefaultLibrary), so both the local-dev and the
+    // download paths below need it.
+    final pubspecFile = File.fromUri(input.packageRoot.resolve('pubspec.yaml'));
+    final pubspecContent = await pubspecFile.readAsString();
+    final versionMatch = RegExp(r'version:\s*(\S+)').firstMatch(pubspecContent);
+    final version = versionMatch?.group(1) ?? '0.0.0';
+
     // 1. Prefer a local dev binary at testserver/liblibwallet.<ext>
     //    (built via `go build -buildmode=c-shared` during development).
     final localFile =
         input.packageRoot.resolve('testserver/liblibwallet.$ext');
     if (File.fromUri(localFile).existsSync()) {
+      // The bundled lib keeps its on-disk filename. On Android the host
+      // dlopen()s the ABI+version-stamped name
+      // (liblibwallet-android-<abi>-v<version>.so), so a raw
+      // testserver/liblibwallet.so would bundle as liblibwallet.so and the
+      // load would miss it — stage a correctly-named copy. Desktop loads the
+      // unversioned name, so the file is bundled as-is there.
+      var assetFile = localFile;
+      if (os == OS.android) {
+        final staged = input.outputDirectory
+            .resolve('liblibwallet-$dartName-v$version.$ext');
+        File.fromUri(localFile).copySync(staged.toFilePath());
+        assetFile = staged;
+      }
       output.assets.code.add(
         CodeAsset(
           package: input.packageName,
           name: 'liblibwallet',
           linkMode: linkMode,
-          file: localFile,
+          file: assetFile,
         ),
       );
       return;
@@ -78,11 +100,6 @@ void main(List<String> args) async {
     // 0.3.23) silently keeps serving stale code after `dart pub upgrade`
     // — root cause of the "events arriving with pre-unification type
     // strings" class of bugs.
-    final pubspecFile = File.fromUri(input.packageRoot.resolve('pubspec.yaml'));
-    final pubspecContent = await pubspecFile.readAsString();
-    final versionMatch = RegExp(r'version:\s*(\S+)').firstMatch(pubspecContent);
-    final version = versionMatch?.group(1) ?? '0.0.0';
-
     final remoteName = 'liblibwallet-$dartName.$ext';
     final cachedName = 'liblibwallet-$dartName-v$version.$ext';
     final outputDir = input.outputDirectoryShared;
