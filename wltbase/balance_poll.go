@@ -87,6 +87,10 @@ func (p *balancePoller) listenTxBroadcasts() {
 	}
 	ch := p.env.em.On("tx:broadcast")
 	for range ch {
+		// A send just hit the network — the cached snapshot is now stale.
+		// Drop it so the Nudge-triggered poll (and any host refresh that
+		// follows) reads fresh balances instead of the pre-send values.
+		p.env.assetCache.invalidate()
 		p.Nudge()
 	}
 }
