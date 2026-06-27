@@ -139,17 +139,76 @@ func (r *request) respond(e *env, resp string) error {
 	}
 
 	ch := takePendingRequestChan(r.Id.String())
-	if ch != nil {
-		to := time.NewTimer(2 * time.Second)
-		defer to.Stop()
-		select {
-		case ch <- resp:
-			return nil
-		case <-to.C:
-			return errors.New("timed out while sending response")
-		}
+	if ch == nil {
+		// The pending channel was already consumed (the request
+		// timed out, was rejected, or a previous respond already
+		// delivered). Surface this instead of silently succeeding —
+		// a caller that just performed signing/broadcast side
+		// effects must know the waiter is gone.
+		return errors.New("request is no longer awaiting a response")
 	}
+	to := time.NewTimer(2 * time.Second)
+	defer to.Stop()
+	select {
+	case ch <- resp:
+		return nil
+	case <-to.C:
+		return errors.New("timed out while sending response")
+	}
+}
+
+// claim performs an atomic compare-and-set that moves a pending
+// request into an in-progress ("processing") state before any
+// signing / broadcast side effects run. It reloads the authoritative
+// row so an already-terminal request (rejected / timedout / accepted)
+// can't be approved a second time, and requires the in-memory pending
+// channel to still exist so a timed-out request whose waiter already
+// gave up is rejected too. The pendingReqsLk mutex makes the
+// reload-check-write sequence atomic within the process.
+func (r *request) claim(e *env) error {
+	pendingReqsLk.Lock()
+	defer pendingReqsLk.Unlock()
+
+	id := r.Id.String()
+	if _, ok := pendingReqs[id]; !ok {
+		return errors.New("request is no longer awaiting a response")
+	}
+	reloaded, err := psql.Get[request](e.sqlCtx, map[string]any{"Id": r.Id})
+	if err != nil {
+		return fmt.Errorf("failed to reload request: %w", err)
+	}
+	if reloaded.Status != "pending" {
+		return fmt.Errorf("request is not pending (status %q)", reloaded.Status)
+	}
+	// Compare-and-set: flip to the in-progress state and persist it
+	// before returning, so any later approve/reject of the same row
+	// observes a non-pending status and is rejected.
+	reloaded.Status = "processing"
+	if err := reloaded.save(e); err != nil {
+		return fmt.Errorf("failed to claim request: %w", err)
+	}
+	// Adopt the authoritative row for the handlers but keep the
+	// working copy logically pending; respond() sets the terminal
+	// status, releaseClaim() rolls back on failure.
+	*r = *reloaded
+	r.Status = "pending"
 	return nil
+}
+
+// releaseClaim finalizes a claim. On success the terminal status was
+// already set by respond(); on failure the in-progress flag is rolled
+// back to "pending" so a legitimate retry can run.
+func (r *request) releaseClaim(e *env, succeeded bool) {
+	if succeeded {
+		return
+	}
+	pendingReqsLk.Lock()
+	defer pendingReqsLk.Unlock()
+	reloaded, err := psql.Get[request](e.sqlCtx, map[string]any{"Id": r.Id})
+	if err == nil && reloaded.Status == "processing" {
+		reloaded.Status = "pending"
+		reloaded.save(e)
+	}
 }
 
 func requestTestReq(ctx context.Context) (any, error) {
@@ -215,6 +274,15 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 	if req == nil {
 		return nil, errors.New("request is required")
 	}
+
+	// Idempotency / state guard: atomically claim the pending row so
+	// the signing/broadcast side effects below run at most once and a
+	// timed-out or already-handled request can't be approved.
+	if err := req.claim(e); err != nil {
+		return nil, err
+	}
+	succeeded := false
+	defer func() { req.releaseClaim(e, succeeded) }()
 
 	switch req.Type {
 	case "connect":
@@ -339,7 +407,11 @@ func requestDoApprove(ctx *apirouter.Context, in struct {
 		// Approval acknowledged; the dApp is informed the asset was added to the watch list.
 	}
 
-	return req, req.respond(e, "accepted")
+	if err := req.respond(e, "accepted"); err != nil {
+		return nil, err
+	}
+	succeeded = true
+	return req, nil
 }
 
 func requestDoReject(ctx *apirouter.Context) (any, error) {
@@ -353,5 +425,14 @@ func requestDoReject(ctx *apirouter.Context) (any, error) {
 		return nil, errors.New("request is required")
 	}
 
-	return req, req.respond(e, "rejected")
+	// Same state guard as approve: only a still-pending request can
+	// be rejected, and the transition is atomic.
+	if err := req.claim(e); err != nil {
+		return nil, err
+	}
+	if err := req.respond(e, "rejected"); err != nil {
+		req.releaseClaim(e, false)
+		return nil, err
+	}
+	return req, nil
 }
