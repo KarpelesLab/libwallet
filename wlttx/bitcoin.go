@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -21,6 +22,18 @@ import (
 	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/secp256k1"
 )
+
+// maxBitcoinFeeRateSatPerVB bounds the sat/vB fee rate we will accept,
+// whether pinned by the caller (Transaction.BitcoinFeeRate) or derived
+// from estimatesmartfee. Even historic worst-case mempool congestion
+// peaked around ~2000 sat/vB, so 100_000 is far above any legitimate
+// rate. The bound matters for safety: int64(estVSize)*feeRate can wrap
+// negative for a huge rate, which would make the change calculation
+// (totalIn - want - fee) look satisfiable and under-pay (or build a
+// garbage tx). Keeping the rate under this ceiling keeps the product
+// (a few-hundred-thousand-vB tx * 100k sat/vB ≈ 1e10) comfortably
+// inside int64.
+const maxBitcoinFeeRateSatPerVB int64 = 100_000
 
 // walletByAccount fetches the wallet associated with an account.
 func walletByAccount(e wltintf.Env, a *wltacct.Account) (*wltwallet.Wallet, error) {
@@ -39,9 +52,9 @@ func walletByAccount(e wltintf.Env, a *wltacct.Account) (*wltwallet.Wallet, erro
 type bitcoinTxo struct {
 	Txo    string              `json:"txo"` // "<txid>:<vout>"
 	Height int64               `json:"height"`
-	Amt    outscript.BtcAmount `json:"amt"`  // satoshi, decoded from "0.00000001" form
-	Path   string              `json:"path"` // full HD path ("m/0/0"); preferred
-	I      int                 `json:"i"`    // legacy per-chain index; fallback when Path is empty
+	Amt    outscript.BtcAmount `json:"amt"`    // satoshi, decoded from "0.00000001" form
+	Path   string              `json:"path"`   // full HD path ("m/0/0"); preferred
+	I      int                 `json:"i"`      // legacy per-chain index; fallback when Path is empty
 	Script string              `json:"script"` // flavor: p2pkh, p2wpkh, etc
 	// Spent is null/absent for an unspent output; non-null when
 	// modchain knows the spend (its value is the spending tx info).
@@ -178,6 +191,11 @@ func buildBitcoinTx(ctx *SignContext, tx *Transaction, n *wltnet.Network, acct *
 	//   3. 10 sat/vB conservative fallback on RPC error
 	var feeRateSatPerVB int64
 	if tx.BitcoinFeeRate > 0 {
+		// Reject an insane pinned rate rather than let int64(...) wrap
+		// negative and corrupt the fee/change math below.
+		if tx.BitcoinFeeRate > uint64(maxBitcoinFeeRateSatPerVB) {
+			return fmt.Errorf("BitcoinFeeRate %d sat/vB exceeds sane maximum %d", tx.BitcoinFeeRate, maxBitcoinFeeRateSatPerVB)
+		}
 		feeRateSatPerVB = int64(tx.BitcoinFeeRate)
 	} else {
 		feeRateSatPerVB, err = bitcoinFeeRateForPriority(n, tx.PriorityLevel)
@@ -532,9 +550,9 @@ func bitcoinFeeRate(n *wltnet.Network) (int64, error) {
 // bitcoinFeeRateForPriority returns sat/vB at a confirmation target
 // chosen by priority:
 //
-//   "low"           → 144 blocks  (Bitcoin ~24 h, Litecoin ~6 h)
-//   "" / "medium"   →  6 blocks
-//   "high"          →  2 blocks
+//	"low"           → 144 blocks  (Bitcoin ~24 h, Litecoin ~6 h)
+//	"" / "medium"   →  6 blocks
+//	"high"          →  2 blocks
 //
 // Unknown values fall back to medium. Same RPC the cheaper/faster
 // view UI surfaces — the caller can ask the chain for "what would a
@@ -552,8 +570,21 @@ func bitcoinFeeRateForPriority(n *wltnet.Network, priority string) (int64, error
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return 0, err
 	}
-	// Convert BTC/kB → sat/vB
-	satPerVB := int64(resp.FeeRate * 1e8 / 1000)
+	// Convert BTC/kB → sat/vB. Guard against a malicious / garbage
+	// estimatesmartfee: reject NaN/Inf/negative and bound the upper
+	// side so the float→int64 conversion can neither overflow nor
+	// produce a wrapped/negative rate that corrupts downstream fee math.
+	fr := resp.FeeRate
+	if math.IsNaN(fr) || math.IsInf(fr, 0) || fr < 0 {
+		return 0, fmt.Errorf("estimatesmartfee returned invalid feerate %v", fr)
+	}
+	satFloat := fr * 1e8 / 1000
+	if satFloat > float64(maxBitcoinFeeRateSatPerVB) {
+		// Clamp (also catches a finite-but-huge value that would
+		// overflow int64); never convert an out-of-range float.
+		return maxBitcoinFeeRateSatPerVB, nil
+	}
+	satPerVB := int64(satFloat)
 	if satPerVB < 1 {
 		satPerVB = 1
 	}
