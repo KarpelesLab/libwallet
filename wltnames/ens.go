@@ -29,6 +29,12 @@ func ResolveENS(e wltintf.Env, name string) (string, error) {
 	if name == "" {
 		return "", errors.New("empty name")
 	}
+	// Reject confusable / mixed-script / non-ASCII labels before
+	// resolving so a homograph name cannot silently resolve to an
+	// attacker's address in a payment flow.
+	if err := validateResolvableName(name); err != nil {
+		return "", err
+	}
 
 	// Find the Ethereum mainnet network
 	netID := wltnet.NetworkIdForTypeAndChainId("evm", "1")

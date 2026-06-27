@@ -1,12 +1,14 @@
 package wltnames
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
 
+	"filippo.io/edwards25519"
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/libwallet/wltintf"
@@ -30,6 +32,12 @@ func ResolveSNS(e wltintf.Env, name string) (string, error) {
 	name = strings.TrimSpace(strings.ToLower(name))
 	if name == "" {
 		return "", errors.New("empty name")
+	}
+	// Reject confusable / mixed-script / non-ASCII labels before
+	// resolving so a homograph name cannot silently resolve to an
+	// attacker's address in a payment flow.
+	if err := validateResolvableName(name); err != nil {
+		return "", err
 	}
 	if !strings.HasSuffix(name, ".sol") {
 		return "", errors.New("SNS names must end with .sol")
@@ -69,8 +77,32 @@ func ResolveSNS(e wltintf.Env, name string) (string, error) {
 
 	// NameRecordHeader layout: parent(32) + owner(32) + class(32) + data
 	// The owner at offset 32..64 is the resolved address.
+	parent := acctInfo[0:32]
 	owner := acctInfo[32:64]
+	// Verify the record's parent equals the ".sol" root domain. Without
+	// this an account whose data merely happens to be >=96 bytes (or a
+	// record under a different parent) could be accepted as a .sol
+	// resolution and pay out to an unrelated owner.
+	if !bytes.Equal(parent, parentBytes) {
+		return "", errors.New("SNS record parent mismatch")
+	}
+	// Reject a zeroed owner (uninitialized / cleared record) rather than
+	// returning the all-zeros address as a payment target.
+	if isZeroBytes(owner) {
+		return "", errors.New("SNS name resolves to zero owner")
+	}
 	return base58.Bitcoin.Encode(owner), nil
+}
+
+// isZeroBytes reports whether b is all zero bytes (mirrors ENS
+// isZeroAddress for the raw 32-byte Solana key form).
+func isZeroBytes(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func sha256Sum(data []byte) []byte {
@@ -96,28 +128,38 @@ func createProgramAddress(nameHash, class, parent []byte, programIDBase58 string
 	seed := append(nameHash, class...)
 	seed = append(seed, parent...)
 
-	// Try bumps 255..0 to find a valid off-curve PDA
+	// findProgramAddress: try bumps 255..0 and return the first candidate
+	// that is NOT a valid ed25519 point (off-curve), exactly as Solana's
+	// PublicKey.findProgramAddress does. The previous loop always returned
+	// the bump-255 hash without the off-curve check, so for any domain
+	// whose canonical bump is < 255 (the common case) it derived the wrong
+	// account key.
 	for bump := 255; bump >= 0; bump-- {
-		bumpBytes := []byte{byte(bump)}
 		h := sha256.New()
 		h.Write(seed)
-		h.Write(bumpBytes)
+		h.Write([]byte{byte(bump)})
 		h.Write(programID)
 		h.Write([]byte("ProgramDerivedAddress"))
 		pda := h.Sum(nil)
 
-		// A valid PDA is NOT on the curve. For simplicity, we skip the curve check
-		// and return the first result — most real SNS domains use a specific bump
-		// that's not easy to derive client-side without full ed25519 curve math.
-		// Callers should verify by fetching the account.
-		_ = pda
-		// For a production implementation, we would check if the point is off-curve.
-		// Here we just use the standard bump (255) first.
-		if bump == 255 {
-			return base58.Bitcoin.Encode(pda), nil
+		if isOnCurveEd25519(pda) {
+			// On-curve points are not valid PDAs; keep decrementing.
+			continue
 		}
+		return base58.Bitcoin.Encode(pda), nil
 	}
 	return "", errors.New("unable to derive PDA")
+}
+
+// isOnCurveEd25519 reports whether the 32-byte value is a valid (canonical)
+// ed25519 curve point encoding. A valid PDA must be OFF the curve, so
+// createProgramAddress skips any bump whose hash lands on the curve.
+func isOnCurveEd25519(b []byte) bool {
+	if len(b) != 32 {
+		return false
+	}
+	_, err := new(edwards25519.Point).SetBytes(b)
+	return err == nil
 }
 
 // rpcGetAccountInfo fetches a Solana account's data (base64-decoded).
