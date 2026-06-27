@@ -21,6 +21,7 @@ package wltwc
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,6 +33,20 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltutil"
 	"github.com/KarpelesLab/xuid"
+)
+
+const (
+	// seenRetention bounds how long an envelope fingerprint is remembered
+	// for replay detection. Comfortably exceeds the relay message TTL so a
+	// redelivered/replayed message is still recognised as a duplicate.
+	seenRetention = 10 * time.Minute
+
+	// publishedAt freshness window. The relay's publishedAt is advisory;
+	// we only reject grossly out-of-range values (clock skew in the future,
+	// or older than a session's lifetime) to avoid false positives on
+	// legitimately redelivered traffic.
+	publishedAtFutureSkew = 5 * time.Minute
+	publishedAtMaxAge     = 7 * 24 * time.Hour
 )
 
 // Manager lives for the lifetime of the libwallet env.
@@ -51,6 +66,11 @@ type Manager struct {
 	// pendingRequests tracks in-flight session_request ids so a later
 	// WalletConnect:respondSession can find the right envelope target.
 	pendingRequests map[int64]*pendingSessionRequest
+
+	// seen holds recently-observed envelope fingerprints (keyed by
+	// topic|sha256(envelope)) for replay protection. Guarded by seenMu.
+	seenMu sync.Mutex
+	seen   map[string]time.Time
 }
 
 type pendingProposal struct {
@@ -77,6 +97,7 @@ func NewManager(env wltintf.Env) *Manager {
 		log:                slog.Default().With("component", "wc.manager"),
 		proposalsByPairing: make(map[string]*pendingProposal),
 		pendingRequests:    make(map[int64]*pendingSessionRequest),
+		seen:               make(map[string]time.Time),
 	}
 }
 
@@ -186,16 +207,51 @@ func (m *Manager) dispatchLoop() {
 // handleIncoming decrypts one relay message and dispatches per WC method.
 func (m *Manager) handleIncoming(ev RelayEvent) {
 	s, err := sessionByTopic(m.env, ev.Topic)
-	if err != nil || s == nil {
+	if err != nil {
+		// A real backend error — do not treat as an unknown peer; just
+		// drop this message and let the relay redeliver later.
+		m.log.Info("session lookup failed for inbound", "topic", ev.Topic, "err", err)
+		return
+	}
+	if s == nil {
 		m.log.Info("inbound for unknown topic", "topic", ev.Topic)
 		return
 	}
+
+	// Expiry enforcement: never act on traffic for an expired session or
+	// pairing. Tear the local state down so we stop listening.
+	if !s.Expiry.IsZero() && time.Now().After(s.Expiry) {
+		m.log.Info("inbound for expired session", "topic", ev.Topic, "state", s.State)
+		m.expireSession(s)
+		return
+	}
+
+	// Replay protection: drop exact-duplicate envelopes and messages whose
+	// relay publishedAt timestamp is grossly outside the freshness window.
+	if m.seenEnvelope(ev.Topic, ev.Message) {
+		m.log.Debug("dropping duplicate inbound envelope", "topic", ev.Topic)
+		return
+	}
+	if !publishedAtFresh(ev.PublishedAt) {
+		m.log.Info("dropping inbound with stale publishedAt", "topic", ev.Topic, "publishedAt", ev.PublishedAt)
+		return
+	}
+
 	sym, err := s.symKeyBytes()
 	if err != nil {
 		m.log.Info("symkey decode failed", "topic", ev.Topic, "err", err)
 		return
 	}
-	selfPriv, _ := s.selfPrivBytes()
+
+	// Envelope type-confusion guard: an active (settled) session only ever
+	// receives type-0 (symKey) envelopes, so pass a nil private key — that
+	// makes openEnvelope reject any type-1 (asymmetric) envelope. The
+	// asymmetric path is only legitimate before settle, on a
+	// pairing/proposed row.
+	var selfPriv []byte
+	if s.State != "active" {
+		selfPriv, _ = s.selfPrivBytes()
+	}
 	plain, _, err := openEnvelope(sym, selfPriv, []byte(ev.Message))
 	if err != nil {
 		m.log.Info("envelope open failed", "topic", ev.Topic, "err", err)
@@ -209,28 +265,89 @@ func (m *Manager) handleIncoming(ev RelayEvent) {
 		Error  *rpcError       `json:"error"`
 	}
 	if err := json.Unmarshal(plain, &rpc); err != nil {
-		m.log.Info("rpc decode failed", "err", err, "payload", string(plain))
+		// Never log decrypted plaintext at Info — length + error only.
+		m.log.Info("rpc decode failed", "err", err, "len", len(plain))
 		return
 	}
 
 	switch {
 	case rpc.Method == "wc_sessionPropose":
+		// A proposal is only valid on a pairing/proposed topic, never on
+		// an already-active session — reject rather than mutate state.
+		if s.State == "active" {
+			m.log.Info("rejecting wc_sessionPropose on active session topic", "topic", s.Topic)
+			return
+		}
 		m.handleSessionPropose(s, rpc.ID, rpc.Params, sym)
 	case rpc.Method == "wc_sessionSettle":
 		m.handleSessionSettle(s, rpc.ID, rpc.Params)
 	case rpc.Method == "wc_sessionRequest":
+		if s.State != "active" {
+			m.log.Info("rejecting wc_sessionRequest on non-active session", "topic", s.Topic, "state", s.State)
+			return
+		}
 		m.handleSessionRequest(s, rpc.ID, rpc.Params)
 	case rpc.Method == "wc_sessionDelete":
+		if s.State != "active" {
+			m.log.Info("ignoring wc_sessionDelete on non-active session", "topic", s.Topic, "state", s.State)
+			return
+		}
 		m.handleSessionDelete(s)
-	case rpc.Method == "wc_sessionEvent" || rpc.Method == "wc_sessionPing":
+	case rpc.Method == "wc_sessionEvent":
+		if s.State != "active" {
+			m.log.Info("ignoring wc_sessionEvent on non-active session", "topic", s.Topic, "state", s.State)
+			return
+		}
 		// ack only
+		m.ack(s, rpc.ID)
+	case rpc.Method == "wc_sessionPing":
+		// ack only — harmless in any state
 		m.ack(s, rpc.ID)
 	case rpc.Result != nil || rpc.Error != nil:
 		// Response to something we sent. For v1 we don't correlate; log.
-		m.log.Debug("rpc response", "id", rpc.ID, "result", string(rpc.Result), "err", rpc.Error)
+		m.log.Debug("rpc response", "id", rpc.ID, "err", rpc.Error)
 	default:
 		m.log.Info("unknown wc method", "method", rpc.Method)
 	}
+}
+
+// expireSession marks a session/pairing disconnected and stops listening on
+// its topic. Best-effort: relay errors are logged, not fatal.
+func (m *Manager) expireSession(s *wcSession) {
+	if s.State != "disconnected" {
+		s.State = "disconnected"
+		_ = s.save(m.env)
+	}
+	if m.relay != nil && m.relayCtx != nil {
+		ctx, cancel := context.WithTimeout(m.relayCtx, 5*time.Second)
+		defer cancel()
+		_ = m.relay.Unsubscribe(ctx, s.Topic, "") // subId tracking omitted in v1
+	}
+}
+
+// seenEnvelope records a per-topic fingerprint of the raw envelope and
+// reports whether it has been seen recently (i.e. is a replay). Old entries
+// are pruned opportunistically so the map stays bounded.
+func (m *Manager) seenEnvelope(topic, message string) bool {
+	sum := sha256.Sum256([]byte(message))
+	key := topic + "|" + string(sum[:])
+
+	m.seenMu.Lock()
+	defer m.seenMu.Unlock()
+	if m.seen == nil {
+		m.seen = make(map[string]time.Time)
+	}
+	now := time.Now()
+	for k, t := range m.seen {
+		if now.Sub(t) > seenRetention {
+			delete(m.seen, k)
+		}
+	}
+	if _, ok := m.seen[key]; ok {
+		return true
+	}
+	m.seen[key] = now
+	return false
 }
 
 // handleSessionPropose stashes the proposal and emits a host event so the
@@ -337,7 +454,7 @@ func (m *Manager) ApproveProposal(pairingTopic string, accounts []string, method
 
 	// Send wc_sessionSettle on the session topic.
 	settlePayload := map[string]any{
-		"relay":          map[string]any{"protocol": "irn"},
+		"relay": map[string]any{"protocol": "irn"},
 		"controller": map[string]any{
 			"publicKey": hexLower(selfPub),
 			"metadata": map[string]any{
@@ -347,7 +464,7 @@ func (m *Manager) ApproveProposal(pairingTopic string, accounts []string, method
 				"icons":       []string{},
 			},
 		},
-		"namespaces":        namespaces,
+		"namespaces":         namespaces,
 		"requiredNamespaces": pp.Proposal["requiredNamespaces"],
 		"optionalNamespaces": pp.Proposal["optionalNamespaces"],
 		"sessionProperties":  pp.Proposal["sessionProperties"],
@@ -368,7 +485,7 @@ func (m *Manager) ApproveProposal(pairingTopic string, accounts []string, method
 		"id":      pp.ProposalID,
 		"jsonrpc": "2.0",
 		"result": map[string]any{
-			"relay":     map[string]any{"protocol": "irn"},
+			"relay":              map[string]any{"protocol": "irn"},
 			"responderPublicKey": hexLower(selfPub),
 		},
 	}
@@ -431,6 +548,26 @@ func (m *Manager) handleSessionRequest(s *wcSession, id int64, params json.RawMe
 		m.log.Info("sessionRequest decode", "err", err)
 		return
 	}
+
+	// Scope enforcement: the request's method/chain must fall within what
+	// the user actually approved for this session. Reject anything else
+	// with a JSON-RPC error and never surface it to the host.
+	if ok, reason := requestAuthorized(s, req.ChainID, req.Request.Method); !ok {
+		m.log.Info("rejecting unauthorized session request",
+			"topic", s.Topic, "method", req.Request.Method, "chainId", req.ChainID, "reason", reason)
+		if sym, err := s.symKeyBytes(); err == nil {
+			resp := map[string]any{
+				"id":      id,
+				"jsonrpc": "2.0",
+				"error":   map[string]any{"code": 3001, "message": "Unauthorized: " + reason},
+			}
+			ctx, cancel := context.WithTimeout(m.relayCtx, 10*time.Second)
+			defer cancel()
+			_ = m.publishRPC(ctx, s.Topic, sym, resp, tagSessionResponse)
+		}
+		return
+	}
+
 	var pBody any
 	_ = json.Unmarshal(req.Request.Params, &pBody)
 
@@ -457,7 +594,10 @@ func (m *Manager) handleSessionRequest(s *wcSession, id int64, params json.RawMe
 // RespondSession publishes a wc_sessionRequest response.
 func (m *Manager) RespondSession(topic string, id int64, result any) error {
 	s, err := sessionByTopic(m.env, topic)
-	if err != nil || s == nil {
+	if err != nil {
+		return fmt.Errorf("session lookup: %w", err)
+	}
+	if s == nil {
 		return errors.New("unknown topic")
 	}
 	sym, err := s.symKeyBytes()
@@ -480,7 +620,10 @@ func (m *Manager) RespondSession(topic string, id int64, result any) error {
 // RespondSessionError publishes a JSON-RPC error on wc_sessionRequest.
 func (m *Manager) RespondSessionError(topic string, id int64, code int, message string) error {
 	s, err := sessionByTopic(m.env, topic)
-	if err != nil || s == nil {
+	if err != nil {
+		return fmt.Errorf("session lookup: %w", err)
+	}
+	if s == nil {
 		return errors.New("unknown topic")
 	}
 	sym, err := s.symKeyBytes()
@@ -507,7 +650,10 @@ func (m *Manager) RespondSessionError(topic string, id int64, code int, message 
 // for chainChanged / accountsChanged pushes).
 func (m *Manager) EmitSessionEvent(topic, name string, data any, chainID string) error {
 	s, err := sessionByTopic(m.env, topic)
-	if err != nil || s == nil {
+	if err != nil {
+		return fmt.Errorf("session lookup: %w", err)
+	}
+	if s == nil {
 		return errors.New("unknown topic")
 	}
 	sym, err := s.symKeyBytes()
@@ -543,7 +689,10 @@ func (m *Manager) handleSessionDelete(s *wcSession) {
 // Disconnect sends wc_sessionDelete to the peer and tears down locally.
 func (m *Manager) Disconnect(topic string) error {
 	s, err := sessionByTopic(m.env, topic)
-	if err != nil || s == nil {
+	if err != nil {
+		return fmt.Errorf("session lookup: %w", err)
+	}
+	if s == nil {
 		return errors.New("unknown topic")
 	}
 	sym, err := s.symKeyBytes()
@@ -594,6 +743,108 @@ func (m *Manager) StartPairing(uri string) (topic string, err error) {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+// publishedAtFresh reports whether a relay publishedAt value is within the
+// acceptable freshness window. A zero/absent value is accepted (the field is
+// optional). The relay reports milliseconds; older deployments use seconds,
+// so the unit is inferred from magnitude.
+func publishedAtFresh(publishedAt int64) bool {
+	if publishedAt <= 0 {
+		return true // field absent — nothing to check
+	}
+	var t time.Time
+	if publishedAt > 1e12 {
+		t = time.UnixMilli(publishedAt)
+	} else {
+		t = time.Unix(publishedAt, 0)
+	}
+	d := time.Since(t)
+	if d < -publishedAtFutureSkew {
+		return false // too far in the future
+	}
+	if d > publishedAtMaxAge {
+		return false // older than any plausible live session
+	}
+	return true
+}
+
+// requestAuthorized checks an inbound wc_sessionRequest against the session's
+// approved namespaces: the request's chain must map to a granted namespace,
+// the method must be in that namespace's granted methods, and the chain
+// itself must be granted (via the namespace chains list or an approved
+// account on that chain). Returns (false, reason) when unauthorized.
+func requestAuthorized(s *wcSession, chainID, method string) (bool, string) {
+	if len(s.Namespaces) == 0 {
+		return false, "no approved namespaces"
+	}
+	nsName := chainID
+	if i := strings.IndexByte(chainID, ':'); i >= 0 {
+		nsName = chainID[:i]
+	}
+	if nsName == "" {
+		return false, "request has no chainId"
+	}
+	nsAny, ok := s.Namespaces[nsName]
+	if !ok {
+		return false, "namespace not approved: " + nsName
+	}
+	ns, ok := nsAny.(map[string]any)
+	if !ok {
+		return false, "malformed namespace: " + nsName
+	}
+	if !containsString(ns["methods"], method) {
+		return false, "method not approved: " + method
+	}
+	if !chainGranted(ns, chainID) {
+		return false, "chain not approved: " + chainID
+	}
+	return true, ""
+}
+
+// containsString reports whether v (a JSON array decoded as []any, or a
+// []string) contains want.
+func containsString(v any, want string) bool {
+	switch list := v.(type) {
+	case []any:
+		for _, e := range list {
+			if s, ok := e.(string); ok && s == want {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range list {
+			if s == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// chainGranted reports whether chainID is authorized by a namespace, either
+// because it is listed in the namespace's chains, or because an approved
+// CAIP-10 account ("<chainId>:<address>") exists for it.
+func chainGranted(ns map[string]any, chainID string) bool {
+	if containsString(ns["chains"], chainID) {
+		return true
+	}
+	prefix := chainID + ":"
+	switch accs := ns["accounts"].(type) {
+	case []any:
+		for _, a := range accs {
+			if s, ok := a.(string); ok && strings.HasPrefix(s, prefix) {
+				return true
+			}
+		}
+	case []string:
+		for _, s := range accs {
+			if strings.HasPrefix(s, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 func (m *Manager) publishRPC(ctx context.Context, topic string, sym []byte, rpc map[string]any, tag int) error {
 	buf, _ := json.Marshal(rpc)
