@@ -68,13 +68,13 @@ type RelayClient struct {
 	edPriv ed25519.PrivateKey
 	edPub  ed25519.PublicKey
 
-	conn     *websocket.Conn
-	connMu   sync.Mutex
-	closed   atomic.Bool
-	nextID   atomic.Int64
-	pending  sync.Map // int64 → chan rpcResponse
-	Events   chan RelayEvent
-	writeCh  chan rpcRequest
+	conn    *websocket.Conn
+	connMu  sync.Mutex
+	closed  atomic.Bool
+	nextID  atomic.Int64
+	pending sync.Map // int64 → chan rpcResponse
+	Events  chan RelayEvent
+	writeCh chan rpcRequest
 }
 
 // RelayEvent is one inbound message from the relay (an irn_subscription).
@@ -87,17 +87,17 @@ type RelayEvent struct {
 }
 
 type rpcRequest struct {
-	ID     int64           `json:"id"`
-	Jsonrpc string         `json:"jsonrpc"`
-	Method string          `json:"method"`
-	Params json.RawMessage `json:"params"`
+	ID      int64           `json:"id"`
+	Jsonrpc string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
 }
 
 type rpcResponse struct {
-	ID     int64           `json:"id"`
-	Jsonrpc string         `json:"jsonrpc"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *rpcError       `json:"error,omitempty"`
+	ID      int64           `json:"id"`
+	Jsonrpc string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -167,6 +167,10 @@ func (r *RelayClient) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dial relay: %w", err)
 	}
+	// Bound inbound WebSocket frame size so a malicious/buggy relay can't
+	// force unbounded allocation (2 MiB is well above any legitimate
+	// WalletConnect envelope).
+	conn.SetReadLimit(1 << 21)
 	r.connMu.Lock()
 	r.conn = conn
 	r.connMu.Unlock()
@@ -279,7 +283,9 @@ func (r *RelayClient) readLoop(done chan<- struct{}) {
 			Error  *rpcError       `json:"error"`
 		}
 		if err := json.Unmarshal(data, &peek); err != nil {
-			r.log.Info("relay decode error", "err", err, "msg", string(data))
+			// Do not log the raw frame at Info — it may carry sensitive
+			// envelope material. Length + error is enough to diagnose.
+			r.log.Info("relay decode error", "err", err, "len", len(data))
 			continue
 		}
 		if peek.Method == "irn_subscription" {
