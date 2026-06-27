@@ -118,18 +118,14 @@ func (a *Account) UnmarshalJSON(b []byte) error {
 		a.IL = v
 		return nil
 	}
-	// Last-ditch recovery for scientific-notation input — pre-fix
-	// data that was rounded through float64. We can't recover the
-	// original integer (precision was lost upstream), but we can
-	// at least produce a *big.Int that doesn't error out so the
-	// approval flow can continue. Caller is responsible for
-	// surfacing the precision loss to the user if it matters.
-	if f, _, err := big.ParseFloat(raw, 10, 256, big.ToNearestEven); err == nil {
-		v, _ := f.Int(nil)
-		a.IL = v
-		return nil
-	}
-	return fmt.Errorf("Account.IL: cannot parse %q as integer", raw)
+	// Scientific-notation / lossy input is a HARD ERROR. The previous
+	// "last-ditch recovery" parsed such input through big.Float and
+	// stored the rounded result — but IL is the BIP32 child-key tweak,
+	// and a value whose precision was already lost upstream fabricates a
+	// WRONG tweak, silently yielding an account that derives the wrong
+	// key (and signs/spends from the wrong address). Refuse rather than
+	// continue with a fabricated value.
+	return fmt.Errorf("Account.IL: cannot parse %q as integer (refusing lossy/scientific-notation recovery)", raw)
 }
 
 // save persists the account to the database
