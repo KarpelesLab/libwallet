@@ -202,6 +202,12 @@ class FfiTransport implements Transport {
   @override
   Stream<LibwalletResponse> send(String path, String verb,
       [Map<String, dynamic>? params]) {
+    // Guard against use-after-dispose: the Go handle has been destroyed, so
+    // calling into it would be a use-after-free. Surface a clean error instead.
+    if (_disposed) {
+      throw const LibwalletException(message: 'Transport closed', code: '-1');
+    }
+
     final id = _nextId++;
     final controller = StreamController<LibwalletResponse>();
     _pending[id] = controller;
