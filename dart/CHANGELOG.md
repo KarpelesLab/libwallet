@@ -1,5 +1,15 @@
 ## 0.4.70
 
+- **Fix swaps rejected by an over-strict min-receive tripwire.** The 0.4.69
+  client-side tripwire compared OKX's execute-time `minReceiveAmount`
+  against the stale quote-time `MinAmountOut` and rejected on *any*
+  shortfall, so normal sub-bps price drift between quote and execute failed
+  every swap (`minReceiveAmount 713177 is below the approved minimum
+  713274` — a 0.0136% gap). The check now tolerates drift up to one
+  slippage band below the approved minimum (the drift the user already
+  accepts; the on-chain `minReceiveAmount` still enforces their real
+  slippage), while still tripping on the gross underpayment a tampered
+  response would produce.
 - **EVM swap MEV protection is now opt-out.** It stays on by default but
   the host can disable it per-swap via
   `SwapApi.execute(mevProtection: false)` (in 0.4.69 it was unconditionally

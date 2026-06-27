@@ -923,14 +923,24 @@ func okxValidateEVMTx(q *Quote, tx *okxSwapTx) error {
 	return nil
 }
 
-// okxAssertMinReceive refuses to proceed when the provider-returned
-// minReceiveAmount is below the Quote.MinAmountOut the user approved.
-// This is the client-side enforcement of the slippage floor: if price
-// moved adversely between quote and execute such that OKX would settle
-// below the approved minimum, we reject so the user re-quotes rather
-// than silently accepting a worse fill. No-op when the field is absent
-// or unparseable (a display value we won't hard-fail on), or when the
-// quote carries no minimum.
+// okxAssertMinReceive rejects a swap whose provider-returned
+// minReceiveAmount falls grossly below the Quote.MinAmountOut the user
+// approved — a tamper / gross-underpayment tripwire, NOT the user's actual
+// slippage protection (that's minReceiveAmount itself, which the swap
+// program enforces on-chain against the current price).
+//
+// The comparison can't be exact: Quote.MinAmountOut is a stale snapshot
+// (amountOut at quote time × the user's slippage), while OKX recomputes
+// minReceiveAmount from a FRESH quote at execute time. So any normal
+// downward price drift in the seconds between quote and execute leaves
+// minReceiveAmount a hair under MinAmountOut on a perfectly honest fill —
+// which is exactly what the field reported (713177 vs 713274, 0.0136%).
+//
+// We therefore allow minReceiveAmount to sit up to one slippage band below
+// MinAmountOut: that's the price drift the user already signalled they
+// tolerate, and it still trips on the order-of-magnitude shortfall a
+// tampered /swap response would produce. No-op when the field is absent /
+// unparseable or the quote carries no minimum.
 func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
 	if strings.TrimSpace(tx.MinReceiveAmount) == "" {
 		return nil
@@ -942,10 +952,16 @@ func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
 	if q.MinAmountOut == nil || q.MinAmountOut.Value() == nil {
 		return nil
 	}
-	if got.Cmp(q.MinAmountOut.Value()) < 0 {
+	// floor = MinAmountOut × (10_000 − slippageBps) / 10_000, i.e. relax the
+	// approved minimum by one slippage band to absorb quote→execute drift.
+	slip := int64(normalizeSlippageBps(q.SlippageBps))
+	floor := new(big.Int).Mul(q.MinAmountOut.Value(), big.NewInt(10_000-slip))
+	floor.Quo(floor, big.NewInt(10_000))
+	if got.Cmp(floor) < 0 {
 		return newErr(ErrCodeSlippageExceeded, fmt.Sprintf(
-			"okx: swap minReceiveAmount %s is below the approved minimum %s",
-			got, q.MinAmountOut.Value()))
+			"okx: swap minReceiveAmount %s is below the approved floor %s "+
+				"(approved minimum %s, less %d bps drift tolerance)",
+			got, floor, q.MinAmountOut.Value(), slip))
 	}
 	return nil
 }
