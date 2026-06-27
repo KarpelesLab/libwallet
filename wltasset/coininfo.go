@@ -44,6 +44,13 @@ func coinInfoByUrl(e wltintf.Env, u string) (*CoinInfo, error) {
 	}
 
 	var ci *coinInfoApiResponse
-	err = json.Unmarshal(buf, &ci)
-	return ci.Data, err
+	if err = json.Unmarshal(buf, &ci); err != nil {
+		return nil, err
+	}
+	// A valid-but-null JSON body (e.g. `null`) unmarshals into a nil
+	// pointer without error — guard before dereferencing.
+	if ci == nil {
+		return nil, nil
+	}
+	return ci.Data, nil
 }
