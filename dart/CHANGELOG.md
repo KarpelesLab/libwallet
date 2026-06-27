@@ -21,6 +21,19 @@
   `orderId`; the host can poll `Crypto/Okx:orderStatus` for final
   settlement. A cheap post-broadcast status check surfaces an
   already-failed order instead of reporting a phantom success.
+- **Security hardening pass across the native library.** A parallel
+  security audit produced fixes spanning the Go packages: WalletConnect
+  now enforces per-request namespace scope, session state/expiry, replay
+  protection and envelope-type binding; EIP-712 signing surfaces
+  chain-mismatch and Permit/approve risk instead of blind-signing, and
+  the approval flow is guarded against double-broadcast; RPC/metadata
+  URLs are validated against internal-IP SSRF; Solana `signMessage`
+  refuses transaction-shaped payloads and ed25519 signatures are verified
+  before broadcast; the Solana priority fee from RPC is capped; token
+  decimals/metadata and swap slippage are bounded with OKX swap-vs-quote
+  tripwires; and the cgo FFI boundary gains lifecycle locking and panic
+  recovery. The Dart `FfiTransport.send` now rejects calls after
+  `dispose()`.
 
 ## 0.4.68
 
