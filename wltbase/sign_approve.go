@@ -20,6 +20,7 @@ import (
 	"github.com/KarpelesLab/cryptutil"
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltsign"
 	"github.com/KarpelesLab/libwallet/wlttx"
@@ -159,6 +160,14 @@ func approveEthTypedDataSign(ctx context.Context, e *env, req *request, keys []*
 	td, err := ParseEIP712TypedData(string(tdJSON))
 	if err != nil {
 		return fmt.Errorf("failed to parse EIP-712 data: %w", err)
+	}
+	// Anti-blind-signing defense in depth: re-evaluate the typed data
+	// at sign time and log any cross-chain / dangerous-approval
+	// findings so a risky signature is never produced silently. The
+	// host already saw these on the approval sheet (newMessageSignValue
+	// attaches them to the request Value); this leaves an audit trail.
+	for _, w := range td.SecurityWarnings(activeEVMChainID(ctx, "evm")) {
+		wltlog.Warnf("eip712-sign: %s (%s): %s", w.Code, w.Severity, w.Message)
 	}
 	digest, err := td.HashEIP712()
 	if err != nil {

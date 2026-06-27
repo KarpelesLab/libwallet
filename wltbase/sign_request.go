@@ -20,6 +20,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/url"
 	"regexp"
@@ -68,10 +69,10 @@ type SignBalanceChange struct {
 // SignWarning is an advisory the UI can surface in the approval
 // sheet. Stable codes keep the UI copy table short:
 //
-//   insufficient_balance / below_sender_rent /
-//   recipient_rent_not_funded / recipient_is_contract /
-//   recipient_new_account / erc20_approve_unlimited /
-//   net_loss_exceeds_amount / priority_fee_recommended
+//	insufficient_balance / below_sender_rent /
+//	recipient_rent_not_funded / recipient_is_contract /
+//	recipient_new_account / erc20_approve_unlimited /
+//	net_loss_exceeds_amount / priority_fee_recommended
 type SignWarning struct {
 	Code     string `json:"code"`
 	Severity string `json:"severity"` // "info" | "warn" | "block"
@@ -479,8 +480,8 @@ func lookupVerifyingContractLabel(chain string, domain map[string]any) string {
 
 // ── Base64 / hex helpers ─────────────────────────────────────
 
-func b64Encode(b []byte) string  { return base64.StdEncoding.EncodeToString(b) }
-func hexEncode(b []byte) string  { return hex.EncodeToString(b) }
+func b64Encode(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+func hexEncode(b []byte) string { return hex.EncodeToString(b) }
 func bigIntStr(i *big.Int) string {
 	if i == nil {
 		return ""
@@ -500,7 +501,7 @@ func ptrOfAddr(s string) *string {
 // newMessageSignValue builds a MessageSignValue for arbitrary-data
 // signing. typedDataJSON is the EIP-712 JSON string for
 // eth_signTypedData* and empty for everything else.
-func newMessageSignValue(ctx context.Context, chain, method, from string, msgBytes []byte, typedDataJSON string) *MessageSignValue {
+func newMessageSignValue(ctx context.Context, chain, method, from, origin string, msgBytes []byte, typedDataJSON string) *MessageSignValue {
 	val := &MessageSignValue{
 		Chain:        chain,
 		Method:       method,
@@ -521,6 +522,13 @@ func newMessageSignValue(ctx context.Context, chain, method, from string, msgByt
 			// when no match; host renders the address alone.
 			val.VerifyingContractLabel = lookupVerifyingContractLabel(chain, val.StructuredDomain)
 		}
+		// Anti-blind-signing: surface cross-chain replay risk and
+		// dangerous approval primitives (Permit / Permit2 / approve /
+		// Seaport). Additive — these never block signing, they just
+		// give the host enough to render an informed prompt.
+		if parsed, err := ParseEIP712TypedData(typedDataJSON); err == nil {
+			val.Warnings = append(val.Warnings, parsed.SecurityWarnings(activeEVMChainID(ctx, chain))...)
+		}
 	}
 	detectSIWE(val)
 	if val.MessageText != "" && hasURL(val.MessageText) {
@@ -530,8 +538,109 @@ func newMessageSignValue(ctx context.Context, chain, method, from string, msgByt
 			Message:  "message contains a URL — verify it before signing",
 		})
 	}
-	_ = ctx // reserved for future RPC-based detectors
+	// SIWE/SIWS origin check: the domain/uri the message asks you to
+	// sign in to should match the site that requested the signature.
+	// A mismatch is a classic phishing pattern (a malicious page
+	// asking you to sign in to a bank/exchange).
+	if (val.IsSIWE || val.IsSIWS) && val.SIWEFields != nil {
+		if w := siweOriginWarning(val.SIWEFields, origin); w != nil {
+			val.Warnings = append(val.Warnings, *w)
+		}
+	}
 	return val
+}
+
+// siweOriginWarning compares the SIWE/SIWS message's declared domain
+// and uri against the requesting site's origin and returns a warning
+// when they don't line up. requestOrigin is the request Host (e.g.
+// "https://example.com"); empty disables the check.
+func siweOriginWarning(fields map[string]string, requestOrigin string) *SignWarning {
+	if requestOrigin == "" {
+		return nil
+	}
+	originHost := hostOf(requestOrigin)
+	if originHost == "" {
+		return nil
+	}
+	domain := strings.TrimSpace(fields["domain"])
+	uri := strings.TrimSpace(fields["uri"])
+	mismatch := false
+	if domain != "" && !hostMatches(domain, originHost) {
+		mismatch = true
+	}
+	if uri != "" && !hostMatches(hostOf(uri), originHost) {
+		mismatch = true
+	}
+	if !mismatch {
+		return nil
+	}
+	detail := domain
+	if detail == "" {
+		detail = uri
+	}
+	return &SignWarning{
+		Code:     "siwe_domain_mismatch",
+		Severity: "warn",
+		Message:  fmt.Sprintf("This sign-in message is for %q but the request came from %q. This can be a phishing attempt — verify before signing.", detail, originHost),
+		Field:    "domain",
+	}
+}
+
+// hostOf extracts the host (no scheme/port) from a URL or a bare
+// "host[:port]" / "host/path" string.
+func hostOf(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.Contains(s, "://") {
+		if u, err := url.Parse(s); err == nil && u.Host != "" {
+			return strings.ToLower(u.Hostname())
+		}
+	}
+	// Bare authority — strip any path then any port.
+	if i := strings.IndexAny(s, "/?#"); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		s = s[:i]
+	}
+	return strings.ToLower(s)
+}
+
+// hostMatches reports whether candidate equals host or is a subdomain
+// relationship of it (either direction), tolerating the common
+// "www." prefix.
+func hostMatches(candidate, host string) bool {
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	host = strings.ToLower(strings.TrimSpace(host))
+	if candidate == "" || host == "" {
+		return false
+	}
+	candidate = strings.TrimPrefix(candidate, "www.")
+	host = strings.TrimPrefix(host, "www.")
+	if candidate == host {
+		return true
+	}
+	return strings.HasSuffix(candidate, "."+host) || strings.HasSuffix(host, "."+candidate)
+}
+
+// activeEVMChainID returns the wallet's current EVM network chain id
+// (decimal string) for the cross-chain EIP-712 check, or "" when the
+// active network isn't EVM or can't be resolved.
+func activeEVMChainID(ctx context.Context, chain string) string {
+	if chain != "evm" {
+		return ""
+	}
+	env := getEnvFromCtx(ctx)
+	if env == nil {
+		return ""
+	}
+	n, err := wltnet.CurrentNetwork(env)
+	if err != nil || n == nil || n.Type != "evm" {
+		return ""
+	}
+	return n.ChainId
 }
 
 // ── Chain-specific TransactionSignValue builders ─────────────
@@ -850,7 +959,7 @@ func solanaBase58(b []byte) string {
 	for zeros < len(b) && b[zeros] == 0 {
 		zeros++
 	}
-	size := (len(b) - zeros) * 138 / 100 + 1
+	size := (len(b)-zeros)*138/100 + 1
 	encoded := make([]byte, size)
 	high := size - 1
 	for i := zeros; i < len(b); i++ {

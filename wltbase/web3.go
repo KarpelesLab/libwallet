@@ -270,7 +270,7 @@ func web3Req(ctx context.Context, in struct {
 			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   newMessageSignValue(ctx, "evm", "personal_sign", a.Address, valBin, ""),
+			Value:   newMessageSignValue(ctx, "evm", "personal_sign", a.Address, key, valBin, ""),
 		}
 		if err := req.run(e); err != nil {
 			return nil, err
@@ -349,7 +349,7 @@ func web3Req(ctx context.Context, in struct {
 			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   newMessageSignValue(ctx, "evm", in.Query.Method, a.Address, nil, typedDataStr),
+			Value:   newMessageSignValue(ctx, "evm", in.Query.Method, a.Address, key, nil, typedDataStr),
 		}
 		if err := req.run(e); err != nil {
 			return nil, err
@@ -380,6 +380,14 @@ func web3Req(ctx context.Context, in struct {
 		tx.Type = "evm"
 		if err := tx.Validate(e); err != nil {
 			return nil, err
+		}
+		// Authorization: tx.From must belong to an account this origin
+		// has connected — mirror the personal_sign / eth_signTypedData
+		// checks above. Without this a dApp could ask the wallet to
+		// sign and broadcast from an address the user never authorised
+		// for it.
+		if !isConnectedEVMAddress(e, conn, tx.From) {
+			return nil, errors.New("eth_sendTransaction: from address is not a connected account for this origin")
 		}
 		val := newEVMTransactionSignValue(ctx, e, n, tx, "eth_sendTransaction")
 		req := &request{
@@ -555,7 +563,7 @@ func web3Req(ctx context.Context, in struct {
 			Type:    "message_sign",
 			Host:    key,
 			Account: &a.Address,
-			Value:   newMessageSignValue(ctx, "solana", "solana_signMessage", a.Address, raw, ""),
+			Value:   newMessageSignValue(ctx, "solana", "solana_signMessage", a.Address, key, raw, ""),
 		}
 		err = req.run(e)
 		if err != nil {
@@ -673,7 +681,7 @@ func web3Req(ctx context.Context, in struct {
 			Type:    "message_sign",
 			Host:    key,
 			Account: &acctId,
-			Value:   newMessageSignValue(ctx, "bitcoin", "mpurse_signMessage", a.Address, []byte(msg), ""),
+			Value:   newMessageSignValue(ctx, "bitcoin", "mpurse_signMessage", a.Address, key, []byte(msg), ""),
 		}
 		if err := req.run(e); err != nil {
 			return nil, err
@@ -735,7 +743,14 @@ func web3Req(ctx context.Context, in struct {
 		return nil, errors.New("mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction")
 
 	default:
-		// relay to current network
+		// SECURITY (audit, flagged for human review): this open relay
+		// forwards ANY unhandled JSON-RPC method straight to the active
+		// network. Replacing it with a strict method allowlist was
+		// deliberately NOT done here — many dApps depend on arbitrary
+		// read methods (eth_call, eth_getLogs, debug_*, vendor
+		// extensions) and a naive allowlist would break them. Recommend
+		// designing a read-only/safe method allowlist (plus explicit
+		// review of mpurse_sendRawTransaction) as a separate change.
 		return n.DoRPC(in.Query.Method, in.Query.Params...)
 	}
 }
@@ -800,6 +815,27 @@ func buildNetworkFromChainInfo(chainId *big.Int) *wltnet.Network {
 // Always returns a non-nil slice so the JSON wire shape is `[]` and
 // not `null` when nothing matches; matches what dApps expect from
 // eth_accounts on a fresh connection.
+// isConnectedEVMAddress reports whether addr (0x-hex, case-insensitive)
+// belongs to one of the accounts the origin has connected. Used to
+// authorise eth_sendTransaction's from field, mirroring the inline
+// checks personal_sign / eth_signTypedData already do.
+func isConnectedEVMAddress(e *env, conn []*connectedSite, addr string) bool {
+	addr = strings.ToLower(strings.TrimSpace(addr))
+	if addr == "" {
+		return false
+	}
+	for _, c := range conn {
+		a, err := wltacct.FindAccount(e, c.Account.String())
+		if err != nil {
+			continue
+		}
+		if strings.ToLower(a.Address) == addr {
+			return true
+		}
+	}
+	return false
+}
+
 func collectEVMAccountAddresses(e *env, conn []*connectedSite) []string {
 	out := make([]string, 0, len(conn))
 	for _, c := range conn {

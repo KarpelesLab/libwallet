@@ -2,8 +2,110 @@ package wltbase
 
 import (
 	"encoding/hex"
+	"math/big"
 	"testing"
 )
+
+func TestEIP712EncodeInt256TwosComplement(t *testing.T) {
+	// -1 must encode as all 0xff (two's complement), not 0x00..01.
+	got := hex.EncodeToString(encodeInt256(big.NewInt(-1)))
+	want := "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	if got != want {
+		t.Errorf("encodeInt256(-1) = %s, want %s", got, want)
+	}
+	// A positive magnitude with the top bit set must NOT be sign-
+	// extended to 0xff (the old bug). 2^255 fits in uint256.
+	p := new(big.Int).Lsh(big.NewInt(1), 255)
+	got = hex.EncodeToString(encodeInt256(p))
+	want = "8000000000000000000000000000000000000000000000000000000000000000"
+	if got != want {
+		t.Errorf("encodeInt256(2^255) = %s, want %s", got, want)
+	}
+}
+
+func TestEIP712FixedArray(t *testing.T) {
+	typedData := `{
+		"types": {
+			"EIP712Domain": [{"name": "name", "type": "string"}],
+			"Pair": [{"name": "vals", "type": "uint256[2]"}]
+		},
+		"primaryType": "Pair",
+		"domain": {"name": "Test"},
+		"message": {"vals": ["1", "2"]}
+	}`
+	td, err := ParseEIP712TypedData(typedData)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if _, err := td.HashEIP712(); err != nil {
+		t.Fatalf("HashEIP712 error: %v", err)
+	}
+	// Wrong element count must be rejected, not silently mis-encoded.
+	td.Message["vals"] = []any{"1"}
+	if _, err := td.HashEIP712(); err == nil {
+		t.Error("expected error for fixed array with wrong length")
+	}
+}
+
+func TestEIP712HexDecodeError(t *testing.T) {
+	if _, err := hexDecode("0xZZ"); err == nil {
+		t.Error("expected error for invalid hex")
+	}
+	if b, err := hexDecode("0x1234"); err != nil || hex.EncodeToString(b) != "1234" {
+		t.Errorf("hexDecode(0x1234) = %x, %v", b, err)
+	}
+}
+
+func TestEIP712SecurityWarnings(t *testing.T) {
+	// Unlimited ERC-2612 permit + chain mismatch.
+	typedData := `{
+		"types": {
+			"EIP712Domain": [{"name": "chainId", "type": "uint256"}],
+			"Permit": [
+				{"name": "owner", "type": "address"},
+				{"name": "spender", "type": "address"},
+				{"name": "value", "type": "uint256"},
+				{"name": "nonce", "type": "uint256"},
+				{"name": "deadline", "type": "uint256"}
+			]
+		},
+		"primaryType": "Permit",
+		"domain": {"chainId": "1"},
+		"message": {
+			"owner": "0x0000000000000000000000000000000000000001",
+			"spender": "0x000000000000000000000000000000000000dEaD",
+			"value": "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+			"nonce": "0",
+			"deadline": "1700000000"
+		}
+	}`
+	td, err := ParseEIP712TypedData(typedData)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	ws := td.SecurityWarnings("137") // wallet on Polygon, domain says chain 1
+	var sawMismatch, sawUnlimited bool
+	for _, w := range ws {
+		if w.Code == "eip712_chain_mismatch" {
+			sawMismatch = true
+		}
+		if w.Code == "eip712_permit_unlimited" {
+			sawUnlimited = true
+		}
+	}
+	if !sawMismatch {
+		t.Error("expected eip712_chain_mismatch warning")
+	}
+	if !sawUnlimited {
+		t.Error("expected eip712_permit_unlimited warning")
+	}
+	// Same chain → no mismatch warning.
+	for _, w := range td.SecurityWarnings("1") {
+		if w.Code == "eip712_chain_mismatch" {
+			t.Error("unexpected chain mismatch warning when chains match")
+		}
+	}
+}
 
 // Test vector from EIP-712 specification
 // https://eips.ethereum.org/EIPS/eip-712#definition-of-hashstruct
