@@ -16,12 +16,12 @@ import (
 	"github.com/KarpelesLab/ethrpc"
 	"github.com/KarpelesLab/ethrpc/chains"
 	"github.com/KarpelesLab/libwallet/wltasset"
-	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnft"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltutil"
+	"github.com/KarpelesLab/outscript"
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
@@ -31,6 +31,12 @@ var (
 	networkCacheLk sync.Mutex
 )
 
+// ModChainApiKey is shipped in the client binary and is therefore
+// effectively public — anyone can extract it and spend the associated
+// quota. AUDIT (I1): relocate modchain access behind a server-side proxy
+// that injects the key, or scope/rotate it, so the secret is not embedded
+// in distributed binaries. Left in place here to avoid breaking runtime
+// RPC routing; the change requires backend coordination.
 const ModChainApiKey = "crapi-nx4p6j-ifez-cjli-p5wj-uml43cte"
 
 type Network struct {
@@ -80,6 +86,17 @@ func (a *AddEthereumChainParameter) Validate() error {
 	if n := len(a.NativeCurrency.Symbol); n < 2 || n > 6 {
 		return &apirouter.Error{Code: -32602, Message: "Expected 2-6 character string 'nativeCurrency.symbol'."}
 	}
+	// Validate every caller-supplied RPC URL so a dApp cannot register a
+	// plausibly-named chain that secretly points at an attacker endpoint
+	// or an internal service (audit C1). Empty list means "auto".
+	for _, ru := range a.RPCUrls {
+		if ru == "" || ru == "auto" {
+			continue
+		}
+		if err := validateRPCURL(ru); err != nil {
+			return &apirouter.Error{Code: -32602, Message: fmt.Sprintf("Invalid rpcUrls entry: %s", err)}
+		}
+	}
 	// TODO add more checks?
 
 	return nil
@@ -111,6 +128,13 @@ func (a *AddEthereumChainParameter) AsNetwork() *Network {
 }
 
 func (n *Network) check() error {
+	// Reject a caller-/dApp-supplied RPC that points at an internal
+	// address or downgrades the scheme before it is ever persisted or
+	// used to broadcast a signed transaction (audit C1). "" / "auto"
+	// sentinels are allowed — they resolve from the chain registry.
+	if err := validateNetworkRPC(n.RPC); err != nil {
+		return err
+	}
 	// check network status and fill anything missing
 	switch n.Type {
 	case "evm":
@@ -436,6 +460,9 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 			return n.validRPC, nil
 		}
 		if n.RPC != "" && n.RPC != "auto" {
+			if err := validateRPCURL(n.RPC); err != nil {
+				return nil, err
+			}
 			n.validRPC = ethrpc.New(n.RPC)
 			return n.validRPC, nil
 		}
@@ -461,6 +488,13 @@ func (n *Network) getRPC() (ethrpc.Handler, error) {
 		return n.validRPC, nil
 	}
 	if n.RPC != "" && n.RPC != "auto" {
+		// Defense in depth: even though create/update validated the URL,
+		// re-check here so a value that reached the struct by any other
+		// path can never be dialed for an internal-network SSRF or have
+		// a signed tx broadcast to an attacker endpoint (audit C1).
+		if err := validateRPCURL(n.RPC); err != nil {
+			return nil, err
+		}
 		return ethrpc.New(n.RPC), nil
 	}
 	if n.validRPC != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/ethrpc"
@@ -176,7 +177,12 @@ func (n *Network) ApiUpdate(ctx *apirouter.Context) error {
 	if !updated {
 		return nil
 	}
-	n.check()
+	// Honor check()'s error — it now validates the (possibly caller-
+	// supplied) RPC URL, so an invalid/internal RPC must fail the update
+	// instead of being silently persisted (audit C1).
+	if err := n.check(); err != nil {
+		return err
+	}
 	return n.Save(e)
 }
 
@@ -264,10 +270,10 @@ func apiCreateNetwork(ctx *apirouter.Context, n *Network) (any, error) {
 // depending on which kind of node the URL points at. Response shape
 // depends on [Type]:
 //
-//   evm     : {RPC, Type, ChainId, Name?, CurrencySymbol?, EVM_Info?}
-//   solana  : {RPC, Type, SolanaVersion, SolanaCluster}
-//              cluster ∈ {"mainnet-beta", "devnet", "testnet", "unknown"}
-//   bitcoin : {RPC, Type, Chain, Blocks}
+//	evm     : {RPC, Type, ChainId, Name?, CurrencySymbol?, EVM_Info?}
+//	solana  : {RPC, Type, SolanaVersion, SolanaCluster}
+//	           cluster ∈ {"mainnet-beta", "devnet", "testnet", "unknown"}
+//	bitcoin : {RPC, Type, Chain, Blocks}
 func networkTestRPC(ctx *apirouter.Context, in struct {
 	URL  string
 	Type string
@@ -276,27 +282,42 @@ func networkTestRPC(ctx *apirouter.Context, in struct {
 	if u == "" {
 		return nil, errors.New("invalid url")
 	}
+	// Run the caller-supplied URL through the same validator used for
+	// stored RPCs (audit H1). Without this, testRPC was a blind SSRF /
+	// port-fingerprinting oracle: it would dial any host:port the caller
+	// named and surface reachability through the success/error channel.
+	if err := validateRPCURL(u); err != nil {
+		return nil, err
+	}
 	typ := in.Type
 	if typ == "" {
 		// Back-compat: the endpoint used to accept only EVM URLs.
 		typ = "evm"
 	}
 
+	// Bound every probe so a slow/hung internal endpoint can't be used as
+	// a timing oracle and can't wedge the API goroutine.
+	pctx, cancel := context.WithTimeout(context.Background(), testRPCTimeout)
+	defer cancel()
+
 	switch typ {
 	case "evm":
-		return testRPCEVM(u)
+		return testRPCEVM(pctx, u)
 	case "solana":
-		return testRPCSolana(u)
+		return testRPCSolana(pctx, u)
 	case "bitcoin":
-		return testRPCBitcoin(u)
+		return testRPCBitcoin(pctx, u)
 	default:
 		return nil, fmt.Errorf("unsupported Type %q (want evm | solana | bitcoin)", typ)
 	}
 }
 
-func testRPCEVM(u string) (any, error) {
+// testRPCTimeout bounds each individual testRPC probe.
+const testRPCTimeout = 10 * time.Second
+
+func testRPCEVM(ctx context.Context, u string) (any, error) {
 	rpc := ethrpc.New(u)
-	id, err := ethrpc.ReadUint64(rpc.Do("net_version"))
+	id, err := ethrpc.ReadUint64(rpc.DoCtx(ctx, "net_version"))
 	if err != nil {
 		return nil, err
 	}
@@ -322,10 +343,10 @@ var solanaClusters = map[string]string{
 	"4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY": "testnet",
 }
 
-func testRPCSolana(u string) (any, error) {
+func testRPCSolana(ctx context.Context, u string) (any, error) {
 	rpc := ethrpc.New(u)
 	// getVersion → {"solana-core": "1.17.x", "feature-set": 12345}
-	raw, err := rpc.Do("getVersion")
+	raw, err := rpc.DoCtx(ctx, "getVersion")
 	if err != nil {
 		return nil, fmt.Errorf("getVersion: %w", err)
 	}
@@ -338,7 +359,7 @@ func testRPCSolana(u string) (any, error) {
 	}
 
 	// Identify the cluster via the genesis hash.
-	genesis, err := ethrpc.ReadString(rpc.Do("getGenesisHash"))
+	genesis, err := ethrpc.ReadString(rpc.DoCtx(ctx, "getGenesisHash"))
 	cluster := "unknown"
 	if err == nil {
 		if name, ok := solanaClusters[genesis]; ok {
@@ -353,16 +374,16 @@ func testRPCSolana(u string) (any, error) {
 	}, nil
 }
 
-func testRPCBitcoin(u string) (any, error) {
+func testRPCBitcoin(ctx context.Context, u string) (any, error) {
 	rpc := ethrpc.New(u)
 	// getblockchaininfo works against modchain proxies, native bitcoind,
 	// and any fork (litecoind, dogecoind, monacoin-core, bitcoin-abc).
-	raw, err := rpc.Do("getblockchaininfo")
+	raw, err := rpc.DoCtx(ctx, "getblockchaininfo")
 	if err != nil {
 		return nil, fmt.Errorf("getblockchaininfo: %w", err)
 	}
 	var info struct {
-		Chain  string `json:"chain"`  // "main" / "test" / "regtest" / "signet" (also "monacoin" / etc. on forks)
+		Chain  string `json:"chain"` // "main" / "test" / "regtest" / "signet" (also "monacoin" / etc. on forks)
 		Blocks uint64 `json:"blocks"`
 	}
 	if err := json.Unmarshal(raw, &info); err != nil {
