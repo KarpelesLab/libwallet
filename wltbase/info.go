@@ -92,11 +92,11 @@ func infoGetWalletInfo() (any, error) {
 func infoGetWalletInfoValue() map[string]any {
 	info := wltwallet.GetWalletInfo()
 	return map[string]any{
-		"clientId":           info.ClientID,
-		"name":               info.Name,
-		"version":            info.Version,
-		"logLevel":           info.LogLevel,
-		"effectiveLogLevel":  wltlog.GetLevel().String(),
+		"clientId":          info.ClientID,
+		"name":              info.Name,
+		"version":           info.Version,
+		"logLevel":          info.LogLevel,
+		"effectiveLogLevel": wltlog.GetLevel().String(),
 	}
 }
 
@@ -131,7 +131,9 @@ func infoPaths(ctx context.Context) (any, error) {
 	}
 	res["TempDir"] = os.TempDir()
 	res["DataDir"] = e.dataDir
-	res["Environ"] = os.Environ()
+	// NOTE: os.Environ() was intentionally removed here — it leaked
+	// the entire process environment (API keys, tokens, secrets) to
+	// any caller. The host only needs the specific directories above.
 
 	return res, nil
 }
