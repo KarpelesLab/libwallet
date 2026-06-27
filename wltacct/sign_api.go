@@ -1,6 +1,7 @@
 package wltacct
 
 import (
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -45,9 +46,9 @@ func init() {
 //
 // Defaults to "solana" for ed25519 accounts, "evm" for secp256k1 accounts.
 func accountSignMessage(ctx *apirouter.Context, in struct {
-	Message string                       `json:"Message"` // base64 of bytes to sign
-	Keys    []*wltsign.KeyDescription    `json:"Keys"`
-	Mode    string                       `json:"Mode"`
+	Message string                    `json:"Message"` // base64 of bytes to sign
+	Keys    []*wltsign.KeyDescription `json:"Keys"`
+	Mode    string                    `json:"Mode"`
 }) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
@@ -90,6 +91,19 @@ func accountSignMessage(ctx *apirouter.Context, in struct {
 		// encoding. Done before signing so "publicKey" in the
 		// response is the corrected address.
 		_, _ = EnsureEd25519PubkeyOnAccount(ctx, acct, in.Keys)
+		// Domain-separation guard. Solana signMessage signs the caller's
+		// bytes with raw ed25519 and has NO domain separation, so a
+		// "message" that is actually the serialized message (or full
+		// serialization) of a fund-moving Solana transaction would yield a
+		// valid transaction signature — blind transaction signing. Reject
+		// any payload that parses as a Solana transaction naming this
+		// account as a required signer; callers must use signTransaction
+		// for transactions.
+		if pubkey, err := base64.RawURLEncoding.DecodeString(acct.Pubkey); err == nil && len(pubkey) == 32 {
+			if solanaPayloadIsSignableTx(msgBytes, pubkey) {
+				return nil, errors.New("refusing to sign: message parses as a Solana transaction for this account — use signTransaction instead")
+			}
+		}
 		sig, err := acct.Sign(nil, msgBytes, signOpt)
 		if err != nil {
 			return nil, fmt.Errorf("solana sign failed: %w", err)
@@ -114,7 +128,15 @@ func accountSignMessage(ctx *apirouter.Context, in struct {
 			"signature": "0x" + hex.EncodeToString(sig),
 		}, nil
 	case "raw":
-		// Caller has already hashed; sign the bytes directly.
+		// UNCONDITIONAL BLIND DIGEST SIGNING. The caller's bytes are signed
+		// directly with no domain separation: for secp256k1 they ARE the
+		// ECDSA digest, for ed25519 they are the message. To bound this to
+		// an actual hash digest (and prevent feeding a raw transaction body
+		// through as an unbounded, ambiguously-reduced-mod-N input), require
+		// exactly 32 bytes. Anything else is refused.
+		if len(msgBytes) != 32 {
+			return nil, fmt.Errorf("raw mode requires a 32-byte digest, got %d bytes", len(msgBytes))
+		}
 		var rng = rand.Reader
 		if acct.Curve == "ed25519" {
 			rng = nil
@@ -253,6 +275,16 @@ func signSolanaTransaction(ctx *apirouter.Context, txB64 string, keys []*wltsign
 	if len(pubkey) != 32 {
 		return nil, nil, fmt.Errorf("ed25519 pubkey on account has wrong length: got %d, want 32", len(pubkey))
 	}
+
+	// Fail closed: verify the signature locally before inserting it and
+	// broadcasting. The secp256k1 path fails closed via
+	// BruteforceRecoveryCode (it can't produce a compact signature unless
+	// it round-trips against the known pubkey); the ed25519 path had no
+	// equivalent check and would insert/broadcast a bad signature blind.
+	if !ed25519.Verify(ed25519.PublicKey(pubkey), msg, sig) {
+		return nil, nil, errors.New("ed25519 signature failed local verification; refusing to broadcast")
+	}
+
 	signed, err := solanaInsertSignature(txBytes, sig, pubkey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to insert signature: %w", err)

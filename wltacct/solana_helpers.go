@@ -89,6 +89,30 @@ func solanaFindSignerSlot(msg []byte, pubkey []byte) (int, error) {
 	return -1, errors.New("pubkey not found in transaction account keys")
 }
 
+// solanaPayloadIsSignableTx reports whether payload, interpreted as a Solana
+// transaction (or a bare transaction message), would place pubkey in a
+// required-signer slot.
+//
+// signMessage uses this as a reject filter: the Solana signMessage path signs
+// the caller's bytes with raw ed25519 and has NO domain separation, so a raw
+// signature over such a payload is indistinguishable from a valid transaction
+// signature for this account — i.e. blind transaction signing. Any payload
+// that parses this way must be refused; legitimate off-chain messages do not
+// parse as a Solana message naming this exact 32-byte pubkey as a signer.
+func solanaPayloadIsSignableTx(payload, pubkey []byte) bool {
+	// Case 1: payload is a bare serialized message.
+	if _, err := solanaFindSignerSlot(payload, pubkey); err == nil {
+		return true
+	}
+	// Case 2: payload is a full transaction (signature array + message).
+	if msg, err := solanaExtractMessage(payload); err == nil {
+		if _, err := solanaFindSignerSlot(msg, pubkey); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // solanaInsertSignature writes sig into the signature slot whose corresponding
 // account-keys entry matches pubkey. Returns an error if pubkey isn't a signer
 // for this transaction or the transaction is malformed.
