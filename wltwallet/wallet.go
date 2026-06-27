@@ -31,17 +31,17 @@ import (
 // It can contain multiple keys with a configurable threshold for signatures
 type Wallet struct {
 	TableName psql.Name    `sql:"Wallet"`
-	Id        *xuid.XUID   `sql:",key=PRIMARY"`                              // Unique identifier for the wallet
-	Name      string       `sql:",type=VARCHAR,size=255"`                    // User-friendly name
-	Curve     string       `sql:",type=VARCHAR,size=255"`                    // Elliptic curve used (e.g., "secp256k1")
-	Protocol  string       `sql:",type=VARCHAR,size=64,null=0,default=''"`   // TSS protocol — see ProtocolFor* constants. Empty = legacy (gg18 / eddsa).
-	Threshold int          `sql:",type=INT"`                                 // Minimum number of keys required for signing
-	Keys      []*WalletKey `sql:"-"`                                         // Associated keys (not stored in database)
-	Gen       uint64       `sql:",type=BIGINT,null=0,default=0"`             // incremented on reshare
-	Pubkey    string       `sql:",type=TEXT"`                                // Base64 encoded public key
-	Chaincode string       `sql:",type=TEXT"`                                // Base64 encoded chaincode for HD wallet derivation
-	Created   time.Time    `sql:",type=DATETIME"`                            // Creation timestamp
-	Modified  time.Time    `sql:",type=DATETIME"`                            // Last modification timestamp
+	Id        *xuid.XUID   `sql:",key=PRIMARY"`                            // Unique identifier for the wallet
+	Name      string       `sql:",type=VARCHAR,size=255"`                  // User-friendly name
+	Curve     string       `sql:",type=VARCHAR,size=255"`                  // Elliptic curve used (e.g., "secp256k1")
+	Protocol  string       `sql:",type=VARCHAR,size=64,null=0,default=''"` // TSS protocol — see ProtocolFor* constants. Empty = legacy (gg18 / eddsa).
+	Threshold int          `sql:",type=INT"`                               // Minimum number of keys required for signing
+	Keys      []*WalletKey `sql:"-"`                                       // Associated keys (not stored in database)
+	Gen       uint64       `sql:",type=BIGINT,null=0,default=0"`           // incremented on reshare
+	Pubkey    string       `sql:",type=TEXT"`                              // Base64 encoded public key
+	Chaincode string       `sql:",type=TEXT"`                              // Base64 encoded chaincode for HD wallet derivation
+	Created   time.Time    `sql:",type=DATETIME"`                          // Creation timestamp
+	Modified  time.Time    `sql:",type=DATETIME"`                          // Last modification timestamp
 }
 
 // TSS protocol identifiers stored in [Wallet.Protocol]. The value
@@ -507,10 +507,16 @@ func (w *Wallet) Sign(rand io.Reader, digest []byte, opts crypto.SignerOpts) (da
 	defer func() {
 		if e := recover(); e != nil {
 			// TODO might want to find a way to get the crash log
+			log.Printf("panic: %s", e)
+			// Always set err so a panic can never be swallowed into a
+			// (nil signature, nil error) result — a signer returning a
+			// nil error with a nil signature is dangerous. Use the opts
+			// type assertion only to attach a crash id when available.
 			if aopt, ok := opts.(*wltsign.Opts); ok {
 				id := wltcrash.Log(aopt.Context, e, "signature main thread")
-				log.Printf("panic: %s", e)
 				err = fmt.Errorf("panic during signature generation, please contact support (crash id %s)", id)
+			} else {
+				err = fmt.Errorf("panic during signature generation, please contact support")
 			}
 		}
 	}()
