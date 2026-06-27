@@ -36,47 +36,45 @@ type NftFetchInfo struct {
 }
 
 func doHTTPCall(e wltintf.Env, uri string) ([]byte, error) {
-	fmt.Println("Will try uri:", uri)
-	buf, err := e.CacheGet(context.Background(), uri, 30*time.Second, 24*time.Hour)
-	if err != nil {
-		fmt.Println("CacheGet Error:", err)
+	// Gate the (contract-controlled) URL before handing it to the
+	// fetcher: restrict the scheme to http/https and reject hosts that
+	// resolve to internal addresses so contract metadata can't drive an
+	// SSRF. The redirect-hop / body-size limiting for the actual
+	// transfer is enforced by the hardened wltbase.CacheGet fetcher.
+	if err := validateMetadataURL(uri); err != nil {
 		return nil, err
 	}
-	return buf, nil
+	return e.CacheGet(context.Background(), uri, 30*time.Second, 24*time.Hour)
 }
 
 func doIPFSCall(e wltintf.Env, uri string) ([]byte, error) {
 	cid := strings.TrimPrefix(uri, "ipfs://")
-	newUrl := ipfsGateways[0] + cid // Use the first IPFS gateway
-	buf, err := doHTTPCall(e, newUrl)
-	if err == nil && buf != nil {
-		return buf, nil
+	// The CID comes from contract-controlled metadata and is composed
+	// onto a gateway base URL by raw concatenation. Validate its charset
+	// so a value like "..%2f", "x?@evil" or "x#@evil" can't reshape the
+	// request (path traversal, query/fragment/authority injection).
+	if !validIPFSCID(cid) {
+		return nil, fmt.Errorf("invalid IPFS CID %q", cid)
 	}
 
-	newUrl = ipfsGateways[1] + cid // Use the second IPFS gateway
-	buf, err = doHTTPCall(e, newUrl)
-	if err == nil && buf != nil {
-		return buf, nil
+	var err error
+	for _, gw := range ipfsGateways {
+		var buf []byte
+		buf, err = doHTTPCall(e, gw+cid)
+		if err == nil && buf != nil {
+			return buf, nil
+		}
 	}
-
-	newUrl = ipfsGateways[2] + cid // Use the third IPFS gateway
-	buf, err = doHTTPCall(e, newUrl)
-	if err == nil && buf != nil {
-		return buf, nil
-	}
-	fmt.Println("IPFS Calls didnt provide any data", err)
 	return nil, err
 }
 
 func (n *Network) NftMetadata(e wltintf.Env, contractAddress string, tokenId string) (*wltnft.Nft, error) {
 	bytes, err := detectMetadataFunction(n, contractAddress, tokenId)
 	if err != nil {
-		fmt.Println("detectMetadataFunction Error:", err)
 		return nil, err
 	}
 	uri, err := wltutil.DecodeEVMEthCallString(bytes)
 	if err != nil {
-		fmt.Println("DecodeEVMEthCallString Error:", err)
 		return nil, err
 	}
 	var buf []byte
