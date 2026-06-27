@@ -158,7 +158,8 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 			return err
 		}
 		log.Printf("initializing remote peer %s with info=%+v", p.Id.String(), info)
-		log.Printf("remote sid = %s", kd.Key)
+		// Do not log kd.Key (the RemoteKey session id) — it is sensitive
+		// routing material and was previously emitted at info level.
 		rp := &spotPeer{
 			hub:     hub,
 			partyId: oldidmap[n],
