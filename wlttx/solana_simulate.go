@@ -115,11 +115,18 @@ func resolveComputeUnitLimitViaSimulation(
 // inclusion robust against runtime-jitter (account contention,
 // CPI-depth-dependent CU charges) without paying for unused budget.
 func applySolanaCUHeadroom(units uint64, pinned uint32) uint32 {
+	const solanaMaxCU uint64 = 1_400_000
+	// A malicious/buggy RPC could report an enormous unitsConsumed.
+	// Clamp it to the per-tx CU ceiling BEFORE any arithmetic so that
+	// units+solanaCUHeadroomMin and units*solanaCUHeadroomBPS can't
+	// overflow uint64 (the latter wraps for units > ~1.8e16).
+	if units > solanaMaxCU {
+		units = solanaMaxCU
+	}
 	chosen := units + solanaCUHeadroomMin
 	if pct := units + units*solanaCUHeadroomBPS/10_000; pct > chosen {
 		chosen = pct
 	}
-	const solanaMaxCU uint64 = 1_400_000
 	if chosen > solanaMaxCU {
 		chosen = solanaMaxCU
 	}
@@ -157,9 +164,9 @@ func solanaSimulateUnitsConsumed(ctx context.Context, n *wltnet.Network, message
 	}
 	var resp struct {
 		Value struct {
-			Err            json.RawMessage `json:"err"`
-			UnitsConsumed  uint64          `json:"unitsConsumed"`
-			Logs           []string        `json:"logs"`
+			Err           json.RawMessage `json:"err"`
+			UnitsConsumed uint64          `json:"unitsConsumed"`
+			Logs          []string        `json:"logs"`
 		} `json:"value"`
 	}
 	if jerr := json.Unmarshal(raw, &resp); jerr != nil {

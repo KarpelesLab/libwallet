@@ -22,6 +22,7 @@ import (
 
 	"github.com/KarpelesLab/libwallet/wltacct"
 	"github.com/KarpelesLab/libwallet/wltintf"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
 )
 
@@ -176,7 +177,6 @@ func isUnlimitedApproval(amount *big.Int) bool {
 	return amount.Cmp(unlimitedApprovalThreshold) >= 0
 }
 
-
 // PreflightError is returned by pre-flight checks when a transaction is
 // guaranteed to fail. It carries a machine-readable Code so apps can
 // react (e.g. offer a "Send max" button when code == "below_sender_rent")
@@ -227,7 +227,10 @@ func preflightSolanaNativeSend(e wltintf.Env, n *wltnet.Network, acct *wltacct.A
 	if err != nil {
 		// Treat RPC failure as non-blocking — the broadcast path
 		// will surface any real problem, and we don't want to
-		// block a legitimate tx because a node burped.
+		// block a legitimate tx because a node burped. Log it so a
+		// node that fails persistently doesn't silently disable the
+		// balance guard without anyone noticing.
+		wltlog.Warnf("solana-preflight: balance RPC failed (%v); skipping balance check for %s", err, acct.GetAddress())
 		return nil
 	}
 
@@ -236,7 +239,18 @@ func preflightSolanaNativeSend(e wltintf.Env, n *wltnet.Network, acct *wltacct.A
 		senderRent = 890880 // canonical 0-byte system-account rent
 	}
 
-	const feeLamports uint64 = 5000
+	// Use the real computed fee (base signature fee + priority fee)
+	// rather than a hardcoded 5000. Validate sets tx.Fee (9-decimal
+	// lamports) just before calling us, so a priority-enabled send
+	// no longer under-counts its fee and pass a preflight it would
+	// fail on-chain. Fall back to the 5000 base fee when tx.Fee is
+	// absent or not representable.
+	feeLamports := uint64(5000)
+	if tx.Fee != nil {
+		if fv := tx.Fee.Value(); fv != nil && fv.IsUint64() {
+			feeLamports = fv.Uint64()
+		}
+	}
 
 	recipientExists := true
 	var recipientRent uint64

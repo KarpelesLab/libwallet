@@ -138,15 +138,15 @@ func buildSOLTransferMessage(from, to [32]byte, lamports uint64, recentBlockhash
 	)
 
 	if cuLimit > 0 {
-		msg = append(msg, programIdxCB)        // programIdIndex = ComputeBudget
-		msg = append(msg, compactU16(0)...)    // no accounts
+		msg = append(msg, programIdxCB)     // programIdIndex = ComputeBudget
+		msg = append(msg, compactU16(0)...) // no accounts
 		data := computeBudgetSetLimit(cuLimit)
 		msg = append(msg, compactU16(uint16(len(data)))...)
 		msg = append(msg, data...)
 	}
 	if cuPrice > 0 {
-		msg = append(msg, programIdxCB)        // programIdIndex = ComputeBudget
-		msg = append(msg, compactU16(0)...)    // no accounts
+		msg = append(msg, programIdxCB)     // programIdIndex = ComputeBudget
+		msg = append(msg, compactU16(0)...) // no accounts
 		data := computeBudgetSetPrice(cuPrice)
 		msg = append(msg, compactU16(uint16(len(data)))...)
 		msg = append(msg, data...)
@@ -206,9 +206,14 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 	var to [32]byte
 	copy(to[:], toBytes)
 
-	// Convert amount to lamports
-	if tx.Amount == nil {
+	// Convert amount to lamports. Guard the uint64 conversion: a
+	// value that doesn't fit (or a nil/MAX sentinel) would otherwise
+	// silently wrap and build a tx for the wrong amount.
+	if tx.Amount == nil || tx.Amount.Value() == nil {
 		return errors.New("amount is required")
+	}
+	if !tx.Amount.Value().IsUint64() {
+		return fmt.Errorf("amount %s exceeds representable uint64 lamports", tx.Amount.Value().String())
 	}
 	lamports := tx.Amount.Value().Uint64()
 
@@ -281,6 +286,11 @@ func (tx *Transaction) signAndSendSolana(ctx context.Context, n *wltnet.Network,
 			return fmt.Errorf("derive recipient ATA: %w", err)
 		}
 
+		// Guard the uint64 conversion on the SPL path too — the native
+		// branch above checks IsUint64 but this one silently wrapped.
+		if tx.Amount.Value() == nil || !tx.Amount.Value().IsUint64() {
+			return fmt.Errorf("SPL amount exceeds representable uint64 base units")
+		}
 		amount := tx.Amount.Value().Uint64()
 		decimals := uint8(tx.resolvedToken.GetDecimals())
 		splMintB58 = tx.resolvedToken.GetAddress()

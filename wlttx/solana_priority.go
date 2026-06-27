@@ -13,11 +13,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltnet"
 )
+
+// solanaMaxCUPrice bounds the ComputeUnitPrice (microlamports per CU)
+// we will ever adopt from getRecentPrioritizationFees. A malicious or
+// spiking RPC could otherwise report an arbitrarily large value which,
+// paired with a CU limit up to the 1.4M per-tx ceiling, makes the
+// signed priority fee approach or exceed the user's whole SOL balance
+// (fee burn). The ceiling is deliberately generous: even sustained
+// mainnet congestion keeps the median priority fee well under 1e6
+// microlamports/CU, so 50_000_000 (50 lamports/CU) leaves several
+// orders of magnitude of headroom for a legitimate "high" percentile
+// while still bounding the worst case. We clamp rather than error so a
+// genuinely congested network never blocks a send. A price the caller
+// pins explicitly (ComputeUnitPrice) is left untouched — that's an
+// informed decision, not an attacker-controlled RPC value.
+const solanaMaxCUPrice uint64 = 50_000_000
 
 // Default compute-unit limit for a basic SOL transfer. The System
 // Program transfer ixn needs ~200 CU in practice; we set 1000 to
@@ -102,6 +118,12 @@ func resolveSolanaPriority(n *wltnet.Network, tx *Transaction) error {
 		// flat 5000 lamport fee.
 		return nil
 	}
+	// Clamp the RPC-derived price to a sane ceiling so a malicious or
+	// spiking node can't drive the signed priority fee toward the
+	// user's whole balance.
+	if price > solanaMaxCUPrice {
+		price = solanaMaxCUPrice
+	}
 	tx.ComputeUnitPrice = price
 	if tx.ComputeUnitLimit == 0 {
 		tx.ComputeUnitLimit = solanaCULimitDefault(tx)
@@ -150,11 +172,24 @@ func solanaFeeLamports(tx *Transaction) uint64 {
 	if tx.ComputeUnitLimit == 0 || tx.ComputeUnitPrice == 0 {
 		return baseFee
 	}
-	// priority fee = ceil(cuLimit * cuPrice / 1_000_000)
-	num := uint64(tx.ComputeUnitLimit) * tx.ComputeUnitPrice
-	priority := num / 1_000_000
-	if num%1_000_000 != 0 {
-		priority++
+	// priority fee = ceil(cuLimit * cuPrice / 1_000_000), computed in
+	// big.Int so a large (caller-pinned) cuLimit*cuPrice product can't
+	// silently wrap a uint64 and under-report the fee to the balance
+	// preflight. On overflow we saturate just below ^uint64(0), which
+	// the preflight then treats as "insufficient balance" rather than
+	// waving a ruinous fee through.
+	num := new(big.Int).Mul(
+		new(big.Int).SetUint64(uint64(tx.ComputeUnitLimit)),
+		new(big.Int).SetUint64(tx.ComputeUnitPrice),
+	)
+	num.Add(num, big.NewInt(999_999))
+	num.Quo(num, big.NewInt(1_000_000))
+	maxPriority := ^uint64(0) - baseFee
+	priority := maxPriority
+	if num.IsUint64() {
+		if u := num.Uint64(); u < maxPriority {
+			priority = u
+		}
 	}
 	return baseFee + priority
 }
