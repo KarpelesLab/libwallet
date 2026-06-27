@@ -2,6 +2,8 @@ package wltwc
 
 import (
 	"encoding/base64"
+	"errors"
+	"os"
 	"time"
 
 	"github.com/KarpelesLab/libwallet/wltintf"
@@ -115,11 +117,17 @@ func allNonClosedSessions(e wltintf.Env) ([]*wcSession, error) {
 }
 
 // sessionByTopic finds the (one) non-disconnected session currently using
-// the given topic. Returns (nil, nil) if none found.
+// the given topic. Returns (nil, nil) when no row matches the topic, but a
+// real backend error (connectivity, decode, …) is propagated so callers can
+// distinguish "unknown topic" from "lookup failed" — collapsing both to
+// (nil, nil) would silently treat a transient DB error as an unknown peer.
 func sessionByTopic(e wltintf.Env, topic string) (*wcSession, error) {
 	s, err := psql.Get[wcSession](e, map[string]any{"Topic": topic})
 	if err != nil {
-		return nil, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return s, nil
 }
