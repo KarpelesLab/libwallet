@@ -16,6 +16,15 @@ import (
 
 var ErrAmountParseFailed = errors.New("failed to parse provided amount")
 
+// maxAmountStringLen bounds the length of a textual amount we will
+// parse from (potentially untrusted) input such as JSON. big.Int /
+// big.Float parsing is super-linear in the input length, so an
+// attacker-supplied multi-kilobyte numeric string is a cheap CPU DoS.
+// No legitimate on-chain amount needs anywhere near this many
+// characters — a uint256 is 78 decimal digits; fiat, fixed-point
+// quotes and exponent forms all fit comfortably under 128.
+const maxAmountStringLen = 128
+
 // Amount represents a fixed-point decimal value with arbitrary precision.
 // It uses a big.Int for the value and an exponent to represent the decimal position.
 // For example, 123.456 would be stored as value=123456 and exp=3.
@@ -106,11 +115,18 @@ func (a *Amount) Dup() *Amount {
 
 // NewAmountFromString returns a new Amount initialized with the passed string value
 func NewAmountFromString(s string, decimals int) (*Amount, error) {
+	// Bound untrusted input length before any super-linear big.Int /
+	// big.Float parse below.
+	if len(s) > maxAmountStringLen {
+		return nil, fmt.Errorf("%w: input too long (%d > %d)", ErrAmountParseFailed, len(s), maxAmountStringLen)
+	}
 	if decimals == 0 {
 		pos := strings.IndexAny(s, "eE")
 		extraE := 0
 		if pos != -1 {
-			v, err := strconv.ParseInt(s[pos+1:], 0, 64)
+			// base 10: never interpret 0x/0o/0b prefixes or "_"
+			// digit separators in the exponent of untrusted input.
+			v, err := strconv.ParseInt(s[pos+1:], 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("%w: %s", ErrAmountParseFailed, err)
 			}
@@ -119,7 +135,9 @@ func NewAmountFromString(s string, decimals int) (*Amount, error) {
 		}
 		pos = strings.IndexByte(s, '.')
 		if pos == -1 {
-			v, ok := new(big.Int).SetString(s, 0)
+			// base 10 (was 0): reject 0x/0o/0b prefixes and
+			// underscore separators that base-0 would silently accept.
+			v, ok := new(big.Int).SetString(s, 10)
 			if !ok {
 				return nil, ErrAmountParseFailed
 			}
@@ -141,7 +159,9 @@ func NewAmountFromString(s string, decimals int) (*Amount, error) {
 		}
 		return &Amount{value: v, exp: e}, nil
 	}
-	f, _, err := big.ParseFloat(s, 0, 1024, big.ToNearestEven)
+	// base 10 (was 0): reject hex-float / 0x / "_" forms from untrusted
+	// input while still accepting decimal scientific notation.
+	f, _, err := big.ParseFloat(s, 10, 1024, big.ToNearestEven)
 	if err != nil {
 		return nil, err
 	}
@@ -258,16 +278,26 @@ func (a Amount) String() string {
 		return s
 	}
 
+	// Peel the sign off the magnitude before inserting the decimal
+	// point. Otherwise the leading '-' is counted as a digit when
+	// comparing len(s) against exp, producing malformed renderings
+	// like "0.-5" (value=-5,exp=2) or "-.5" (value=-5,exp=1).
+	neg := ""
+	if strings.HasPrefix(s, "-") {
+		neg = "-"
+		s = s[1:]
+	}
+
 	if len(s) > a.exp {
 		p := len(s) - a.exp
-		return s[:p] + "." + s[p:]
+		return neg + s[:p] + "." + s[p:]
 	}
 	if len(s) < a.exp {
 		p := a.exp - len(s)
-		return "0." + strings.Repeat("0", p) + s
+		return neg + "0." + strings.Repeat("0", p) + s
 	}
 
-	return "0." + s
+	return neg + "0." + s
 }
 
 func (a Amount) IsZero() bool {
@@ -396,7 +426,12 @@ func (a *Amount) Scan(v any) error {
 				a.isMax = true
 				return nil
 			}
-			realV, vok := new(big.Int).SetString(v, 0)
+			if len(v) > maxAmountStringLen {
+				return fmt.Errorf("%w: v too long", ErrAmountParseFailed)
+			}
+			// base 10 (was 0): the "v" field comes from untrusted JSON;
+			// don't accept 0x/0o/0b prefixes or underscore separators.
+			realV, vok := new(big.Int).SetString(v, 10)
 			if !vok {
 				return errors.New("failed to parse v")
 			}
@@ -424,8 +459,23 @@ func (a *Amount) Scan(v any) error {
 }
 
 func (a Amount) Bytes() []byte {
+	if a.value != nil && a.value.Sign() < 0 {
+		// Negative values use version 0x01: [0x01][varint exp][sign=1]
+		// [magnitude big-endian]. big.Int.Bytes() is magnitude-only, so
+		// the legacy version-0 layout silently dropped the sign and
+		// negatives didn't round-trip. version 0x01 carries it
+		// explicitly.
+		buf := binary.AppendVarint([]byte{0x01}, int64(a.exp))
+		buf = append(buf, 1) // sign byte: negative
+		return append(buf, a.value.Bytes()...)
+	}
+	// Non-negative: keep the legacy version-0 layout byte-for-byte so
+	// previously serialized data and older readers stay compatible.
 	buf := binary.AppendVarint([]byte{0x00}, int64(a.exp))
-	return append(buf, a.value.Bytes()...)
+	if a.value != nil {
+		buf = append(buf, a.value.Bytes()...)
+	}
+	return buf
 }
 
 func (a Amount) MarshalBinary() ([]byte, error) {
@@ -436,7 +486,8 @@ func (a *Amount) UnmarshalBinary(data []byte) error {
 	if len(data) < 2 {
 		return errors.New("data too short")
 	}
-	if data[0] != 0 {
+	version := data[0]
+	if version != 0x00 && version != 0x01 {
 		return errors.New("invalid version")
 	}
 	exp, n := binary.Varint(data[1:])
@@ -445,7 +496,20 @@ func (a *Amount) UnmarshalBinary(data []byte) error {
 	}
 
 	a.exp = int(exp)
-	a.value = new(big.Int).SetBytes(data[n+1:])
+	rest := data[1+n:]
+	if version == 0x00 {
+		// Legacy: magnitude-only, always non-negative.
+		a.value = new(big.Int).SetBytes(rest)
+		return nil
+	}
+	// Version 0x01: leading sign byte then magnitude.
+	if len(rest) < 1 {
+		return errors.New("invalid amount encoding: missing sign byte")
+	}
+	a.value = new(big.Int).SetBytes(rest[1:])
+	if rest[0] == 1 {
+		a.value.Neg(a.value)
+	}
 	return nil
 }
 
