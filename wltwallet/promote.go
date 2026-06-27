@@ -82,11 +82,15 @@ func apiWalletPromote(ctx *apirouter.Context, in struct {
 //	    {Type: "RemoteKey", Key: <wdrone session id>},    // server-side via 2FA
 //	    {Type: "Password",  Key: <user password>},        // user-memorised
 //	]
-//	newThreshold = 1                                      // any 1 of 3 can sign
+//	newThreshold = 1                                      // any 2 of 3 can sign
 //
-// A 1-of-3 committee gives the user three independent recovery paths;
-// 1-of-2 (e.g. [StoreKey + Password]) is allowed but loses one
-// recovery lane. Pass exactly 1 KeyDescription and Promote rejects —
+// newThreshold is the protocol threshold T: signing requires exactly
+// T+1 parties. So newThreshold=1 over three keys is a 2-of-3 scheme —
+// any two of the three keys can sign, and no single key alone can.
+// A 2-of-3 committee gives the user three independent recovery paths
+// (lose any one key, the remaining two can still sign); a 2-of-2
+// (e.g. [StoreKey + Password]) is allowed but loses that redundancy —
+// losing either key bricks the wallet. Pass exactly 1 KeyDescription and Promote rejects —
 // a single-party "threshold" scheme isn't a meaningful sharing.
 // See [PromoteMnemonic] for the same guidance applied to multi-chain
 // migrations.

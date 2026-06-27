@@ -108,15 +108,17 @@ func apiWalletPromoteMnemonic(ctx *apirouter.Context, in struct {
 //	    {Type: "RemoteKey", Key: <wdrone session id>},     // server-side via 2FA
 //	    {Type: "Password",  Key: <user password>},         // user-memorised
 //	]
-//	newThreshold = 1                                       // any 1 of 3 can sign
+//	newThreshold = 1                                       // any 2 of 3 can sign
 //
-// A 1-of-3 committee gives the user three independent recovery paths
-// (lose the device → reset with password + remote 2FA; forget the
-// password → reset with device + remote 2FA; lose 2FA access → reset
-// with device + password). Fewer than three keys is allowed but
-// degrades recovery: a 1-of-2 [StoreKey + Password] loses the
-// password-reset path entirely, and a 1-of-2 [RemoteKey + Password]
-// loses the device-only sign path.
+// newThreshold is the protocol threshold T: signing requires exactly
+// T+1 parties. So newThreshold=1 over three keys is a 2-of-3 scheme —
+// any two of the three keys can sign, and no single key alone can.
+// A 2-of-3 committee gives the user three independent recovery paths
+// (lose the device → re-sign with password + remote 2FA; forget the
+// password → re-sign with device + remote 2FA; lose 2FA access →
+// re-sign with device + password). Fewer than three keys is allowed
+// but degrades recovery: a 2-of-2 [StoreKey + Password] has no
+// redundancy — losing either key bricks the wallet.
 //
 // Validation:
 //   - len(newKeys) >= 2. Required by the underlying TSS protocol —
