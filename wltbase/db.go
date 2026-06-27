@@ -10,6 +10,14 @@ import (
 	"github.com/portablesql/psql"
 )
 
+// SECURITY (audit, flagged for human review): the wallet database is
+// stored unencrypted at rest. Adding full DB at-rest encryption is a
+// large, migration-sensitive change (key management, schema/data
+// migration, performance) and was intentionally NOT done as part of
+// this audit pass. Recommended direction: keystore-backed column
+// encryption for the sensitive fields (seeds/keys) rather than
+// whole-file encryption, reviewed and migrated separately.
+
 // kvConfig stores simple key-value configuration data
 type kvConfig struct {
 	psql.Name `sql:"KvConfig"`
