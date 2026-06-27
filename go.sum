@@ -19,8 +19,8 @@ github.com/KarpelesLab/cryptutil v0.3.0 h1:qzJv3I8vqQmTfNTmtyIy4bymFmPU1cFUCOxWH
 github.com/KarpelesLab/cryptutil v0.3.0/go.mod h1:jDMxxyu/DyxVc+8mbXPiJ9Hx0sLI/ksOe790AeToapE=
 github.com/KarpelesLab/currencydb v0.1.4 h1:GW19JzkY5VN3YYt3pY2DS9ALznXYYIrfRSknTbCpuUk=
 github.com/KarpelesLab/currencydb v0.1.4/go.mod h1:xF2xEc/uVfhfdv+Paesi28BfqvMkXRuwohG6RBU5Ip8=
-github.com/KarpelesLab/edwards25519 v1.1.7 h1:03Yr0HxxIvzuupdqLKRjC9P6Em3rl+CpgDZEA/xqkVs=
-github.com/KarpelesLab/edwards25519 v1.1.7/go.mod h1:NikirayExusFY4vgi5ENCCMxOjkcF8uD6yA/y+a2iJ8=
+github.com/KarpelesLab/edwards25519 v1.1.8 h1:jmPoX6XgSRdBLFazb5oxiGEchlspFOCKavqj5IwJ3lw=
+github.com/KarpelesLab/edwards25519 v1.1.8/go.mod h1:NikirayExusFY4vgi5ENCCMxOjkcF8uD6yA/y+a2iJ8=
 github.com/KarpelesLab/emitter v0.3.1 h1:3uLKPoX+pNv4lQp0T/eD1gNkS/yakuKR0poZ9vUQIgI=
 github.com/KarpelesLab/emitter v0.3.1/go.mod h1:JOaQADpNVN0OJfhkDurRCUkMEotPM8Pukh3DadTOY+4=
 github.com/KarpelesLab/ethrpc v0.2.13 h1:wVxwBjQJi0qC6tn0IT9bk07dkzIxfI/9oL1gHHy24dU=
@@ -31,8 +31,8 @@ github.com/KarpelesLab/lngdb v1.0.1 h1:vJcjRN0/4IaAbCWBrXN9YpGs7ZmmReAZA3B0bbRs5
 github.com/KarpelesLab/lngdb v1.0.1/go.mod h1:UTxBZsxyc+YPXpUy38NQjCrS+V9ZPFv5sDXE5iuxdh8=
 github.com/KarpelesLab/mldsa v0.2.0 h1:rOTLCBZmLLW7/IpUJ+Z/qslMQm/4s0zXPLA21a+V6HA=
 github.com/KarpelesLab/mldsa v0.2.0/go.mod h1:x1T4Gyd86wpLwnk1LafWJCqD3EwvhZKXK+0QfHgqZBk=
-github.com/KarpelesLab/outscript v0.3.29 h1:NOS+Hu+zo+qujuuj3bQSO1VmfcxoCGsqPQpOunnSb9g=
-github.com/KarpelesLab/outscript v0.3.29/go.mod h1:MalUfVIVyJZiJvax9aMOcVpLofVPfIuR0trMr/0yjww=
+github.com/KarpelesLab/outscript v0.3.34 h1:Woauwh43JAPZbdvLNe5Z+IujB1wbtBuKcotA6AgbjQ0=
+github.com/KarpelesLab/outscript v0.3.34/go.mod h1:smy7Su3ZJ1lz6HLJaDSvlxURR5hQeDBaOWoWpaYCfhs=
 github.com/KarpelesLab/pjson v0.2.0 h1:Qpv9v6AhvcH7k+iFMPUN11bcgqHyyBNCvRweh9eI7JY=
 github.com/KarpelesLab/pjson v0.2.0/go.mod h1:v3xur0hbHYFmi0vlNqUOqXE7FGmz845gtFJONiuwKho=
 github.com/KarpelesLab/pobj v0.2.1 h1:4I31k/rWcip74a2GngCmD30kx1LSNclvfkEN7TlrIj8=

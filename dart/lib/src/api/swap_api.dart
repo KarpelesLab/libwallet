@@ -236,16 +236,21 @@ class SwapApi {
   /// - `slippage_exceeded` — price moved; re-quote with tighter
   ///   slippage or accept more
   /// - `provider_unavailable` — aggregator or chain RPC failure
+  /// [mevProtection] toggles OKX's MEV-protected broadcast for EVM swaps.
+  /// Leave `null` to use the default (on); pass `false` to opt out (e.g.
+  /// when the protected mempool is landing slowly). Ignored on Solana.
   Future<SwapResult> execute({
     required String quoteId,
     required List<SigningKey> keys,
     String? from,
+    bool? mevProtection,
   }) async {
     final params = <String, dynamic>{
       'quoteId': quoteId,
       'Keys': keys.map((k) => k.toJson()).toList(),
     };
     if (from != null) params['from'] = from;
+    if (mevProtection != null) params['mevProtection'] = mevProtection;
     final data = await _conn.request('Swap:execute', 'POST', params);
     return SwapResult.fromJson(data as Map<String, dynamic>);
   }

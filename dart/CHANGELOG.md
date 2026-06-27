@@ -1,3 +1,19 @@
+## 0.4.70
+
+- **EVM swap MEV protection is now opt-out.** It stays on by default but
+  the host can disable it per-swap via
+  `SwapApi.execute(mevProtection: false)` (in 0.4.69 it was unconditionally
+  on). Threaded through `ExecuteRequest.mevProtection` → `ExecuteOpts` →
+  `Provider.Execute`; Solana ignores it.
+- **Surface OKX `orderId` on the Dart `SwapResult`.** The `orderId` from
+  the OKX broadcast is now exposed on the Dart model (it was already on the
+  Go `SwapResult`) so the host can poll `Crypto/Okx:orderStatus` for final
+  settlement.
+- **Update `outscript` to v0.3.34 (security).** Pulls in upstream hardening
+  on decode/sign paths libwallet uses — Solana transaction decoding,
+  EVM tx `Signature()`/`ParseTransaction` panic guards, `evmabi` address
+  encoding, plus Bitcoin script and address bounds/overflow fixes.
+
 ## 0.4.69
 
 - **Broadcast OKX swaps through OKX's own API instead of our RPC.**

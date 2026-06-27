@@ -11,7 +11,7 @@ require (
 	github.com/KarpelesLab/emitter v0.3.1
 	github.com/KarpelesLab/ethrpc v0.2.13
 	github.com/KarpelesLab/feapi v0.2.7
-	github.com/KarpelesLab/outscript v0.3.29
+	github.com/KarpelesLab/outscript v0.3.34
 	github.com/KarpelesLab/pjson v0.2.0
 	github.com/KarpelesLab/pobj v0.2.1
 	github.com/KarpelesLab/rest v0.6.17
@@ -35,7 +35,7 @@ require (
 	github.com/KarpelesLab/bech32m v0.1.5 // indirect
 	github.com/KarpelesLab/contexter v1.0.2 // indirect
 	github.com/KarpelesLab/currencydb v0.1.4 // indirect
-	github.com/KarpelesLab/edwards25519 v1.1.7 // indirect
+	github.com/KarpelesLab/edwards25519 v1.1.8 // indirect
 	github.com/KarpelesLab/lngdb v1.0.1 // indirect
 	github.com/KarpelesLab/mldsa v0.2.0 // indirect
 	github.com/KarpelesLab/putil v1.0.0 // indirect

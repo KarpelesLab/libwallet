@@ -134,7 +134,7 @@ func (s *stubProvider) Chain() string { return s.chain }
 func (s *stubProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error) {
 	return s.q, s.err
 }
-func (s *stubProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+func (s *stubProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error) {
 	return nil, fmt.Errorf("stub Execute not implemented")
 }
 

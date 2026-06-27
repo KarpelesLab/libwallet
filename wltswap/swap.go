@@ -180,6 +180,18 @@ type ExecuteRequest struct {
 	QuoteId string                    `json:"quoteId"`
 	From    string                    `json:"from,omitempty"`
 	Keys    []*wltsign.KeyDescription `json:"Keys,omitempty"`
+	// MevProtection lets the host opt in/out of OKX's MEV-protected
+	// broadcast for EVM swaps. nil = use the default (on); Solana ignores
+	// it. Pointer so an omitted field is "unset" rather than false.
+	MevProtection *bool `json:"mevProtection,omitempty"`
+}
+
+// ExecuteOpts carries per-execution host preferences resolved from the
+// ExecuteRequest and threaded to Provider.Execute.
+type ExecuteOpts struct {
+	// MevProtection toggles OKX's MEV-protected broadcast for EVM swaps.
+	// nil = provider default (on); Solana ignores it.
+	MevProtection *bool
 }
 
 // SwapResult is the output of Swap:execute. Kept as a distinct type
@@ -778,7 +790,7 @@ func swapExecute(ctx context.Context, req *ExecuteRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := provider.Execute(ctx, n, acct, q, req.Keys)
+	result, err := provider.Execute(ctx, n, acct, q, req.Keys, &ExecuteOpts{MevProtection: req.MevProtection})
 	if err != nil {
 		return nil, err
 	}

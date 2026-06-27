@@ -90,7 +90,8 @@ func (okxSolanaProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wlt
 	return okxQuote(ctx, n, acct, req, "okx_solana", "OKX")
 }
 
-func (okxSolanaProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+func (okxSolanaProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, _ *ExecuteOpts) (*SwapResult, error) {
+	// MEV protection (opts.MevProtection) is EVM-only; Solana ignores it.
 	return okxExecuteSolana(ctx, n, acct, q, keys)
 }
 
@@ -106,8 +107,8 @@ func (okxEVMProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltacc
 	return okxQuote(ctx, n, acct, req, "okx_evm", "OKX")
 }
 
-func (okxEVMProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
-	return okxExecuteEVM(ctx, n, acct, q, keys)
+func (okxEVMProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error) {
+	return okxExecuteEVM(ctx, n, acct, q, keys, opts)
 }
 
 // ── wire shapes ─────────────────────────────────────────────────
@@ -782,7 +783,7 @@ func isRetryableSolanaBroadcast(err error) bool {
 
 // ── Execute (EVM) ───────────────────────────────────────────────
 
-func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error) {
 	tx, err := okxFetchSwapTx(ctx, n, acct, q)
 	if err != nil {
 		return nil, err
@@ -838,11 +839,13 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 		Network:  n.Id,
 	}
 
-	// Broadcast every EVM swap through OKX with MEV protection on. We sign
-	// locally, then hand the raw signed tx to OKX rather than
-	// eth_sendRawTransaction'ing it ourselves: OKX routes it through a
-	// MEV-protected (private) mempool where supported and silently ignores
-	// the flag on chains that don't, so it's safe to enable unconditionally.
+	// Broadcast every EVM swap through OKX. MEV protection is on by default
+	// (the host can opt out via ExecuteRequest.mevProtection) and routes the
+	// tx through a MEV-protected (private) mempool where supported; OKX
+	// silently ignores the flag on chains that don't, so enabling it is
+	// always safe. We sign locally, then hand the raw signed tx to OKX
+	// rather than eth_sendRawTransaction'ing it ourselves.
+	mev := mevEnabled(opts)
 	chainIndex, err := okxChainIndexFor(n)
 	if err != nil {
 		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
@@ -851,7 +854,7 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 	if err != nil {
 		return nil, err
 	}
-	bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId, rawHex, true)
+	bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId, rawHex, mev)
 	if err != nil {
 		return nil, fmt.Errorf("okx evm broadcastTransaction: %w", err)
 	}
@@ -945,6 +948,16 @@ func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
 			got, q.MinAmountOut.Value()))
 	}
 	return nil
+}
+
+// mevEnabled resolves whether to request OKX MEV-protected broadcast for an
+// EVM swap. Defaults to true (on) when the host doesn't set a preference;
+// honors an explicit opts.MevProtection otherwise.
+func mevEnabled(opts *ExecuteOpts) bool {
+	if opts != nil && opts.MevProtection != nil {
+		return *opts.MevProtection
+	}
+	return true
 }
 
 // okxFetchSwapTx hits Crypto/Okx:swap once and returns the inner tx
