@@ -80,8 +80,8 @@ type Quote struct {
 	PriceImpact float64 `json:"priceImpact,omitempty"`
 
 	// Fees — bps for app-side math, absolute amounts for display.
-	FeeBps      uint16         `json:"feeBps"`
-	SlippageBps uint16         `json:"slippageBps"`
+	FeeBps      uint16 `json:"feeBps"`
+	SlippageBps uint16 `json:"slippageBps"`
 	// ReferralFee is our 50 bps take, denominated in the INPUT
 	// token's base units (amountIn * feeBps / 10_000). Use this
 	// for "platform fee: 0.005 SOL" UI strings.
@@ -301,9 +301,9 @@ func swapQuote(ctx context.Context, req *QuoteRequest) (any, error) {
 	if req.AmountIn == "" {
 		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required (use \"MAX\" to swap the full balance)")
 	}
-	if req.SlippageBps == 0 {
-		req.SlippageBps = DefaultSlippageBps
-	}
+	// Apply the default-on-zero and clamp to the safe ceiling so a
+	// hostile or buggy caller can't drive MinAmountOut to zero.
+	req.SlippageBps = normalizeSlippageBps(req.SlippageBps)
 
 	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
 	if err != nil {
@@ -357,9 +357,9 @@ func swapQuotes(ctx context.Context, req *QuoteRequest) (any, error) {
 	if req.AmountIn == "" {
 		return nil, newErr(ErrCodeInvalidRequest, "amountIn is required (use \"MAX\" to quote the full balance)")
 	}
-	if req.SlippageBps == 0 {
-		req.SlippageBps = DefaultSlippageBps
-	}
+	// Apply the default-on-zero and clamp to the safe ceiling so a
+	// hostile or buggy caller can't drive MinAmountOut to zero.
+	req.SlippageBps = normalizeSlippageBps(req.SlippageBps)
 
 	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
 	if err != nil {
@@ -411,9 +411,9 @@ func swapMaxSpendable(ctx context.Context, req *QuoteRequest) (any, error) {
 	}
 	req.TokenIn.Address = stripChainPrefix(req.TokenIn.Address)
 	req.TokenOut.Address = stripChainPrefix(req.TokenOut.Address)
-	if req.SlippageBps == 0 {
-		req.SlippageBps = DefaultSlippageBps
-	}
+	// Apply the default-on-zero and clamp to the safe ceiling so a
+	// hostile or buggy caller can't drive MinAmountOut to zero.
+	req.SlippageBps = normalizeSlippageBps(req.SlippageBps)
 
 	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
 	if err != nil {

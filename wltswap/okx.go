@@ -263,9 +263,9 @@ func okxTokenAddrFor(n *wltnet.Network, addr string) string {
 // fraction (0.005); V6 renamed the param to `slippagePercent` and
 // switched the units.
 func okxSlippagePercent(bps uint16) string {
-	if bps == 0 {
-		bps = DefaultSlippageBps
-	}
+	// Default-on-zero and clamp to the safe ceiling before forwarding
+	// to OKX — never hand the provider an unbounded slippage value.
+	bps = normalizeSlippageBps(bps)
 	pct := float64(bps) / 100.0
 	return strconv.FormatFloat(pct, 'f', -1, 64)
 }
@@ -344,11 +344,11 @@ func okxQuote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req
 	// minReceiveAmount on /swap, but /quote doesn't carry it, so
 	// compute deterministically from SlippageBps for the UI's
 	// "minimum received" line.
-	slippage := req.SlippageBps
-	if slippage == 0 {
-		slippage = DefaultSlippageBps
-	}
-	bpsFactor := big.NewInt(int64(10_000 - slippage))
+	slippage := normalizeSlippageBps(req.SlippageBps)
+	// Compute the bps factor in a wide signed type AFTER clamping so
+	// `10_000 - slippage` can never underflow (uint16) or go negative:
+	// normalizeSlippageBps guarantees slippage ∈ [1, 5000].
+	bpsFactor := big.NewInt(10_000 - int64(slippage))
 	minOut := new(big.Int).Mul(amountOut, bpsFactor)
 	minOut.Quo(minOut, big.NewInt(10_000))
 
@@ -618,6 +618,13 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 		if tx.Data == "" {
 			return nil, newErr(ErrCodeProviderUnavailable, "okx: solana swap returned empty tx.data")
 		}
+		// Tripwire: the Solana tx body is an opaque serialized blob we
+		// can't cheaply re-derive, but OKX echoes the minReceiveAmount
+		// it baked in — refuse to sign if it undercuts the floor the
+		// user approved in the quote.
+		if err := okxAssertMinReceive(q, tx); err != nil {
+			return nil, err
+		}
 		rawTx, err := okxDecodeSolanaTxData(tx.Data)
 		if err != nil {
 			return nil, newErr(ErrCodeProviderUnavailable, "okx: decode solana tx.data: "+err.Error())
@@ -784,6 +791,13 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 		return nil, newErr(ErrCodeProviderUnavailable, "okx: evm swap returned empty tx")
 	}
 
+	// Client-side tripwires: the /swap response is signed and broadcast
+	// as-is, so verify it still matches the quote the user approved
+	// before we put a signature on it.
+	if err := okxValidateEVMTx(q, tx); err != nil {
+		return nil, err
+	}
+
 	nonce, err := fetchEVMNonce(ctx, n, acct.GetAddress())
 	if err != nil {
 		return nil, err
@@ -853,6 +867,84 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 		URL:      n.TransactionUrl(hash),
 		Quote:    q,
 	}, nil
+}
+
+// okxValidateEVMTx runs client-side tripwires on the OKX-returned EVM
+// swap tx before we sign it. Defence-in-depth: a compromised or buggy
+// upstream (or a tampered proxy response) must not be able to redirect
+// funds to an arbitrary contract or quietly worsen the trade past the
+// quote the user approved. The happy path always passes.
+//
+// Checks performed:
+//   - minReceiveAmount must not undercut the approved Quote.MinAmountOut;
+//   - tx.To must equal the approved router/spender (ApprovalSpender) for
+//     token-in swaps. Native-in swaps don't carry a comparable spender
+//     in the quote, so To is only required to be non-empty there (the
+//     caller already enforces that);
+//   - tx.value must equal the native-in amount (the full AmountIn for a
+//     native-currency input, exactly 0 for a token input).
+func okxValidateEVMTx(q *Quote, tx *okxSwapTx) error {
+	if err := okxAssertMinReceive(q, tx); err != nil {
+		return err
+	}
+
+	// tx.To must be the router we approved an allowance for. Only
+	// available for token-in swaps; native-in swaps have no
+	// ApprovalSpender to compare against.
+	if q.ApprovalSpender != "" {
+		if !strings.EqualFold(strings.TrimSpace(tx.To), strings.TrimSpace(q.ApprovalSpender)) {
+			return newErr(ErrCodeProviderUnavailable, fmt.Sprintf(
+				"okx: swap tx.to %q does not match approved spender %q", tx.To, q.ApprovalSpender))
+		}
+	}
+
+	// tx.value must match the expected native-in amount: the full
+	// AmountIn when swapping the chain's native currency, otherwise 0.
+	txVal, ok := new(big.Int).SetString(strings.TrimSpace(tx.Value), 10)
+	if !ok {
+		txVal = big.NewInt(0)
+	}
+	want := big.NewInt(0)
+	if okxIsNativeEVMInput(q.TokenIn.Address) {
+		if q.AmountIn != nil && q.AmountIn.Value() != nil {
+			want = q.AmountIn.Value()
+		} else {
+			// No reference amount to compare against — don't block.
+			want = nil
+		}
+	}
+	if want != nil && txVal.Cmp(want) != 0 {
+		return newErr(ErrCodeProviderUnavailable, fmt.Sprintf(
+			"okx: swap tx.value %s does not match expected native-in amount %s", txVal, want))
+	}
+	return nil
+}
+
+// okxAssertMinReceive refuses to proceed when the provider-returned
+// minReceiveAmount is below the Quote.MinAmountOut the user approved.
+// This is the client-side enforcement of the slippage floor: if price
+// moved adversely between quote and execute such that OKX would settle
+// below the approved minimum, we reject so the user re-quotes rather
+// than silently accepting a worse fill. No-op when the field is absent
+// or unparseable (a display value we won't hard-fail on), or when the
+// quote carries no minimum.
+func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
+	if strings.TrimSpace(tx.MinReceiveAmount) == "" {
+		return nil
+	}
+	got, ok := new(big.Int).SetString(strings.TrimSpace(tx.MinReceiveAmount), 10)
+	if !ok {
+		return nil
+	}
+	if q.MinAmountOut == nil || q.MinAmountOut.Value() == nil {
+		return nil
+	}
+	if got.Cmp(q.MinAmountOut.Value()) < 0 {
+		return newErr(ErrCodeSlippageExceeded, fmt.Sprintf(
+			"okx: swap minReceiveAmount %s is below the approved minimum %s",
+			got, q.MinAmountOut.Value()))
+	}
+	return nil
 }
 
 // okxFetchSwapTx hits Crypto/Okx:swap once and returns the inner tx
