@@ -3,7 +3,9 @@ package wlttoken
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/KarpelesLab/apirouter"
 	"github.com/KarpelesLab/base58"
@@ -14,6 +16,63 @@ import (
 	"github.com/KarpelesLab/xuid"
 	"github.com/portablesql/psql"
 )
+
+// Bounds applied to untrusted token metadata (on-chain symbol / name /
+// decimals, plus operator-supplied overrides). Token symbols and names
+// originate from contract calls or RPC metadata an attacker controls, so
+// they are sanitised and capped to defeat display-spoofing (control
+// chars, bidi overrides, homographs, unbounded length) and decimals are
+// bounded because they feed amount scaling.
+const (
+	maxTokenSymbolLen = 32
+	maxTokenNameLen   = 128
+	maxTokenDecimals  = 36
+)
+
+// sanitizeTokenText strips control and bidirectional/zero-width
+// formatting characters from untrusted token metadata and caps the
+// result to maxLen runes. This prevents token-impersonation and
+// terminal/display corruption from on-chain symbol/name fields
+// (e.g. a U+202E RIGHT-TO-LEFT OVERRIDE that visually reverses text,
+// or homograph padding hidden behind zero-width joiners).
+func sanitizeTokenText(s string, maxLen int) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r == unicode.ReplacementChar:
+			// dropped: invalid UTF-8 sequence
+		case unicode.IsControl(r):
+			// dropped: C0/C1 control characters
+		case isBidiOrInvisible(r):
+			// dropped: bidi overrides / zero-width / BOM
+		default:
+			out = append(out, r)
+			if len(out) >= maxLen {
+				return strings.TrimSpace(string(out))
+			}
+		}
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// isBidiOrInvisible reports whether r is a bidirectional formatting
+// control or an invisible/zero-width character commonly abused to spoof
+// or corrupt displayed token names.
+func isBidiOrInvisible(r rune) bool {
+	switch {
+	case r >= '\u202A' && r <= '\u202E': // LRE, RLE, PDF, LRO, RLO
+		return true
+	case r >= '\u2066' && r <= '\u2069': // LRI, RLI, FSI, PDI
+		return true
+	case r >= '\u200B' && r <= '\u200F': // ZWSP, ZWNJ, ZWJ, LRM, RLM
+		return true
+	case r == '\u061C': // Arabic letter mark
+		return true
+	case r == '\uFEFF': // zero-width no-break space / BOM
+		return true
+	}
+	return false
+}
 
 type token struct {
 	TableName psql.Name  `sql:"Token"`
@@ -82,8 +141,14 @@ func (t *token) validate(e wltintf.Env) error {
 		return fmt.Errorf("tokens are not supported on %s networks", net.Type)
 	}
 
-	if t.Decimals < 0 {
-		return errors.New("Decimals must be >= 0")
+	// Sanitise display metadata — Symbol/Name may originate from
+	// untrusted on-chain sources (discovery, swap EnsureToken) and are
+	// otherwise persisted verbatim.
+	t.Symbol = sanitizeTokenText(t.Symbol, maxTokenSymbolLen)
+	t.Name = sanitizeTokenText(t.Name, maxTokenNameLen)
+
+	if t.Decimals < 0 || t.Decimals > maxTokenDecimals {
+		return fmt.Errorf("Decimals must be between 0 and %d", maxTokenDecimals)
 	}
 
 	return nil
@@ -164,12 +229,12 @@ func EnsureToken(e wltintf.Env, networkId *xuid.XUID, address, symbol, name stri
 
 // Exported accessors for external callers (e.g. wlttx for ERC-20 transfer encoding).
 
-func (t *token) GetAddress() string   { return t.Address }
-func (t *token) GetDecimals() int     { return t.Decimals }
-func (t *token) GetType() string      { return t.Type }
+func (t *token) GetAddress() string     { return t.Address }
+func (t *token) GetDecimals() int       { return t.Decimals }
+func (t *token) GetType() string        { return t.Type }
 func (t *token) GetNetwork() *xuid.XUID { return t.Network }
-func (t *token) GetName() string      { return t.Name }
-func (t *token) GetSymbol() string    { return t.Symbol }
+func (t *token) GetName() string        { return t.Name }
+func (t *token) GetSymbol() string      { return t.Symbol }
 
 // LookupTokenByMint returns the Token row for (networkId, address), or
 // nil if no row exists. Distinguishes "not found" (nil, nil) from
@@ -210,16 +275,16 @@ func (t *token) ApiUpdate(ctx *apirouter.Context) error {
 	updated := false
 
 	if v, ok := apirouter.GetParam[string](ctx, "Name"); ok {
-		t.Name = v
+		t.Name = sanitizeTokenText(v, maxTokenNameLen)
 		updated = true
 	}
 	if v, ok := apirouter.GetParam[string](ctx, "Symbol"); ok {
-		t.Symbol = v
+		t.Symbol = sanitizeTokenText(v, maxTokenSymbolLen)
 		updated = true
 	}
 	if v, ok := apirouter.GetParam[int](ctx, "Decimals"); ok {
-		if v < 0 {
-			return errors.New("Decimals must be >= 0")
+		if v < 0 || v > maxTokenDecimals {
+			return fmt.Errorf("Decimals must be between 0 and %d", maxTokenDecimals)
 		}
 		t.Decimals = v
 		updated = true

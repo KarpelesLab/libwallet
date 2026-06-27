@@ -76,19 +76,29 @@ func discoverERC20(net *wltnet.Network, address string) (*discoverResult, error)
 	// Query name()
 	name, err := doEthCallString(net, address, selectorName)
 	if err == nil {
-		result.Name = name
+		result.Name = sanitizeTokenText(name, maxTokenNameLen)
 	}
 
 	// Query symbol()
 	symbol, err := doEthCallString(net, address, selectorSymbol)
 	if err == nil {
-		result.Symbol = symbol
+		result.Symbol = sanitizeTokenText(symbol, maxTokenSymbolLen)
 	}
 
-	// Query decimals()
+	// Query decimals(). The result is attacker-controlled on-chain
+	// metadata that feeds amount scaling, so refuse anything that
+	// doesn't fit a small, sane range rather than truncating a
+	// uint256 down to a (possibly negative) int.
 	decimals, err := doEthCallUint256(net, address, selectorDecimals)
 	if err == nil {
-		result.Decimals = int(decimals.Int64())
+		if !decimals.IsInt64() {
+			return nil, fmt.Errorf("address %s reports an out-of-range decimals value", address)
+		}
+		d := decimals.Int64()
+		if d < 0 || d > maxTokenDecimals {
+			return nil, fmt.Errorf("address %s reports an invalid decimals value %d", address, d)
+		}
+		result.Decimals = int(d)
 	}
 
 	// Query totalSupply()
@@ -139,6 +149,12 @@ func discoverSPLToken(net *wltnet.Network, address string) (*discoverResult, err
 		return nil, fmt.Errorf("address %s is not a token mint (type: %s)", address, resp.Value.Data.Parsed.Type)
 	}
 
+	// Decimals come straight from untrusted RPC metadata and feed
+	// amount scaling — bound them before trusting the value.
+	if dec := resp.Value.Data.Parsed.Info.Decimals; dec < 0 || dec > maxTokenDecimals {
+		return nil, fmt.Errorf("address %s reports an invalid decimals value %d", address, dec)
+	}
+
 	tokenType := "spl-token"
 	if resp.Value.Data.Program == "spl-token-2022" {
 		tokenType = "spl-token-2022"
@@ -177,15 +193,21 @@ func doEthCallString(net *wltnet.Network, contractAddress, selector string) (str
 		return "", err
 	}
 
-	// Try ABI-encoded string (offset + length + data)
+	// Try ABI-encoded string (offset + length + data). The offset and
+	// length words are attacker-controlled (the contract chooses what
+	// eth_call returns), so range-check every value before using it as
+	// a slice bound — a bogus length would otherwise drive a negative
+	// or out-of-bounds `end` and panic the handler (remote DoS).
 	if len(raw) >= 64 {
 		offset := new(big.Int).SetBytes(raw[:32])
-		if offset.Int64() == 32 && len(raw) >= 64 {
+		if offset.IsInt64() && offset.Int64() == 32 {
 			length := new(big.Int).SetBytes(raw[32:64])
-			end := 64 + int(length.Int64())
-			if end <= len(raw) {
-				s := string(raw[64:end])
-				return strings.TrimSpace(s), nil
+			if length.IsInt64() {
+				n := length.Int64()
+				if n >= 0 && 64+n <= int64(len(raw)) {
+					s := string(raw[64 : 64+n])
+					return strings.TrimSpace(s), nil
+				}
 			}
 		}
 	}
