@@ -24,16 +24,24 @@ package wltswap
 //   Quote:    GET Crypto/Okx:quote  →   build *Quote (+ approval
 //                                       check on EVM via the chain's
 //                                       dexTokenApproveAddress).
-//   Execute:  GET Crypto/Okx:swap   →   { routerResult, tx, platformFee }.
-//                                       Solana: tx.data is the
-//                                         serialized tx blob; sign it
-//                                         via solanaSplicingSignLocal
-//                                         and broadcast via
-//                                         sendTransaction.
-//                                       EVM: build wlttx.Transaction
-//                                         with tx.to/data/value/gas/…
-//                                         and route through
-//                                         Transaction.SignAndSend.
+//   Execute:  GET Crypto/Okx:swap   →   { routerResult, tx, platformFee },
+//                                       then sign locally and broadcast
+//                                       through OKX (Crypto/Okx:
+//                                       broadcastTransaction → orderId,
+//                                       tracked via :orderStatus). Going
+//                                       through OKX's node — rather than our
+//                                       own RPC — avoids node-lag "Blockhash
+//                                       not found" on Solana and gets MEV-
+//                                       protected submission on EVM.
+//                                       Solana: tx.data is the serialized tx
+//                                         blob; splice-sign it via
+//                                         solanaSplicingSignLocal, broadcast
+//                                         base64 (retry with a fresh
+//                                         blockhash on expiry).
+//                                       EVM: build wlttx.Transaction from
+//                                         tx.to/data/value/gas/…, SignEVMRaw
+//                                         it, broadcast the raw hex with MEV
+//                                         protection enabled.
 
 import (
 	"context"
@@ -46,11 +54,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltacct"
+	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wltsign"
-	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/rest"
 )
@@ -586,44 +595,182 @@ func okxDecodeSolanaTxData(s string) ([]byte, error) {
 	return candidates[0], nil
 }
 
+// okxSolanaBroadcastAttempts bounds the fetch→sign→broadcast retries. Each
+// attempt re-fetches the swap tx so it carries a FRESH blockhash: the
+// blockhash is frozen into the message at sign time, so the only cure for a
+// stale/expired one is to rebuild and re-sign. The keys are already in hand
+// (the user approved before Execute was called), so retries need no further
+// user interaction.
+const okxSolanaBroadcastAttempts = 3
+
 func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
-	tx, err := okxFetchSwapTx(ctx, n, acct, q)
+	chainIndex, err := okxChainIndexFor(n)
 	if err != nil {
-		return nil, err
-	}
-	if tx.Data == "" {
-		return nil, newErr(ErrCodeProviderUnavailable, "okx: solana swap returned empty tx.data")
-	}
-	rawTx, err := okxDecodeSolanaTxData(tx.Data)
-	if err != nil {
-		return nil, newErr(ErrCodeProviderUnavailable, "okx: decode solana tx.data: "+err.Error())
-	}
-	signed, err := solanaSplicingSignLocal(ctx, acct, keys, rawTx)
-	if err != nil {
-		return nil, fmt.Errorf("sign okx solana transaction: %w", err)
+		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
 	}
 
-	// Broadcast via standard sendTransaction. OKX hands us a fully-
-	// built v0 (or legacy) transaction; we sign and ship as-is.
-	rpcCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	txB58 := solanaBase58(signed)
-	raw, err := n.DoRPCCtx(rpcCtx, "sendTransaction", txB58, map[string]any{"encoding": "base58"})
-	if err != nil {
-		return nil, fmt.Errorf("okx solana sendTransaction: %w", err)
+	var lastErr error
+	for attempt := 1; attempt <= okxSolanaBroadcastAttempts; attempt++ {
+		tx, err := okxFetchSwapTx(ctx, n, acct, q)
+		if err != nil {
+			return nil, err
+		}
+		if tx.Data == "" {
+			return nil, newErr(ErrCodeProviderUnavailable, "okx: solana swap returned empty tx.data")
+		}
+		rawTx, err := okxDecodeSolanaTxData(tx.Data)
+		if err != nil {
+			return nil, newErr(ErrCodeProviderUnavailable, "okx: decode solana tx.data: "+err.Error())
+		}
+		signed, sig, err := solanaSplicingSignLocal(ctx, acct, keys, rawTx)
+		if err != nil {
+			return nil, fmt.Errorf("sign okx solana transaction: %w", err)
+		}
+
+		// Broadcast through OKX rather than our own RPC sendTransaction:
+		// OKX's node knows the blockhash it just embedded (so there's no
+		// node-lag "Blockhash not found" at preflight) and lands the tx via
+		// its staked submission path. Solana's wire format for the broadcast
+		// endpoint is base64.
+		bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId,
+			base64.StdEncoding.EncodeToString(signed), false)
+		if err != nil {
+			lastErr = fmt.Errorf("okx solana broadcastTransaction: %w", err)
+			if attempt < okxSolanaBroadcastAttempts && isRetryableSolanaBroadcast(err) {
+				wltlog.Errorf("swap: okx broadcast attempt %d/%d failed, retrying with fresh blockhash: %s",
+					attempt, okxSolanaBroadcastAttempts, err)
+				continue
+			}
+			return nil, lastErr
+		}
+
+		// The Solana txid is the slot-0 signature we just spliced; prefer
+		// OKX's reported hash when present but fall back to the local one so
+		// the UI always has a working explorer link without polling.
+		hash := solanaBase58(sig)
+		if bres.TxHash != "" {
+			hash = bres.TxHash
+		}
+
+		// Cheap, single best-effort confirm: if OKX already considers the
+		// order terminally failed (e.g. it couldn't land before expiry),
+		// retry with a fresh blockhash rather than report a phantom success.
+		// Pending/success/not-yet-seen all proceed — the host tracks final
+		// settlement via Crypto/Okx:orderStatus(orderId).
+		if bres.OrderId != "" {
+			if st := okxOrderFailed(ctx, chainIndex, acct.GetAddress(), bres.OrderId); st != "" {
+				lastErr = newErr(ErrCodeProviderUnavailable,
+					fmt.Sprintf("okx reported swap %s (orderId %s)", st, bres.OrderId))
+				if attempt < okxSolanaBroadcastAttempts {
+					wltlog.Errorf("swap: okx order %s %s, retrying with fresh blockhash", bres.OrderId, st)
+					continue
+				}
+				return nil, lastErr
+			}
+		}
+
+		return &SwapResult{
+			QuoteId:  q.QuoteId,
+			Provider: q.Provider,
+			Chain:    "solana",
+			Hash:     hash,
+			OrderId:  bres.OrderId,
+			URL:      n.TransactionUrl(hash),
+			Quote:    q,
+		}, nil
 	}
-	var sig string
-	if err := json.Unmarshal(raw, &sig); err != nil {
-		return nil, newErr(ErrCodeProviderUnavailable, "okx: parse sendTransaction response: "+err.Error())
+	if lastErr == nil {
+		lastErr = fmt.Errorf("okx solana broadcast: exhausted %d attempts", okxSolanaBroadcastAttempts)
 	}
-	return &SwapResult{
-		QuoteId:  q.QuoteId,
-		Provider: q.Provider,
-		Chain:    "solana",
-		Hash:     sig,
-		URL:      n.TransactionUrl(sig),
-		Quote:    q,
-	}, nil
+	return nil, lastErr
+}
+
+// okxBroadcastResult is the entry shape returned by
+// Crypto/Okx:broadcastTransaction. TxHash may be empty briefly right after
+// broadcast; OrderId is the durable handle for orderStatus polling.
+type okxBroadcastResult struct {
+	OrderId    string `json:"orderId"`
+	ChainIndex string `json:"chainIndex"`
+	Address    string `json:"address"`
+	TxHash     string `json:"txHash"`
+}
+
+// okxOrderStatusResult is the entry shape returned by Crypto/Okx:orderStatus.
+type okxOrderStatusResult struct {
+	OrderId string `json:"orderId"`
+	TxHash  string `json:"txHash"`
+	Status  string `json:"status"` // pending|success|failed (OKX terminology)
+}
+
+// okxBroadcastSwapTx broadcasts a signed swap tx through OKX and returns the
+// resulting order handle. signedTx is base64 (Solana) or hex (EVM); mev is
+// honored EVM-side only (Solana ignores it).
+func okxBroadcastSwapTx(ctx context.Context, chainIndex, address, quoteId, signedTx string, mev bool) (*okxBroadcastResult, error) {
+	body := rest.Param{
+		"quoteId":    quoteId,
+		"chainIndex": chainIndex,
+		"address":    address,
+		"signedTx":   signedTx,
+	}
+	if mev {
+		body["enableMevProtection"] = true
+	}
+	var raw []json.RawMessage
+	if err := rest.Apply(ctx, "Crypto/Okx:broadcastTransaction", "POST", body, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, newErr(ErrCodeProviderUnavailable, "okx: broadcastTransaction returned empty response")
+	}
+	var res okxBroadcastResult
+	if err := json.Unmarshal(raw[0], &res); err != nil {
+		return nil, fmt.Errorf("okx: decode broadcast entry: %w", err)
+	}
+	return &res, nil
+}
+
+// okxOrderFailed does a single best-effort orderStatus check right after
+// broadcast. It returns the status string only when OKX already reports the
+// order terminally failed — so the caller can retry/surface it instead of
+// claiming success; "" means pending/success/unknown/not-yet-seen. Errors are
+// swallowed (it's advisory): final settlement is tracked host-side.
+func okxOrderFailed(ctx context.Context, chainIndex, address, orderId string) string {
+	var raw []json.RawMessage
+	if err := rest.Apply(ctx, "Crypto/Okx:orderStatus", "GET", rest.Param{
+		"chainIndex": chainIndex,
+		"address":    address,
+		"orderId":    orderId,
+	}, &raw); err != nil || len(raw) == 0 {
+		return ""
+	}
+	var res okxOrderStatusResult
+	if err := json.Unmarshal(raw[0], &res); err != nil {
+		return ""
+	}
+	if strings.EqualFold(res.Status, "failed") || strings.EqualFold(res.Status, "fail") {
+		return res.Status
+	}
+	return ""
+}
+
+// isRetryableSolanaBroadcast reports whether an OKX broadcast error is the
+// kind a fresh blockhash + re-sign can cure (stale/expired blockhash, preflight
+// simulation miss, transient timeout) versus a terminal one (e.g. insufficient
+// balance) that retrying would only waste a signing round-trip on.
+func isRetryableSolanaBroadcast(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, m := range []string{
+		"blockhash", "block height", "expired", "simulation failed",
+		"-32002", "not found", "timeout", "timed out", "deadline",
+	} {
+		if strings.Contains(s, m) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Execute (EVM) ───────────────────────────────────────────────
@@ -676,15 +823,34 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 		Format:   "legacy",
 		Network:  n.Id,
 	}
-	if err := wTx.SignAndSend(ctx, keys); err != nil {
+
+	// Broadcast every EVM swap through OKX with MEV protection on. We sign
+	// locally, then hand the raw signed tx to OKX rather than
+	// eth_sendRawTransaction'ing it ourselves: OKX routes it through a
+	// MEV-protected (private) mempool where supported and silently ignores
+	// the flag on chains that don't, so it's safe to enable unconditionally.
+	chainIndex, err := okxChainIndexFor(n)
+	if err != nil {
+		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
+	}
+	rawHex, hash, err := wTx.SignEVMRaw(ctx, keys)
+	if err != nil {
 		return nil, err
+	}
+	bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId, rawHex, true)
+	if err != nil {
+		return nil, fmt.Errorf("okx evm broadcastTransaction: %w", err)
+	}
+	if bres.TxHash != "" {
+		hash = bres.TxHash
 	}
 	return &SwapResult{
 		QuoteId:  q.QuoteId,
 		Provider: q.Provider,
 		Chain:    "evm",
-		Hash:     wTx.Hash,
-		URL:      wTx.URL,
+		Hash:     hash,
+		OrderId:  bres.OrderId,
+		URL:      n.TransactionUrl(hash),
 		Quote:    q,
 	}, nil
 }

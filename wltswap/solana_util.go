@@ -131,32 +131,41 @@ func looksLikeSolanaTx(raw []byte) bool {
 // sign the bytes, and drop the signature into the first 64-byte
 // slot. The adapter assumes the user is the fee payer (slot 0),
 // which is always true for Jupiter Ultra / dFlow swaps.
-func solanaSplicingSignLocal(ctx context.Context, acct *wltacct.Account, keys []*wltsign.KeyDescription, rawTx []byte) ([]byte, error) {
+// Returns the fully-signed transaction and the 64-byte signature spliced
+// into slot 0. On Solana that slot-0 signature, base58-encoded, IS the
+// transaction id — so callers can report the on-chain hash immediately,
+// without waiting on a broadcast response.
+func solanaSplicingSignLocal(ctx context.Context, acct *wltacct.Account, keys []*wltsign.KeyDescription, rawTx []byte) (signed, sig []byte, err error) {
 	if len(rawTx) < 1 {
-		return nil, fmt.Errorf("empty transaction")
+		return nil, nil, fmt.Errorf("empty transaction")
 	}
 	numSigs, consumed, err := decodeCompactU16(rawTx, 0)
 	if err != nil {
-		return nil, fmt.Errorf("parse numSignatures: %w", err)
+		return nil, nil, fmt.Errorf("parse numSignatures: %w", err)
 	}
 	if numSigs < 1 {
-		return nil, fmt.Errorf("transaction declares 0 signers — cannot splice user signature")
+		return nil, nil, fmt.Errorf("transaction declares 0 signers — cannot splice user signature")
 	}
 	sigsEnd := consumed + int(numSigs)*64
 	if sigsEnd > len(rawTx) {
-		return nil, fmt.Errorf("signatures truncated: declared %d, tx only %d bytes", numSigs, len(rawTx))
+		return nil, nil, fmt.Errorf("signatures truncated: declared %d, tx only %d bytes", numSigs, len(rawTx))
 	}
 	message := rawTx[sigsEnd:]
 
 	signOpt := &wltsign.Opts{Context: ctx, Keys: keys}
 	signStart := time.Now()
-	sig, err := acct.Sign(nil, message, signOpt)
+	sig, err = acct.Sign(nil, message, signOpt)
 	if err != nil {
 		wltlog.Errorf("swap: Solana splice-sign failed after %s: %s", time.Since(signStart).Round(time.Millisecond), err)
-		return nil, fmt.Errorf("sign message: %w", err)
+		return nil, nil, fmt.Errorf("sign message: %w", err)
 	}
+	// The sign duration is the dominant slice of the fetch→broadcast
+	// window that decides whether the OKX blockhash is still valid at
+	// broadcast — log it so field reports of "Blockhash not found" can
+	// be attributed to slow signing vs. RPC node lag.
+	wltlog.Debugf("swap: Solana splice-sign ok in %s", time.Since(signStart).Round(time.Millisecond))
 	if len(sig) != ed25519.SignatureSize {
-		return nil, fmt.Errorf("unexpected signature length %d", len(sig))
+		return nil, nil, fmt.Errorf("unexpected signature length %d", len(sig))
 	}
 
 	// Local verify so an upstream "signature verification failed"
@@ -164,17 +173,17 @@ func solanaSplicingSignLocal(ctx context.Context, acct *wltacct.Account, keys []
 	// account address (fee-payer pubkey) we just signed under.
 	pubBytes, err := base58.Bitcoin.Decode(acct.GetAddress())
 	if err != nil || len(pubBytes) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("decode fee-payer pubkey: %w", err)
+		return nil, nil, fmt.Errorf("decode fee-payer pubkey: %w", err)
 	}
 	if !ed25519.Verify(ed25519.PublicKey(pubBytes), message, sig) {
-		return nil, fmt.Errorf("signature does not verify under fee-payer pubkey — TSS key shares may be inconsistent")
+		return nil, nil, fmt.Errorf("signature does not verify under fee-payer pubkey — TSS key shares may be inconsistent")
 	}
 
 	// Splice: copy the signed bytes into slot 0.
 	out := make([]byte, len(rawTx))
 	copy(out, rawTx)
 	copy(out[consumed:consumed+64], sig)
-	return out, nil
+	return out, sig, nil
 }
 
 // encodeCompactU16 is the inverse of decodeCompactU16; used by

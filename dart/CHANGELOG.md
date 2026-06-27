@@ -1,3 +1,27 @@
+## 0.4.69
+
+- **Broadcast OKX swaps through OKX's own API instead of our RPC.**
+  Solana swaps now go through `Crypto/Okx:broadcastTransaction` rather
+  than a direct `sendTransaction` to our chain RPC. OKX's node knows the
+  blockhash it just embedded in the swap tx, which eliminates the
+  node-lag `Transaction simulation failed: Blockhash not found` rejection
+  at preflight (the blockhash was valid but our broadcast node hadn't
+  observed it yet). The Solana path also gains a bounded retry: on a
+  blockhash/expiry error it re-fetches the swap tx with a **fresh
+  blockhash**, re-signs, and re-broadcasts (no new user approval — the
+  signing keys are already in hand). The on-chain txid is taken from the
+  spliced slot-0 signature, so the explorer link is available without
+  polling.
+- **Enable MEV protection on EVM swaps.** EVM swaps are now signed
+  locally and broadcast through OKX with `enableMevProtection` on, routing
+  them through a private/MEV-protected mempool where the chain supports it
+  (OKX ignores the flag on chains that don't). Adds `Transaction.SignEVMRaw`
+  (sign without broadcasting) so the raw signed tx can be handed to OKX.
+- **Track swap settlement via `orderId`.** `SwapResult` now carries OKX's
+  `orderId`; the host can poll `Crypto/Okx:orderStatus` for final
+  settlement. A cheap post-broadcast status check surfaces an
+  already-failed order instead of reporting a phantom success.
+
 ## 0.4.68
 
 - **Coalesce redundant balance-snapshot RPCs into one upstream scan.**

@@ -193,6 +193,11 @@ type SwapResult struct {
 	// Hash is the on-chain transaction signature (Solana) or
 	// transaction hash (EVM).
 	Hash string `json:"hash"`
+	// OrderId is OKX's broadcast handle for swaps routed through their
+	// broadcast endpoint (Solana). Empty for paths that broadcast
+	// directly to a chain RPC. The host can poll Crypto/Okx:orderStatus
+	// with it to track final settlement.
+	OrderId string `json:"orderId,omitempty"`
 	// URL is a block-explorer link for the hash. Matches
 	// wltnet.Network.TransactionUrl's output.
 	URL string `json:"url,omitempty"`

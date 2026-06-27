@@ -750,6 +750,32 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 		return tx.save(e)
 	}
 
+	if err := tx.signEVM(ctx, e, n, acct, keys); err != nil {
+		return err
+	}
+
+	// eth_sendRawTransaction
+	hash, err := ethrpc.ReadString(n.DoRPC("eth_sendRawTransaction", "0x"+hex.EncodeToString(tx.Raw)))
+	if err != nil {
+		return err
+	}
+	// should already be the same
+	tx.Hash = hash
+	tx.URL = n.TransactionUrl(tx.Hash)
+	wltintf.NotifyTxBroadcast(e)
+	if err := tx.save(e); err != nil {
+		return fmt.Errorf("failed to save transaction after broadcast: %w", err)
+	}
+
+	return nil
+}
+
+// signEVM signs the EVM transaction and stores the raw signed bytes in
+// tx.Raw WITHOUT broadcasting. encodeTx sets tx.Hash to the signed tx hash;
+// this also backfills tx.Fee and persists the row. Shared by SignAndSend
+// (which then eth_sendRawTransaction's tx.Raw) and SignEVMRaw (which hands
+// the bytes to an external broadcaster, e.g. OKX's MEV-protected path).
+func (tx *Transaction) signEVM(ctx context.Context, e wltintf.Env, n *wltnet.Network, acct *wltacct.Account, keys []*wltsign.KeyDescription) error {
 	signOpt := &wltsign.Opts{
 		Context: ctx,
 		IL:      acct.IL,
@@ -778,23 +804,46 @@ func (tx *Transaction) SignAndSend(ctx context.Context, keys []*wltsign.KeyDescr
 	// whole call.
 	_ = tx.computeFee(n)
 
-	err = tx.save(e)
-	if err != nil {
-		return err
-	}
+	return tx.save(e)
+}
 
-	// eth_sendRawTransaction
-	hash, err := ethrpc.ReadString(n.DoRPC("eth_sendRawTransaction", "0x"+hex.EncodeToString(buf)))
+// SignEVMRaw signs the EVM transaction WITHOUT broadcasting and returns the
+// 0x-prefixed raw signed tx plus its hash. For broadcasters that submit the
+// wire bytes themselves rather than via eth_sendRawTransaction — e.g. the OKX
+// swap path, which forwards the raw tx to OKX's MEV-protected broadcast.
+func (tx *Transaction) SignEVMRaw(ctx context.Context, keys []*wltsign.KeyDescription) (raw, hash string, err error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return "", "", errors.New("failed to get env")
+	}
+	if err := tx.Validate(e); err != nil {
+		return "", "", err
+	}
+	if tx.From == "" {
+		return "", "", errors.New("from is required")
+	}
+	acct, err := wltacct.FindAccount(e, tx.From)
 	if err != nil {
-		return err
+		return "", "", err
 	}
-	// should already be the same
-	tx.Hash = hash
-	tx.URL = n.TransactionUrl(tx.Hash)
-	wltintf.NotifyTxBroadcast(e)
-	if err := tx.save(e); err != nil {
-		return fmt.Errorf("failed to save transaction after broadcast: %w", err)
+	n, err := tx.getNetwork(e)
+	if err != nil {
+		return "", "", err
 	}
-
-	return nil
+	if n.Type != "evm" {
+		return "", "", fmt.Errorf("SignEVMRaw: network %q is not evm", n.Type)
+	}
+	now := time.Now()
+	tx.Created = &now
+	if keys == nil {
+		keys = tx.Keys
+	}
+	if keys == nil {
+		return "", "", errors.New("keys are missing")
+	}
+	tx.Keys = nil
+	if err := tx.signEVM(ctx, e, n, acct, keys); err != nil {
+		return "", "", err
+	}
+	return "0x" + hex.EncodeToString(tx.Raw), tx.Hash, nil
 }
