@@ -28,26 +28,26 @@ import (
 )
 
 type Transaction struct {
-	psql.Name    `sql:"Transaction"`
-	Id           *xuid.XUID                `json:"id,omitempty" sql:",key=PRIMARY"`
-	Type         string                    `json:"type" sql:",type=VARCHAR,size=255"`           // transfer, etc
-	Asset        string                    `json:"asset" sql:",type=VARCHAR,size=255"`          // asset id (network id + "@" + NATIVE if native, or token id)
-	From         string                    `json:"from,omitempty" sql:",type=VARCHAR,size=255"` // from (account)
-	To           string                    `json:"to" sql:",type=VARCHAR,size=255"`
-	Gas          uint64                    `json:"gas" sql:",type=BIGINT"`                          // gas amount
-	GasPrice     string                    `json:"gasPrice,omitempty" sql:",type=VARCHAR,size=255"` // gas price (legacy)
-	MaxFeePerGas string                    `json:"maxFeePerGas,omitempty" sql:",type=VARCHAR,size=255"` // EIP-1559 max fee per gas
-	MaxPriorityFeePerGas string            `json:"maxPriorityFeePerGas,omitempty" sql:",type=VARCHAR,size=255"` // EIP-1559 max priority (tip) fee per gas
-	Fee          *wltobj.Amount            `json:"fee,omitempty" sql:",type=JSON,format=json"`
-	Nonce        uint64                    `json:"nonce" sql:",type=BIGINT"`                      // eth only
-	Format       string                    `json:"format,omitempty" sql:",type=VARCHAR,size=255"` // transaction format, for ethereum: legacy or eip1559
-	Raw          []byte                    `json:"raw,omitempty" sql:",type=BLOB"`
-	Hash         string                    `json:"hash,omitempty" sql:",type=VARCHAR,size=255"`
-	URL          string                    `json:"url,omitempty" sql:",type=TEXT"`
-	Network      *xuid.XUID                `json:"network,omitempty" sql:",type=VARCHAR,size=255"`
-	Amount       *wltobj.Amount            `json:"amount" sql:",type=JSON,format=json"`
-	Value        *wltobj.Amount            `json:"value,omitempty" sql:",type=JSON,format=json"`
-	Data         string                    `json:"data,omitempty" sql:",type=TEXT"`
+	psql.Name            `sql:"Transaction"`
+	Id                   *xuid.XUID     `json:"id,omitempty" sql:",key=PRIMARY"`
+	Type                 string         `json:"type" sql:",type=VARCHAR,size=255"`           // transfer, etc
+	Asset                string         `json:"asset" sql:",type=VARCHAR,size=255"`          // asset id (network id + "@" + NATIVE if native, or token id)
+	From                 string         `json:"from,omitempty" sql:",type=VARCHAR,size=255"` // from (account)
+	To                   string         `json:"to" sql:",type=VARCHAR,size=255"`
+	Gas                  uint64         `json:"gas" sql:",type=BIGINT"`                                      // gas amount
+	GasPrice             string         `json:"gasPrice,omitempty" sql:",type=VARCHAR,size=255"`             // gas price (legacy)
+	MaxFeePerGas         string         `json:"maxFeePerGas,omitempty" sql:",type=VARCHAR,size=255"`         // EIP-1559 max fee per gas
+	MaxPriorityFeePerGas string         `json:"maxPriorityFeePerGas,omitempty" sql:",type=VARCHAR,size=255"` // EIP-1559 max priority (tip) fee per gas
+	Fee                  *wltobj.Amount `json:"fee,omitempty" sql:",type=JSON,format=json"`
+	Nonce                uint64         `json:"nonce" sql:",type=BIGINT"`                      // eth only
+	Format               string         `json:"format,omitempty" sql:",type=VARCHAR,size=255"` // transaction format, for ethereum: legacy or eip1559
+	Raw                  []byte         `json:"raw,omitempty" sql:",type=BLOB"`
+	Hash                 string         `json:"hash,omitempty" sql:",type=VARCHAR,size=255"`
+	URL                  string         `json:"url,omitempty" sql:",type=TEXT"`
+	Network              *xuid.XUID     `json:"network,omitempty" sql:",type=VARCHAR,size=255"`
+	Amount               *wltobj.Amount `json:"amount" sql:",type=JSON,format=json"`
+	Value                *wltobj.Amount `json:"value,omitempty" sql:",type=JSON,format=json"`
+	Data                 string         `json:"data,omitempty" sql:",type=TEXT"`
 	// ── Solana priority fees (opt-in; zero values preserve legacy behaviour) ──
 	ComputeUnitLimit uint32 `json:"computeUnitLimit,omitempty" sql:"-"` // SetComputeUnitLimit instruction argument
 	ComputeUnitPrice uint64 `json:"computeUnitPrice,omitempty" sql:"-"` // microlamports per CU; 0 = use PriorityLevel
@@ -84,12 +84,12 @@ type Transaction struct {
 	// rather than letting the caller's Type string drift out of sync
 	// with the asset they actually meant to send. nil means native.
 	// Unexported: never serialized, never persisted.
-	resolvedToken resolvedTokenAsset `json:"-" sql:"-"`
-	Keys         []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
-	Created      *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
-	FiatAmount   *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
-	FiatCurrency string                    `json:"fiat_currency,omitempty" sql:"-"`
-	FiatQuote    any                       `json:"fiat_quote,omitempty" sql:"-"`
+	resolvedToken resolvedTokenAsset        `json:"-" sql:"-"`
+	Keys          []*wltsign.KeyDescription `json:"Keys,omitempty" sql:"-"`
+	Created       *time.Time                `json:"created,omitempty" sql:",type=DATETIME"`
+	FiatAmount    *wltobj.Amount            `json:"fiat_amount,omitempty" sql:"-"`
+	FiatCurrency  string                    `json:"fiat_currency,omitempty" sql:"-"`
+	FiatQuote     any                       `json:"fiat_quote,omitempty" sql:"-"`
 }
 
 func (tx *Transaction) save(e wltintf.Env) error {
@@ -240,7 +240,16 @@ func (tx *Transaction) estimateGas(n *wltnet.Network) error {
 	if tx.Data != "" {
 		v["data"] = tx.Data
 	}
-	if tx.Amount != nil && tx.Amount.Sign() > 0 {
+	// For ERC-20 (token) transfers the amount rides inside the calldata
+	// (transfer(to,amount)); transfer() is non-payable, so passing the
+	// token amount as native msg.value makes eth_estimateGas revert.
+	// Mirror encodeTx and force value=0 in that case. resolvedToken
+	// covers the type-agnostic "transfer" that Validate routed to an
+	// ERC-20 as well as the explicit "erc20_transfer".
+	isTokenTransfer := tx.Type == "erc20_transfer" || tx.resolvedToken != nil
+	if isTokenTransfer {
+		v["value"] = "0x0"
+	} else if tx.Amount != nil && tx.Amount.Sign() > 0 {
 		v["value"] = "0x" + tx.Amount.Value().Text(16)
 	} else if tx.Value != nil && tx.Value.Sign() > 0 {
 		v["value"] = "0x" + tx.Value.Value().Text(16)
