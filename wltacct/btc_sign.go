@@ -1,6 +1,7 @@
 package wltacct
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/sha256"
@@ -85,6 +86,15 @@ func (a *Account) SignCompact(hash []byte, headerOffset byte, opts crypto.Signer
 // Digest = double-SHA256( prefix || varint(len(message)) || message )
 // where prefix is the per-chain magic (via BitcoinMessagePrefix).
 func (a *Account) SignBitcoinMessage(prefix, message []byte, opts crypto.SignerOpts) ([]byte, error) {
+	// Enforce the known-chain allow-list. BitcoinMessagePrefix returns
+	// ok=false for chains we don't recognise; signing under an unknown or
+	// caller-fabricated prefix would produce a signature with no defined
+	// domain separation (potential cross-protocol replay). Refuse unless
+	// the supplied prefix exactly matches a known chain's magic prefix.
+	if !isKnownBitcoinMessagePrefix(prefix) {
+		return nil, errors.New("refusing to sign: unknown Bitcoin-family message prefix (chain not in allow-list)")
+	}
+
 	full := make([]byte, 0, len(prefix)+9+len(message))
 	full = append(full, prefix...)
 	full = appendVarInt(full, uint64(len(message)))
@@ -93,6 +103,17 @@ func (a *Account) SignBitcoinMessage(prefix, message []byte, opts crypto.SignerO
 	h1 := sha256.Sum256(full)
 	h2 := sha256.Sum256(h1[:])
 	return a.SignCompact(h2[:], 31, opts)
+}
+
+// isKnownBitcoinMessagePrefix reports whether prefix exactly matches the full
+// byte prefix (length byte + magic) of a chain in the known allow-list.
+func isKnownBitcoinMessagePrefix(prefix []byte) bool {
+	for chainId := range bitcoinMsgPrefix {
+		if known, ok := BitcoinMessagePrefix(chainId); ok && bytes.Equal(prefix, known) {
+			return true
+		}
+	}
+	return false
 }
 
 // appendVarInt appends a Bitcoin-style variable-length integer.
