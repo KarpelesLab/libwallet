@@ -1,3 +1,16 @@
+## 0.4.73
+
+- **Reserve the wSOL wrap rent on max native-SOL swaps.** `Swap:maxSpendable`
+  for a native-SOL input reserved the *output* token ATA rent but not the
+  transient *input* wSOL wrap account (~2.04M lamports) that every native-SOL
+  swap creates, funds with `amount_in`, and closes. The wallet must front
+  that rent at peak, so the reported max over-stated by ~0.002 SOL and a
+  max/near-max SOL swap couldn't fund the wrap — failing on-chain at the swap
+  instruction (`custom program error: 0xb`). Max now reserves both the input
+  wSOL wrap and the output ATA (each gated on whether the account already
+  exists). Note: this corrects the max-amount math; a host that lets the user
+  enter an amount manually should still validate it against `maxSpendable`.
+
 ## 0.4.72
 
 - **Fail fast on deterministic swap reverts.** The Solana swap retry loop
