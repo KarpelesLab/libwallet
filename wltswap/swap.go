@@ -849,3 +849,70 @@ func resolveAccountAndNetwork(e wltintf.Env, from, _ string) (*wltacct.Account, 
 	}
 	return acct, n, nil
 }
+
+// OrderStatusRequest is the input to Swap:orderStatus.
+type OrderStatusRequest struct {
+	// OrderId is the SwapResult.orderId returned by Swap:execute.
+	OrderId string `json:"orderId"`
+	// From selects the account that signed the swap (default: current).
+	// The order is keyed by that wallet's on-chain address, so it must
+	// match the swap that produced the orderId.
+	From string `json:"from,omitempty"`
+	// Network overrides the network the order belongs to (default: current).
+	Network string `json:"network,omitempty"`
+}
+
+// SwapOrderStatus is the normalized settlement state of a broadcast swap,
+// polled from the provider. Status is one of "pending" | "success" |
+// "failed". FailReason carries the provider/RPC error on failure; TxHash is
+// set once the tx is on chain.
+type SwapOrderStatus struct {
+	OrderId    string `json:"orderId"`
+	Chain      string `json:"chain"`
+	Status     string `json:"status"`
+	TxHash     string `json:"txHash,omitempty"`
+	FailReason string `json:"failReason,omitempty"`
+}
+
+// swapOrderStatus is the Swap:orderStatus endpoint — poll the settlement
+// state of a previously executed swap by its orderId. Swap:execute reports
+// success as soon as the provider ACCEPTS the broadcast (which, for OKX,
+// happens before the tx has even been validated — it returns an orderId for
+// a garbage payload too), so a host that needs certainty the swap actually
+// landed polls here until Status is no longer "pending".
+func swapOrderStatus(ctx context.Context, req *OrderStatusRequest) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	if req == nil || strings.TrimSpace(req.OrderId) == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "orderId is required")
+	}
+	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
+	if err != nil {
+		return nil, err
+	}
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
+		return nil, err
+	}
+	chainIndex, err := okxChainIndexFor(n)
+	if err != nil {
+		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
+	}
+	entry, err := okxFetchOrderStatus(ctx, chainIndex, acct.GetAddress(), req.OrderId)
+	if err != nil {
+		return nil, newErr(ErrCodeProviderUnavailable, "okx: orderStatus: "+err.Error())
+	}
+	res := &SwapOrderStatus{
+		OrderId: req.OrderId,
+		Chain:   n.Type,
+		Status:  okxTxStatusLabel(entry),
+	}
+	if entry != nil {
+		res.TxHash = entry.TxHash
+		if res.Status == "failed" {
+			res.FailReason = strings.TrimSpace(entry.FailReason)
+		}
+	}
+	return res, nil
+}

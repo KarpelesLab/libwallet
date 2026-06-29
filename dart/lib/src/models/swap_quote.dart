@@ -432,6 +432,48 @@ class SwapResult {
       );
 }
 
+/// Settlement state of a broadcast swap, from `Swap:orderStatus`.
+///
+/// [SwapApi.execute] returns as soon as the provider *accepts* the broadcast
+/// (OKX returns an [SwapResult.orderId] before the tx has even been
+/// validated), so a host that needs certainty the swap actually landed polls
+/// [SwapApi.orderStatus] until [status] is no longer `pending`.
+class SwapOrderStatus {
+  final String orderId;
+
+  /// "solana" | "evm".
+  final String chain;
+
+  /// Normalized settlement state: `pending` | `success` | `failed`.
+  final String status;
+
+  /// On-chain transaction hash, once known. Empty while pending.
+  final String txHash;
+
+  /// Provider/RPC failure reason when [status] is `failed`. Empty otherwise.
+  final String failReason;
+
+  const SwapOrderStatus({
+    required this.orderId,
+    required this.chain,
+    required this.status,
+    this.txHash = '',
+    this.failReason = '',
+  });
+
+  bool get isPending => status == 'pending';
+  bool get isSuccess => status == 'success';
+  bool get isFailed => status == 'failed';
+
+  factory SwapOrderStatus.fromJson(Map<String, dynamic> json) => SwapOrderStatus(
+        orderId: (json['orderId'] as String?) ?? '',
+        chain: (json['chain'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'pending',
+        txHash: (json['txHash'] as String?) ?? '',
+        failReason: (json['failReason'] as String?) ?? '',
+      );
+}
+
 /// One provider's result from `Swap:quotes`. Exactly one of [quote] /
 /// [error] is populated:
 ///

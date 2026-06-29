@@ -14,6 +14,12 @@
   fresh blockhash on failure), instead of trusting the `orderId`. Also
   fixes the orderStatus response parsing (the orders are nested under a
   paginated envelope with a numeric `txStatus`).
+- **Add `Swap:orderStatus` (typed `swap.orderStatus(orderId)`).** Lets the
+  host poll a swap's settlement state by `orderId` — `pending` / `success`
+  / `failed`, with the on-chain `txHash` and, on failure, the provider's
+  `failReason`. Use it after `execute` to confirm a swap actually landed
+  (a success from `execute` only means the broadcast was accepted, not
+  settled).
 - **Support the MAX amount sentinel on native Solana sends.** `Amount.max(9)`
   (`{"v":"MAX"}`) can now be passed as a native-SOL `Transaction.amount` and
   is resolved server-side to balance − fee − rent at build time — same as

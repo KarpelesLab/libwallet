@@ -785,22 +785,61 @@ func okxAwaitOrder(ctx context.Context, chainIndex, address, orderId string) (tx
 	}
 }
 
-// okxOrderStatusOnce fetches a single orderStatus order entry; returns nil on
-// any error or when the order isn't visible to OKX yet.
-func okxOrderStatusOnce(ctx context.Context, chainIndex, address, orderId string) *okxOrderStatusEntry {
+// okxFetchOrderStatus fetches a single orderStatus order entry. Returns
+// (nil, nil) when the order isn't visible to OKX yet (just-accepted / unknown
+// id); surfaces transport / decode errors for callers that want them.
+func okxFetchOrderStatus(ctx context.Context, chainIndex, address, orderId string) (*okxOrderStatusEntry, error) {
 	var raw []json.RawMessage
 	if err := rest.Apply(ctx, "Crypto/Okx:orderStatus", "GET", rest.Param{
 		"chainIndex": chainIndex,
 		"address":    address,
 		"orderId":    orderId,
-	}, &raw); err != nil || len(raw) == 0 {
-		return nil
+	}, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, nil
 	}
 	var page okxOrderStatusPage
-	if err := json.Unmarshal(raw[0], &page); err != nil || len(page.Orders) == 0 {
+	if err := json.Unmarshal(raw[0], &page); err != nil {
+		return nil, fmt.Errorf("okx: decode orderStatus: %w", err)
+	}
+	if len(page.Orders) == 0 {
+		return nil, nil
+	}
+	return &page.Orders[0], nil
+}
+
+// okxOrderStatusOnce is the error-swallowing variant used by the in-execute
+// poll, where a transient lookup miss should just mean "not settled yet".
+func okxOrderStatusOnce(ctx context.Context, chainIndex, address, orderId string) *okxOrderStatusEntry {
+	e, err := okxFetchOrderStatus(ctx, chainIndex, address, orderId)
+	if err != nil {
 		return nil
 	}
-	return &page.Orders[0]
+	return e
+}
+
+// okxTxStatusLabel normalizes OKX's numeric txStatus into a stable label:
+// "pending" | "success" | "failed". A nil entry (order not yet visible)
+// reads as "pending".
+func okxTxStatusLabel(e *okxOrderStatusEntry) string {
+	if e == nil {
+		return "pending"
+	}
+	switch e.TxStatus {
+	case "2":
+		return "success"
+	case "3":
+		return "failed"
+	case "1":
+		return "pending"
+	default:
+		if e.TxHash != "" {
+			return "success"
+		}
+		return "pending"
+	}
 }
 
 // isRetryableSolanaBroadcast reports whether an OKX broadcast error is the
