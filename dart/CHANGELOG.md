@@ -1,3 +1,15 @@
+## 0.4.72
+
+- **Fail fast on deterministic swap reverts.** The Solana swap retry loop
+  treated any `-32002 "Transaction simulation failed"` as a stale-blockhash
+  case and re-fetched + re-signed up to 3×. But a program revert (e.g.
+  `Error processing Instruction N: custom program error: 0xb` — typically
+  slippage / unfillable route) is deterministic: a fresh blockhash changes
+  nothing. Such errors now surface immediately with their reason instead of
+  burning two extra signing rounds. (A genuinely failing swap still fails —
+  this only makes it fast and clear; raise slippage if the revert is a
+  min-output check.)
+
 ## 0.4.71
 
 - **Fix Solana swaps silently not landing.** OKX's broadcast endpoint

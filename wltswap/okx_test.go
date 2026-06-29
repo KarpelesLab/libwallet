@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -477,6 +478,46 @@ func TestOkxAssertMinReceive(t *testing.T) {
 			}
 			if !tc.wantError && err != nil {
 				t.Fatalf("expected pass, got %v", err)
+			}
+		})
+	}
+}
+
+func TestIsRetryableSolanaBroadcast(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   string
+		retry bool
+	}{
+		{
+			// The original node-lag / stale-blockhash bug — retry helps.
+			name:  "blockhash not found",
+			err:   `{"code":-32002,"message":"Transaction simulation failed: Blockhash not found"}`,
+			retry: true,
+		},
+		{"block height exceeded", "block height exceeded", true},
+		{"expired", "transaction expired", true},
+		{"timeout", "context deadline exceeded", true},
+		{
+			// Jeremy's FLASH case: deterministic program revert — retrying
+			// 3x just burns signing rounds, must NOT retry.
+			name:  "custom program error 0xb",
+			err:   `{"code":-32002,"message":"Transaction simulation failed: Error processing Instruction 5: custom program error: 0xb"}`,
+			retry: false,
+		},
+		{"insufficient funds", "insufficient lamports", false},
+		{"slippage", "exceeds desired slippage limit", false},
+		{"empty", "", false},
+		{"unrelated", "some other error", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.err != "" {
+				err = errors.New(tc.err)
+			}
+			if got := isRetryableSolanaBroadcast(err); got != tc.retry {
+				t.Fatalf("isRetryableSolanaBroadcast(%q) = %v, want %v", tc.err, got, tc.retry)
 			}
 		})
 	}

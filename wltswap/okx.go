@@ -842,18 +842,37 @@ func okxTxStatusLabel(e *okxOrderStatusEntry) string {
 	}
 }
 
-// isRetryableSolanaBroadcast reports whether an OKX broadcast error is the
-// kind a fresh blockhash + re-sign can cure (stale/expired blockhash, preflight
-// simulation miss, transient timeout) versus a terminal one (e.g. insufficient
-// balance) that retrying would only waste a signing round-trip on.
+// isRetryableSolanaBroadcast reports whether an OKX broadcast/settlement
+// error is the kind a fresh blockhash + re-sign can cure (stale/expired
+// blockhash, transient timeout) versus a DETERMINISTIC on-chain revert that
+// will fail identically on every retry.
+//
+// The discriminator matters because both arrive as the same JSON-RPC -32002
+// "Transaction simulation failed: …" envelope: a stale-blockhash retryable
+// case ("… Blockhash not found") and a terminal program revert ("… Error
+// processing Instruction 5: custom program error: 0xb") look alike on the
+// "-32002"/"simulation failed" substring alone. So we check the deterministic
+// markers FIRST and bail, then allow only genuine transient/blockhash markers.
 func isRetryableSolanaBroadcast(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := strings.ToLower(err.Error())
+	// Deterministic reverts — a fresh blockhash changes nothing; retrying
+	// only burns signing rounds. Includes program reverts (slippage,
+	// liquidity, etc.) and plainly terminal conditions.
 	for _, m := range []string{
-		"blockhash", "block height", "expired", "simulation failed",
-		"-32002", "not found", "timeout", "timed out", "deadline",
+		"custom program error", "error processing instruction",
+		"insufficient", "slippage", "exceeds desired", "deserialize",
+	} {
+		if strings.Contains(s, m) {
+			return false
+		}
+	}
+	// Transient / stale-blockhash failures a fresh fetch + re-sign can cure.
+	for _, m := range []string{
+		"blockhash", "block height exceeded", "expired",
+		"timeout", "timed out", "deadline",
 	} {
 		if strings.Contains(s, m) {
 			return true
