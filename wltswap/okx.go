@@ -638,10 +638,11 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 		// Broadcast through OKX rather than our own RPC sendTransaction:
 		// OKX's node knows the blockhash it just embedded (so there's no
 		// node-lag "Blockhash not found" at preflight) and lands the tx via
-		// its staked submission path. Solana's wire format for the broadcast
-		// endpoint is base64.
+		// its staked submission path. OKX base58-decodes the Solana signedTx
+		// (NOT base64 — sending base64 makes OKX reject it with "invalid
+		// base58 encoding" and the tx silently never lands).
 		bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId,
-			base64.StdEncoding.EncodeToString(signed), false)
+			solanaBase58(signed), false)
 		if err != nil {
 			lastErr = fmt.Errorf("okx solana broadcastTransaction: %w", err)
 			if attempt < okxSolanaBroadcastAttempts && isRetryableSolanaBroadcast(err) {
@@ -652,28 +653,25 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 			return nil, lastErr
 		}
 
-		// The Solana txid is the slot-0 signature we just spliced; prefer
-		// OKX's reported hash when present but fall back to the local one so
-		// the UI always has a working explorer link without polling.
-		hash := solanaBase58(sig)
-		if bres.TxHash != "" {
-			hash = bres.TxHash
-		}
-
-		// Cheap, single best-effort confirm: if OKX already considers the
-		// order terminally failed (e.g. it couldn't land before expiry),
-		// retry with a fresh blockhash rather than report a phantom success.
-		// Pending/success/not-yet-seen all proceed — the host tracks final
-		// settlement via Crypto/Okx:orderStatus(orderId).
+		// OKX returns an orderId the instant it accepts the request — BEFORE
+		// the tx has landed or even been validated; it reports the real
+		// outcome only via orderStatus. So we must poll to tell a landed swap
+		// apart from one that failed async, otherwise we'd report a phantom
+		// success for a tx that never hit the chain.
+		hash := solanaBase58(sig) // Solana txid = base58(slot-0 signature)
 		if bres.OrderId != "" {
-			if st := okxOrderFailed(ctx, chainIndex, acct.GetAddress(), bres.OrderId); st != "" {
+			txHash, failed, reason := okxAwaitOrder(ctx, chainIndex, acct.GetAddress(), bres.OrderId)
+			if failed {
 				lastErr = newErr(ErrCodeProviderUnavailable,
-					fmt.Sprintf("okx reported swap %s (orderId %s)", st, bres.OrderId))
-				if attempt < okxSolanaBroadcastAttempts {
-					wltlog.Errorf("swap: okx order %s %s, retrying with fresh blockhash", bres.OrderId, st)
+					fmt.Sprintf("okx swap did not land (orderId %s): %s", bres.OrderId, reason))
+				if attempt < okxSolanaBroadcastAttempts && isRetryableSolanaBroadcast(fmt.Errorf("%s", reason)) {
+					wltlog.Errorf("swap: okx order %s failed, retrying with fresh blockhash: %s", bres.OrderId, reason)
 					continue
 				}
 				return nil, lastErr
+			}
+			if txHash != "" {
+				hash = txHash
 			}
 		}
 
@@ -703,16 +701,28 @@ type okxBroadcastResult struct {
 	TxHash     string `json:"txHash"`
 }
 
-// okxOrderStatusResult is the entry shape returned by Crypto/Okx:orderStatus.
-type okxOrderStatusResult struct {
-	OrderId string `json:"orderId"`
-	TxHash  string `json:"txHash"`
-	Status  string `json:"status"` // pending|success|failed (OKX terminology)
+// okxOrderStatusPage is the Crypto/Okx:orderStatus data entry: a paginated
+// envelope wrapping the matched orders — [ { "cursor": "...", "orders": […] } ].
+type okxOrderStatusPage struct {
+	Cursor string                `json:"cursor"`
+	Orders []okxOrderStatusEntry `json:"orders"`
+}
+
+// okxOrderStatusEntry is one tracked order. TxStatus is OKX's numeric code as
+// a string: "1" pending, "2" success, "3" failed. FailReason carries the
+// upstream RPC error on failure; TxHash is set once the tx is on chain.
+type okxOrderStatusEntry struct {
+	OrderId    string `json:"orderId"`
+	TxStatus   string `json:"txStatus"`
+	FailReason string `json:"failReason"`
+	TxHash     string `json:"txHash"`
 }
 
 // okxBroadcastSwapTx broadcasts a signed swap tx through OKX and returns the
-// resulting order handle. signedTx is base64 (Solana) or hex (EVM); mev is
-// honored EVM-side only (Solana ignores it).
+// resulting order handle. signedTx is base58 (Solana) or 0x-hex (EVM) — OKX
+// base58-decodes the Solana form, so base64 silently fails to land. mev is
+// honored EVM-side only (Solana ignores it). NOTE: the returned orderId means
+// "accepted", not "landed" — confirm via orderStatus (see okxAwaitOrder).
 func okxBroadcastSwapTx(ctx context.Context, chainIndex, address, quoteId, signedTx string, mev bool) (*okxBroadcastResult, error) {
 	body := rest.Param{
 		"quoteId":    quoteId,
@@ -737,28 +747,60 @@ func okxBroadcastSwapTx(ctx context.Context, chainIndex, address, quoteId, signe
 	return &res, nil
 }
 
-// okxOrderFailed does a single best-effort orderStatus check right after
-// broadcast. It returns the status string only when OKX already reports the
-// order terminally failed — so the caller can retry/surface it instead of
-// claiming success; "" means pending/success/unknown/not-yet-seen. Errors are
-// swallowed (it's advisory): final settlement is tracked host-side.
-func okxOrderFailed(ctx context.Context, chainIndex, address, orderId string) string {
+// okxSolanaConfirmTimeout / okxSolanaConfirmInterval bound the post-broadcast
+// orderStatus poll. Solana settles in seconds, so a landed or failed order
+// usually shows within the first couple of polls.
+const (
+	okxSolanaConfirmTimeout  = 25 * time.Second
+	okxSolanaConfirmInterval = 2 * time.Second
+)
+
+// okxAwaitOrder polls Crypto/Okx:orderStatus until the order lands (success /
+// has a txHash), terminally fails, the context ends, or the timeout elapses.
+// Returns the on-chain txHash when known, whether it failed, and the failure
+// reason. A timeout-while-pending returns (",", false, "") so the caller
+// proceeds optimistically — the tx may still be in flight.
+func okxAwaitOrder(ctx context.Context, chainIndex, address, orderId string) (txHash string, failed bool, reason string) {
+	deadline := time.Now().Add(okxSolanaConfirmTimeout)
+	for {
+		if e := okxOrderStatusOnce(ctx, chainIndex, address, orderId); e != nil {
+			switch e.TxStatus {
+			case "2": // success
+				return e.TxHash, false, ""
+			case "3": // failed
+				return e.TxHash, true, strings.TrimSpace(e.FailReason)
+			}
+			if e.TxHash != "" { // landed even if status not yet "2"
+				return e.TxHash, false, ""
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", false, "" // still pending — caller proceeds optimistically
+		}
+		select {
+		case <-ctx.Done():
+			return "", false, ""
+		case <-time.After(okxSolanaConfirmInterval):
+		}
+	}
+}
+
+// okxOrderStatusOnce fetches a single orderStatus order entry; returns nil on
+// any error or when the order isn't visible to OKX yet.
+func okxOrderStatusOnce(ctx context.Context, chainIndex, address, orderId string) *okxOrderStatusEntry {
 	var raw []json.RawMessage
 	if err := rest.Apply(ctx, "Crypto/Okx:orderStatus", "GET", rest.Param{
 		"chainIndex": chainIndex,
 		"address":    address,
 		"orderId":    orderId,
 	}, &raw); err != nil || len(raw) == 0 {
-		return ""
+		return nil
 	}
-	var res okxOrderStatusResult
-	if err := json.Unmarshal(raw[0], &res); err != nil {
-		return ""
+	var page okxOrderStatusPage
+	if err := json.Unmarshal(raw[0], &page); err != nil || len(page.Orders) == 0 {
+		return nil
 	}
-	if strings.EqualFold(res.Status, "failed") || strings.EqualFold(res.Status, "fail") {
-		return res.Status
-	}
-	return ""
+	return &page.Orders[0]
 }
 
 // isRetryableSolanaBroadcast reports whether an OKX broadcast error is the
