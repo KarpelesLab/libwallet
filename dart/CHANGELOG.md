@@ -1,3 +1,27 @@
+## 0.4.71
+
+- **Fix Solana swaps silently not landing.** OKX's broadcast endpoint
+  base58-decodes the Solana `signedTx`, but we were sending **base64** —
+  OKX accepted the request (returned an `orderId`) yet the chain RPC
+  rejected it with `invalid base58 encoding`, so the tx never hit the chain
+  while the app saw a success with a hash. Now broadcast the signed Solana
+  tx as base58.
+- **Confirm OKX swap broadcasts before reporting success.** OKX returns an
+  `orderId` the moment it *accepts* a request — before the tx has landed or
+  even been validated (it returns one even for a garbage payload). We now
+  poll `Crypto/Okx:orderStatus` after broadcasting and only report success
+  once the order lands (or surface the real `failReason` / retry with a
+  fresh blockhash on failure), instead of trusting the `orderId`. Also
+  fixes the orderStatus response parsing (the orders are nested under a
+  paginated envelope with a numeric `txStatus`).
+- **Support the MAX amount sentinel on native Solana sends.** `Amount.max(9)`
+  (`{"v":"MAX"}`) can now be passed as a native-SOL `Transaction.amount` and
+  is resolved server-side to balance − fee − rent at build time — same as
+  EVM. Hosts should prefer this over precomputing the max client-side (it
+  avoids decimals mistakes and the quote→send race). Unsupported MAX paths
+  (ERC-20, SPL, Bitcoin) now fail with a clear message instead of a vague
+  error.
+
 ## 0.4.70
 
 - **Fix swaps rejected by an over-strict min-receive tripwire.** The 0.4.69
