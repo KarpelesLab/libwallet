@@ -1,3 +1,18 @@
+## 0.4.74
+
+- **Fix native-SOL swaps not wrapping (the real `0xb` cause).** For native
+  SOL, the OKX adapter sent the **wSOL mint** (`So111…112`) as the token
+  identifier, which OKX interprets as "spend the user's existing wSOL SPL
+  token" — it builds a tx that does **not** wrap native SOL. So for any
+  wallet that doesn't already hold wSOL (i.e. almost every user) the swap's
+  source token account was uninitialized and the tx reverted on-chain
+  (`AccountNotInitialized` / `custom program error: 0xb`), regardless of
+  balance or slippage. The adapter now sends OKX's **native-SOL identifier**
+  (`11111111111111111111111111111111`), which makes OKX include the SOL→wSOL
+  wrap (and the wSOL→SOL unwrap when SOL is the output). Confirmed by
+  simulating real OKX txs against mainnet for an affected wallet. (Pairs with
+  a platform-side fix to the OKX commission account for native-SOL swaps.)
+
 ## 0.4.73
 
 - **Reserve the wSOL wrap rent on max native-SOL swaps.** `Swap:maxSpendable`

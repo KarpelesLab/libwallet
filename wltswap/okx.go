@@ -70,12 +70,24 @@ import (
 // industry-standard sentinel every major EVM aggregator uses.
 const okxEVMNativeSentinel = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
-// okxSolanaNativeSentinel is the address OKX uses on Solana for
-// native SOL — the canonical wSOL mint. Confusing on its face, but
-// it's what `Crypto/Okx:allTokens?chainId=501` returns for the
-// native token entry, so it's what the quote / swap endpoints
-// expect for native SOL inputs and outputs.
-const okxSolanaNativeSentinel = WrappedSOLMint
+// okxSolanaNativeSentinel is the identifier OKX's DEX quote/swap endpoints
+// use for NATIVE SOL: the all-1s System Program address (the 32-byte zero
+// pubkey), NOT the wSOL mint.
+//
+// This is load-bearing. Passing the wSOL mint (So111…112) makes OKX treat
+// the input as "spend the user's existing wSOL SPL token" and build a tx
+// that does NOT wrap native SOL — so the swap's source token account is
+// uninitialized for any wallet that doesn't already hold wSOL (i.e. almost
+// every user), and the swap reverts on-chain with AnchorError
+// AccountNotInitialized / "custom program error: 0xb". Confirmed by
+// simulating real OKX txs against mainnet: the wSOL-mint form leaves the
+// source account uninitialized, while the all-1s form makes OKX include the
+// SOL→wSOL wrap (and the wSOL→SOL unwrap when SOL is the output).
+//
+// (The `allTokens` endpoint lists native SOL under the wSOL mint, which is
+// what misled the original constant — but the quote/swap endpoints need the
+// all-1s native identifier to actually wrap.)
+const okxSolanaNativeSentinel = "11111111111111111111111111111111"
 
 // okxSolanaProvider is the registry entry for Solana swaps.
 // Implementation lives on the shared `okx` helpers below; the two

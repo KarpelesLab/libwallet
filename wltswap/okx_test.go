@@ -522,3 +522,21 @@ func TestIsRetryableSolanaBroadcast(t *testing.T) {
 		})
 	}
 }
+
+// TestOkxSolanaNativeSentinelWrapsNativeSol pins the OKX native-SOL
+// identifier to the all-1s System Program address. It must NOT be the wSOL
+// mint: passing the wSOL mint makes OKX skip the SOL wrap, so the swap's
+// source token account is uninitialized for users who don't already hold
+// wSOL (the field-reported AccountNotInitialized / custom program error 0xb).
+func TestOkxSolanaNativeSentinelWrapsNativeSol(t *testing.T) {
+	if okxSolanaNativeSentinel != "11111111111111111111111111111111" {
+		t.Fatalf("okxSolanaNativeSentinel = %q, want the all-1s native SOL address", okxSolanaNativeSentinel)
+	}
+	if okxSolanaNativeSentinel == WrappedSOLMint {
+		t.Fatal("okxSolanaNativeSentinel must not be the wSOL mint — OKX would not wrap native SOL")
+	}
+	sol := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
+	if got := okxTokenAddrFor(sol, "NATIVE"); got != "11111111111111111111111111111111" {
+		t.Fatalf("okxTokenAddrFor(NATIVE) = %q, want all-1s native SOL address", got)
+	}
+}
