@@ -13,7 +13,6 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltnet"
 	"github.com/KarpelesLab/pobj"
-	"github.com/KarpelesLab/xuid"
 )
 
 // ERC-20 function selectors
@@ -47,9 +46,9 @@ func apiDiscoverToken(ctx *apirouter.Context, in struct {
 		return nil, fmt.Errorf("failed to get env")
 	}
 
-	netId, err := xuid.Parse(in.Network)
+	netId, err := resolveNetworkRef(in.Network)
 	if err != nil {
-		return nil, fmt.Errorf("invalid network ID: %w", err)
+		return nil, err
 	}
 
 	net, err := wltnet.NetworkById(e, netId)

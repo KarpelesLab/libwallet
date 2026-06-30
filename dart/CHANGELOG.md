@@ -12,6 +12,19 @@
   wrap (and the wSOL→SOL unwrap when SOL is the output). Confirmed by
   simulating real OKX txs against mainnet for an affected wallet. (Pairs with
   a platform-side fix to the OKX commission account for native-SOL swaps.)
+- **Confirm EVM swap settlement (no more phantom success).** The EVM swap
+  path broadcast through OKX and returned the `orderId`/hash without checking
+  whether the tx actually landed — so a swap that reverted on-chain (missing
+  ERC-20 approval, slippage, gas) reported success with a hash that never
+  mined. It now polls `Crypto/Okx:orderStatus` (same as Solana) and surfaces
+  the real `failReason` on failure. (The EVM `signedTx` hex encoding was
+  verified correct against OKX, so this was purely the missing confirmation.)
+- **Fix adding tokens on Polygon (and any chain): `invalid UUID length: 7`.**
+  `Token:create` / `Token:discoverToken` parsed the `Network` field directly
+  as an xuid, but the Dart API sends the canonical `"<type>.<chainId>"` form
+  (e.g. `"evm.137"` = 7 chars) that `Asset.network` uses — so token-add failed
+  with `invalid UUID length: 7`. Both endpoints now resolve a network ref in
+  either form (xuid `net-…` or `"<type>.<chainId>"`).
 
 ## 0.4.73
 
