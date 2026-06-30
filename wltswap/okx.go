@@ -970,8 +970,23 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 	if err != nil {
 		return nil, fmt.Errorf("okx evm broadcastTransaction: %w", err)
 	}
-	if bres.TxHash != "" {
-		hash = bres.TxHash
+
+	// Confirm the order actually settled. Like Solana, OKX returns an
+	// orderId the moment it ACCEPTS the broadcast — before the tx is mined,
+	// so a swap that reverts on-chain (missing ERC-20 approval, slippage,
+	// gas) would otherwise report a phantom success. Surface the real
+	// failReason instead. We do NOT retry here (re-signing burns the nonce);
+	// the host can re-quote. Pending-after-timeout returns optimistically —
+	// the tx may still confirm; the host tracks it via Swap:orderStatus.
+	if bres.OrderId != "" {
+		txHash, failed, reason := okxAwaitOrder(ctx, chainIndex, acct.GetAddress(), bres.OrderId)
+		if failed {
+			return nil, newErr(ErrCodeProviderUnavailable,
+				fmt.Sprintf("okx evm swap did not land (orderId %s): %s", bres.OrderId, reason))
+		}
+		if txHash != "" {
+			hash = txHash
+		}
 	}
 	return &SwapResult{
 		QuoteId:  q.QuoteId,
