@@ -1,3 +1,16 @@
+## 0.4.77
+
+- **Remote reshare failures now surface their real cause in seconds.** The
+  signing fleet (wdrone) now validates at init time that its stored 2FA
+  share matches the committee the reshare asks it to play — a stale/desynced
+  share (the `Wallet:repairRemoteKey` scenario) fails the ceremony
+  immediately with an actionable message instead of stalling. Any later
+  fleet-side round failure is shipped back as a `walletsign:error` frame,
+  which the client now intercepts to fail the ceremony with the remote's
+  reason ("reshare failed — remote participant reported: …; the wallet
+  committee is unchanged") rather than waiting out the 2-minute rounds
+  deadline. Wire-compatible in both directions with older fleet/clients.
+
 ## 0.4.76
 
 - **Add `Wallet:repairRemoteKey` (`wallets.repairRemoteKey`) — restore a

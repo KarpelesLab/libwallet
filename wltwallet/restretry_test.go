@@ -196,14 +196,14 @@ func TestIsRetryableCriticalError(t *testing.T) {
 
 func TestReshareRoundsContext(t *testing.T) {
 	t.Run("nil error passes through", func(t *testing.T) {
-		_, cancel, wrap := reshareRoundsContext(context.Background())
+		_, cancel, wrap, _ := reshareRoundsContext(context.Background())
 		defer cancel()
 		if wrap(nil) != nil {
 			t.Fatal("wrap(nil) must be nil")
 		}
 	})
 	t.Run("own deadline becomes descriptive error", func(t *testing.T) {
-		_, cancel, wrap := reshareRoundsContext(context.Background())
+		_, cancel, wrap, _ := reshareRoundsContext(context.Background())
 		defer cancel()
 		err := wrap(context.DeadlineExceeded)
 		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
@@ -215,7 +215,7 @@ func TestReshareRoundsContext(t *testing.T) {
 	})
 	t.Run("caller cancel passes through untouched", func(t *testing.T) {
 		parent, parentCancel := context.WithCancel(context.Background())
-		_, cancel, wrap := reshareRoundsContext(parent)
+		_, cancel, wrap, _ := reshareRoundsContext(parent)
 		defer cancel()
 		parentCancel()
 		// Host cancelled: even a DeadlineExceeded from the derived ctx
@@ -228,11 +228,27 @@ func TestReshareRoundsContext(t *testing.T) {
 		}
 	})
 	t.Run("other errors unchanged", func(t *testing.T) {
-		_, cancel, wrap := reshareRoundsContext(context.Background())
+		_, cancel, wrap, _ := reshareRoundsContext(context.Background())
 		defer cancel()
 		e := errors.New("vss verification failed")
 		if wrap(e) != e {
 			t.Fatal("non-deadline errors must pass through unchanged")
+		}
+	})
+	t.Run("remote-reported failure surfaces its reason", func(t *testing.T) {
+		ctx, cancel, wrap, fail := reshareRoundsContext(context.Background())
+		defer cancel()
+		fail("reshare eddsa: stored share belongs to party key 123 (stale share)")
+		<-ctx.Done() // fail cancels the rounds ctx
+		err := wrap(ctx.Err())
+		if err == nil || !strings.Contains(err.Error(), "stale share") {
+			t.Fatalf("expected remote reason to surface, got %v", err)
+		}
+		if strings.Contains(err.Error(), "stopped responding") {
+			t.Fatalf("remote failure must not be mislabelled as a timeout, got %q", err.Error())
+		}
+		if !strings.Contains(err.Error(), "committee is unchanged") {
+			t.Fatalf("expected committee-unchanged assurance, got %q", err.Error())
 		}
 	})
 }
