@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,6 +159,80 @@ func TestRetryLoopBehaviour(t *testing.T) {
 			if !isTransientRestError(err) {
 				t.Errorf("unexpected err: %v", err)
 			}
+		}
+	})
+}
+
+func TestIsRetryableCriticalError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		// Deterministic 4xx must not be retried.
+		{"rest 400", &rest.Error{Response: &rest.Response{Code: 400}}, false},
+		{"rest 404", &rest.Error{Response: &rest.Response{Code: 404}}, false},
+		// 5xx retried, as in the plain retry path.
+		{"rest 500", &rest.Error{Response: &rest.Response{Code: 500}}, true},
+		{"rest 503", &rest.Error{Response: &rest.Response{Code: 503}}, true},
+		// The critical difference vs isTransientRestError: transport-level
+		// failures ARE retried — the request may have been delivered and
+		// abandoning it risks desyncing the server-side share (the field
+		// case was an http2 header timeout after 90s).
+		{"transport http2 timeout", errors.New(`Post "https://…/WalletSign:setGeneratedKey": http2: timeout awaiting response headers`), true},
+		{"connection reset", errors.New("read tcp: connection reset by peer"), true},
+		{"rest error with nil response", &rest.Error{}, true},
+		{"wrapped 404", fmt.Errorf("x: %w", &rest.Error{Response: &rest.Response{Code: 404}}), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isRetryableCriticalError(tc.err); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReshareRoundsContext(t *testing.T) {
+	t.Run("nil error passes through", func(t *testing.T) {
+		_, cancel, wrap := reshareRoundsContext(context.Background())
+		defer cancel()
+		if wrap(nil) != nil {
+			t.Fatal("wrap(nil) must be nil")
+		}
+	})
+	t.Run("own deadline becomes descriptive error", func(t *testing.T) {
+		_, cancel, wrap := reshareRoundsContext(context.Background())
+		defer cancel()
+		err := wrap(context.DeadlineExceeded)
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("must keep DeadlineExceeded in chain, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "stopped responding") {
+			t.Fatalf("expected descriptive message, got %q", err.Error())
+		}
+	})
+	t.Run("caller cancel passes through untouched", func(t *testing.T) {
+		parent, parentCancel := context.WithCancel(context.Background())
+		_, cancel, wrap := reshareRoundsContext(parent)
+		defer cancel()
+		parentCancel()
+		// Host cancelled: even a DeadlineExceeded from the derived ctx
+		// must not be re-labelled as a participant failure.
+		if err := wrap(context.DeadlineExceeded); strings.Contains(err.Error(), "stopped responding") {
+			t.Fatalf("caller cancel must pass through, got %q", err.Error())
+		}
+		if err := wrap(context.Canceled); !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected Canceled, got %v", err)
+		}
+	})
+	t.Run("other errors unchanged", func(t *testing.T) {
+		_, cancel, wrap := reshareRoundsContext(context.Background())
+		defer cancel()
+		e := errors.New("vss verification failed")
+		if wrap(e) != e {
+			t.Fatal("non-deadline errors must pass through unchanged")
 		}
 	})
 }

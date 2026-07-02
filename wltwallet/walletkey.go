@@ -329,9 +329,14 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 		if protocolParam != "" {
 			params["protocol"] = protocolParam
 		}
-		_, err = restDoRetry(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", params)
+		// Tenacious retry: this upload is the one step whose abandonment
+		// can desync server-side state from the local (unchanged)
+		// committee — an interrupted upload may still land server-side and
+		// overwrite the live share (see restDoRetryCritical). Keep pushing
+		// for the full budget before surfacing an error.
+		_, err = restDoRetryCritical(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", params)
 		if err != nil {
-			return err
+			return fmt.Errorf("RemoteKey share upload failed after extended retries (local wallet committee is unchanged; if any attempt reached the server the stored remote share may be out of sync — re-run this reshare from a device holding the local shares before relying on the RemoteKey): %w", err)
 		}
 		wk.Key = kd.Key
 	}

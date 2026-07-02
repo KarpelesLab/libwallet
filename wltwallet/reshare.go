@@ -24,6 +24,36 @@ import (
 	"github.com/KarpelesLab/xuid"
 )
 
+// reshareRoundsTimeout bounds the interactive TSS reshare rounds (remote
+// peer init + message exchange). The rounds themselves complete in seconds
+// (live probes: 2-20s), but the window must also cover spotPeer.Start's
+// legitimate worst case: maxInitAttempts=3 × (15s selectPeer + 15s init
+// query) ≈ 90s before the rounds begin. 2 minutes = that init ceiling plus
+// ~30s of rounds headroom; anything tighter can kill a ceremony that would
+// have succeeded on init attempt 3. Without a bound, a remote party that
+// goes silent after init (field case: a server-side RemoteKey share left
+// inconsistent by an abandoned upload) hangs the ceremony — and the host
+// UI — forever.
+const reshareRoundsTimeout = 2 * time.Minute
+
+// reshareRoundsContext derives the bounded ctx for the TSS rounds plus an
+// error wrapper that turns OUR deadline into a descriptive, actionable
+// error. A caller-initiated cancel (parent already done) passes through
+// untouched so hosts can still distinguish their own cancellation.
+func reshareRoundsContext(parent context.Context) (context.Context, context.CancelFunc, func(error) error) {
+	ctx, cancel := context.WithTimeout(parent, reshareRoundsTimeout)
+	wrap := func(err error) error {
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, context.DeadlineExceeded) && parent.Err() == nil {
+			return fmt.Errorf("reshare TSS rounds timed out after %s — a committee participant stopped responding mid-ceremony (for a RemoteKey this can indicate the server-side share is out of sync); the wallet committee is unchanged: %w", reshareRoundsTimeout, err)
+		}
+		return err
+	}
+	return ctx, cancel, wrap
+}
+
 // Reshare will produce new keys for the given wallet.
 //
 // Dispatches on Wallet.Protocol so each TSS family runs its own
@@ -117,6 +147,13 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 	newtssctx := tss.NewPeerContext(newsids)
 
 	log.Printf("producing final; oldids = %v newids = %v", oldsids, newsids)
+
+	// Bound the interactive rounds so a silent remote party errors out
+	// instead of hanging the ceremony forever. (Placed after the slow
+	// pre-param generation above, which legitimately takes minutes on
+	// low-end devices.)
+	ctx, cancelRounds, wrapRoundsErr := reshareRoundsContext(ctx)
+	defer cancelRounds()
 
 	hub := newTssHub()
 
@@ -239,7 +276,7 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 	wg.Wait()
 
 	if reshareErr != nil {
-		return reshareErr
+		return wrapRoundsErr(reshareErr)
 	}
 	for _, p := range newWKeys {
 		if p.sdata == nil {
@@ -334,6 +371,10 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 	newtssctx := tss.NewPeerContext(newsids)
 
 	log.Printf("producing eddsa reshare final; oldids = %v newids = %v", oldsids, newsids)
+
+	// Bound the interactive rounds — see reshareRoundsTimeout.
+	ctx, cancelRounds, wrapRoundsErr := reshareRoundsContext(ctx)
+	defer cancelRounds()
 
 	hub := newTssHub()
 
@@ -448,7 +489,7 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 	wg.Wait()
 
 	if reshareErr != nil {
-		return reshareErr
+		return wrapRoundsErr(reshareErr)
 	}
 	for _, p := range newWKeys {
 		if p.eddata == nil {
@@ -549,6 +590,10 @@ func (w *Wallet) ReshareFrost(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 
 	log.Printf("producing frost reshare; oldids=%v newids=%v", oldsids, newsids)
 
+	// Bound the interactive rounds — see reshareRoundsTimeout.
+	ctx, cancelRounds, wrapRoundsErr := reshareRoundsContext(ctx)
+	defer cancelRounds()
+
 	hub := newTssHub()
 	for n := range newWKeys {
 		hub.addLocal(newidmap[n])
@@ -626,7 +671,7 @@ func (w *Wallet) ReshareFrost(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 	wg.Wait()
 
 	if reshareErr != nil {
-		return reshareErr
+		return wrapRoundsErr(reshareErr)
 	}
 	for _, p := range newWKeys {
 		if p.frostData == nil {
@@ -749,6 +794,10 @@ func (w *Wallet) ReshareDkls(ctx context.Context, oldKeys []*wltsign.KeyDescript
 
 	log.Printf("producing dkls23 reshare; oldids=%v newids=%v", oldsids, newsids)
 
+	// Bound the interactive rounds — see reshareRoundsTimeout.
+	ctx, cancelRounds, wrapRoundsErr := reshareRoundsContext(ctx)
+	defer cancelRounds()
+
 	hub := newTssHub()
 	for n := range newWKeys {
 		hub.addLocal(newidmap[n])
@@ -829,7 +878,7 @@ func (w *Wallet) ReshareDkls(ctx context.Context, oldKeys []*wltsign.KeyDescript
 	wg.Wait()
 
 	if reshareErr != nil {
-		return reshareErr
+		return wrapRoundsErr(reshareErr)
 	}
 	for _, p := range newWKeys {
 		if p.dklsData == nil {

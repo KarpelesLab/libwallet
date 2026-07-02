@@ -1,3 +1,27 @@
+## 0.4.75
+
+- **Reshare no longer hangs forever on a silent participant.** The TSS
+  reshare rounds (all four protocols: dkls23, FROST, legacy GG18/EdDSA) are
+  now bounded at 2 minutes — sized to the remote-peer init worst case
+  (3 attempts × 30 s) plus rounds headroom; healthy ceremonies complete in
+  seconds. A
+  remote (RemoteKey/wdrone) participant that goes quiet after init now
+  surfaces a descriptive error ("a committee participant stopped responding
+  mid-ceremony…, the wallet committee is unchanged") instead of hanging the
+  host UI indefinitely. Field case: device-share recovery stuck at
+  `ready for TSS rounds` when the server-side RemoteKey share was out of
+  sync. A host-initiated cancel still passes through unchanged.
+- **Tenacious RemoteKey share upload.** `Crypto/WalletSign:setGeneratedKey`
+  — the one reshare step whose abandonment can leave the server-side share
+  out of sync with the local (unchanged) committee — now retries transport
+  failures (http2 header timeouts, connection resets) as well as 5xx, with
+  exponential backoff for up to 5 minutes before giving up. On final
+  failure the error spells out the recovery step (re-run the reshare from a
+  device holding the local shares). Previously a single 90-second http2
+  timeout aborted the reshare after one attempt — the abandoned upload
+  could still land server-side and silently desync the RemoteKey share
+  (root cause of the recovery hang above).
+
 ## 0.4.74
 
 - **Fix native-SOL swaps not wrapping (the real `0xb` cause).** For native
