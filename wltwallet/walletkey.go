@@ -344,6 +344,47 @@ func (wk *WalletKey) encrypt(kd *wltsign.KeyDescription) error {
 	return nil
 }
 
+// pushRemoteShare uploads wk.Data (the fleet-encrypted RemoteKey share blob,
+// byte-identical to what encrypt() originally sent) to the WalletSign backend
+// under sessionKey. Unlike uploadCurveProtocol — which reads the in-memory
+// share pointers populated during a live ceremony — this derives the wire
+// tags from the PERSISTED Schema + wallet curve, because on a restored
+// wallet the pointers are nil (the RemoteKey blob is not client-decryptable
+// by design). Used by Wallet:repairRemoteKey.
+func (wk *WalletKey) pushRemoteShare(w *Wallet, sessionKey string) error {
+	if wk.Type != "RemoteKey" {
+		return fmt.Errorf("pushRemoteShare: key %s is %q, not a RemoteKey", wk.Id, wk.Type)
+	}
+	var curveParam, protocolParam string
+	switch wk.Schema {
+	case "dkls23":
+		curveParam, protocolParam = "secp256k1", ProtocolDKLS
+	case "frost":
+		curveParam, protocolParam = "ed25519", ProtocolFROST
+	case "":
+		// Legacy GG18-family share: the curve disambiguates ecdsa/eddsa.
+		switch w.Curve {
+		case "secp256k1", "ed25519":
+			curveParam, protocolParam = w.Curve, "legacy"
+		default:
+			return fmt.Errorf("pushRemoteShare: legacy share with unsupported wallet curve %q", w.Curve)
+		}
+	default:
+		return fmt.Errorf("pushRemoteShare: unsupported share schema %q", wk.Schema)
+	}
+	params := rest.Param{
+		"data":     base64.RawURLEncoding.EncodeToString(wk.Data),
+		"key":      sessionKey,
+		"curve":    curveParam,
+		"protocol": protocolParam,
+	}
+	if _, err := restDoRetryCritical(withClientID(context.Background()), "Crypto/WalletSign:setGeneratedKey", "POST", params); err != nil {
+		return fmt.Errorf("repair RemoteKey share upload failed: %w", err)
+	}
+	wk.Key = sessionKey
+	return nil
+}
+
 func (wk *WalletKey) opener(kd *wltsign.KeyDescription) (*cryptutil.Opener, error) {
 	switch wk.Type {
 	case "StoreKey":

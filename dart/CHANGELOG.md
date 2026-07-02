@@ -1,3 +1,22 @@
+## 0.4.76
+
+- **Add `Wallet:repairRemoteKey` (`wallets.repairRemoteKey`) — restore a
+  desynced server-side 2FA share from a backup.** The RemoteKey share lives
+  server-side per `crws-…` record and is overwritten in place by share
+  uploads, so a reshare abandoned mid-upload can leave the record holding a
+  share from the abandoned ceremony while the wallet keeps its old
+  committee. If the StoreKey is also gone, the wallet drops below T+1
+  recoverable shares — no in-app reshare can authorize. Because the wallet
+  keeps a byte-identical, fleet-encrypted copy of the uploaded share in its
+  key data (preserved by `Wallet:backup`), a wallet restored from backup can
+  now push that consistent copy back under a fresh validated 2FA session:
+  `remoteKeys.reshare` → `validate` → `wallets.repairRemoteKey(walletId,
+  remoteKey: v.remoteKey)` → then run the recovery reshare as usual. The
+  blob is encrypted to the signing fleet's keys — the device never sees the
+  share plaintext. Validated end-to-end against the live fleet, including a
+  faithful reproduction of the corruption (an "abandoned" ceremony whose
+  upload lands) and post-repair recovery.
+
 ## 0.4.75
 
 - **Reshare no longer hangs forever on a silent participant.** The TSS

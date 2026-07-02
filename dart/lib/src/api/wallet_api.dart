@@ -476,6 +476,39 @@ class WalletApi {
     }
   }
 
+  /// Repair the wallet's server-side RemoteKey (2FA) share from the local
+  /// backup copy.
+  ///
+  /// The RemoteKey share is stored server-side per `crws-…` record and
+  /// overwritten in place by share uploads. A reshare abandoned mid-upload
+  /// (e.g. a network timeout during the final `setGeneratedKey` step) can
+  /// leave the server holding a share from the abandoned ceremony while the
+  /// wallet keeps its old committee — after which any ceremony needing the
+  /// RemoteKey's participation (e.g. device-share recovery) stalls with
+  /// "participant stopped responding".
+  ///
+  /// Because the wallet keeps a byte-identical, fleet-encrypted copy of the
+  /// uploaded share in its key data (and `Wallet:backup` preserves it), a
+  /// wallet restored from backup can push that consistent copy back:
+  ///
+  /// ```dart
+  /// // 1. fresh 2FA session
+  /// final s = await client.remoteKeys.reshare(key: oldRemoteKey.key);
+  /// final v = await client.remoteKeys.validate(session: s.session, code: code);
+  /// // 2. repair the server-side share
+  /// await client.wallets.repairRemoteKey(walletId, remoteKey: v.remoteKey);
+  /// // 3. then run the recovery reshare with ANOTHER fresh session as usual
+  /// ```
+  ///
+  /// The share blob is encrypted to the signing fleet's keys; neither this
+  /// device nor the transport ever sees the share plaintext.
+  Future<Wallet> repairRemoteKey(String walletId,
+      {required String remoteKey}) async {
+    final data = await _conn.request(
+        'Wallet/$walletId:repairRemoteKey', 'POST', {'Key': remoteKey});
+    return Wallet.fromJson(data as Map<String, dynamic>);
+  }
+
   /// Run the mobile-led ClawdWallet keygen ceremony (Stage 1).
   ///
   /// Mobile is the keygen leader: this call sends a

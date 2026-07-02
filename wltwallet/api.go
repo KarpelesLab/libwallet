@@ -25,6 +25,7 @@ func init() {
 	)
 	pobj.RegisterStatic("Wallet:multiCreate", apiMultiCreateWallet)
 	pobj.RegisterStatic("Wallet:reshare", apiWalletReshare)
+	pobj.RegisterStatic("Wallet:repairRemoteKey", apiWalletRepairRemoteKey)
 	pobj.RegisterStatic("Wallet:importPrivateKey", apiImportPrivateKey)
 	pobj.RegisterStatic("Wallet:importMnemonic", apiImportMnemonic)
 	pobj.RegisterStatic("Wallet:promote", apiWalletPromote)
@@ -184,6 +185,61 @@ func apiWalletReshare(ctx *apirouter.Context, in struct {
 		return nil, err
 	}
 
+	return w, nil
+}
+
+// apiWalletRepairRemoteKey re-uploads the wallet's locally-stored RemoteKey
+// share blob to the WalletSign backend under a fresh, validated crws session.
+//
+// Why this exists: the RemoteKey share is stored server-side per crws record
+// and overwritten in place by Crypto/WalletSign:setGeneratedKey. A reshare
+// abandoned mid-upload (field case: a 90s http2 header timeout) can leave the
+// server holding a share from the abandoned ceremony's polynomial while the
+// local wallet keeps the old committee — after which any reshare requiring
+// the RemoteKey's participation stalls, and if the StoreKey is also gone the
+// wallet drops below T+1 recoverable shares. Because encrypt() keeps the
+// exact uploaded bytes in WalletKey.Data (and Wallet:backup serializes them),
+// a restored backup carries the consistent, fleet-encrypted share — this
+// endpoint pushes those bytes back, restoring the record without any
+// server-side rollback. The blob is encrypted to the WalletSign HSM keyring,
+// so the client never sees the share plaintext.
+//
+// Key must be a freshly validated session ("crws-…:crwsv-…" from
+// RemoteKey:reshare + RemoteKey:validate). After repair, run the recovery
+// reshare with ANOTHER fresh session as usual.
+func apiWalletRepairRemoteKey(ctx *apirouter.Context, in struct {
+	Key string
+}) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	w := apirouter.GetObject[Wallet](ctx, "Wallet")
+	if w == nil {
+		return nil, errors.New("Wallet required")
+	}
+	if in.Key == "" {
+		return nil, errors.New("Key (validated RemoteKey session) is required")
+	}
+	var wk *WalletKey
+	for _, k := range w.Keys {
+		if k.Type == "RemoteKey" {
+			wk = k
+			break
+		}
+	}
+	if wk == nil {
+		return nil, errors.New("wallet has no RemoteKey share")
+	}
+	if len(wk.Data) == 0 {
+		return nil, errors.New("wallet's RemoteKey share has no local data blob — was this wallet restored from a backup that includes key data?")
+	}
+	if err := wk.pushRemoteShare(w, in.Key); err != nil {
+		return nil, err
+	}
+	if err := w.save(e); err != nil {
+		return nil, err
+	}
 	return w, nil
 }
 
