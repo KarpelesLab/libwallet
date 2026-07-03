@@ -1,7 +1,10 @@
 //! End-to-end FROST via the production local-ceremony module: an all-on-device
 //! wallet generates its shares and signs, all through `libwallet::tss`.
 
-use libwallet::tss::{frost_keygen_local, frost_keygen_with_parties, frost_sign_local};
+use libwallet::tss::{
+    ed25519_verify, frost_group_pubkey, frost_keygen_local, frost_keygen_with_parties,
+    frost_sign_local,
+};
 
 #[test]
 fn frost_keygen_then_sign_local() {
@@ -49,6 +52,24 @@ fn keygen_with_uuid_party_keys_signs() {
     // A committee formed from these UUID-keyed shares signs.
     let sig = frost_sign_local(&shares[..2], 1, b"msg").unwrap();
     assert_eq!(sig.len(), 64);
+}
+
+#[test]
+fn frost_signature_verifies_as_standard_ed25519() {
+    // The gold-standard proof: a FROST aggregate signature must verify under the
+    // compressed group key exactly like any Ed25519 signature. This also proves
+    // frost_group_pubkey derives the right Wallet.Pubkey bytes.
+    let shares = frost_keygen_local(3, 1).unwrap();
+    let pubkey = frost_group_pubkey(&shares[0].1);
+    // All shares agree on the group pubkey.
+    assert_eq!(frost_group_pubkey(&shares[1].1), pubkey);
+
+    let msg = b"a real transaction hash";
+    let sig = frost_sign_local(&shares[..2], 1, msg).unwrap();
+    let sig64: [u8; 64] = sig.try_into().unwrap();
+
+    assert!(ed25519_verify(&pubkey, msg, &sig64), "FROST sig must verify under group key");
+    assert!(!ed25519_verify(&pubkey, b"tampered", &sig64), "wrong message must fail");
 }
 
 #[test]

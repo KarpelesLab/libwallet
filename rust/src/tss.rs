@@ -168,6 +168,23 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// The wallet's group public key as the 32-byte compressed Ed25519 encoding
+/// (RFC 8032). This is `Wallet.Pubkey` (before base64url) and matches Go
+/// `GroupPublicKey.ToEd25519PubKey().Serialize()`. Any share carries it.
+pub fn frost_group_pubkey(key: &Key) -> [u8; 32] {
+    key.group_public_key.compress()
+}
+
+/// Verify a standard Ed25519 signature against a 32-byte public key. Used to
+/// confirm a FROST aggregate signature is valid under the group key — the same
+/// check any external Ed25519 verifier (or chain node) performs.
+pub fn ed25519_verify(pubkey: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
+    use purecrypto::ec::{Ed25519PublicKey, Ed25519Signature};
+    let pk = Ed25519PublicKey::from_bytes(*pubkey);
+    let s = Ed25519Signature::from_bytes(*sig);
+    pk.verify(msg, &s).is_ok()
+}
+
 /// Sign `msg` with a committee of local shares (must be at least
 /// `threshold + 1`). Returns the 64-byte Ed25519 signature. All committee
 /// members produce the identical aggregate signature.
