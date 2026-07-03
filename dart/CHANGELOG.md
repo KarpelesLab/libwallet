@@ -1,3 +1,18 @@
+## 0.4.78
+
+- **Registered ERC-20 tokens now appear in `Asset:list` with live
+  balances.** EVM tokens added via `Token:create` / `Token:discoverToken`
+  (or auto-registered by a swap) previously produced a Token row but never
+  showed up in the asset/balance list — only native currencies and Solana
+  SPL tokens did. `Asset:list` now enumerates the network's registered
+  ERC-20 tokens and reads each balance via `eth_call balanceOf`, riding the
+  existing balance-snapshot cache and the 60 s poller (so `balances_changed`
+  now fires for ERC-20 movements too). Zero balances are included on
+  purpose: a token the user explicitly registered shows as "0" rather than
+  vanishing. Reimplements the feature from the long-lived `erc20` branch
+  natively on the current codebase (the branch predates the `wlttoken`
+  package and the Asset:list rewrite).
+
 ## 0.4.77
 
 - **Remote reshare failures now surface their real cause in seconds.** The

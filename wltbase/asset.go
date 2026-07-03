@@ -12,7 +12,9 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
 	"github.com/KarpelesLab/libwallet/wlttoken"
+	"github.com/KarpelesLab/libwallet/wlttx"
 	"github.com/KarpelesLab/pobj"
 )
 
@@ -178,6 +180,46 @@ func computeAssets(ctx context.Context, e wltintf.Env, n *wltnet.Network, acct *
 				}
 			}
 			assets = append(assets, tokens...)
+		}
+	}
+	if n.Type == "evm" && acct.GetAddress() != "N/A" {
+		// Registered ERC-20 tokens: unlike Solana (where token accounts
+		// are enumerable on-chain), EVM has no cheap owner→tokens query,
+		// so the user's Token registry (Token:create / Token:discoverToken
+		// / swap EnsureToken) is the source of truth. Zero balances are
+		// included on purpose — the user explicitly registered the token
+		// and expects to see the row (e.g. "0 USDC") rather than nothing.
+		// A per-token RPC failure skips that token (logged) instead of
+		// failing the whole snapshot.
+		if tokens, err := wlttoken.TokensByNetwork(e, n.Id); err == nil {
+			for _, t := range tokens {
+				if t.GetType() != "erc20" {
+					continue
+				}
+				bal, err := wlttx.EVMERC20BalanceOf(ctx, n, t.GetAddress(), acct.GetAddress())
+				if err != nil {
+					wltlog.Debugf("asset-list: balanceOf %s on %s failed: %v", t.GetAddress(), n.Id, err)
+					continue
+				}
+				name, symbol := t.GetName(), t.GetSymbol()
+				if name == "" {
+					name = t.GetAddress()[:min(10, len(t.GetAddress()))] + "..."
+				}
+				if symbol == "" {
+					symbol = t.GetAddress()[:min(8, len(t.GetAddress()))]
+				}
+				assets = append(assets, &wltasset.Asset{
+					Key:     n.String() + "." + t.GetAddress(),
+					Name:    name,
+					Symbol:  symbol,
+					Amount:  wltobj.NewAmountRaw(bal, t.GetDecimals()),
+					Network: n.Id,
+					Type:    "fungible",
+					TestNet: n.TestNet,
+				})
+			}
+		} else {
+			wltlog.Debugf("asset-list: TokensByNetwork %s failed: %v", n.Id, err)
 		}
 	}
 	return &assetSnapshot{Network: n, Account: acct, Assets: assets}, nil

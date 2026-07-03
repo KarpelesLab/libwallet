@@ -242,6 +242,18 @@ func (t *token) GetSymbol() string      { return t.Symbol }
 // enrichment) that want to overlay user-saved metadata on top of a
 // chain-fetched balance list without erroring out when the mint isn't
 // tracked.
+// TokensByNetwork returns every registered Token row for the given network.
+// Used by Asset:list to enumerate the user's ERC-20 tokens (the Solana path
+// discovers tokens on-chain instead; EVM has no cheap on-chain enumeration,
+// so the registry the user builds via Token:create / Token:discoverToken is
+// the source of truth).
+func TokensByNetwork(e wltintf.Env, networkId *xuid.XUID) ([]*token, error) {
+	if networkId == nil {
+		return nil, nil
+	}
+	return psql.Fetch[token](e, map[string]any{"Network": networkId})
+}
+
 func LookupTokenByMint(e wltintf.Env, networkId *xuid.XUID, address string) (*token, error) {
 	if networkId == nil || address == "" {
 		return nil, nil

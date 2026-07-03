@@ -514,6 +514,13 @@ func maxSendableEVMERC20(ctx context.Context, n *wltnet.Network, acct *wltacct.A
 	return res, nil
 }
 
+// EVMERC20BalanceOf reads balanceOf(owner) from an ERC-20 contract —
+// exported for wltbase's Asset:list, which enumerates the user's registered
+// tokens with live balances.
+func EVMERC20BalanceOf(ctx context.Context, n *wltnet.Network, contract, owner string) (*big.Int, error) {
+	return evmERC20BalanceOf(ctx, n, contract, owner)
+}
+
 // evmERC20BalanceOf reads balanceOf(owner) from contract on n. ABI:
 // the call data is the 4-byte selector followed by the owner address
 // padded to 32 bytes. Result is a single uint256.
