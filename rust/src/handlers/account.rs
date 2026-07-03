@@ -242,6 +242,12 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
                 .unwrap_or(890_880);
             raw.saturating_sub(rent).to_string()
         }
+        "bitcoin" => {
+            // Sum unspent NATIVE outputs via modchain_assets (satoshi).
+            crate::bitcoin::native_balance_satoshi(rpc, &account.address)
+                .map_err(ApiError::internal)?
+                .to_string()
+        }
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))

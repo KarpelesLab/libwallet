@@ -9,6 +9,62 @@ use outscript::crypto::secp256k1::SecpPublicKey;
 
 use crate::{Env, Error, Result};
 
+/// Parse a modchain `balance` value (outscript BtcAmount JSON) into satoshi.
+/// Mirrors Go `BtcAmount.UnmarshalText`: a JSON number/string, where a value
+/// without a decimal point is whole BTC (×1e8), a decimal value is scaled to
+/// 8 places (max 8 decimals), and a `0x`-prefixed string is raw satoshi hex.
+pub fn parse_btc_amount(v: &serde_json::Value) -> Result<u64> {
+    // Numbers keep their literal form via to_string (no float rounding).
+    let s = match v {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        other => return Err(Error::Env(format!("bad btc amount {other}"))),
+    };
+    let s = s.trim();
+    if let Some(hex) = s.strip_prefix("0x") {
+        return u64::from_str_radix(hex, 16).map_err(|e| Error::Env(format!("btc hex: {e}")));
+    }
+    match s.split_once('.') {
+        None => {
+            let v: u64 = s.parse().map_err(|e| Error::Env(format!("btc int: {e}")))?;
+            v.checked_mul(100_000_000).ok_or_else(|| Error::Env("btc overflow".into()))
+        }
+        Some((int_part, frac)) => {
+            if frac.len() > 8 {
+                return Err(Error::Env("cannot parse amount with more than 8 decimals".into()));
+            }
+            let digits = format!("{int_part}{frac}");
+            let mut v: u64 = digits.parse().map_err(|e| Error::Env(format!("btc dec: {e}")))?;
+            for _ in frac.len()..8 {
+                v = v.checked_mul(10).ok_or_else(|| Error::Env("btc overflow".into()))?;
+            }
+            Ok(v)
+        }
+    }
+}
+
+/// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
+/// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
+pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
+    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([lookup]))?;
+    let assets = raw
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| Error::Env("modchain_assets: no assets array".into()))?;
+    let mut total: u64 = 0;
+    for a in assets {
+        if a.get("asset").and_then(|s| s.as_str()) != Some("NATIVE") {
+            continue;
+        }
+        if let Some(bal) = a.get("balance") {
+            total = total
+                .checked_add(parse_btc_amount(bal)?)
+                .ok_or_else(|| Error::Env("btc balance overflow".into()))?;
+        }
+    }
+    Ok(total)
+}
+
 /// A UTXO to spend.
 pub struct Utxo {
     pub txid: [u8; 32], // display (big-endian) order
