@@ -109,6 +109,41 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     res.map_err(ApiError::internal)
 }
 
+/// `Swap:quotes` — the multi-provider fan-out form of Swap:quote (Go
+/// `swapQuotes`). One routed provider per chain today, so `attempts` has a
+/// single entry carrying either the quote or a structured error.
+pub fn quotes(env: &Env, params: &Value) -> ApiResult {
+    let net_id = params.get("Network").and_then(Value::as_str).unwrap_or("@");
+    let net = crate::models::network::fetch(env, net_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "network not found"))?;
+    let provider = match net.kind.as_str() {
+        "solana" => "okx_solana",
+        "evm" => "okx_evm",
+        other => return Err(ApiError::new(400, format!("swap not supported on {other}"))),
+    };
+
+    let token_in = token_ref(params.get("TokenIn"))?;
+    let token_out = token_ref(params.get("TokenOut"))?;
+    let amount_in = params.get("AmountIn").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "AmountIn required"))?;
+    let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
+    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
+    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
+    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
+
+    // A quote failure becomes an attempt-level error, not an endpoint failure.
+    let attempt = match swap::get_quote(&key, base, &net.kind, &net.chain_id, token_in, token_out, amount_in, slippage) {
+        Ok(q) => serde_json::json!({ "provider": provider, "providerLabel": "OKX", "quote": q }),
+        Err(e) => serde_json::json!({
+            "provider": provider,
+            "providerLabel": "OKX",
+            "error": { "code": "provider_unavailable", "message": e.to_string() },
+        }),
+    };
+    Ok(serde_json::json!({ "attempts": [attempt] }))
+}
+
 /// `Swap:buildApprovalData` — the ERC-20 `approve(spender, amount)` calldata for
 /// an EVM swap. `Unlimited` uses uint256 max; otherwise `Amount` is base units.
 /// The host wraps this in a Transaction for signAndSend (the stateful

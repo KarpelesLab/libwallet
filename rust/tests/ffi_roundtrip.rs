@@ -666,6 +666,26 @@ fn network_resolve_rpc_via_ffi() {
 }
 
 #[test]
+fn swap_quotes_via_ffi() {
+    let h = new_env();
+    // Default current network = ephemeral evm.1. Mock OKX proxy returns a quote.
+    let okx = mock_node(
+        r#"{"result":"success","data":[{"fromTokenAmount":"1000000","toTokenAmount":"2000000","priceImpactPercent":"0.1"}]}"#,
+    );
+    let okx = okx.trim_end_matches('/');
+    let body = format!(
+        r#"{{"path":"Swap:quotes","params":{{"TokenIn":{{"address":"0xIN","decimals":6}},"TokenOut":{{"address":"0xOUT","decimals":6}},"AmountIn":"1000000","SlippageBps":50,"KeyId":"k","Secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","Backend":"{okx}"}}}}"#
+    );
+    let resp = request(h, &body);
+    assert_eq!(resp["result"], "success", "{resp}");
+    let att = &resp["data"]["attempts"][0];
+    assert_eq!(att["provider"], "okx_evm");
+    assert_eq!(att["providerLabel"], "OKX");
+    assert_eq!(att["quote"]["amountOut"]["v"], "2000000");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn swap_availability_via_ffi() {
     let h = new_env();
     // Current network defaults to ephemeral evm.1 (Ethereum) — swaps available.
