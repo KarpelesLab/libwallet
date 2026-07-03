@@ -47,6 +47,16 @@ pub fn quote(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(q).unwrap())
 }
 
+/// `Swap:countryAvailability` — whether swaps are offered in a country (Go
+/// `swapCountryAvailability`).
+pub fn country_availability(_env: &Env, params: &Value) -> ApiResult {
+    let country = params
+        .get("Country")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Country required"))?;
+    Ok(serde_json::to_value(swap::country_availability(country)).unwrap())
+}
+
 /// `Swap:availability` — whether swaps are available on the current (or given)
 /// network, and the eligible providers (Go `swapAvailability`).
 pub fn availability(env: &Env, params: &Value) -> ApiResult {

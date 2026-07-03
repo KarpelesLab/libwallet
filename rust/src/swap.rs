@@ -120,6 +120,51 @@ pub fn normalize_slippage(bps: u16) -> u16 {
     }
 }
 
+/// Whether OKX offers swaps in a country (ISO 3166-1 alpha-2), Go
+/// `okxAvailableCountries` — the exact 121-country allow-list.
+pub fn okx_available_country(code: &str) -> bool {
+    matches!(
+        code,
+        "AE" | "AG" | "AI" | "AM" | "AR" | "AT" | "AU" | "AZ" | "BB" | "BE" | "BG" | "BH" | "BM"
+            | "BO" | "BR" | "BS" | "BW" | "BY" | "BZ" | "CA" | "CF" | "CH" | "CI" | "CL" | "CM"
+            | "CO" | "CR" | "CZ" | "DE" | "DK" | "DM" | "DO" | "EC" | "EE" | "ES" | "FI" | "FR"
+            | "GB" | "GD" | "GE" | "GN" | "GQ" | "GR" | "GT" | "GW" | "GY" | "HK" | "HN" | "HR"
+            | "HU" | "IE" | "IL" | "IT" | "JM" | "JO" | "JP" | "KE" | "KG" | "KN" | "KR" | "KW"
+            | "KY" | "KZ" | "LC" | "LI" | "LT" | "LU" | "LV" | "MA" | "MD" | "ME" | "MG" | "MK"
+            | "ML" | "MO" | "MT" | "MU" | "MX" | "MY" | "MZ" | "NE" | "NG" | "NI" | "NL" | "NO"
+            | "NZ" | "OM" | "PA" | "PE" | "PL" | "PR" | "PT" | "PY" | "QA" | "RO" | "RU" | "SA"
+            | "SE" | "SG" | "SI" | "SK" | "SN" | "SR" | "SV" | "TC" | "TJ" | "TM" | "TN" | "TR"
+            | "TT" | "TW" | "UA" | "UG" | "US" | "UY" | "UZ" | "VC" | "VE" | "VG" | "VN" | "ZA"
+    )
+}
+
+/// A country-availability verdict (Go `CountryAvailabilityResult`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CountryAvailability {
+    pub available: bool,
+    pub country: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+/// Whether swaps are offered in a country (Go `swapCountryAvailability`). A
+/// malformed code (not two ASCII letters) is `invalid_country`; a well-formed
+/// but non-allow-listed code is `country_not_supported`. (Go additionally
+/// validates against a full ISO 3166-1 table; that country DB isn't ported, so
+/// a well-formed but non-existent code reads as `country_not_supported` here.)
+pub fn country_availability(country: &str) -> CountryAvailability {
+    let code = country.trim().to_uppercase();
+    let well_formed = code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase());
+    if !well_formed {
+        return CountryAvailability { available: false, country: code, reason: "invalid_country".into() };
+    }
+    if okx_available_country(&code) {
+        CountryAvailability { available: true, country: code, reason: String::new() }
+    } else {
+        CountryAvailability { available: false, country: code, reason: "country_not_supported".into() }
+    }
+}
+
 /// Whether OKX routes swaps on this EVM chain id (Go `okxSupportedEVMChains`).
 pub fn okx_supported_evm_chain(chain_id: &str) -> bool {
     matches!(

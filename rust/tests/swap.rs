@@ -36,6 +36,22 @@ fn okx_token_addr_and_slippage() {
 }
 
 #[test]
+fn country_availability_uses_allowlist() {
+    // Allow-listed (case/space-insensitive) -> available.
+    assert!(swap::country_availability("JP").available);
+    assert!(swap::country_availability(" us ").available);
+    assert!(swap::country_availability("gb").available);
+    // Well-formed but not allow-listed -> country_not_supported.
+    let cn = swap::country_availability("CN");
+    assert!(!cn.available);
+    assert_eq!(cn.reason, "country_not_supported");
+    // Malformed -> invalid_country.
+    assert_eq!(swap::country_availability("").reason, "invalid_country");
+    assert_eq!(swap::country_availability("USA").reason, "invalid_country");
+    assert_eq!(swap::country_availability("1!").reason, "invalid_country");
+}
+
+#[test]
 fn availability_gates_by_chain() {
     // EVM: supported chain ids are available; others aren't.
     let eth = swap::availability("evm", "1");

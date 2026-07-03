@@ -78,6 +78,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Swap:quote" => swap::quote(&handle.env, params),
         "Swap:buildApprovalData" => swap::build_approval_data(&handle.env, params),
         "Swap:availability" => swap::availability(&handle.env, params),
+        "Swap:countryAvailability" => swap::country_availability(&handle.env, params),
         "Account:balance" => account::balance(&handle.env, params),
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
