@@ -120,6 +120,101 @@ impl Network {
         }
     }
 
+    /// The native-currency decimals for this network: the stored
+    /// `currency_decimals`, else the chain registry (EVM), else the chain
+    /// default (SOL=9, BTC-family=8). Matches Go's decimals resolution.
+    pub fn native_decimals(&self) -> i64 {
+        if self.currency_decimals > 0 {
+            return self.currency_decimals;
+        }
+        match self.kind.as_str() {
+            "evm" => self
+                .chain_info()
+                .and_then(|i| i.native_currency.as_ref())
+                .map(|c| c.decimals as i64)
+                .unwrap_or(18),
+            "solana" => 9,
+            _ => 8, // bitcoin family (satoshi)
+        }
+    }
+
+    /// The account's native balance as a scaled [`crate::Amount`] (port of Go
+    /// `Network.nativeBalance`, in currency units rather than raw base units):
+    /// EVM eth_getBalance (wei / decimals), Solana getBalance minus the
+    /// rent-exempt reserve (lamports / 9), Bitcoin summed NATIVE UTXOs
+    /// (satoshi / 8). `rpc` is a dialable endpoint; `address` the account.
+    pub fn native_amount(&self, rpc: &str, address: &str) -> Result<crate::Amount> {
+        use num_bigint::BigInt;
+        match self.kind.as_str() {
+            "evm" => {
+                let hex = crate::rpc::call(rpc, "eth_getBalance", json!([address, "latest"]))?;
+                let hex = hex.as_str().ok_or_else(|| crate::Error::Env("balance not a string".into()))?;
+                let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+                let n = BigInt::parse_bytes(stripped.as_bytes(), 16)
+                    .ok_or_else(|| crate::Error::Env(format!("bad balance hex {hex}")))?;
+                Ok(crate::Amount::new_raw(n, self.native_decimals()))
+            }
+            "solana" => {
+                let res = crate::rpc::call(rpc, "getBalance", json!([address]))?;
+                let raw = res
+                    .get("value")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| crate::Error::Env("unexpected getBalance response".into()))?;
+                let rent = crate::rpc::call(rpc, "getMinimumBalanceForRentExemption", json!([0]))
+                    .ok()
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(890_880);
+                Ok(crate::Amount::new_raw(BigInt::from(raw.saturating_sub(rent)), 9))
+            }
+            "bitcoin" => {
+                let sats = crate::bitcoin::native_balance_satoshi(rpc, address)?;
+                Ok(crate::Amount::new_raw(BigInt::from(sats), 8))
+            }
+            other => Err(crate::Error::Env(format!("native balance unsupported for {other}"))),
+        }
+    }
+
+    /// The `type.chainId` string form (Go `Network.String`).
+    pub fn key_prefix(&self) -> String {
+        format!("{}.{}", self.kind, self.chain_id)
+    }
+
+    /// Build the live native-currency [`Asset`](crate::models::asset::Asset) for
+    /// `address` (port of Go `Network.NativeAsset`): fetch the balance, key it
+    /// `<type>.<chainId>.NATIVE`, and label it from the chain registry (EVM) or
+    /// the network/native symbol (Bitcoin/Solana). Computed, not persisted, so
+    /// the Id is left empty.
+    pub fn native_asset(&self, rpc: &str, address: &str) -> Result<crate::models::asset::Asset> {
+        let amount = self.native_amount(rpc, address)?;
+        let symbol = self.native_symbol()?;
+        // EVM takes the currency name from the chain registry; the others use
+        // the network name, falling back to the symbol.
+        let name = match self.kind.as_str() {
+            "evm" => self
+                .chain_info()
+                .and_then(|i| i.native_currency.as_ref())
+                .map(|c| c.name.clone())
+                .unwrap_or_else(|| symbol.clone()),
+            _ if !self.name.is_empty() => self.name.clone(),
+            _ => symbol.clone(),
+        };
+        Ok(crate::models::asset::Asset {
+            id: String::new(),
+            key: format!("{}.NATIVE", self.key_prefix()),
+            name,
+            symbol,
+            amount,
+            kind: "fungible".to_owned(),
+            network: self.id.clone(),
+            created: String::new(),
+            updated: String::new(),
+            fiat_amount: None,
+            fiat_currency: String::new(),
+            fiat_quote: None,
+            testnet: self.testnet,
+        })
+    }
+
     /// The Network JSON object, matching Go's custom MarshalJSON.
     pub fn to_json(&self) -> Value {
         let mut m = Map::new();

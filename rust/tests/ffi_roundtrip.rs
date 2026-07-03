@@ -356,6 +356,37 @@ fn account_balance_via_ffi() {
 }
 
 #[test]
+fn native_asset_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // Current network defaults to the ephemeral evm.1; pass an explicit RPC.
+    // 2 ETH = 0x1bc16d674ec80000 wei.
+    let rpc = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":"0x1bc16d674ec80000"}"#);
+    let asset = request(
+        h,
+        &format!(r#"{{"path":"Account:nativeAsset","params":{{"Id":"{account_id}","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(asset["result"], "success", "nativeAsset failed: {asset:?}");
+    assert_eq!(asset["data"]["key"], "evm.1.NATIVE");
+    assert_eq!(asset["data"]["symbol"], "ETH");
+    assert_eq!(asset["data"]["amount"]["v"], "2000000000000000000");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn bitcoin_balance_via_ffi() {
     let h = new_env();
     let w = request(

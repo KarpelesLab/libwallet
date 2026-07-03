@@ -7,6 +7,62 @@ fn env() -> Env {
     env
 }
 
+/// One-shot JSON-RPC mock returning `result_json` for a single request.
+fn mock(result_json: &str) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#);
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = listener.accept() {
+            let mut buf = [0u8; 8192];
+            let _ = s.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    format!("http://{addr}/")
+}
+
+#[test]
+fn evm_native_amount_and_asset() {
+    let env = env();
+    let n = network::fetch(&env, "evm.1").unwrap().unwrap();
+
+    // 1 ETH = 0xde0b6b3a7640000 wei, 18 decimals.
+    let rpc = mock(r#""0xde0b6b3a7640000""#);
+    let amt = n.native_amount(&rpc, "0xabc").unwrap();
+    assert_eq!(amt.to_display_string(), "1.000000000000000000");
+    assert_eq!(amt.exp(), 18);
+
+    // The assembled native Asset carries the chain-registry label + .NATIVE key.
+    let rpc2 = mock(r#""0xde0b6b3a7640000""#);
+    let asset = n.native_asset(&rpc2, "0xabc").unwrap();
+    assert_eq!(asset.key, "evm.1.NATIVE");
+    assert_eq!(asset.symbol, "ETH");
+    assert_eq!(asset.name, "Ether");
+    assert_eq!(asset.kind, "fungible");
+    assert!(asset.is_native());
+    assert!(asset.id.is_empty(), "computed asset is not persisted");
+    assert_eq!(asset.amount.to_display_string(), "1.000000000000000000");
+}
+
+#[test]
+fn bitcoin_native_amount_from_modchain() {
+    let env = env();
+    let n = network::fetch(&env, "bitcoin.bitcoin").unwrap().unwrap();
+    let rpc = mock(r#"{"assets":[{"asset":"NATIVE","decimals":8,"balance":"0.00500123"}]}"#);
+    let amt = n.native_amount(&rpc, "bc1qexample").unwrap();
+    // 500123 satoshi -> 0.00500123 BTC (8 decimals).
+    assert_eq!(amt.exp(), 8);
+    assert_eq!(amt.to_display_string(), "0.00500123");
+}
+
 #[test]
 fn ephemeral_evm_uses_chain_registry() {
     let env = env();
