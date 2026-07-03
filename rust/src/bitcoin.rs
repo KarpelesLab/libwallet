@@ -292,6 +292,60 @@ pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
     Ok(total)
 }
 
+impl DiscoveredUtxo {
+    /// The HD chain (0=receive, 1=change) from the UTXO's path.
+    fn chain(&self) -> u32 {
+        self.path.split('/').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
+    }
+    /// The HD child index from the UTXO's path (last segment).
+    fn child_index(&self) -> u32 {
+        self.path.rsplit('/').next().and_then(|s| s.parse().ok()).unwrap_or(0)
+    }
+    /// Per-input virtual size (Go `bitcoinTxo.vsize`) for fee estimation.
+    fn vsize(&self) -> u64 {
+        match self.script.as_str() {
+            "p2wpkh" | "p2wsh" => 68,
+            "p2sh:p2wpkh" | "p2sh-p2wpkh" => 91,
+            _ => 148, // p2pkh and unknown (over-estimate rather than under-pay)
+        }
+    }
+}
+
+/// Estimated vsize of a tx with `ins` inputs and `outs` outputs (Go
+/// `estimateMixedTxVSize`): 11 overhead + 31/output + per-input vsize.
+fn estimate_vsize(ins: &[DiscoveredUtxo], outs: u64) -> u64 {
+    11 + outs * 31 + ins.iter().map(|u| u.vsize()).sum::<u64>()
+}
+
+/// Greedy largest-first coin selection (Go `selectUTXOs`): add UTXOs until the
+/// total covers `want_sats` + the size-based fee. Returns (selected, total_in).
+fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64) -> Result<(Vec<DiscoveredUtxo>, u64)> {
+    let mut sorted = all.to_vec();
+    sorted.sort_by(|a, b| b.amount_sats.cmp(&a.amount_sats)); // largest first
+    let mut total: u64 = 0;
+    let mut out: Vec<DiscoveredUtxo> = Vec::new();
+    for u in sorted {
+        total += u.amount_sats;
+        out.push(u);
+        let fee = estimate_vsize(&out, 2) * fee_rate;
+        if total >= want_sats + fee {
+            return Ok((out, total));
+        }
+    }
+    Err(Error::Env(format!("insufficient funds: have {total} sats across {} utxos", out.len())))
+}
+
+/// The next change (m/1) index (Go `nextChangeIndex`): highest used m/1 index +1.
+fn next_change_index(all: &[DiscoveredUtxo]) -> u32 {
+    let mut max: i64 = -1;
+    for u in all {
+        if u.chain() == 1 {
+            max = max.max(u.child_index() as i64);
+        }
+    }
+    (max + 1) as u32
+}
+
 /// A UTXO to spend.
 pub struct Utxo {
     pub txid: [u8; 32], // display (big-endian) order
@@ -373,6 +427,176 @@ pub fn sign_transfer(
         .iter()
         .map(|u| BtcTxSign::new(&signer, "p2pkh").amount(u.amount).prev_script(u.script_pubkey.clone()))
         .collect();
+    tx.sign(&signs).map_err(Error::Env)?;
+    Ok(tx.to_bytes())
+}
+
+/// Parse a `"<txid>:<vout>"` ref into (32-byte big-endian display txid, vout).
+/// outscript reverses to wire order itself, so we keep display order here.
+fn parse_txo_ref(ref_: &str) -> Result<([u8; 32], u32)> {
+    let (txid_hex, vout_s) = ref_
+        .split_once(':')
+        .ok_or_else(|| Error::Env(format!("invalid txo ref {ref_}")))?;
+    let bytes = (0..txid_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(txid_hex.get(i..i + 2).unwrap_or(""), 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .map_err(|e| Error::Env(format!("bad txid hex: {e}")))?;
+    let txid: [u8; 32] = bytes.try_into().map_err(|_| Error::Env("txid must be 32 bytes".into()))?;
+    let vout: u32 = vout_s.parse().map_err(|_| Error::Env("bad vout".into()))?;
+    Ok((txid, vout))
+}
+
+/// Reduce (account_il + child_tweak) mod n into a 32-byte tweak — the total
+/// derivation from the wallet root to an input's key (Go `finalIL`).
+fn combine_tweak(account_il: &BigInt, child_tweak: &[u8; 32]) -> [u8; 32] {
+    let child = BigInt::from_bytes_be(Sign::Plus, child_tweak);
+    let sum = ((account_il + child) % secp_n() + secp_n()) % secp_n();
+    pad32(&sum.to_bytes_be().1)
+}
+
+/// Discover UTXOs, select inputs, build change/fee, and DKLs-sign a full Bitcoin
+/// transaction to `recipient` for `want_sats` (Go `wlttx` bitcoin send path).
+/// Each input is signed under its own HD-derived key (m/chain/index below the
+/// account xpub) with the combined wallet-root tweak; TssSigner self-verifies
+/// every signature. `fee_rate_sat_vb` is the pinned rate (or a caller default).
+/// Returns the raw signed transaction bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn build_and_sign_auto(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    rpc: &str,
+    chain_id: &str,
+    recipient: &str,
+    want_sats: u64,
+    fee_rate_sat_vb: u64,
+) -> Result<Vec<u8>> {
+    use base64::Engine;
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "bitcoin" {
+        return Err(Error::Env("account is not bitcoin".into()));
+    }
+    let account_pub: [u8; 33] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&acct.pubkey)
+        .map_err(|e| Error::Env(format!("bad account pubkey: {e}")))?
+        .try_into()
+        .map_err(|_| Error::Env("account pubkey not 33 bytes".into()))?;
+    let account_cc: [u8; 32] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&acct.chaincode)
+        .map_err(|e| Error::Env(format!("bad chaincode: {e}")))?
+        .try_into()
+        .map_err(|_| Error::Env("chaincode not 32 bytes".into()))?;
+    let account_il = {
+        let s = acct.il.as_str().unwrap_or("0");
+        BigInt::parse_bytes(s.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0))
+    };
+    let wallet_id = acct.wallet.clone();
+
+    // 1. Discover + select UTXOs.
+    let xpub = build_xpub(&account_pub, &account_cc);
+    let all = list_utxos(rpc, &xpub)?;
+    if all.is_empty() {
+        return Err(Error::Env("no spendable UTXOs".into()));
+    }
+    let (selected, total_in) = select_utxos(&all, want_sats, fee_rate_sat_vb)?;
+
+    // 2. Fee + change (dust threshold 546 sat), 2-output size estimate.
+    let fee = estimate_vsize(&selected, 2) * fee_rate_sat_vb;
+    if total_in < want_sats + fee {
+        return Err(Error::Env(format!("insufficient funds: {total_in} < {want_sats} + fee {fee}")));
+    }
+    let change = total_in - want_sats - fee;
+
+    // 3. Per-input signer: derive each input's key + combined tweak.
+    struct InputPlan {
+        txid: [u8; 32],
+        vout: u32,
+        amount: u64,
+        scheme: String,
+        child_pub: [u8; 33],
+        tweak: [u8; 32],
+    }
+    let mut plans = Vec::with_capacity(selected.len());
+    for u in &selected {
+        let (txid, vout) = parse_txo_ref(&u.txo)?;
+        let (child_pub, child_tweak) =
+            crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[u.chain(), u.child_index()])
+                .map_err(|e| Error::Env(e.to_string()))?;
+        let scheme = if u.script.is_empty() { "p2wpkh".to_owned() } else { u.script.clone() };
+        plans.push(InputPlan {
+            txid,
+            vout,
+            amount: u.amount_sats,
+            scheme,
+            child_pub,
+            tweak: combine_tweak(&account_il, &child_tweak),
+        });
+    }
+
+    // bitcoin-cash requires SIGHASH_FORKID.
+    let sighash: u32 = if chain_id == "bitcoin-cash" { 0x41 } else { 0 };
+
+    // Build the signers (self-verifying) and their prev scripts.
+    let signers: Vec<TssSigner> = plans
+        .iter()
+        .map(|p| {
+            let pubkey = SecpPublicKey::from_sec1(&p.child_pub)
+                .map_err(|e| Error::Env(format!("bad child pubkey: {e:?}")))?;
+            let wid = wallet_id.clone();
+            let tweak = p.tweak;
+            Ok(TssSigner {
+                pubkey,
+                sign_digest: Box::new(move |digest: &[u8; 32]| {
+                    let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest)
+                        .map_err(|e| e.to_string())?;
+                    let (s, _) = normalize_low_s(s, v);
+                    Ok((r, s))
+                }),
+            })
+        })
+        .collect::<Result<_>>()?;
+
+    // 4. Assemble the tx.
+    let mut tx = BtcTx { version: 2, locktime: 0, ..BtcTx::default() };
+    for p in &plans {
+        tx.inputs.push(BtcTxInput {
+            txid: p.txid,
+            vout: p.vout,
+            script: Vec::new(),
+            sequence: 0xffff_fffd, // RBF
+            witnesses: Vec::new(),
+        });
+    }
+    tx.add_output(recipient, want_sats).map_err(Error::Env)?;
+    if change > 546 {
+        let change_addr = {
+            let idx = next_change_index(&all);
+            let (child, _) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[1, idx])
+                .map_err(|e| Error::Env(e.to_string()))?;
+            hd_address(&child, chain_id)?
+        };
+        tx.add_output(&change_addr, change).map_err(Error::Env)?;
+    }
+
+    // 5. Sign every input under its own key + scheme.
+    let signs: Vec<BtcTxSign> = plans
+        .iter()
+        .zip(&signers)
+        .map(|(p, signer)| {
+            let prev_script = outscript::script::Script::new(
+                SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?,
+            )
+            .out(&p.scheme)
+            .map_err(Error::Env)?
+            .bytes()
+            .to_vec();
+            let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
+            s.sighash = sighash;
+            Ok(s)
+        })
+        .collect::<Result<_>>()?;
     tx.sign(&signs).map_err(Error::Env)?;
     Ok(tx.to_bytes())
 }
@@ -480,5 +704,88 @@ mod tests {
         let parsed = BtcTx::from_bytes(&raw).expect("valid tx");
         assert_eq!(parsed.inputs.len(), 1);
         assert!(!parsed.inputs[0].script.is_empty(), "input scriptSig populated");
+    }
+
+    /// One-shot mock serving a single modchain_assets JSON-RPC result.
+    fn mock_rpc(result_json: &str) -> String {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#);
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}/")
+    }
+
+    #[test]
+    fn btc_auto_build_signs_all_inputs_and_self_verifies() {
+        // Full auto-input path: discover UTXOs at their HD paths, select, build
+        // change, and sign each input under its own derived key. Each TssSigner
+        // self-verifies, so success proves the per-input combined-tweak signing.
+        let env = Env::init_memory().unwrap();
+        wallet::init(&env).unwrap();
+        account::init(&env).unwrap();
+        crate::models::network::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+
+        // Two UTXOs on different HD paths (receive m/0/0 and change m/1/2), so
+        // both the multi-path key derivation and change-index logic are used.
+        let rpc = mock_rpc(
+            r#"{"assets":[{"asset":"NATIVE","txo":[
+                {"txo":"1111111111111111111111111111111111111111111111111111111111111111:0","amt":"0.00080000","path":"m/0/0","script":"p2wpkh"},
+                {"txo":"2222222222222222222222222222222222222222222222222222222222222222:1","amt":"0.00050000","path":"m/1/2","script":"p2wpkh"}
+            ]}]}"#,
+        );
+
+        let unlock: Vec<(String, String)> = vec![
+            (w.keys[0].id.clone(), "passwordone".to_string()),
+            (w.keys[1].id.clone(), "passwordtwo".to_string()),
+            (w.keys[2].id.clone(), "passwordthree".to_string()),
+        ];
+
+        // Send 0.001 BTC to the account's own address; forces both UTXOs in.
+        let raw = build_and_sign_auto(&env, &a.id, &unlock, &rpc, "bitcoin", &a.address, 100_000, 5)
+            .expect("auto build + sign + self-verify");
+        assert!(!raw.is_empty());
+
+        let parsed = BtcTx::from_bytes(&raw).expect("valid tx");
+        assert_eq!(parsed.inputs.len(), 2, "both UTXOs selected");
+        // recipient + change outputs.
+        assert_eq!(parsed.outputs.len(), 2, "recipient + change");
+        // Every input got a witness (p2wpkh) — signed successfully.
+        assert!(parsed.inputs.iter().all(|i| !i.witnesses.is_empty()), "witnesses populated");
+    }
+
+    #[test]
+    fn btc_auto_build_insufficient_funds_errors() {
+        let env = Env::init_memory().unwrap();
+        wallet::init(&env).unwrap();
+        account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+        let rpc = mock_rpc(
+            r#"{"assets":[{"asset":"NATIVE","txo":[
+                {"txo":"1111111111111111111111111111111111111111111111111111111111111111:0","amt":"0.00001000","path":"m/0/0","script":"p2wpkh"}
+            ]}]}"#,
+        );
+        let unlock: Vec<(String, String)> =
+            vec![(w.keys[0].id.clone(), "passwordone".to_string())];
+        // Want more than the single tiny UTXO holds.
+        let err = build_and_sign_auto(&env, &a.id, &unlock, &rpc, "bitcoin", &a.address, 100_000, 5);
+        assert!(err.is_err(), "insufficient funds must error");
     }
 }

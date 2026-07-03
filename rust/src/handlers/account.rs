@@ -125,6 +125,36 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
 fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
 
+    let keys: Vec<crate::sign::KeyDescription> =
+        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    let unlock: Vec<(String, String)> =
+        keys.iter().filter(|k| k.kind == "Password").map(|k| (k.id.clone(), k.key.clone())).collect();
+
+    // Auto-input path: {To, Amount} with no explicit UTXOs — discover, select,
+    // add change, and sign each input under its own HD key.
+    let no_utxos = tx.get("UTXOs").and_then(Value::as_array).map(|a| a.is_empty()).unwrap_or(true);
+    if no_utxos {
+        if let (Some(to), Some(amount)) =
+            (tx.get("To").and_then(Value::as_str), tx.get("Amount").and_then(Value::as_u64))
+        {
+            let net = crate::models::network::fetch(env, "@")
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(400, "no current network"))?;
+            if net.kind != "bitcoin" {
+                return Err(ApiError::new(400, "current network is not bitcoin"));
+            }
+            let fee_rate = tx.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
+            let raw = crate::bitcoin::build_and_sign_auto(
+                env, &account.id, &unlock, rpc, &net.chain_id, to, amount, fee_rate,
+            )
+            .map_err(ApiError::internal)?;
+            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            let txid = crate::rpc::call(rpc, "sendrawtransaction", serde_json::json!([hex]))
+                .map_err(ApiError::internal)?;
+            return Ok(serde_json::json!({ "txid": txid, "raw": format!("0x{hex}") }));
+        }
+    }
+
     let mut utxos = Vec::new();
     for u in tx.get("UTXOs").and_then(Value::as_array).ok_or_else(|| ApiError::new(400, "UTXOs required"))? {
         let txid_v = decode_hex(u.get("txid").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "utxo txid"))?)?;
@@ -141,11 +171,6 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
         let amount = o.get("amount").and_then(Value::as_u64).unwrap_or(0);
         outputs.push((address.to_string(), amount));
     }
-
-    let keys: Vec<crate::sign::KeyDescription> =
-        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-    let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| k.kind == "Password").map(|k| (k.id.clone(), k.key.clone())).collect();
 
     let raw = crate::bitcoin::sign_transfer(env, &account.id, &unlock, &utxos, &outputs).map_err(ApiError::internal)?;
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
