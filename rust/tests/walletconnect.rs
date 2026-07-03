@@ -59,6 +59,57 @@ fn type1_asymmetric_roundtrip() {
 }
 
 #[test]
+fn process_inbound_classifies_and_guards() {
+    let sym: [u8; 32] = seq(0, 32).try_into().unwrap();
+    let nonce: [u8; 12] = seq(60, 12).try_into().unwrap();
+
+    // A wc_sessionRequest carrying personal_sign.
+    let req = br#"{"id":11,"jsonrpc":"2.0","method":"wc_sessionRequest","params":{"request":{"method":"personal_sign","params":["0xdeadbeef","0xacct"]}}}"#;
+    let env = wc::seal_type0_with_nonce(&sym, &nonce, req);
+    let got = wc::process_inbound(&sym, None, true, &env).unwrap();
+    assert_eq!(
+        got,
+        wc::WcInbound::Request {
+            id: 11,
+            method: "personal_sign".into(),
+            params: serde_json::json!(["0xdeadbeef", "0xacct"]),
+        }
+    );
+
+    // wc_sessionDelete and a reply classify correctly.
+    let del = wc::seal_type0_with_nonce(&sym, &nonce, br#"{"id":12,"method":"wc_sessionDelete","params":{}}"#);
+    assert_eq!(wc::process_inbound(&sym, None, true, &del).unwrap(), wc::WcInbound::Delete { id: 12 });
+    let reply = wc::seal_type0_with_nonce(&sym, &nonce, br#"{"id":13,"jsonrpc":"2.0","result":true}"#);
+    assert_eq!(
+        wc::process_inbound(&sym, None, true, &reply).unwrap(),
+        wc::WcInbound::Response { id: 13, error: None }
+    );
+
+    // Envelope type-confusion guard: an active session (self_priv withheld)
+    // must reject a Type-1 (asymmetric) envelope.
+    let recipient_priv: [u8; 32] = seq(1, 32).try_into().unwrap();
+    let recipient_pub = wc::x25519_public(&recipient_priv);
+    let sender_priv: [u8; 32] = seq(200, 32).try_into().unwrap();
+    let (type1, _) = wc::seal_type1_with_nonce(&recipient_pub, &sender_priv, &nonce, req);
+    // Active: no private key -> rejected.
+    assert!(wc::process_inbound(&sym, Some(&recipient_priv), true, &type1).is_err());
+    // Pre-settle: private key supplied -> opens (it's a propose-time path).
+    assert!(wc::process_inbound(&sym, Some(&recipient_priv), false, &type1).is_ok());
+}
+
+#[test]
+fn jsonrpc_response_builders() {
+    assert_eq!(
+        wc::build_jsonrpc_result(5, serde_json::json!("0xsig")),
+        serde_json::json!({"id":5,"jsonrpc":"2.0","result":"0xsig"})
+    );
+    assert_eq!(
+        wc::build_jsonrpc_error(6, 5000, "user rejected"),
+        serde_json::json!({"id":6,"jsonrpc":"2.0","error":{"code":5000,"message":"user rejected"}})
+    );
+}
+
+#[test]
 fn relay_message_builders() {
     // irn_subscribe.
     let sub = wc::build_subscribe(1, "topichex");

@@ -247,6 +247,74 @@ pub fn parse_relay_frame(data: &[u8]) -> Result<RelayFrame> {
     Ok(RelayFrame::Other)
 }
 
+/// A decoded inbound WalletConnect JSON-RPC message (Go `handleIncoming`
+/// dispatch), after the relay envelope is decrypted.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WcInbound {
+    /// `wc_sessionPropose` — a dApp requests a session.
+    Propose { id: i64, params: serde_json::Value },
+    /// `wc_sessionSettle` — the peer confirms the session.
+    Settle { id: i64 },
+    /// `wc_sessionRequest` — a signing/RPC request within a session.
+    Request { id: i64, method: String, params: serde_json::Value },
+    /// `wc_sessionDelete` — the peer ends the session.
+    Delete { id: i64 },
+    /// A JSON-RPC reply to one of our requests.
+    Response { id: i64, error: Option<String> },
+    /// An unrecognized method.
+    Other { id: i64, method: String },
+}
+
+/// Decrypt a relay envelope and classify the WalletConnect JSON-RPC message it
+/// carries (the core of Go `handleIncoming`). `active` toggles the envelope
+/// type-confusion guard: a settled (active) session only accepts Type-0
+/// (symmetric) envelopes, so no private key is offered and any Type-1 envelope
+/// is rejected; before settle the proposal keypair is supplied for Type-1.
+pub fn process_inbound(
+    sym_key: &[u8; 32],
+    self_priv: Option<&[u8; 32]>,
+    active: bool,
+    envelope: &str,
+) -> Result<WcInbound> {
+    let priv_for_open = if active { None } else { self_priv };
+    let (plain, _sender) = open_envelope(Some(sym_key), priv_for_open, envelope)?;
+    let v: serde_json::Value =
+        serde_json::from_slice(&plain).map_err(|e| Error::Env(format!("wc rpc json: {e}")))?;
+    let id = v.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+
+    if v.get("result").is_some() || v.get("error").is_some() {
+        let error = v
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_owned());
+        return Ok(WcInbound::Response { id, error });
+    }
+    let method = v.get("method").and_then(|m| m.as_str()).unwrap_or("");
+    let params = v.get("params").cloned().unwrap_or(serde_json::Value::Null);
+    Ok(match method {
+        "wc_sessionPropose" => WcInbound::Propose { id, params },
+        "wc_sessionSettle" => WcInbound::Settle { id },
+        "wc_sessionRequest" => WcInbound::Request {
+            id,
+            method: params.get("request").and_then(|r| r.get("method")).and_then(|m| m.as_str()).unwrap_or("").to_owned(),
+            params: params.get("request").and_then(|r| r.get("params")).cloned().unwrap_or(serde_json::Value::Null),
+        },
+        "wc_sessionDelete" => WcInbound::Delete { id },
+        other => WcInbound::Other { id, method: other.to_owned() },
+    })
+}
+
+/// A JSON-RPC 2.0 success reply `{id, jsonrpc, result}` (Go response payload).
+pub fn build_jsonrpc_result(id: i64, result: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "id": id, "jsonrpc": "2.0", "result": result })
+}
+
+/// A JSON-RPC 2.0 error reply `{id, jsonrpc, error:{code, message}}`.
+pub fn build_jsonrpc_error(id: i64, code: i64, message: &str) -> serde_json::Value {
+    serde_json::json!({ "id": id, "jsonrpc": "2.0", "error": { "code": code, "message": message } })
+}
+
 /// Build the session-settle `namespaces` object for an approval (Go
 /// `buildNamespaces`). For each namespace in the proposal's required + optional
 /// namespaces (first occurrence wins), emit `{accounts, methods, events,
