@@ -10,6 +10,84 @@ use std::thread;
 use libwallet::rest::ApiKey;
 use libwallet::swap::{self, TokenRef};
 
+/// Multi-response mock serving `responses` in order (one request each).
+fn mock_multi(responses: Vec<String>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for body in responses {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        }
+    });
+    format!("http://{addr}/")
+}
+
+#[test]
+fn execute_evm_signs_and_broadcasts() {
+    use libwallet::evm::recover_sender;
+    use libwallet::models::{account, wallet};
+    use libwallet::sign::KeyDescription;
+    use libwallet::Env;
+
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds: Vec<KeyDescription> = ["a", "b", "c"]
+        .iter()
+        .map(|p| KeyDescription { kind: "Password".into(), key: format!("password{p}"), id: String::new() })
+        .collect();
+    let w = wallet::create(&env, "EVM", "secp256k1", &kds).unwrap();
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let unlock: Vec<(String, String)> = w
+        .keys
+        .iter()
+        .zip(["a", "b", "c"])
+        .map(|(k, p)| (k.id.clone(), format!("password{p}")))
+        .collect();
+
+    // OKX proxy returns a swap tx (router calldata to a DEX contract).
+    let okx = mock_multi(vec![
+        r#"{"result":"success","data":[{"tx":{"from":"0xfrom","to":"0x1111111111111111111111111111111111111111","value":"0","data":"0xabcdef","gas":"120000","gasPrice":"20000000000"}}]}"#.to_string(),
+    ]);
+    // Node: eth_getTransactionCount(pending) = 3, then eth_sendRawTransaction.
+    let node = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xswaphash"}"#.to_string(),
+    ]);
+
+    let key = ApiKey::from_seed("kid", [4u8; 32]);
+    let token_in = TokenRef { address: "0xIN".into(), symbol: "IN".into(), decimals: 18 };
+    let token_out = TokenRef { address: "0xOUT".into(), symbol: "OUT".into(), decimals: 6 };
+
+    let res = swap::execute_evm(
+        &env, &a.id, &unlock, &key, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50,
+    )
+    .unwrap();
+    assert_eq!(res["hash"], "0xswaphash");
+    let raw_hex = res["raw"].as_str().unwrap();
+    assert!(raw_hex.starts_with("0x"));
+
+    // Gold-standard: the signed swap tx recovers (ecrecover) to the account.
+    let raw = (2..raw_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&raw_hex[i..i + 2], 16).unwrap())
+        .collect::<Vec<u8>>();
+    assert_eq!(
+        recover_sender(&raw).unwrap().to_lowercase(),
+        a.address.to_lowercase(),
+        "swap tx must recover to the swapping account"
+    );
+}
+
 #[test]
 fn okx_chain_index_maps_networks() {
     assert_eq!(swap::okx_chain_index("evm", "1").unwrap(), "1");

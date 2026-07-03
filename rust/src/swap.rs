@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::rest::ApiKey;
-use crate::{Amount, Error, Result};
+use crate::{Amount, Env, Error, Result};
 
 /// Default platform fee (bps), matching Go `DefaultFeeBps`.
 pub const DEFAULT_FEE_BPS: u16 = 50;
@@ -202,6 +202,101 @@ pub fn availability(kind: &str, chain_id: &str) -> Availability {
         providers,
         reason: reason.to_owned(),
     }
+}
+
+/// OKX slippage in percent units (Go `okxSlippagePercent`): bps/100, e.g.
+/// 50 bps -> "0.5".
+fn okx_slippage_percent(bps: u16) -> String {
+    let bps = normalize_slippage(bps);
+    let whole = bps / 100;
+    let frac = bps % 100;
+    if frac == 0 {
+        format!("{whole}")
+    } else if frac % 10 == 0 {
+        format!("{whole}.{}", frac / 10)
+    } else {
+        format!("{whole}.{frac:02}")
+    }
+}
+
+/// Execute an EVM swap (Go `okxExecuteEVM`): fetch the swap transaction from the
+/// OKX proxy, build a legacy EVM tx (gas raised 50% per OKX guidance), DKLs-sign
+/// it locally, and broadcast via the node. Returns `{hash, raw}`.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_evm(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    key: &ApiKey,
+    base: &str,
+    rpc: &str,
+    chain_id: &str,
+    token_in: &TokenRef,
+    token_out: &TokenRef,
+    amount_in: &str,
+    slippage_bps: u16,
+) -> Result<serde_json::Value> {
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "ethereum" {
+        return Err(Error::Env("swap execute is EVM-only here".into()));
+    }
+    let chain_index = okx_chain_index("evm", chain_id)?;
+
+    // 1. Fetch the swap tx from the authenticated OKX proxy.
+    let params = json!({
+        "chainIndex": chain_index,
+        "fromTokenAddress": okx_token_addr("evm", &token_in.address),
+        "toTokenAddress": okx_token_addr("evm", &token_out.address),
+        "amount": amount_in,
+        "userWalletAddress": acct.address,
+        "slippagePercent": okx_slippage_percent(slippage_bps),
+    });
+    let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
+    let entry = match &data {
+        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
+        _ => data.clone(),
+    };
+    let tx = entry.get("tx").ok_or_else(|| Error::Env("okx swap: no tx".into()))?;
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    let tx_data = tx.get("data").and_then(Value::as_str).unwrap_or("");
+    if to.is_empty() || tx_data.is_empty() {
+        return Err(Error::Env("okx: evm swap returned empty tx".into()));
+    }
+    let value = tx.get("value").and_then(Value::as_str).unwrap_or("0").to_owned();
+    let gas_price = tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0").to_owned();
+    let gas: u64 = tx.get("gas").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let gas = gas * 3 / 2; // +50% headroom (OKX guidance)
+
+    // 2. Nonce.
+    let nonce_hex = crate::rpc::call(rpc, "eth_getTransactionCount", json!([acct.address, "pending"]))?;
+    let nonce_hex = nonce_hex.as_str().unwrap_or("0x0");
+    let nonce = u64::from_str_radix(nonce_hex.strip_prefix("0x").unwrap_or(nonce_hex), 16).unwrap_or(0);
+
+    // 3. Build + sign a legacy tx.
+    let data_hex = tx_data.strip_prefix("0x").unwrap_or(tx_data);
+    let call_data = (0..data_hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(data_hex.get(i..i + 2).unwrap_or(""), 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .map_err(|e| Error::Env(format!("bad tx data hex: {e}")))?;
+    let req = crate::evm::EvmTxRequest {
+        nonce,
+        gas,
+        max_fee: gas_price,
+        max_priority: "0".into(),
+        to: to.to_owned(),
+        value,
+        data: call_data,
+        chain_id: chain_id.parse().unwrap_or(1),
+        eip1559: false,
+    };
+    let raw = crate::evm::sign_tx(env, account_id, unlock, &req)?;
+    let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+
+    // 4. Broadcast via the node.
+    let hash = crate::rpc::eth_send_raw_transaction(rpc, &format!("0x{raw_hex}"))?;
+    Ok(json!({ "hash": hash, "raw": format!("0x{raw_hex}") }))
 }
 
 /// The unlimited-approval amount (uint256 max, 2^256 − 1).

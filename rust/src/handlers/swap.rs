@@ -67,6 +67,44 @@ pub fn availability(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(swap::availability(&net.kind, &net.chain_id)).unwrap())
 }
 
+/// `Swap:execute` — fetch the OKX swap transaction, sign it locally, and
+/// broadcast it (EVM). The caller supplies the OKX credential + node RPC and
+/// the wallet's Keys (Password unlock).
+pub fn execute(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Account")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Account required"))?;
+    let net_id = params.get("Network").and_then(Value::as_str).unwrap_or("@");
+    let net = crate::models::network::fetch(env, net_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "network not found"))?;
+    if net.kind != "evm" {
+        return Err(ApiError::new(400, "Swap:execute is EVM-only"));
+    }
+    let token_in = token_ref(params.get("TokenIn"))?;
+    let token_out = token_ref(params.get("TokenOut"))?;
+    let amount_in = params
+        .get("AmountIn")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "AmountIn required"))?;
+    let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
+    let rpc = params.get("RPC").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "RPC required"))?;
+
+    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
+    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
+    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
+
+    let keys: Vec<crate::sign::KeyDescription> =
+        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    let unlock: Vec<(String, String)> =
+        keys.iter().filter(|k| k.kind == "Password").map(|k| (k.id.clone(), k.key.clone())).collect();
+
+    swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
+        .map_err(ApiError::internal)
+}
+
 /// `Swap:buildApprovalData` — the ERC-20 `approve(spender, amount)` calldata for
 /// an EVM swap. `Unlimited` uses uint256 max; otherwise `Amount` is base units.
 /// The host wraps this in a Transaction for signAndSend (the stateful
