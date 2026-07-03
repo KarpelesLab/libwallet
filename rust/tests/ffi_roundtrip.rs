@@ -479,6 +479,40 @@ fn max_sendable_via_ffi() {
 }
 
 #[test]
+fn eip1559_max_sendable_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // balance 1 ETH; baseFee 10 gwei (0x2540be400), tip 2 gwei (0x77359400).
+    // perGas = 2*10 + 2 = 22 gwei; fee = 21000 * 22e9 = 4.62e14; max = 1e18-fee.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}"#.to_string(), // eth_getBalance
+        r#"{"jsonrpc":"2.0","id":1,"result":{"baseFeePerGas":"0x2540be400"}}"#.to_string(), // block
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x77359400"}"#.to_string(), // maxPriorityFeePerGas
+    ]);
+    let resp = request(
+        h,
+        &format!(r#"{{"path":"Account:maxSendable","params":{{"Id":"{account_id}","RPC":"{rpc}","Eip1559":true}}}}"#),
+    );
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"]["fee"]["v"], "462000000000000"); // 21000 * 22 gwei
+    assert_eq!(resp["data"]["max"]["v"], "999538000000000000");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn solana_max_sendable_via_ffi() {
     let h = new_env();
     let w = request(

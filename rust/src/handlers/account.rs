@@ -329,14 +329,30 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
 
     match account.kind.as_str() {
         "ethereum" => {
-            // balance (wei) and gasPrice; fee = 21000 * gasPrice.
+            let hex_bi = |v: &Value| {
+                let s = v.as_str().unwrap_or("0x0");
+                BigInt::parse_bytes(s.strip_prefix("0x").unwrap_or(s).as_bytes(), 16)
+                    .unwrap_or_else(|| BigInt::from(0))
+            };
             let bal_dec = crate::rpc::eth_get_balance(&rpc, &account.address).map_err(ApiError::internal)?;
             let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
-            let gp_hex = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
-            let gp_hex = gp_hex.as_str().unwrap_or("0x0");
-            let gas_price = BigInt::parse_bytes(gp_hex.strip_prefix("0x").unwrap_or(gp_hex).as_bytes(), 16)
-                .unwrap_or_else(|| BigInt::from(0));
-            let fee = BigInt::from(21000) * &gas_price;
+            // Fee reserve for a 21000-gas transfer. EIP-1559 (when requested):
+            // (2*baseFee + tip) * gas; else legacy gasPrice * gas.
+            let per_gas = if params.get("Eip1559").and_then(Value::as_bool).unwrap_or(false) {
+                let block = crate::rpc::call(&rpc, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
+                    .map_err(ApiError::internal)?;
+                let base_fee = block.get("baseFeePerGas").map(hex_bi).unwrap_or_else(|| BigInt::from(0));
+                let tip = crate::rpc::call(&rpc, "eth_maxPriorityFeePerGas", serde_json::json!([]))
+                    .ok()
+                    .map(|v| hex_bi(&v))
+                    .filter(|t| *t > BigInt::from(0))
+                    .unwrap_or_else(|| BigInt::from(1_000_000_000u64)); // 1 gwei fallback
+                base_fee * 2 + tip
+            } else {
+                let gp = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+                hex_bi(&gp)
+            };
+            let fee = BigInt::from(21000) * &per_gas;
             let max = if balance <= fee { BigInt::from(0) } else { &balance - &fee };
             let decimals = crate::models::network::fetch(env, "@")
                 .ok().flatten().map(|n| n.native_decimals()).unwrap_or(18);
