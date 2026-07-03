@@ -8,6 +8,8 @@ mod contact;
 mod crash;
 mod info;
 mod network;
+mod nft;
+mod token;
 mod wallet;
 
 use serde_json::Value;
@@ -23,6 +25,8 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::account::init(env)?;
     crate::models::asset::init(env)?;
     crate::models::network::init(env)?;
+    crate::models::token::init(env)?;
+    crate::models::nft::init(env)?;
     Ok(())
 }
 
@@ -59,6 +63,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account" => account::route(&handle.env, verb, params),
         "Asset" => asset::route(&handle.env, verb, params),
         "Network" => network::route(&handle.env, verb, params),
+        "Token" => token::route(&handle.env, verb, params),
+        "Nft" => nft::route(&handle.env, verb, params),
         _ => Err(ApiError::not_found(path)),
     }
 }
