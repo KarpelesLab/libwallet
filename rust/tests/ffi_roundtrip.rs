@@ -737,6 +737,44 @@ fn network_resolve_rpc_via_ffi() {
 }
 
 #[test]
+fn swap_max_spendable_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let acc = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = acc["data"]["Id"].as_str().unwrap().to_string();
+
+    // Node: balance 1 ETH, gasPrice 20 gwei -> max = 1e18 - 4.2e14.
+    let node = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
+    ]);
+    // OKX proxy: quote for that max amountIn.
+    let okx = mock_node(
+        r#"{"result":"success","data":[{"fromTokenAmount":"999580000000000000","toTokenAmount":"2000000000"}]}"#,
+    );
+    let okx = okx.trim_end_matches('/');
+    let body = format!(
+        r#"{{"path":"Swap:maxSpendable","params":{{"Account":"{account_id}","TokenIn":{{"address":"NATIVE","decimals":18}},"TokenOut":{{"address":"0xOUT","decimals":6}},"SlippageBps":50,"RPC":"{node}","KeyId":"k","Secret":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","Backend":"{okx}"}}}}"#
+    );
+    let resp = request(h, &body);
+    assert_eq!(resp["result"], "success", "{resp}");
+    // The quote was taken at the computed max amountIn.
+    assert_eq!(resp["data"]["amountIn"]["v"], "999580000000000000");
+    assert_eq!(resp["data"]["amountOut"]["v"], "2000000000");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn swap_quotes_via_ffi() {
     let h = new_env();
     // Default current network = ephemeral evm.1. Mock OKX proxy returns a quote.

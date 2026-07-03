@@ -84,6 +84,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Swap:quote" => swap::quote(&handle.env, params),
         "Swap:execute" => swap::execute(&handle.env, params),
         "Swap:quotes" => swap::quotes(&handle.env, params),
+        "Swap:maxSpendable" => swap::max_spendable(&handle.env, params),
         "Swap:buildApprovalData" => swap::build_approval_data(&handle.env, params),
         "Swap:availability" => swap::availability(&handle.env, params),
         "Swap:countryAvailability" => swap::country_availability(&handle.env, params),

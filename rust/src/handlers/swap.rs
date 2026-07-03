@@ -109,6 +109,54 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     res.map_err(ApiError::internal)
 }
 
+/// `Swap:maxSpendable` — quote the maximum the account can swap (Go
+/// `swapMaxSpendable`): compute the max native amountIn (balance minus the fee
+/// reserve) and quote it. EVM native-in only for now; a zero max returns an
+/// advisory instead of a quote.
+pub fn max_spendable(env: &Env, params: &Value) -> ApiResult {
+    use num_bigint::BigInt;
+    let account_id = params.get("Account").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Account required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let net_id = params.get("Network").and_then(Value::as_str).unwrap_or("@");
+    let net = crate::models::network::fetch(env, net_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "network not found"))?;
+    if net.kind != "evm" {
+        return Err(ApiError::new(400, "Swap:maxSpendable is EVM-only here"));
+    }
+    let token_in = token_ref(params.get("TokenIn"))?;
+    let token_out = token_ref(params.get("TokenOut"))?;
+    let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
+    let rpc = params.get("RPC").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "RPC required"))?;
+
+    // Max native amountIn = balance − (21000 × gasPrice).
+    let bal_dec = crate::rpc::eth_get_balance(rpc, &account.address).map_err(ApiError::internal)?;
+    let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+    let gp = crate::rpc::call(rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+    let gp = gp.as_str().unwrap_or("0x0");
+    let gas_price = BigInt::parse_bytes(gp.strip_prefix("0x").unwrap_or(gp).as_bytes(), 16).unwrap_or_else(|| BigInt::from(0));
+    let fee = BigInt::from(21000) * gas_price;
+    let max = if balance <= fee { BigInt::from(0) } else { balance - fee };
+    if max <= BigInt::from(0) {
+        return Ok(serde_json::json!({
+            "status": "balance_too_small",
+            "message": "balance does not cover network fee",
+            "amountIn": "0",
+        }));
+    }
+
+    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
+    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
+    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
+
+    let q = swap::get_quote(&key, base, &net.kind, &net.chain_id, token_in, token_out, &max.to_string(), slippage)
+        .map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(q).unwrap())
+}
+
 /// `Swap:quotes` — the multi-provider fan-out form of Swap:quote (Go
 /// `swapQuotes`). One routed provider per chain today, so `attempts` has a
 /// single entry carrying either the quote or a structured error.
