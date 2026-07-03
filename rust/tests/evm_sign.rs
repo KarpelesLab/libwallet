@@ -3,7 +3,7 @@
 //! address. This verifies the whole chain — BIP32 tweak derivation, DKLs
 //! sign_with_tweak, low-s normalization, EIP-155 v, and RLP assembly.
 
-use libwallet::evm::{recover_sender, sign_legacy_tx, LegacyTxRequest};
+use libwallet::evm::{recover_sender, sign_tx, EvmTxRequest};
 use libwallet::models::{account, wallet};
 use libwallet::sign::KeyDescription;
 use libwallet::Env;
@@ -28,23 +28,40 @@ fn evm_tx_signature_recovers_to_account() {
         (w.keys[1].id.clone(), "passwordtwo".to_string()),
         (w.keys[2].id.clone(), "passwordthree".to_string()),
     ];
-    let req = LegacyTxRequest {
+    let legacy = EvmTxRequest {
         nonce: 0,
         gas: 21000,
-        gas_price: "20000000000".to_string(),
+        max_fee: "20000000000".to_string(),
+        max_priority: "0".to_string(),
         to: "0x000000000000000000000000000000000000dEaD".to_string(),
         value: "1000000000000000000".to_string(),
         data: vec![],
         chain_id: 1,
+        eip1559: false,
     };
-
-    let raw = sign_legacy_tx(&env, &a.id, &unlock, &req).unwrap();
-    assert!(!raw.is_empty());
-
-    let sender = recover_sender(&raw).unwrap();
+    let raw = sign_tx(&env, &a.id, &unlock, &legacy).unwrap();
     assert_eq!(
-        sender.to_lowercase(),
+        recover_sender(&raw).unwrap().to_lowercase(),
         a.address.to_lowercase(),
-        "the DKLs-signed tx must recover to the account address"
+        "legacy tx must recover to the account address"
+    );
+
+    // EIP-1559 (type-2) transaction also recovers correctly.
+    let eip1559 = EvmTxRequest {
+        nonce: 1,
+        gas: 21000,
+        max_fee: "30000000000".to_string(),
+        max_priority: "2000000000".to_string(),
+        to: "0x000000000000000000000000000000000000bEEF".to_string(),
+        value: "500000000000000000".to_string(),
+        data: vec![],
+        chain_id: 1,
+        eip1559: true,
+    };
+    let raw2 = sign_tx(&env, &a.id, &unlock, &eip1559).unwrap();
+    assert_eq!(
+        recover_sender(&raw2).unwrap().to_lowercase(),
+        a.address.to_lowercase(),
+        "eip-1559 tx must recover to the account address"
     );
 }

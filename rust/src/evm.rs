@@ -15,26 +15,30 @@ use purecrypto::hash::keccak256;
 use crate::models::{account, wallet};
 use crate::{Env, Error, Result};
 
-/// A legacy EVM transaction request (amounts as decimal-wei strings so the
-/// public API stays free of BigInt).
-pub struct LegacyTxRequest {
+/// An EVM transaction request (amounts as decimal-wei strings so the public API
+/// stays free of BigInt). `eip1559` selects the type-2 dynamic-fee format;
+/// otherwise a legacy EIP-155 tx is built. For legacy, `max_fee` is the gas
+/// price and `max_priority` is ignored.
+pub struct EvmTxRequest {
     pub nonce: u64,
     pub gas: u64,
-    pub gas_price: String,
+    pub max_fee: String,
+    pub max_priority: String,
     pub to: String,
     pub value: String,
     pub data: Vec<u8>,
     pub chain_id: u64,
+    pub eip1559: bool,
 }
 
-/// Build, DKLs-sign, and serialize a legacy transaction for `account_id`.
-/// `unlock` provides the Password creds for ALL of the wallet's shares (DKLs
-/// signing needs the full set). Returns the raw signed transaction bytes.
-pub fn sign_legacy_tx(
+/// Build, DKLs-sign, and serialize an EVM transaction (legacy or EIP-1559) for
+/// `account_id`. `unlock` provides the Password creds for ALL of the wallet's
+/// shares (DKLs signing needs the full set). Returns the raw signed tx bytes.
+pub fn sign_tx(
     env: &Env,
     account_id: &str,
     unlock: &[(String, String)],
-    req: &LegacyTxRequest,
+    req: &EvmTxRequest,
 ) -> Result<Vec<u8>> {
     let acct = account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
@@ -43,13 +47,13 @@ pub fn sign_legacy_tx(
     let mut tx = EvmTx {
         nonce: req.nonce,
         gas: req.gas,
-        gas_fee_cap: parse_dec(&req.gas_price)?,
-        gas_tip_cap: BigInt::from(0),
+        gas_fee_cap: parse_dec(&req.max_fee)?,
+        gas_tip_cap: if req.eip1559 { parse_dec(&req.max_priority)? } else { BigInt::from(0) },
         to: req.to.clone(),
         value: parse_dec(&req.value)?,
         data: req.data.clone(),
         chain_id: req.chain_id,
-        tx_type: EvmTxType::Legacy,
+        tx_type: if req.eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy },
         ..Default::default()
     };
 
@@ -61,8 +65,12 @@ pub fn sign_legacy_tx(
     tx.signed = true;
     tx.r = BigInt::from_bytes_be(Sign::Plus, &r);
     tx.s = BigInt::from_bytes_be(Sign::Plus, &s);
-    // Legacy EIP-155: v = chain_id*2 + 35 + y_parity.
-    tx.y = BigInt::from(req.chain_id * 2 + 35 + v as u64);
+    // Legacy EIP-155: v = chain_id*2 + 35 + parity. EIP-1559: v = parity.
+    tx.y = if req.eip1559 {
+        BigInt::from(v as u64)
+    } else {
+        BigInt::from(req.chain_id * 2 + 35 + v as u64)
+    };
 
     tx.to_bytes().map_err(Error::Env)
 }

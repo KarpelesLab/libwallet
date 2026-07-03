@@ -57,10 +57,17 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
         .get("Transaction")
         .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
 
-    let req = crate::evm::LegacyTxRequest {
+    let eip1559 =
+        tx.get("type").and_then(Value::as_u64) == Some(2) || tx.get("maxFeePerGas").is_some();
+    let max_fee = if eip1559 { tx.get("maxFeePerGas") } else { tx.get("gasPrice") }
+        .and_then(Value::as_str)
+        .unwrap_or("0")
+        .to_string();
+    let req = crate::evm::EvmTxRequest {
         nonce: tx.get("nonce").and_then(Value::as_u64).unwrap_or(0),
         gas: tx.get("gas").and_then(Value::as_u64).unwrap_or(21000),
-        gas_price: tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0").to_string(),
+        max_fee,
+        max_priority: tx.get("maxPriorityFeePerGas").and_then(Value::as_str).unwrap_or("0").to_string(),
         to: tx.get("to").and_then(Value::as_str).unwrap_or("").to_string(),
         value: tx.get("value").and_then(Value::as_str).unwrap_or("0").to_string(),
         data: match tx.get("data").and_then(Value::as_str) {
@@ -68,6 +75,7 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
             None => Vec::new(),
         },
         chain_id: tx.get("chainId").and_then(Value::as_u64).unwrap_or(1),
+        eip1559,
     };
 
     let keys: Vec<crate::sign::KeyDescription> = params
@@ -80,7 +88,7 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
 
-    let raw = crate::evm::sign_legacy_tx(env, account_id, &unlock, &req).map_err(ApiError::internal)?;
+    let raw = crate::evm::sign_tx(env, account_id, &unlock, &req).map_err(ApiError::internal)?;
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
 }
