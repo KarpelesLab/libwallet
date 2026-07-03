@@ -789,6 +789,37 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn storekey_derive_password_matches_wallet_key_via_ffi() {
+    let h = new_env();
+    // A Password wallet stores each key's derived PKIX pubkey in WalletKey.Key;
+    // StoreKey:derivePassword must reproduce it from the password + wkey id.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wkey_id = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let wkey_pub = w["data"]["Keys"][0]["Key"].as_str().unwrap().to_string();
+
+    let d = request(
+        h,
+        &format!(r#"{{"path":"StoreKey:derivePassword","params":{{"Password":"passwordone","WalletKeyId":"{wkey_id}"}}}}"#),
+    );
+    assert_eq!(d["result"], "success", "{d}");
+    assert_eq!(d["data"]["Public_Key"], wkey_pub, "derived pubkey must match the wallet key recipient");
+
+    // A wrong password derives a different key.
+    let bad = request(
+        h,
+        &format!(r#"{{"path":"StoreKey:derivePassword","params":{{"Password":"WRONGWRONG","WalletKeyId":"{wkey_id}"}}}}"#),
+    );
+    assert_ne!(bad["data"]["Public_Key"], wkey_pub);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_info_roundtrip_via_ffi() {
     let h = new_env();
     // Set then get the wallet identity record.
