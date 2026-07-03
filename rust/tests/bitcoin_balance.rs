@@ -6,7 +6,8 @@ use std::net::TcpListener;
 use std::thread;
 
 use libwallet::bitcoin::{
-    hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount, scan_chain,
+    address_formats, hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount,
+    scan_chain,
 };
 use serde_json::json;
 
@@ -95,6 +96,38 @@ fn list_utxos_skips_spent_and_parses_amounts() {
     assert_eq!(utxos[1].amount_sats, 50_000);
     let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
     assert_eq!(total, 150_000);
+}
+
+#[test]
+fn address_formats_lists_per_chain_shapes() {
+    let pk: [u8; 33] = unhex("0339a36013301597daef41fbe593a02cc513d0b55527ec2df1050e2e8ff49c85c2")
+        .try_into()
+        .unwrap();
+    let cc: [u8; 32] = unhex("873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508")
+        .try_into()
+        .unwrap();
+
+    // Bitcoin: Native SegWit (default) / wrapped SegWit / Legacy.
+    let btc = address_formats(&pk, &cc, "bitcoin").unwrap();
+    assert_eq!(btc.len(), 3);
+    assert_eq!(btc[0].kind, "p2wpkh");
+    assert!(btc[0].is_default);
+    assert!(btc[0].address.starts_with("bc1q"));
+    assert_eq!(btc[1].kind, "p2sh:p2wpkh");
+    assert!(btc[1].address.starts_with('3')); // wrapped segwit
+    assert_eq!(btc[2].kind, "p2pkh");
+    assert!(btc[2].address.starts_with('1')); // legacy
+    assert!(btc.iter().all(|f| f.path == "m/0/0"));
+
+    // Dogecoin: a single P2PKH "Standard" format.
+    let doge = address_formats(&pk, &cc, "dogecoin").unwrap();
+    assert_eq!(doge.len(), 1);
+    assert_eq!(doge[0].kind, "p2pkh");
+    assert!(doge[0].is_default);
+    assert!(doge[0].address.starts_with('D'));
+
+    // Unknown chain errors.
+    assert!(address_formats(&pk, &cc, "ethereum").is_err());
 }
 
 #[test]

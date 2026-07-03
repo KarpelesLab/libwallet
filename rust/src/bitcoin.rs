@@ -80,11 +80,73 @@ fn hd_address_kind(chain_id: &str) -> Result<(&'static str, &'static str)> {
 /// `chain_id`, via outscript (P2WPKH/P2PKH per [`hd_address_kind`]).
 pub fn hd_address(pubkey_compressed: &[u8; 33], chain_id: &str) -> Result<String> {
     let (script_type, network) = hd_address_kind(chain_id)?;
+    address_for(pubkey_compressed, script_type, network)
+}
+
+/// Encode `pubkey` as the address of a given `script_type` (e.g. "p2wpkh",
+/// "p2sh:p2wpkh", "p2pkh") on the outscript `network` tag.
+fn address_for(pubkey_compressed: &[u8; 33], script_type: &str, network: &str) -> Result<String> {
     let pk = SecpPublicKey::from_sec1(pubkey_compressed)
         .map_err(|e| Error::Env(format!("bad pubkey: {e:?}")))?;
     outscript::script::Script::new(pk)
         .address(script_type, &[network])
         .map_err(|e| Error::Env(format!("address encode: {e}")))
+}
+
+/// One receive-address format (Go `AddressFormat`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AddressFormat {
+    pub kind: String,
+    pub name: String,
+    pub address: String,
+    pub path: String,
+    #[serde(rename = "default")]
+    pub is_default: bool,
+}
+
+/// The address-format catalog per chain (Go `bitcoinFormatCatalog`), ordered by
+/// display preference (modern first). The first entry is the account's default.
+fn format_catalog(chain_id: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match chain_id {
+        "bitcoin" | "litecoin" => Some(&[
+            ("p2wpkh", "Native SegWit"),
+            ("p2sh:p2wpkh", "SegWit (legacy-compatible)"),
+            ("p2pkh", "Legacy"),
+        ]),
+        "monacoin" => Some(&[("p2wpkh", "Native SegWit"), ("p2pkh", "Legacy")]),
+        "bitcoin-cash" => Some(&[("p2pkh", "CashAddr")]),
+        "dogecoin" => Some(&[("p2pkh", "Standard")]),
+        _ => None,
+    }
+}
+
+/// Every receive-address format available for this account on `chain_id` (Go
+/// `Account.AddressFormats`), all derived from `m/0/0` below the account xpub.
+/// Formats a pubkey can't render are skipped rather than failing the list.
+pub fn address_formats(
+    account_pubkey: &[u8; 33],
+    account_chaincode: &[u8; 32],
+    chain_id: &str,
+) -> Result<Vec<AddressFormat>> {
+    let catalog = format_catalog(chain_id)
+        .ok_or_else(|| Error::Env(format!("unsupported bitcoin-family chainId: {chain_id}")))?;
+    let tag = if chain_id == "bitcoin-cash" { "bitcoincash" } else { chain_id };
+    let child = crate::hdderive::derive_pub(account_pubkey, account_chaincode, &[0, 0])
+        .map_err(|e| Error::Env(e.to_string()))?;
+
+    let mut out = Vec::with_capacity(catalog.len());
+    for (i, (kind, name)) in catalog.iter().enumerate() {
+        if let Ok(address) = address_for(&child, kind, tag) {
+            out.push(AddressFormat {
+                kind: (*kind).to_owned(),
+                name: (*name).to_owned(),
+                address,
+                path: "m/0/0".to_owned(),
+                is_default: i == 0,
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// One derived HD address on a receive/change chain (Go `scanChain` entry).
