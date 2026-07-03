@@ -85,6 +85,20 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
 }
 
+/// `Account:signAndSendTransaction` — sign the EVM transaction, then broadcast
+/// it via the node RPC (eth_sendRawTransaction) and return the tx hash. The RPC
+/// endpoint is taken from the `RPC` param (network-resolution lands with wltnet).
+pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
+    let rpc_url = params
+        .get("RPC")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
+    let signed = sign_transaction(env, params)?;
+    let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
+    let hash = crate::rpc::eth_send_raw_transaction(rpc_url, raw).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "hash": hash, "raw": raw }))
+}
+
 fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if s.len() % 2 != 0 {

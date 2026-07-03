@@ -29,6 +29,8 @@ pub mod sign;
 pub mod hdderive;
 // EVM transaction building + threshold signing (wlttx EVM path).
 pub mod evm;
+// Blocking JSON-RPC client for blockchain nodes (wltnet).
+pub mod rpc;
 // Threshold-signature ceremonies (tsslib).
 pub mod tss;
 // Object models (ported from the Go wlt* packages).

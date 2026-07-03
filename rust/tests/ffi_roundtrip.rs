@@ -266,6 +266,66 @@ fn evm_wallet_account_and_sign_transaction_via_ffi() {
     LibwalletDestroy(h);
 }
 
+/// One-shot mock JSON-RPC node returning `response_json`; yields its URL.
+fn mock_node(response_json: &str) -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let body = response_json.to_string();
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = listener.accept() {
+            let mut buf = [0u8; 8192];
+            let _ = s.read(&mut buf);
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = s.write_all(resp.as_bytes());
+        }
+    });
+    format!("http://{addr}/")
+}
+
+#[test]
+fn evm_sign_and_send_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> =
+        (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // Mock node accepts the broadcast and returns a tx hash.
+    let rpc = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":"0xabc123txhash"}"#);
+    let sent = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signAndSendTransaction","params":{{"Id":"{account_id}","RPC":"{rpc}",
+                "Transaction":{{"nonce":0,"gas":21000,"gasPrice":"20000000000","to":"0x000000000000000000000000000000000000dEaD","value":"1","chainId":1}},
+                "Keys":[{{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    assert_eq!(sent["result"], "success", "signAndSend failed: {sent:?}");
+    assert_eq!(sent["data"]["hash"], "0xabc123txhash");
+    assert!(sent["data"]["raw"].as_str().unwrap().starts_with("0x"));
+    LibwalletDestroy(h);
+}
+
 #[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
