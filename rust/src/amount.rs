@@ -49,6 +49,15 @@ fn exp10(n: u32) -> BigInt {
     BigInt::from(10u32).pow(n)
 }
 
+/// BigInt from an already-integral f64 (NaN/inf -> 0). Handles magnitudes
+/// beyond i64 by decomposing the float, matching Go's `big.Float.Int`.
+fn bigint_from_f64_trunc(f: f64) -> BigInt {
+    if !f.is_finite() {
+        return BigInt::from(0);
+    }
+    num_traits::FromPrimitive::from_f64(f.trunc()).unwrap_or_else(|| BigInt::from(0))
+}
+
 impl Amount {
     pub fn new(value: i64, decimals: i64) -> Amount {
         Amount { value: Some(BigInt::from(value)), exp: decimals, is_max: false }
@@ -62,6 +71,36 @@ impl Amount {
     /// amount). Value is None until [`set_max_resolved`](Amount::set_max_resolved).
     pub fn new_max(decimals: i64) -> Amount {
         Amount { value: None, exp: decimals, is_max: true }
+    }
+
+    /// Port of Go `NewAmountFromFloat64(f, exp)`: store `f` with `exp` decimal
+    /// places, significand = round-half-away(f * 10^exp). When `exp <= 0` the
+    /// scale is taken from `f`'s own decimals (min 5), matching the Go path.
+    /// Used for computed (never-persisted) values like a fiat conversion, so
+    /// f64's ~53-bit precision — the same precision Go's `big.NewFloat(f)`
+    /// starts from — is acceptable.
+    pub fn from_float64(f: f64, exp: i64) -> Amount {
+        let mut decimals = exp;
+        if decimals <= 0 {
+            // Count fractional digits of f's shortest decimal form.
+            let s = format!("{f}");
+            decimals = match s.split_once('.') {
+                Some((_, frac)) => frac.len() as i64,
+                None => 5,
+            };
+        }
+        if decimals < 5 {
+            decimals = 5;
+        }
+        let scaled = f * 10f64.powi(decimals as i32);
+        // Round half away from zero (Go adds 0.5*sign then truncates to int).
+        let rounded = if scaled >= 0.0 {
+            (scaled + 0.5).trunc()
+        } else {
+            (scaled - 0.5).trunc()
+        };
+        let value = bigint_from_f64_trunc(rounded);
+        Amount { value: Some(value), exp: decimals, is_max: false }
     }
 
     /// Parse `s` into an Amount. `decimals == 0` uses the exact integer path

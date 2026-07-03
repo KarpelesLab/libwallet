@@ -105,6 +105,22 @@ fn amount_arithmetic() {
 }
 
 #[test]
+fn amount_from_float64_vectors() {
+    // NewAmountFromFloat64(f, 8): significand = round-half-away(f * 1e8), exp 8.
+    assert_eq!(Amount::from_float64(1.0, 8).to_display_string(), "1.00000000");
+    assert_eq!(Amount::from_float64(3200.5, 8).to_display_string(), "3200.50000000");
+    assert_eq!(Amount::from_float64(0.12345678, 8).to_display_string(), "0.12345678");
+    // half rounds away from zero
+    assert_eq!(Amount::from_float64(0.000000005, 8).to_display_string(), "0.00000001");
+    // negative
+    assert_eq!(Amount::from_float64(-2.5, 8).to_display_string(), "-2.50000000");
+    // exp <= 0 -> derive from f's decimals, min 5
+    assert_eq!(Amount::from_float64(1.5, 0).exp(), 5);
+    // large magnitude beyond i64 (market cap): 1.2e12 * 1e8 = 1.2e20
+    assert_eq!(Amount::from_float64(1.2e12, 8).exp(), 8);
+}
+
+#[test]
 fn timeid_go_vectors() {
     let t = TimeId { type_: String::new(), unix: 1_700_000_000, nano: 123, index: 0 };
     assert_eq!(t.to_string(), "nil:1700000000:123:0");

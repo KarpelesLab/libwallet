@@ -18,7 +18,7 @@ pub const CACHE_KEY: &str = "rest:Crypto/DataCache:quotes";
 const TTL: Duration = Duration::from_secs(5 * 60);
 
 /// One token's quote record (mirrors Go `CMCQuoteData`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CmcQuoteData {
     #[serde(default)]
     pub id: i64,
@@ -43,7 +43,7 @@ pub struct CmcQuoteData {
 }
 
 /// A per-currency price entry (mirrors Go `CMCQuoteEntry`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CmcQuoteEntry {
     #[serde(default)]
     pub price: f64,

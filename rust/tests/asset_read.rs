@@ -54,3 +54,30 @@ fn list_and_missing() {
     assert_eq!(asset::list(&env).unwrap().len(), 1);
     assert!(asset::fetch(&env, "as-none").unwrap().is_none());
 }
+
+#[test]
+fn convert_to_fiat_from_cached_quotes() {
+    use std::time::Duration;
+    let env = seed();
+    // Pre-warm the quote cache so convert_to needs no network: ETH = $3200.50.
+    let quotes = r#"[{"id":1027,"name":"Ethereum","symbol":"ETH","quote":{"USD":{"price":3200.5}}}]"#;
+    env.cache_store(libwallet::quote::CACHE_KEY, quotes.as_bytes(), Duration::from_secs(300))
+        .unwrap();
+
+    let mut a = asset::fetch(&env, "as-1").unwrap().unwrap();
+    assert!(a.convert_to(&env, "USD").unwrap(), "conversion applied");
+    assert_eq!(a.fiat_currency, "USD");
+    // 1 ETH * $3200.50 = $3200.50 (8-decimal amount).
+    assert_eq!(a.fiat_amount.as_ref().unwrap().to_display_string(), "3200.50000000");
+    assert_eq!(a.fiat_quote.as_ref().unwrap().price, 3200.5);
+
+    // JSON exposes the computed fiat fields under Go's snake_case tags.
+    let j = serde_json::to_value(&a).unwrap();
+    assert_eq!(j["fiat_currency"], "USD");
+    assert_eq!(j["fiat_quote"]["price"], 3200.5);
+
+    // A currency with no entry leaves the fields unset (no error).
+    let mut b = asset::fetch(&env, "as-1").unwrap().unwrap();
+    assert!(!b.convert_to(&env, "JPY").unwrap());
+    assert!(b.fiat_amount.is_none());
+}
