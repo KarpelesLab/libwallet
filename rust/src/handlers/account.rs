@@ -97,10 +97,6 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
 /// it via the node RPC (eth_sendRawTransaction) and return the tx hash. The RPC
 /// endpoint is taken from the `RPC` param (network-resolution lands with wltnet).
 pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
-    let rpc_url = params
-        .get("RPC")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
     let account_id = params
         .get("Id")
         .and_then(Value::as_str)
@@ -108,6 +104,8 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let rpc_url = resolve_rpc(env, params, &account.kind)?;
+    let rpc_url = rpc_url.as_str();
 
     match account.kind.as_str() {
         "ethereum" => {
@@ -220,13 +218,11 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
         .get("Id")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
-    let rpc = params
-        .get("RPC")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let rpc = rpc.as_str();
 
     let bal = match account.kind.as_str() {
         "ethereum" => crate::rpc::eth_get_balance(rpc, &account.address).map_err(ApiError::internal)?,
@@ -249,6 +245,32 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
+}
+
+/// The RPC URL for a request touching an account of `account_kind`: the `RPC`
+/// param wins; otherwise fall back to the current network's resolved RPC (Go
+/// resolves RPC from the network — this covers Solana/Bitcoin, which have
+/// endpoint defaults, without the host passing a URL). Errors when neither is
+/// available or the current network's type doesn't match the account.
+fn resolve_rpc(env: &Env, params: &Value, account_kind: &str) -> Result<String, ApiError> {
+    if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        return Ok(url.to_owned());
+    }
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "RPC endpoint required (no current network)"))?;
+    // account kind (ethereum/solana/bitcoin) -> network type (evm/solana/bitcoin).
+    let want = match account_kind {
+        "ethereum" => "evm",
+        other => other,
+    };
+    if net.kind != want {
+        return Err(ApiError::new(
+            400,
+            format!("current network is {} but account is {account_kind}; pass RPC", net.kind),
+        ));
+    }
+    net.resolved_rpc().map_err(ApiError::internal)
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
