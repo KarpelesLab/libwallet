@@ -549,6 +549,40 @@ fn solana_max_sendable_via_ffi() {
 }
 
 #[test]
+fn solana_max_sendable_reserves_recipient_rent_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"SOL","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // balance 0.01 SOL, rent 890880, recipient does NOT exist (value=null) so an
+    // extra rent is reserved: max = 10_000_000 - 5000 - 890880 - 890880 = 8_213_240.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":{"value":10000000}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":890880}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":{"value":null}}"#.to_string(), // getAccountInfo: absent
+    ]);
+    let resp = request(
+        h,
+        &format!(r#"{{"path":"Account:maxSendable","params":{{"Id":"{account_id}","RPC":"{rpc}","To":"SomeNewRecipient"}}}}"#),
+    );
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"]["max"]["v"], "8213240");
+    assert_eq!(resp["data"]["reserved"][1]["kind"], "recipient_rent");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn solana_balance_subtracts_rent_via_ffi() {
     let h = new_env();
     let w = request(

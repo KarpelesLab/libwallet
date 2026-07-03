@@ -367,14 +367,28 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
             const FEE: u64 = 5000;
             let rent = crate::rpc::call(&rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
                 .ok().and_then(|v| v.as_u64()).unwrap_or(890_880);
-            let reserve = FEE + rent;
+            // If a To is given and that account doesn't exist yet, an extra
+            // rent-exempt reserve is held to fund its creation (Go maxSendableSolana).
+            let mut recipient_rent = 0u64;
+            if let Some(to) = params.get("To").and_then(Value::as_str) {
+                let info = crate::rpc::call(&rpc, "getAccountInfo", serde_json::json!([to, {"encoding":"base64"}]));
+                let exists = info.ok().map(|v| !v.get("value").map(|x| x.is_null()).unwrap_or(true)).unwrap_or(true);
+                if !exists {
+                    recipient_rent = rent;
+                }
+            }
+            let reserve = FEE + rent + recipient_rent;
             let max = balance.saturating_sub(reserve);
             let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), 9);
+            let mut reserved = vec![serde_json::json!({ "kind": "sender_rent", "amount": amt(rent) })];
+            if recipient_rent > 0 {
+                reserved.push(serde_json::json!({ "kind": "recipient_rent", "amount": amt(recipient_rent) }));
+            }
             Ok(serde_json::json!({
                 "chain": "solana",
                 "balance": amt(balance),
                 "fee": amt(FEE),
-                "reserved": [{ "kind": "sender_rent", "amount": amt(rent) }],
+                "reserved": reserved,
                 "max": amt(max),
             }))
         }
