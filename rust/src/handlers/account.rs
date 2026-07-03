@@ -233,10 +233,18 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
         "solana" => {
             let res = crate::rpc::call(rpc, "getBalance", serde_json::json!([account.address]))
                 .map_err(ApiError::internal)?;
-            res.get("value")
+            let raw = res
+                .get("value")
                 .and_then(Value::as_u64)
-                .map(|v| v.to_string())
-                .ok_or_else(|| ApiError::new(502, "unexpected getBalance response"))?
+                .ok_or_else(|| ApiError::new(502, "unexpected getBalance response"))?;
+            // Subtract the rent-exempt minimum so the reported balance is what
+            // the user can actually spend (matching Go nativeBalance). RPC
+            // failure falls back to the canonical 0-byte system-account reserve.
+            let rent = crate::rpc::call(rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
+                .ok()
+                .and_then(|v| v.as_u64())
+                .unwrap_or(890_880);
+            raw.saturating_sub(rent).to_string()
         }
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };

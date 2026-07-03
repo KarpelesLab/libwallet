@@ -355,6 +355,38 @@ fn account_balance_via_ffi() {
     LibwalletDestroy(h);
 }
 
+#[test]
+fn solana_balance_subtracts_rent_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"SOL","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // getBalance = 0.01 SOL (10_000_000 lamports), rent-exempt min = 890_880.
+    // Spendable = 10_000_000 - 890_880 = 9_109_120.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":{"value":10000000}}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":890880}"#.to_string(),
+    ]);
+    let bal = request(
+        h,
+        &format!(r#"{{"path":"Account:balance","params":{{"Id":"{account_id}","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(bal["result"], "success", "balance failed: {bal:?}");
+    assert_eq!(bal["data"]["balance"], "9109120");
+    LibwalletDestroy(h);
+}
+
 /// Mock node serving `responses` in order (one request each).
 fn mock_multi(responses: Vec<String>) -> String {
     use std::io::{Read, Write};
