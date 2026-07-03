@@ -49,6 +49,8 @@ pub mod walletconnect;
 pub mod erc20;
 // Cross-device (RemoteKey) spot message routing (wltwallet broker).
 pub mod remotekey;
+// Curated token registry (wlttoken/curated) for Token:listCurated.
+pub mod curated;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).

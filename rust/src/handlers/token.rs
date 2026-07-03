@@ -23,3 +23,14 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Token"))),
     }
 }
+
+/// `Token:listCurated` {Network} — the embedded curated token list for a
+/// canonical "<type>.<chainId>" chain key (Go apiListCurated). Always a JSON
+/// array; the dynamic ChiefStaker (Solana mainnet) feed is not included.
+pub fn list_curated(_env: &Env, params: &Value) -> ApiResult {
+    let network = params
+        .get("Network")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Network required (canonical \"<type>.<chainId>\")"))?;
+    Ok(Value::Array(crate::curated::for_chain(network)))
+}

@@ -1,0 +1,428 @@
+[
+  {
+    "chainKey": "evm.43114",
+    "address": "0x130966628846BFd36ff31a822705796e8cb8C18D",
+    "symbol": "MIM",
+    "name": "Magic Internet Money",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/16786/thumb/mimlogopng.png?1624979612",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x1f1E7c893855525b303f99bDF5c3c05Be09ca251",
+    "symbol": "SYN",
+    "name": "Synapse",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/18024/thumb/syn.png?1635002049"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x20CF1b6E9d856321ed4686877CF4538F2C84B4dE",
+    "symbol": "ANKR",
+    "name": "Ankr",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/4324/thumb/U85xTl2.png?1608111978"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x2147EFFF675e4A4eE1C2f918d181cDBd7a8E208f",
+    "symbol": "ALPHA",
+    "name": "Alpha Venture DAO",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/12738/thumb/AlphaToken_256x256.png?1617160876"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x214DB107654fF987AD859F34125307783fC8e387",
+    "symbol": "FXS",
+    "name": "Frax Share",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/13423/thumb/frax_share.png?1608478989"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x26deBD39D5eD069770406FCa10A0E4f8d2c743eB",
+    "symbol": "GUN",
+    "name": "GUNZ",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/55027/standard/gunz.jpg?1743262298"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x2775d5105276781B4b85bA6eA6a6653bEeD1dd32",
+    "symbol": "XAUt0",
+    "name": "Tether Gold",
+    "decimals": 6,
+    "type": "erc20",
+    "logoURI": "https://coin-images.coingecko.com/coins/images/66560/large/XAUt0_Token_Icon_Gold.png?1749747942"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590",
+    "symbol": "STG",
+    "name": "Stargate Finance",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/24413/thumb/STG_LOGO.png?1647654518"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x37B608519F91f70F2EeB0e5Ed9AF4061722e4F76",
+    "symbol": "SUSHI",
+    "name": "Sushi",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/12271/thumb/512x512_Logo_no_chop.png?1606986688"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x3Bd2B1c7ED8D396dbb98DED3aEbb41350a5b2339",
+    "symbol": "UMA",
+    "name": "UMA Voting Token v1",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x04Fa0d235C4abf4BcF4787aF4CF447DE572eF828/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x44c784266cf024a60e8acF2427b9857Ace194C5d",
+    "symbol": "AXL",
+    "name": "Axelar",
+    "decimals": 6,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/27277/large/V-65_xQ1_400x400.jpeg"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB",
+    "symbol": "WETH",
+    "name": "Wrapped Ether",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2/logo.png",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x50b7545627a5162F82A992c33b87aDc75187B218",
+    "symbol": "WBTC",
+    "name": "Wrapped BTC",
+    "decimals": 8,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x5947BB275c521040051D82396192181b413227A3",
+    "symbol": "LINK",
+    "name": "ChainLink Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x514910771AF9Ca656af840dff83E8264EcF986CA/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x596fA47043f99A4e0F122243B841E55375cdE0d2",
+    "symbol": "ZRX",
+    "name": "0x Protocol Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xE41d2489571d322189246DaFA5ebDe1F4699F498/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x62edc0692BD897D2295872a9FFCac5425011c661",
+    "symbol": "GMX",
+    "name": "GMX",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/18323/large/arbit.png?1631532468"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x63a72806098Bd3D9520cC43356dD78afe5D386D9",
+    "symbol": "AAVE",
+    "name": "Aave",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/12645/thumb/AAVE.png?1601374110"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x6985884C4392D348587B19cb9eAAf157F13271cd",
+    "symbol": "ZRO",
+    "name": "LayerZero",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/28206/standard/ftxG9_TJ_400x400.jpeg?1696527208"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x6b289CCeAA8639e3831095D75A3e43520faBf552",
+    "symbol": "CTSI",
+    "name": "Cartesi",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/11038/thumb/cartesi.png?1592288021"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x88128fd4b259552A9A1D457f435a6527AAb72d42",
+    "symbol": "MKR",
+    "name": "Maker",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x9f8F72aA9304c8B593d555F12eF6589cC3A579A2/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x8a0cAc13c7da965a312f08ea4229c37869e85cB9",
+    "symbol": "GRT",
+    "name": "The Graph",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/13397/thumb/Graph_Token.png?1608145566"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x8eBAf22B6F053dFFeaf46f4Dd9eFA95D89ba8580",
+    "symbol": "UNI.e",
+    "name": "UNI.e Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/Uniswap/assets/master/blockchains/avalanchec/assets/0x8eBAf22B6F053dFFeaf46f4Dd9eFA95D89ba8580/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x961C8c0B1aaD0c0b10a51FeF6a867E3091BCef17",
+    "symbol": "DYP",
+    "name": "DeFi Yield Protocol",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/13480/thumb/DYP_Logo_Symbol-8.png?1655809066"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7",
+    "symbol": "USDT",
+    "name": "Tether USD",
+    "decimals": 6,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x97Cd1CFE2ed5712660bb6c14053C0EcB031Bff7d",
+    "symbol": "RAI",
+    "name": "Rai Reflex Index",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/14004/thumb/RAI-logo-coin.png?1613592334"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x98443B96EA4b0858FDF3219Cd13e98C7A4690588",
+    "symbol": "BAT",
+    "name": "Basic Attention Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/677/thumb/basic-attention-token.png?1547034427"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x9C9e5fD8bbc25984B178FdCE6117Defa39d2db39",
+    "symbol": "BUSD",
+    "name": "Binance USD",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/9576/thumb/BUSD.png?1568947766",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x9eAaC1B23d935365bD7b542Fe22cEEe2922f52dc",
+    "symbol": "YFI",
+    "name": "yearn finance",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/11849/thumb/yfi-192x192.png?1598325330"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0x9Fb9a33956351cf4fa040f65A13b835A3C8764E3",
+    "symbol": "MULTI",
+    "name": "Multichain",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/22087/thumb/1_Wyot-SDGZuxbjdkaOeT2-A.png?1640764238"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xaBC9547B534519fF73921b1FBA6E672b5f58D083",
+    "symbol": "WOO",
+    "name": "WOO Network",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/12921/thumb/w2UiemF__400x400.jpg?1603670367"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xAEC8318a9a59bAEb39861d10ff6C7f7bf1F96C57",
+    "symbol": "agEUR",
+    "name": "agEur",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/19479/standard/agEUR.png?1696518915"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7",
+    "symbol": "WAVAX",
+    "name": "Wrapped AVAX",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/Uniswap/assets/master/blockchains/avalanchec/assets/0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7/logo.png",
+    "tags": [
+      "wrapped"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E",
+    "symbol": "USDC",
+    "name": "USDC Token",
+    "decimals": 6,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/Uniswap/assets/master/blockchains/avalanchec/assets/0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E/logo.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xBeC243C995409E6520D7C41E404da5dEba4b209B",
+    "symbol": "SNX",
+    "name": "Synthetix Network Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xC011a73ee8576Fb46F5E1c5751cA3B9Fe0af2a6F/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xc3048E19E76CB9a3Aa9d77D8C03c29Fc906e2437",
+    "symbol": "COMP",
+    "name": "Compound",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xc00e94Cb662C3520282E6f5717214004A7f26888/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xc4B06F17ECcB2215a5DBf042C672101Fc20daF55",
+    "symbol": "FLUX",
+    "name": "Flux",
+    "decimals": 8,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x720CD16b011b987Da3518fbf38c3071d4F0D1495/logo.png"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xC891EB4cbdEFf6e073e859e987815Ed1505c2ACD",
+    "symbol": "EURC",
+    "name": "Euro Coin",
+    "decimals": 6,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/26045/standard/euro.png?1696525125",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xCE1bFFBD5374Dac86a2893119683F4911a2F7814",
+    "symbol": "SPELL",
+    "name": "Spell Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/15861/thumb/abracadabra-3.png?1622544862"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xD24C2Ad096400B6FBcd2ad8B24E7acBc21A1da64",
+    "symbol": "FRAX",
+    "name": "Frax",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/13422/thumb/frax_logo.png?1608476506",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xd501281565bf7789224523144Fe5D98e8B28f267",
+    "symbol": "1INCH",
+    "name": "1inch",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/13469/thumb/1inch-token.png?1608803028"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70",
+    "symbol": "DAI.e",
+    "name": "DAI.e Token",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://raw.githubusercontent.com/Uniswap/assets/master/blockchains/avalanchec/assets/0xd586E7F844cEa2F87f50152665BCbc2C279D8d70/logo.png",
+    "tags": [
+      "stablecoin"
+    ]
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xfB98B335551a418cD0737375a2ea0ded62Ea213b",
+    "symbol": "PENDLE",
+    "name": "Pendle",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://coin-images.coingecko.com/coins/images/15069/large/Pendle_Logo_Normal-03.png?1696514728"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xFdCa15bd55F350a36E63C47661914d80411d2C22",
+    "symbol": "TAO",
+    "name": "Bittensor",
+    "decimals": 18,
+    "type": "erc20",
+    "logoURI": "https://coin-images.coingecko.com/coins/images/28452/large/ARUsPeNQ_400x400.jpeg?1696527447"
+  },
+  {
+    "chainKey": "evm.43114",
+    "address": "0xFE6B19286885a4F7F55AdAD09C3Cd1f906D2478F",
+    "symbol": "SOL",
+    "name": "SOL Wormhole ",
+    "decimals": 9,
+    "type": "erc20",
+    "logoURI": "https://assets.coingecko.com/coins/images/22876/thumb/SOL_wh_small.png?1644224316"
+  }
+]
