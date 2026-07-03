@@ -79,8 +79,8 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     let net = crate::models::network::fetch(env, net_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(400, "network not found"))?;
-    if net.kind != "evm" {
-        return Err(ApiError::new(400, "Swap:execute is EVM-only"));
+    if net.kind != "evm" && net.kind != "solana" {
+        return Err(ApiError::new(400, "Swap:execute supports evm and solana"));
     }
     let token_in = token_ref(params.get("TokenIn"))?;
     let token_out = token_ref(params.get("TokenOut"))?;
@@ -101,8 +101,12 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     let unlock: Vec<(String, String)> =
         keys.iter().filter(|k| k.kind == "Password").map(|k| (k.id.clone(), k.key.clone())).collect();
 
-    swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
-        .map_err(ApiError::internal)
+    let res = if net.kind == "solana" {
+        swap::execute_solana(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
+    } else {
+        swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
+    };
+    res.map_err(ApiError::internal)
 }
 
 /// `Swap:buildApprovalData` — the ERC-20 `approve(spender, amount)` calldata for

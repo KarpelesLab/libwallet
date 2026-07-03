@@ -101,6 +101,35 @@ pub fn payload_is_signable_tx(payload: &[u8], pubkey: &[u8; 32]) -> bool {
     false
 }
 
+/// The signature layout of a serialized transaction: `(first_signature_offset,
+/// message_start)`. The message (what each signer signs) is `tx[message_start..]`
+/// and signature slot 0 lives at `[first_signature_offset .. +64]`.
+pub fn tx_sig_layout(raw_tx: &[u8]) -> Option<(usize, usize)> {
+    let (num_sigs, consumed) = read_compact_u16(raw_tx)?;
+    if num_sigs < 1 {
+        return None;
+    }
+    let sigs_end = consumed + num_sigs as usize * 64;
+    if sigs_end > raw_tx.len() {
+        return None;
+    }
+    Some((consumed, sigs_end))
+}
+
+/// The message bytes of a serialized transaction (what the fee-payer signs).
+pub fn tx_message(raw_tx: &[u8]) -> Option<&[u8]> {
+    tx_sig_layout(raw_tx).map(|(_, start)| &raw_tx[start..])
+}
+
+/// Splice a 64-byte signature into slot 0 of a serialized transaction (Go
+/// `solanaSplicingSignLocal`'s final copy). Returns the fully-signed bytes.
+pub fn splice_signature(raw_tx: &[u8], sig: &[u8; 64]) -> Option<Vec<u8>> {
+    let (off, _) = tx_sig_layout(raw_tx)?;
+    let mut out = raw_tx.to_vec();
+    out[off..off + 64].copy_from_slice(sig);
+    Some(out)
+}
+
 /// Serialize a legacy transfer message: `from` sends `lamports` to `to` at
 /// `recent_blockhash`. Account order is [from(signer,writable), to(writable),
 /// SystemProgram(readonly)]; the returned bytes are what the signer signs.

@@ -4,6 +4,7 @@
 //! execution (`Crypto/Okx:swap` + on-chain broadcast) and ERC-20 approval need
 //! the live proxy + credentials and land with the execute pass.
 
+use base64::Engine as _;
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -297,6 +298,111 @@ pub fn execute_evm(
     // 4. Broadcast via the node.
     let hash = crate::rpc::eth_send_raw_transaction(rpc, &format!("0x{raw_hex}"))?;
     Ok(json!({ "hash": hash, "raw": format!("0x{raw_hex}") }))
+}
+
+/// Decode an OKX Solana `tx.data` blob (Go `okxDecodeSolanaTxData`): try base58
+/// (the documented encoding) then base64/base64url, preferring the candidate
+/// that parses as a transaction whose fee-payer is `signer`.
+pub fn decode_solana_tx_data(s: &str, signer: &[u8; 32]) -> Result<Vec<u8>> {
+    let mut candidates: Vec<Vec<u8>> = Vec::new();
+    if let Ok(raw) = bs58::decode(s).into_vec() {
+        if !raw.is_empty() {
+            candidates.push(raw);
+        }
+    }
+    let mut b = s.replace('-', "+").replace('_', "/");
+    while b.len() % 4 != 0 {
+        b.push('=');
+    }
+    if let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(&b) {
+        candidates.push(raw);
+    }
+    // Prefer one whose message names `signer` as a required signer.
+    for raw in &candidates {
+        if let Some(msg) = crate::solana::tx_message(raw) {
+            if crate::solana::find_signer_slot(msg, signer).is_some() {
+                return Ok(raw.clone());
+            }
+        }
+    }
+    // Fall back to the first structurally-valid candidate.
+    for raw in &candidates {
+        if crate::solana::tx_sig_layout(raw).is_some() {
+            return Ok(raw.clone());
+        }
+    }
+    Err(Error::Env("tx.data is neither valid base58 nor base64 transaction".into()))
+}
+
+/// Execute a Solana swap (Go `okxExecuteSolana`): fetch the swap tx from the OKX
+/// proxy, FROST-sign its message, splice the signature into slot 0 (self-verified
+/// under the fee-payer key), and broadcast via `sendTransaction`. Returns
+/// `{signature}`.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_solana(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    key: &ApiKey,
+    base: &str,
+    rpc: &str,
+    chain_id: &str,
+    token_in: &TokenRef,
+    token_out: &TokenRef,
+    amount_in: &str,
+    slippage_bps: u16,
+) -> Result<serde_json::Value> {
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "solana" {
+        return Err(Error::Env("solana swap execute requires a solana account".into()));
+    }
+    let signer = crate::solana::pubkey_from_b64url(&acct.pubkey)
+        .ok_or_else(|| Error::Env("bad account pubkey".into()))?;
+    let chain_index = okx_chain_index("solana", chain_id)?;
+
+    let params = json!({
+        "chainIndex": chain_index,
+        "fromTokenAddress": okx_token_addr("solana", &token_in.address),
+        "toTokenAddress": okx_token_addr("solana", &token_out.address),
+        "amount": amount_in,
+        "userWalletAddress": acct.address,
+        "slippagePercent": okx_slippage_percent(slippage_bps),
+    });
+    let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
+    let entry = match &data {
+        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
+        _ => data.clone(),
+    };
+    let tx_data = entry
+        .get("tx")
+        .and_then(|t| t.get("data"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| Error::Env("okx: solana swap returned empty tx.data".into()))?;
+
+    let raw_tx = decode_solana_tx_data(tx_data, &signer)?;
+    let message = crate::solana::tx_message(&raw_tx)
+        .ok_or_else(|| Error::Env("okx solana tx: no message".into()))?
+        .to_vec();
+
+    // FROST-sign the message and self-verify under the fee-payer key.
+    let sig = crate::models::wallet::sign_frost_local(env, &acct.wallet, unlock, &message)?;
+    let sig64: [u8; 64] = sig
+        .clone()
+        .try_into()
+        .map_err(|_| Error::Env("unexpected signature length".into()))?;
+    if !crate::tss::ed25519_verify(&signer, &message, &sig64) {
+        return Err(Error::Env("signature does not verify under fee-payer pubkey".into()));
+    }
+    let signed = crate::solana::splice_signature(&raw_tx, &sig64)
+        .ok_or_else(|| Error::Env("failed to splice signature".into()))?;
+
+    // Broadcast (base64 wire form).
+    let signed_b64 = base64::engine::general_purpose::STANDARD.encode(&signed);
+    let res = crate::rpc::call(rpc, "sendTransaction", json!([signed_b64, { "encoding": "base64" }]))?;
+    let signature = res.as_str().unwrap_or_default().to_owned();
+    Ok(json!({ "signature": signature }))
 }
 
 /// The unlimited-approval amount (uint256 max, 2^256 − 1).

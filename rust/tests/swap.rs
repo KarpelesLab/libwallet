@@ -32,6 +32,63 @@ fn mock_multi(responses: Vec<String>) -> String {
 }
 
 #[test]
+fn execute_solana_splices_and_broadcasts() {
+    use libwallet::models::{account, wallet};
+    use libwallet::sign::KeyDescription;
+    use libwallet::solana::{build_transfer_message, pubkey_from_b64url, tx_message};
+    use libwallet::tss::ed25519_verify;
+    use libwallet::Env;
+
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds: Vec<KeyDescription> = ["a", "b", "c"]
+        .iter()
+        .map(|p| KeyDescription { kind: "Password".into(), key: format!("password{p}"), id: String::new() })
+        .collect();
+    let w = wallet::create(&env, "SOL", "ed25519", &kds).unwrap();
+    let acct = account::create(&env, &w.id, "", "solana", 0).unwrap();
+    let unlock: Vec<(String, String)> = w
+        .keys
+        .iter()
+        .take(2)
+        .zip(["a", "b"])
+        .map(|(k, p)| (k.id.clone(), format!("password{p}")))
+        .collect();
+
+    // Build a swap tx blob: [compactU16(1)][zero sig:64][message]. The message
+    // names the account as signer slot 0 (so find_signer_slot + self-verify pass).
+    let from = pubkey_from_b64url(&acct.pubkey).unwrap();
+    let message = build_transfer_message(&from, &[9u8; 32], 500, &[1u8; 32]);
+    let mut raw_tx = vec![1u8]; // numSigs = 1
+    raw_tx.extend_from_slice(&[0u8; 64]); // placeholder signature slot
+    raw_tx.extend_from_slice(&message);
+    let tx_data_b58 = bs58::encode(&raw_tx).into_string();
+
+    let okx = mock_multi(vec![format!(
+        r#"{{"result":"success","data":[{{"tx":{{"data":"{tx_data_b58}"}}}}]}}"#
+    )]);
+    let node = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"5xSolSignature"}"#.to_string()]);
+
+    let key = ApiKey::from_seed("kid", [4u8; 32]);
+    let token_in = TokenRef { address: "NATIVE".into(), symbol: "SOL".into(), decimals: 9 };
+    let token_out = TokenRef { address: "EPjF...".into(), symbol: "USDC".into(), decimals: 6 };
+
+    let res = swap::execute_solana(
+        &env, &acct.id, &unlock, &key, &okx, &node, "mainnet", &token_in, &token_out, "1000000000", 50,
+    )
+    .unwrap();
+    assert_eq!(res["signature"], "5xSolSignature");
+
+    // Cross-check: the message that was signed verifies under the account key.
+    let msg = tx_message(&raw_tx).unwrap();
+    // (execute_solana already self-verifies before broadcast; re-signing here
+    // would use fresh FROST nonces, so we just confirm the message layout.)
+    assert_eq!(msg, &message[..]);
+    let _ = ed25519_verify; // referenced for clarity
+}
+
+#[test]
 fn execute_evm_signs_and_broadcasts() {
     use libwallet::evm::recover_sender;
     use libwallet::models::{account, wallet};
