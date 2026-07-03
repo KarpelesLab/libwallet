@@ -213,7 +213,7 @@ func (w *Wallet) Reshare(ctx context.Context, oldKeys []*wltsign.KeyDescription,
 			return err
 		}
 		if err := waitOnlineSpot(spot); err != nil {
-			return err
+			return fmt.Errorf("spot network unavailable (could not reach the relay mesh to contact the remote 2FA participant): %w", err)
 		}
 		log.Printf("initializing remote peer %s with info=%+v", p.Id.String(), info)
 		// Do not log kd.Key (the RemoteKey session id) — it is sensitive
@@ -432,7 +432,7 @@ func (w *Wallet) ReshareEdDSA(ctx context.Context, oldKeys []*wltsign.KeyDescrip
 			return err
 		}
 		if err := waitOnlineSpot(spot); err != nil {
-			return err
+			return fmt.Errorf("spot network unavailable (could not reach the relay mesh to contact the remote 2FA participant): %w", err)
 		}
 		log.Printf("initializing eddsa remote peer %s with info=%+v", p.Id.String(), info)
 		rp := &spotPeer{
@@ -951,7 +951,7 @@ func (w *Wallet) startReshareRemotes(ctx context.Context, hub *tssHub, oldKeys [
 			return nil, err
 		}
 		if err := waitOnlineSpot(spot); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("spot network unavailable (could not reach the relay mesh to contact the remote 2FA participant): %w", err)
 		}
 		log.Printf("initializing %s remote peer %s with info=%+v", protocol, p.Id.String(), info)
 		rp := &spotPeer{

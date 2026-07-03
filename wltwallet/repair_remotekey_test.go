@@ -121,12 +121,29 @@ func TestRepairRemoteKeyShare(t *testing.T) {
 		start := time.Now()
 		err := wallet.Reshare(context.Background(), old2, []*wltsign.KeyDescription{{Type: "Plain"}, {Type: "Plain"}, {Type: "RemoteKey", Key: sess}})
 		if err == nil {
-			t.Fatal("expected the desynced share to stall the reshare, but it completed")
+			t.Fatal("expected the desynced share to fail the reshare, but it completed")
 		}
-		if !strings.Contains(err.Error(), "stopped responding") {
-			t.Fatalf("expected the rounds-deadline error, got after %s: %s", time.Since(start).Round(time.Second), err)
+		// Three acceptable failure shapes depending on fleet version:
+		//   - new wdrone, init-time guard: the init query itself fails with
+		//     the stale-share message ("out of sync" + repairRemoteKey hint);
+		//   - new wdrone, runner path: a walletsign:error frame → client
+		//     fails with "remote participant reported: …";
+		//   - old wdrone: silent stall → 2-minute rounds deadline
+		//     ("stopped responding").
+		msg := err.Error()
+		if strings.Contains(msg, "spot network unavailable") {
+			t.Skipf("spot relay mesh unreachable (infra): %s", err)
 		}
-		log.Printf("phase 3 done: desync reproduced the field hang → deadline error after %s", time.Since(start).Round(time.Second))
+		switch {
+		case strings.Contains(msg, "out of sync"):
+			log.Printf("phase 3 done: desync REJECTED AT INIT by the fleet guard after %s: %s", time.Since(start).Round(time.Second), err)
+		case strings.Contains(msg, "remote participant reported"):
+			log.Printf("phase 3 done: desync reported via walletsign:error frame after %s: %s", time.Since(start).Round(time.Second), err)
+		case strings.Contains(msg, "stopped responding"):
+			log.Printf("phase 3 done: desync hit the rounds deadline (pre-guard fleet) after %s", time.Since(start).Round(time.Second))
+		default:
+			t.Fatalf("expected a stale-share rejection, error frame, or rounds-deadline error; got after %s: %s", time.Since(start).Round(time.Second), err)
+		}
 	}
 
 	// Phase 4 — repair: push the wallet's local P0 blob back to the record.
