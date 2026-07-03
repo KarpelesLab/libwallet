@@ -57,6 +57,61 @@ pub fn country_availability(_env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(swap::country_availability(country)).unwrap())
 }
 
+/// `Swap:buildApproval` — a ready-to-sign ERC-20 approval transaction: the
+/// approve calldata plus a fetched nonce / gas / gasPrice, so the host can pass
+/// it straight to Account:signAndSendTransaction (Go swapBuildApproval, minus
+/// the quote-cache lookup — the spender/amount are supplied directly).
+pub fn build_approval(env: &Env, params: &Value) -> ApiResult {
+    use num_bigint::BigInt;
+    let account_id = params.get("Account").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Account required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "ethereum" {
+        return Err(ApiError::new(400, "approvals are EVM-only"));
+    }
+    let token = params.get("Token").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Token (contract) required"))?;
+    let spender = params.get("Spender").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Spender required"))?;
+    let rpc = params.get("RPC").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "RPC required"))?;
+    let unlimited = params.get("Unlimited").and_then(Value::as_bool).unwrap_or(false);
+    let amount = if unlimited {
+        swap::max_uint256()
+    } else {
+        let s = params.get("Amount").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Amount required (or Unlimited)"))?;
+        BigInt::parse_bytes(s.as_bytes(), 10).ok_or_else(|| ApiError::new(400, "bad Amount"))?
+    };
+    let data = swap::encode_erc20_approve(spender, &amount).map_err(ApiError::internal)?;
+
+    // nonce + gasPrice + gas (estimate, or a safe default for approve()).
+    let nonce_hex = crate::rpc::call(rpc, "eth_getTransactionCount", serde_json::json!([account.address, "pending"]))
+        .map_err(ApiError::internal)?;
+    let nonce_hex = nonce_hex.as_str().unwrap_or("0x0");
+    let nonce = u64::from_str_radix(nonce_hex.strip_prefix("0x").unwrap_or(nonce_hex), 16).unwrap_or(0);
+    let gp = crate::rpc::call(rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+    let gp = gp.as_str().unwrap_or("0x0").to_owned();
+    let gas: u64 = crate::rpc::call(rpc, "eth_estimateGas", serde_json::json!([{ "from": account.address, "to": token, "data": data }]))
+        .ok()
+        .and_then(|v| v.as_str().map(|s| u64::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16).unwrap_or(0)))
+        .filter(|g| *g > 0)
+        .unwrap_or(60_000);
+
+    Ok(serde_json::json!({
+        "tx": {
+            "type": "evm",
+            "from": account.address,
+            "to": token,
+            "value": "0",
+            "data": data,
+            "nonce": nonce,
+            "gas": gas,
+            "gasPrice": BigInt::parse_bytes(gp.strip_prefix("0x").unwrap_or(&gp).as_bytes(), 16).unwrap_or_else(|| BigInt::from(0)).to_string(),
+        },
+        "spender": spender,
+        "amount": amount.to_string(),
+        "isUnlimited": swap::is_unlimited_approval(&amount),
+    }))
+}
+
 /// `Swap:availability` — whether swaps are available on the current (or given)
 /// network, and the eligible providers (Go `swapAvailability`).
 pub fn availability(env: &Env, params: &Value) -> ApiResult {

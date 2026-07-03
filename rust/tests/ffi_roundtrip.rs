@@ -809,6 +809,46 @@ fn swap_max_spendable_via_ffi() {
 }
 
 #[test]
+fn swap_build_approval_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let acc = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = acc["data"]["Id"].as_str().unwrap().to_string();
+
+    // Node: nonce=5, gasPrice=20 gwei, estimateGas=46000.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x5"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xb3b0"}"#.to_string(), // 46000
+    ]);
+    let body = format!(
+        r#"{{"path":"Swap:buildApproval","params":{{"Account":"{account_id}","Token":"0x1111111111111111111111111111111111111111","Spender":"0x2222222222222222222222222222222222222222","Unlimited":true,"RPC":"{rpc}"}}}}"#
+    );
+    let resp = request(h, &body);
+    assert_eq!(resp["result"], "success", "{resp}");
+    let tx = &resp["data"]["tx"];
+    assert_eq!(tx["to"], "0x1111111111111111111111111111111111111111");
+    assert_eq!(tx["nonce"], 5);
+    assert_eq!(tx["gas"], 46000);
+    assert_eq!(tx["gasPrice"], "20000000000");
+    // Unlimited approval: calldata ends in an all-Fs amount word.
+    assert!(tx["data"].as_str().unwrap().starts_with("0x095ea7b3"));
+    assert!(tx["data"].as_str().unwrap().ends_with(&"f".repeat(64)));
+    assert_eq!(resp["data"]["isUnlimited"], true);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn swap_quotes_via_ffi() {
     let h = new_env();
     // Default current network = ephemeral evm.1. Mock OKX proxy returns a quote.
