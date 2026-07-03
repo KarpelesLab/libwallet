@@ -41,6 +41,8 @@ pub mod rest;
 pub mod quote;
 // Coin metadata lookup via the REST backend (wltasset CoinInfo).
 pub mod coininfo;
+// Token-swap quotes via the OKX DEX proxy (wltswap).
+pub mod swap;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).

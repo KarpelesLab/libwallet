@@ -32,7 +32,9 @@ fn request(h: usize, body: &str) -> serde_json::Value {
     let cb: ResponseCallback = capture;
     LibwalletRequest(h, req.as_ptr(), Some(cb), ud);
 
-    let json = rx.recv_timeout(Duration::from_secs(5)).expect("callback fired");
+    // Generous timeout: a Wallet POST runs a full DKLs/FROST keygen (several
+    // seconds), which can be slower under parallel test load.
+    let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
     drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
     serde_json::from_str(&json).expect("valid JSON envelope")
 }

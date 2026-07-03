@@ -13,6 +13,7 @@ mod names;
 mod network;
 mod nft;
 mod quote;
+mod swap;
 mod token;
 mod transaction;
 mod wallet;
@@ -74,6 +75,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Contract:lookup" => contract::lookup(&handle.env, params),
         "Quote:get" => quote::get(&handle.env, params),
         "Coin:info" => coininfo::info(&handle.env, params),
+        "Swap:quote" => swap::quote(&handle.env, params),
         "Account:balance" => account::balance(&handle.env, params),
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
