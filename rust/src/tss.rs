@@ -120,23 +120,29 @@ impl MessageBroker for LocalHub {
     }
 }
 
-/// Deterministic local party ids (`p0..pn`), keyed by index so sorting is
-/// stable. Used when generating an all-local wallet.
-fn local_party_ids(n: usize) -> Vec<PartyId> {
-    let ids: Vec<PartyId> =
-        (0..n).map(|i| PartyId::new(format!("p{i}"), "", vec![(i as u8) + 1])).collect();
-    PartyId::sort(ids, 0)
+/// Generate an `n`-share, threshold-`t` FROST key entirely on this device,
+/// using deterministic index-based party keys. Handy for tests and simple
+/// all-local wallets.
+pub fn frost_keygen_local(n: usize, threshold: usize) -> Result<Vec<(PartyId, Key)>, TssError> {
+    let keys: Vec<Vec<u8>> = (0..n).map(|i| vec![(i as u8) + 1]).collect();
+    frost_keygen_with_parties(keys, threshold)
 }
 
-/// Generate an `n`-share, threshold-`t` FROST key entirely on this device.
-/// Returns each share paired with its party id (the id is needed to form a
-/// signing committee later). For an all-local wallet, persist the shares
-/// (encrypted) and the group public key.
-pub fn frost_keygen_local(n: usize, threshold: usize) -> Result<Vec<(PartyId, Key)>, TssError> {
+/// Generate a threshold FROST key with explicit party keys. Production
+/// Wallet:create passes each WalletKey's UUID bytes here (Go derives the
+/// tss party id from `WalletKey.Id.UUID`), so the resulting shares are keyed
+/// consistently for later signing. Returns each share paired with its party id.
+pub fn frost_keygen_with_parties(
+    party_keys: Vec<Vec<u8>>,
+    threshold: usize,
+) -> Result<Vec<(PartyId, Key)>, TssError> {
+    let n = party_keys.len();
     if n == 0 || threshold >= n {
         return Err(TssError(format!("invalid n={n}, threshold={threshold}")));
     }
-    let parties = local_party_ids(n);
+    let ids: Vec<PartyId> =
+        party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect();
+    let parties = PartyId::sort(ids, 0);
     let hubs = LocalHub::wired(n);
 
     let keygens: Vec<Keygen> = (0..n)
@@ -156,6 +162,10 @@ pub fn frost_keygen_local(n: usize, threshold: usize) -> Result<Vec<(PartyId, Ke
                 .map_err(|e| TssError(format!("keygen: {e:?}")))
         })
         .collect()
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 /// Sign `msg` with a committee of local shares (must be at least
