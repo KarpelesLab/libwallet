@@ -25,6 +25,30 @@ fn ephemeral_evm_uses_chain_registry() {
 }
 
 #[test]
+fn native_symbol_by_type_and_chain() {
+    let env = env();
+    // EVM from the chain registry.
+    assert_eq!(network::fetch(&env, "evm.1").unwrap().unwrap().native_symbol().unwrap(), "ETH");
+    assert_eq!(network::fetch(&env, "evm.137").unwrap().unwrap().native_symbol().unwrap(), "POL");
+    // Bitcoin family by chain id.
+    assert_eq!(
+        network::fetch(&env, "bitcoin.bitcoin").unwrap().unwrap().native_symbol().unwrap(),
+        "BTC"
+    );
+    assert_eq!(
+        network::fetch(&env, "bitcoin.litecoin").unwrap().unwrap().native_symbol().unwrap(),
+        "LTC"
+    );
+    // Solana.
+    assert_eq!(
+        network::fetch(&env, "solana.mainnet").unwrap().unwrap().native_symbol().unwrap(),
+        "SOL"
+    );
+    // Unknown bitcoin chain errors.
+    assert!(network::fetch(&env, "bitcoin.nope").unwrap().unwrap().native_symbol().is_err());
+}
+
+#[test]
 fn ephemeral_solana_and_bitcoin() {
     let env = env();
     let sol = network::fetch(&env, "solana.mainnet").unwrap().unwrap().to_json();

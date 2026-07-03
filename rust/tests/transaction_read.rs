@@ -62,3 +62,55 @@ fn list_and_missing() {
     assert!(tx::list(&env).unwrap().is_empty());
     assert!(tx::fetch(&env, "tx-none").unwrap().is_none());
 }
+
+#[test]
+fn convert_to_fiat_uses_network_native_symbol() {
+    use std::time::Duration;
+    let env = env();
+    // A tx on the ephemeral evm.1 network (native symbol resolves to ETH),
+    // amount = 2 ETH.
+    env.exec(
+        r#"INSERT INTO "Transaction" ("Id","Type","Asset","From","To","Gas","GasPrice","MaxFeePerGas","MaxPriorityFeePerGas","Fee","Nonce","Format","Raw","Hash","URL","Network","Amount","Value","Data","Created") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"#,
+        vec![
+            SqlValue::Text("tx-2".into()),
+            SqlValue::Text("transfer".into()),
+            SqlValue::Text("evm.1.NATIVE".into()),
+            SqlValue::Text("acct-1".into()),
+            SqlValue::Text("0xdead".into()),
+            SqlValue::Int(21000),
+            SqlValue::Text("".into()),
+            SqlValue::Text("".into()),
+            SqlValue::Text("".into()),
+            SqlValue::Null,
+            SqlValue::Int(0),
+            SqlValue::Text("".into()),
+            SqlValue::Blob(vec![]),
+            SqlValue::Text("".into()),
+            SqlValue::Text("".into()),
+            SqlValue::Text("evm.1".into()),
+            SqlValue::Text(r#"{"v":"2000000000000000000","e":18,"f":2.0}"#.into()),
+            SqlValue::Null,
+            SqlValue::Text("".into()),
+            SqlValue::Text("2026-01-01T00:00:00.000000000Z".into()),
+        ],
+    )
+    .unwrap();
+
+    // ETH = $3000.
+    env.cache_store(
+        libwallet::quote::CACHE_KEY,
+        br#"[{"id":1027,"name":"Ethereum","symbol":"ETH","quote":{"USD":{"price":3000.0}}}]"#,
+        Duration::from_secs(300),
+    )
+    .unwrap();
+
+    let mut t = tx::fetch(&env, "tx-2").unwrap().unwrap();
+    assert!(t.convert_to(&env, "USD").unwrap(), "conversion applied");
+    // 2 ETH * $3000 = $6000.
+    assert_eq!(t.fiat_amount.as_ref().unwrap().to_display_string(), "6000.00000000");
+    assert_eq!(t.fiat_currency, "USD");
+
+    let j = serde_json::to_value(&t).unwrap();
+    assert_eq!(j["fiat_currency"], "USD");
+    assert_eq!(j["fiat_quote"]["price"], 3000.0);
+}

@@ -55,6 +55,62 @@ pub struct Transaction {
     pub data: String,
     #[serde(rename = "created", default, skip_serializing_if = "String::is_empty")]
     pub created: String,
+
+    // Computed (never persisted) fiat conversion, matching Go's sql:"-" fields.
+    #[serde(rename = "fiat_amount", default, skip_serializing_if = "Option::is_none")]
+    pub fiat_amount: Option<Amount>,
+    #[serde(rename = "fiat_currency", default, skip_serializing_if = "String::is_empty")]
+    pub fiat_currency: String,
+    #[serde(rename = "fiat_quote", default, skip_serializing_if = "Option::is_none")]
+    pub fiat_quote: Option<crate::quote::CmcQuoteEntry>,
+}
+
+impl Transaction {
+    /// The native symbol for pricing this tx: resolve the network (the tx's own,
+    /// else the current network) and take its native currency. Mirrors Go
+    /// `Transaction.getSymbol` (native-only for now).
+    fn symbol(&self, env: &Env) -> Result<String> {
+        let id = if self.network.is_empty() { "@" } else { &self.network };
+        match crate::models::network::fetch(env, id)? {
+            Some(n) => n.native_symbol(),
+            None => Err(crate::Error::Env("no network for transaction".into())),
+        }
+    }
+
+    /// Port of Go `Transaction.convertTo`: price the tx's amount (or value) in
+    /// `currency` from the quote table and set the fiat_* fields. `Ok(false)`
+    /// when no symbol/quote/amount applies.
+    pub fn convert_to(&mut self, env: &Env, currency: &str) -> Result<bool> {
+        let symbol = match self.symbol(env) {
+            Ok(s) => s,
+            Err(_) => return Ok(false),
+        };
+        let quote = match crate::quote::get_quotes_for_token(env, &symbol)? {
+            Some(q) => q,
+            None => return Ok(false),
+        };
+        let entry = match quote.quote.get(currency) {
+            Some(e) => e.clone(),
+            None => return Ok(false),
+        };
+        // Prefer amount, else value; skip when neither is positive.
+        let amt = self
+            .amount
+            .as_ref()
+            .filter(|a| a.sign() > 0)
+            .or_else(|| self.value.as_ref().filter(|a| a.sign() > 0));
+        let amt = match amt {
+            Some(a) => a.clone(),
+            None => return Ok(false),
+        };
+        let price = Amount::from_float64(entry.price, 8);
+        let mut fiat = Amount::new(0, 8);
+        fiat.mul(&amt, &price);
+        self.fiat_amount = Some(fiat);
+        self.fiat_currency = currency.to_owned();
+        self.fiat_quote = Some(entry);
+        Ok(true)
+    }
 }
 
 pub fn init(env: &Env) -> Result<()> {
@@ -110,5 +166,8 @@ fn row_to_tx(row: &[SqlValue]) -> Transaction {
         value: amount_at(row, 17),
         data: text(18),
         created: text(19),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
     }
 }

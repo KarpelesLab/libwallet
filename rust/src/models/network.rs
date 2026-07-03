@@ -64,6 +64,27 @@ impl Network {
         parse_chain_id(&self.chain_id).and_then(chains::get)
     }
 
+    /// The network's native currency symbol (Go `Network.NativeSymbol`): EVM
+    /// from the chain registry, Bitcoin-family by chain id, Solana = SOL.
+    pub fn native_symbol(&self) -> Result<String> {
+        match self.kind.as_str() {
+            "evm" => self
+                .chain_info()
+                .and_then(|i| i.native_currency.as_ref())
+                .map(|c| c.symbol.clone())
+                .ok_or_else(|| crate::Error::Env(format!("no chain info for evm {}", self.chain_id))),
+            "bitcoin" => match self.chain_id.as_str() {
+                "bitcoin" => Ok("BTC".into()),
+                "bitcoin-cash" => Ok("BCH".into()),
+                "litecoin" => Ok("LTC".into()),
+                "dogecoin" => Ok("DOGE".into()),
+                other => Err(crate::Error::Env(format!("unsupported bitcoin chain type {other}"))),
+            },
+            "solana" => Ok("SOL".into()),
+            other => Err(crate::Error::Env(format!("symbol not available for type {other}"))),
+        }
+    }
+
     /// The Network JSON object, matching Go's custom MarshalJSON.
     pub fn to_json(&self) -> Value {
         let mut m = Map::new();
