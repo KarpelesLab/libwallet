@@ -59,6 +59,49 @@ fn type1_asymmetric_roundtrip() {
 }
 
 #[test]
+fn build_namespaces_filters_and_intersects() {
+    let proposal = serde_json::json!({
+        "requiredNamespaces": {
+            "eip155": {
+                "chains": ["eip155:1", "eip155:137"],
+                "methods": ["eth_sendTransaction", "personal_sign", "eth_secretMethod"],
+                "events": ["chainChanged", "accountsChanged"]
+            }
+        },
+        "optionalNamespaces": {
+            "solana": {
+                "chains": ["solana:mainnet"],
+                "methods": ["solana_signTransaction"],
+                "events": []
+            }
+        }
+    });
+    let accounts = vec![
+        "eip155:1:0xabc".to_string(),
+        "eip155:137:0xabc".to_string(),
+        "solana:mainnet:SoLaddr".to_string(),
+    ];
+    // Wallet allows a subset of methods; empty events allow-list echoes all.
+    let methods = vec!["eth_sendTransaction".to_string(), "personal_sign".to_string(), "solana_signTransaction".to_string()];
+    let events: Vec<String> = vec![];
+
+    let ns = libwallet::walletconnect::build_namespaces(&proposal, &accounts, &methods, &events);
+
+    // eip155: accounts filtered to eip155:*, methods intersected (secretMethod
+    // dropped), events echoed (empty allow-list).
+    let eip = &ns["eip155"];
+    assert_eq!(eip["accounts"], serde_json::json!(["eip155:1:0xabc", "eip155:137:0xabc"]));
+    assert_eq!(eip["methods"], serde_json::json!(["eth_sendTransaction", "personal_sign"]));
+    assert_eq!(eip["events"], serde_json::json!(["chainChanged", "accountsChanged"]));
+    assert_eq!(eip["chains"], serde_json::json!(["eip155:1", "eip155:137"]));
+
+    // solana from optionalNamespaces: only its account, its method.
+    let sol = &ns["solana"];
+    assert_eq!(sol["accounts"], serde_json::json!(["solana:mainnet:SoLaddr"]));
+    assert_eq!(sol["methods"], serde_json::json!(["solana_signTransaction"]));
+}
+
+#[test]
 fn parse_pairing_uri_validates() {
     let sym: [u8; 32] = seq(0, 32).try_into().unwrap();
     let topic = wc::derive_topic(&sym);

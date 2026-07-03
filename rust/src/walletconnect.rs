@@ -169,6 +169,63 @@ pub fn open_envelope(
     }
 }
 
+/// Build the session-settle `namespaces` object for an approval (Go
+/// `buildNamespaces`). For each namespace in the proposal's required + optional
+/// namespaces (first occurrence wins), emit `{accounts, methods, events,
+/// chains}`: accounts filtered to that namespace's CAIP prefix, and methods /
+/// events intersected with the wallet's allow-lists (empty allow-list = echo
+/// the requested set). `accounts` are CAIP-10 (e.g. "eip155:1:0x…").
+pub fn build_namespaces(
+    proposal: &serde_json::Value,
+    accounts: &[String],
+    methods: &[String],
+    events: &[String],
+) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    let mut result = Map::new();
+    for key in ["requiredNamespaces", "optionalNamespaces"] {
+        let ns = match proposal.get(key).and_then(Value::as_object) {
+            Some(m) => m,
+            None => continue,
+        };
+        for (name, desc) in ns {
+            if result.contains_key(name) {
+                continue;
+            }
+            let req_methods = desc.get("methods").and_then(Value::as_array).cloned().unwrap_or_default();
+            let req_events = desc.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
+            let req_chains = desc.get("chains").and_then(Value::as_array).cloned().unwrap_or_default();
+
+            let prefix = format!("{name}:");
+            let ns_accounts: Vec<Value> = accounts
+                .iter()
+                .filter(|a| a.starts_with(&prefix))
+                .map(|a| Value::String(a.clone()))
+                .collect();
+
+            let mut entry = Map::new();
+            entry.insert("accounts".into(), Value::Array(ns_accounts));
+            entry.insert("methods".into(), Value::Array(merge_string_list(&req_methods, methods)));
+            entry.insert("events".into(), Value::Array(merge_string_list(&req_events, events)));
+            entry.insert("chains".into(), Value::Array(req_chains));
+            result.insert(name.clone(), Value::Object(entry));
+        }
+    }
+    Value::Object(result)
+}
+
+/// Intersect `requested` (JSON strings) with `allowed`, preserving requested
+/// order (Go `mergeStringList`). An empty allow-list echoes the requested set.
+fn merge_string_list(requested: &[serde_json::Value], allowed: &[String]) -> Vec<serde_json::Value> {
+    let strs = requested.iter().filter_map(|v| v.as_str());
+    if allowed.is_empty() {
+        return strs.map(|s| serde_json::Value::String(s.to_owned())).collect();
+    }
+    strs.filter(|s| allowed.iter().any(|a| a == s))
+        .map(|s| serde_json::Value::String(s.to_owned()))
+        .collect()
+}
+
 fn decrypt(key: &[u8; 32], nonce: &[u8; 12], ct: &[u8], tag: &[u8; 16]) -> Result<Vec<u8>> {
     let aead = ChaCha20Poly1305::new(key);
     let mut buf = ct.to_vec();
