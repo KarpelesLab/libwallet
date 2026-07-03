@@ -35,6 +35,10 @@ pub mod solana;
 pub mod bitcoin;
 // Blocking JSON-RPC client for blockchain nodes (wltnet).
 pub mod rpc;
+// Blocking client for the KarpelesLab REST backend (rest.Do).
+pub mod rest;
+// Market-quote lookup via the REST backend (wltquote).
+pub mod quote;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).

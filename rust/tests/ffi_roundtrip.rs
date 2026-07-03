@@ -499,3 +499,29 @@ fn invalid_handle_errors() {
     assert_eq!(resp["result"], "error");
     assert_eq!(resp["code"], 500);
 }
+
+#[test]
+fn quote_get_via_ffi() {
+    let h = new_env();
+    let base = mock_node(
+        r#"{"result":"success","data":[{"id":1,"name":"Bitcoin","symbol":"BTC","quote":{"USD":{"price":65000.5}}}]}"#,
+    );
+    let base = base.trim_end_matches('/');
+    let resp = request(
+        h,
+        &format!(r#"{{"path":"Quote:get","params":{{"Symbol":"BTC","Currency":"USD","Backend":"{base}"}}}}"#),
+    );
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"]["symbol"], "BTC");
+    assert_eq!(resp["data"]["price"], 65000.5);
+    assert_eq!(resp["data"]["quote"]["price"], 65000.5);
+
+    // An unknown symbol is a 404 (served from the now-warm cache).
+    let miss = request(
+        h,
+        &format!(r#"{{"path":"Quote:get","params":{{"Symbol":"ZZZ","Backend":"{base}"}}}}"#),
+    );
+    assert_eq!(miss["result"], "error");
+    assert_eq!(miss["code"], 404);
+    LibwalletDestroy(h);
+}
