@@ -368,6 +368,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -446,6 +452,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "tsslib",
  "uuid",
  "xuid-rs",
 ]
@@ -786,6 +793,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tsslib"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57eacbf1bc4f3c4901e58e3742cd2511af56fcb487e97377fd962021019c7ea8"
+dependencies = [
+ "base64",
+ "hex",
+ "purecrypto",
+ "serde",
+ "serde_json",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
