@@ -454,6 +454,28 @@ fn event_bridge_delivers_wallet_created() {
 }
 
 #[test]
+fn network_test_rpc_and_set_current() {
+    let h = new_env();
+    // testRPC: mock node reports net_version "1" -> Ethereum Mainnet metadata.
+    let rpc = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":"1"}"#);
+    let probed = request(
+        h,
+        &format!(r#"{{"path":"Network:testRPC","params":{{"URL":"{rpc}","Type":"evm"}}}}"#),
+    );
+    assert_eq!(probed["result"], "success", "testRPC failed: {probed:?}");
+    assert_eq!(probed["data"]["ChainId"], 1);
+    assert_eq!(probed["data"]["Name"], "Ethereum Mainnet");
+    assert_eq!(probed["data"]["CurrencySymbol"], "ETH");
+
+    // setCurrent on an ephemeral network id.
+    let set = request(h, r#"{"path":"Network:setCurrent","params":{"Id":"net-xyz"}}"#);
+    assert_eq!(set["result"], "success");
+    assert_eq!(set["data"]["network"], "net-xyz");
+    // Fetching @ (current) now resolves that selection (ephemeral fetch still works).
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

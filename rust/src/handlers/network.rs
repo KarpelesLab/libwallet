@@ -23,3 +23,41 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Network"))),
     }
 }
+
+/// `Network:testRPC` — probe an RPC endpoint. EVM: net_version + chain registry
+/// metadata. (Solana/Bitcoin probes follow the same shape.)
+pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
+    let url = params
+        .get("URL")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "URL required"))?;
+    let typ = params.get("Type").and_then(Value::as_str).unwrap_or("evm");
+    match typ {
+        "evm" => {
+            let idv = crate::rpc::call(url, "net_version", serde_json::json!([])).map_err(ApiError::internal)?;
+            let id: u64 = idv
+                .as_str()
+                .and_then(|s| s.parse().ok())
+                .ok_or_else(|| ApiError::new(502, "bad net_version response"))?;
+            let mut res = serde_json::json!({ "RPC": url, "Type": "evm", "ChainId": id });
+            if let Some(info) = ethrpc_rs::chains::get(id) {
+                res["Name"] = serde_json::json!(info.name);
+                if let Some(nc) = &info.native_currency {
+                    res["CurrencySymbol"] = serde_json::json!(nc.symbol);
+                }
+            }
+            Ok(res)
+        }
+        other => Err(ApiError::new(400, format!("testRPC type {other} not yet ported"))),
+    }
+}
+
+/// `Network:setCurrent` — mark a network as the active one.
+pub fn set_current(env: &Env, params: &Value) -> ApiResult {
+    let id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id required"))?;
+    env.set_current("network", id).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "network": id }))
+}

@@ -156,6 +156,20 @@ fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, 
     Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
 }
 
+/// `Account:setCurrent` — mark an account as the active one.
+pub fn set_current(env: &Env, params: &Value) -> ApiResult {
+    let id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id required"))?;
+    // Confirm it exists before selecting it.
+    if crate::models::account::fetch(env, id).map_err(ApiError::internal)?.is_none() {
+        return Err(ApiError::new(404, "account not found"));
+    }
+    env.set_current("account", id).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "account": id }))
+}
+
 fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
     bs58::decode(s)
         .into_vec()
