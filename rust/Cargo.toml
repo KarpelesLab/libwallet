@@ -37,6 +37,7 @@ sha2 = "0.10"
 hmac = "0.12"
 tsslib = "0.2"
 bs58 = "0.5"
+outscript = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3"

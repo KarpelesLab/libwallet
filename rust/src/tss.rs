@@ -213,6 +213,26 @@ pub fn dkls_sign_local(
     Ok((sig.r, sig.s, sig.v))
 }
 
+/// Like [`dkls_sign_local`] but adds a 32-byte HD-derivation `tweak`, producing
+/// a signature that verifies under `group_key + tweak·G` — the derived account
+/// key. Mirrors Go `dklstss.SignWithTweak`.
+pub fn dkls_sign_local_tweaked(
+    sorted_keys: &[tsslib::dklstss::Key],
+    threshold: usize,
+    tweak: &[u8; 32],
+    hash: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8), TssError> {
+    if sorted_keys.len() < threshold + 1 {
+        return Err(TssError(format!("need at least {} keys", threshold + 1)));
+    }
+    let signer_idx: Vec<usize> = (0..=threshold).collect();
+    let tw = purecrypto::ec::secp256k1::Scalar::from_bytes_be_reduce(tweak);
+    let mut rng = purecrypto::rng::OsRng;
+    let sig = tsslib::dklstss::sign_with_tweak(sorted_keys, &signer_idx, &tw, hash, &mut rng)
+        .map_err(|e| TssError(format!("dkls sign_with_tweak: {e:?}")))?;
+    Ok((sig.r, sig.s, sig.v))
+}
+
 /// The wallet's group public key as the 33-byte SEC1-compressed secp256k1
 /// encoding (Wallet.Pubkey for secp256k1 wallets).
 pub fn dkls_group_pubkey(key: &tsslib::dklstss::Key) -> Result<[u8; 33], TssError> {

@@ -7,9 +7,15 @@
 //! Verified against BIP32 test vector 2 (`m/0`) and the EIP-55 spec vectors.
 
 use hmac::{Hmac, Mac};
+use num_bigint::{BigInt, Sign};
 use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 use purecrypto::hash::keccak256;
 use sha2::Sha512;
+
+/// The secp256k1 group order n.
+fn secp_order() -> BigInt {
+    BigInt::parse_bytes(b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16).unwrap()
+}
 
 type HmacSha512 = Hmac<Sha512>;
 
@@ -22,10 +28,10 @@ impl std::fmt::Display for DeriveError {
     }
 }
 
-/// One BIP32 non-hardened public child derivation. `index` must be < 2^31
-/// (non-hardened). Returns the child compressed pubkey (33 bytes) and chain
-/// code (32 bytes).
-fn ckd_pub(parent_pub_compressed: &[u8; 33], chain_code: &[u8; 32], index: u32) -> Result<([u8; 33], [u8; 32]), DeriveError> {
+/// One BIP32 non-hardened public child derivation. Returns the child compressed
+/// pubkey (33 bytes), the child chain code (32 bytes), and IL (the 32-byte
+/// tweak added at this step, `child = IL·G + parent`).
+fn ckd_pub(parent_pub_compressed: &[u8; 33], chain_code: &[u8; 32], index: u32) -> Result<([u8; 33], [u8; 32], [u8; 32]), DeriveError> {
     if index >= 0x8000_0000 {
         return Err(DeriveError(format!("hardened index {index} needs a private key")));
     }
@@ -39,30 +45,49 @@ fn ckd_pub(parent_pub_compressed: &[u8; 33], chain_code: &[u8; 32], index: u32) 
     let mut ir = [0u8; 32];
     ir.copy_from_slice(&i[32..]);
 
-    // child = IL·G + parent. from_bytes_be rejects IL >= curve order (BIP32
-    // says derive with the next index then; astronomically rare, so we surface
-    // it as an error rather than loop).
     let il_scalar = Scalar::from_bytes_be(&il).map_err(|_| DeriveError("IL >= curve order".into()))?;
     let parent = AffinePoint::from_sec1(parent_pub_compressed)
         .map_err(|e| DeriveError(format!("bad parent pubkey: {e:?}")))?;
     let child = ProjectivePoint::mul_generator(&il_scalar).add(&parent.to_projective());
     let child_affine = child.to_affine().ok_or_else(|| DeriveError("child is identity".into()))?;
-    Ok((child_affine.to_sec1_compressed(), ir))
+    Ok((child_affine.to_sec1_compressed(), ir, il))
 }
 
-/// Derive a compressed child public key from a parent compressed pubkey +
-/// chain code down a non-hardened path.
+/// Derive a compressed child public key from a parent compressed pubkey + chain
+/// code down a non-hardened path.
 pub fn derive_pub(parent_pub_compressed: &[u8], chain_code: &[u8], path: &[u32]) -> Result<[u8; 33], DeriveError> {
+    Ok(derive_pub_tweak(parent_pub_compressed, chain_code, path)?.0)
+}
+
+/// Like [`derive_pub`] but also returns the accumulated tweak `IL_total =
+/// Σ IL_i mod n`, so the derived key equals `parent + IL_total·G`. TSS signing
+/// for the derived account passes this tweak to `sign_with_tweak`, making the
+/// signature verify under the child (account) address.
+pub fn derive_pub_tweak(
+    parent_pub_compressed: &[u8],
+    chain_code: &[u8],
+    path: &[u32],
+) -> Result<([u8; 33], [u8; 32]), DeriveError> {
     let mut pk: [u8; 33] =
         parent_pub_compressed.try_into().map_err(|_| DeriveError("parent pubkey not 33 bytes".into()))?;
     let mut cc: [u8; 32] =
         chain_code.try_into().map_err(|_| DeriveError("chain code not 32 bytes".into()))?;
+    let n = secp_order();
+    let mut total = BigInt::from(0);
     for &index in path {
-        let (npk, ncc) = ckd_pub(&pk, &cc, index)?;
+        let (npk, ncc, il) = ckd_pub(&pk, &cc, index)?;
+        total = (total + BigInt::from_bytes_be(Sign::Plus, &il)) % &n;
         pk = npk;
         cc = ncc;
     }
-    Ok(pk)
+    // 32-byte big-endian of the accumulated tweak.
+    let (_, mut tb) = total.to_bytes_be();
+    while tb.len() < 32 {
+        tb.insert(0, 0);
+    }
+    let mut tweak = [0u8; 32];
+    tweak.copy_from_slice(&tb[tb.len() - 32..]);
+    Ok((pk, tweak))
 }
 
 /// The EIP-55 checksummed Ethereum address for a compressed secp256k1 pubkey.

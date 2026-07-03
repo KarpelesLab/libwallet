@@ -27,6 +27,8 @@ pub mod keystore;
 pub mod sign;
 // HD public-key derivation for accounts (secp256k1/ecckd).
 pub mod hdderive;
+// EVM transaction building + threshold signing (wlttx EVM path).
+pub mod evm;
 // Threshold-signature ceremonies (tsslib).
 pub mod tss;
 // Object models (ported from the Go wlt* packages).

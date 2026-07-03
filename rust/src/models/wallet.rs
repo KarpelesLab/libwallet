@@ -321,6 +321,53 @@ fn hex_bytes(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Sign a 32-byte digest with a secp256k1/DKLs23 wallet, returning the ECDSA
+/// `(r, s, v)`. DKLs signing needs the full key set, so `unlock` must name and
+/// unlock ALL of the wallet's Password shares. This is the crypto behind
+/// Account:signTransaction for EVM wallets.
+pub fn dkls_sign_digest(
+    env: &Env,
+    wallet_id: &str,
+    unlock: &[(String, String)],
+    tweak: &[u8; 32],
+    digest: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8)> {
+    let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.protocol != "dkls23" {
+        return Err(Error::Env(format!("wallet protocol {} is not dkls23", wallet.protocol)));
+    }
+    let threshold = wallet.threshold.max(0) as usize;
+
+    let mut keys: Vec<tsslib::dklstss::Key> = Vec::with_capacity(unlock.len());
+    for (wk_id, password) in unlock {
+        let wk = wallet
+            .keys
+            .iter()
+            .find(|k| &k.id == wk_id)
+            .ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
+        if wk.kind != "Password" {
+            return Err(Error::Env(format!("key {wk_id} is {} (only Password unlock supported)", wk.kind)));
+        }
+        let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
+        let uuid = xid.uuid().as_bytes().to_vec();
+        let unlock_key = keystore::password_to_ed25519(password, &uuid).map_err(|e| Error::Env(e.to_string()))?;
+        let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+        let key = tsslib::dklstss::Key::from_json(
+            std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?,
+        )
+        .map_err(|e| Error::Env(format!("load dkls share: {e:?}")))?;
+        keys.push(key);
+    }
+
+    if keys.len() < wallet.keys.len() {
+        return Err(Error::Env("DKLs signing requires all shares to be unlocked".into()));
+    }
+    // dkls_sign_local indexes the full array by party index; put keys[i] at i.
+    keys.sort_by_key(|k| k.idx);
+
+    crate::tss::dkls_sign_local_tweaked(&keys, threshold, tweak, digest).map_err(|e| Error::Env(e.to_string()))
+}
+
 fn row_to_wallet(row: &[SqlValue]) -> Wallet {
     let text = |i: usize| row.get(i).and_then(|v| v.as_text()).unwrap_or("").to_owned();
     let int = |i: usize| row.get(i).and_then(|v| v.as_i64()).unwrap_or(0);

@@ -84,8 +84,10 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
         return Err(Error::Env("index must be non-negative".into()));
     }
 
-    // Derive (curve, path, account pubkey b64url, address, uri) per chain.
-    let (curve_out, path, pubkey_b64, address, uri): (String, String, String, String, String) =
+    // Derive (curve, path, account pubkey b64url, address, uri, IL) per chain.
+    // IL is the HD-derivation tweak (Σ IL_i mod n), stored so signing can pass
+    // it to sign_with_tweak; Null for chains that don't derive (solana).
+    let (curve_out, path, pubkey_b64, address, uri, il): (String, String, String, String, String, Value) =
         match typ {
             "solana" => {
                 if wallet.curve != "ed25519" {
@@ -97,7 +99,7 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
                     return Err(Error::Env("ed25519 wallet pubkey is not 32 bytes".into()));
                 }
                 let addr = bs58::encode(&pb).into_string();
-                ("ed25519".into(), "m".into(), wallet.pubkey.clone(), addr.clone(), format!("solana:{addr}"))
+                ("ed25519".into(), "m".into(), wallet.pubkey.clone(), addr.clone(), format!("solana:{addr}"), Value::Null)
             }
             "ethereum" => {
                 if wallet.curve != "secp256k1" {
@@ -106,15 +108,17 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
                 // BIP32 non-hardened public derivation at m/44/60/0/{index}.
                 let pb = b64url_decode(&wallet.pubkey)?;
                 let cc = b64url_decode(&wallet.chaincode)?;
-                let child = crate::hdderive::derive_pub(&pb, &cc, &[44, 60, 0, index as u32])
+                let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, &[44, 60, 0, index as u32])
                     .map_err(|e| Error::Env(e.to_string()))?;
                 let addr = crate::hdderive::evm_address(&child).map_err(|e| Error::Env(e.to_string()))?;
-                ("secp256k1".into(), format!("m/44/60/0/{index}"), b64url(&child), addr.clone(), format!("ethereum:{addr}"))
+                let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
+                ("secp256k1".into(), format!("m/44/60/0/{index}"), b64url(&child), addr.clone(), format!("ethereum:{addr}"), Value::String(il))
             }
             "bitcoin" => return Err(Error::Env("bitcoin address (outscript) not yet ported".into())),
             other => return Err(Error::Env(format!("unsupported account type {other}"))),
         };
     let now = crate::now_rfc3339();
+    let il_json = serde_json::to_string(&il).unwrap_or_else(|_| "null".into());
 
     let account = Account {
         id: Xuid::new("acct").to_string(),
@@ -128,7 +132,7 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
         uri,
         pubkey: pubkey_b64,
         chaincode: wallet.chaincode.clone(),
-        il: Value::Null,
+        il,
         created: now.clone(),
         updated: now,
     };
@@ -147,7 +151,7 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
             SqlValue::Text(account.uri.clone()),
             SqlValue::Text(account.pubkey.clone()),
             SqlValue::Text(account.chaincode.clone()),
-            SqlValue::Text("null".into()),
+            SqlValue::Text(il_json),
             SqlValue::Text(account.created.clone()),
             SqlValue::Text(account.updated.clone()),
         ],
