@@ -17,6 +17,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wltbase = { path = "../wltbase" }
+wltcontact = { path = "../wltcontact" }
 
 [dev-dependencies]
 serde_json = "1"

@@ -185,6 +185,7 @@ dependencies = [
  "serde",
  "serde_json",
  "wltbase",
+ "wltcontact",
 ]
 
 [[package]]
@@ -511,6 +512,16 @@ dependencies = [
  "chrono",
  "graphitesql",
  "tempfile",
+ "xuid-rs",
+]
+
+[[package]]
+name = "wltcontact"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wltbase",
  "xuid-rs",
 ]
 

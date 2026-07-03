@@ -94,6 +94,32 @@ fn paths_reports_datadir() {
 }
 
 #[test]
+fn contact_create_then_list() {
+    let h = new_env();
+    // Create
+    let created = request(
+        h,
+        r#"{"path":"Contact","verb":"POST","params":{"Name":"Bob","Address":"0x1","Type":"ethereum","Memo":"m"}}"#,
+    );
+    assert_eq!(created["result"], "success");
+    let id = created["data"]["Id"].as_str().unwrap();
+    assert!(id.starts_with("ct-"));
+    assert_eq!(created["data"]["Name"], "Bob");
+
+    // List includes it
+    let listed = request(h, r#"{"path":"Contact","verb":"GET"}"#);
+    assert_eq!(listed["result"], "success");
+    let arr = listed["data"].as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["Id"], id);
+
+    // Fetch by Id
+    let fetched = request(h, &format!(r#"{{"path":"Contact","verb":"GET","params":{{"Id":"{id}"}}}}"#));
+    assert_eq!(fetched["data"]["Name"], "Bob");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

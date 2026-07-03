@@ -8,5 +8,6 @@ mod db;
 mod env;
 mod error;
 
+pub use db::{now_rfc3339, SqlValue};
 pub use env::Env;
 pub use error::{Error, Result};

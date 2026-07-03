@@ -77,6 +77,11 @@ pub extern "C" fn LibwalletInit(data_dir: *const c_char) -> usize {
         };
         match Env::init(&dir) {
             Ok(env) => {
+                // Create model tables (mirrors the Go per-package InitEnv).
+                if let Err(e) = handlers::init_models(&env) {
+                    eprintln!("LibwalletInit: model init failed: {e}");
+                    return 0;
+                }
                 let id = HANDLE_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
                 REGISTRY.lock().unwrap().insert(id, Arc::new(Handle::new(env)));
                 id

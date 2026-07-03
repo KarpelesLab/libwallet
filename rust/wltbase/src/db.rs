@@ -33,6 +33,65 @@ const SCHEMA: &str = concat!(
     r#"CREATE TABLE IF NOT EXISTS "CurrentItem" ("Key" text, "Value" text, "Created" text, "Updated" text, PRIMARY KEY ("Key"));"#,
 );
 
+/// A cross-crate SQL value, so model crates can run parameterized queries
+/// without depending on graphitesql's own `Value` type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlValue {
+    Null,
+    Int(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+impl SqlValue {
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            SqlValue::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            SqlValue::Int(i) => Some(*i),
+            _ => None,
+        }
+    }
+    pub fn as_blob(&self) -> Option<&[u8]> {
+        match self {
+            SqlValue::Blob(b) => Some(b),
+            _ => None,
+        }
+    }
+    pub fn is_null(&self) -> bool {
+        matches!(self, SqlValue::Null)
+    }
+}
+
+impl From<SqlValue> for Value {
+    fn from(v: SqlValue) -> Value {
+        match v {
+            SqlValue::Null => Value::Null,
+            SqlValue::Int(i) => Value::Integer(i),
+            SqlValue::Real(r) => Value::Real(r),
+            SqlValue::Text(s) => Value::Text(s),
+            SqlValue::Blob(b) => Value::Blob(b),
+        }
+    }
+}
+
+impl From<&Value> for SqlValue {
+    fn from(v: &Value) -> SqlValue {
+        match v {
+            Value::Null => SqlValue::Null,
+            Value::Integer(i) => SqlValue::Int(*i),
+            Value::Real(r) => SqlValue::Real(*r),
+            Value::Text(s) => SqlValue::Text(s.clone()),
+            Value::Blob(b) => SqlValue::Blob(b.clone()),
+        }
+    }
+}
+
 type Job = Box<dyn FnOnce(&mut DbInner) + Send>;
 
 /// Handle to the database actor. Cloneable-free: share via `Arc`.
@@ -103,6 +162,29 @@ impl Db {
         rx.recv().map_err(|_| Error::Env("db reply lost".into()))?
     }
 
+    // --- Generic query layer (for model crates) ---------------------------
+
+    /// Ensure a table exists (runs `CREATE TABLE IF NOT EXISTS ...` DDL).
+    pub fn ensure_table(&self, ddl: &str) -> Result<()> {
+        let ddl = ddl.to_owned();
+        self.call(move |i| {
+            i.conn.execute_batch(&ddl)?;
+            Ok(())
+        })
+    }
+
+    /// Run a parameterized query (`?1`, `?2`, ...) and return the rows.
+    pub fn query(&self, sql: &str, args: Vec<SqlValue>) -> Result<Vec<Vec<SqlValue>>> {
+        let sql = sql.to_owned();
+        self.call(move |i| i.query(&sql, args))
+    }
+
+    /// Run a parameterized statement and return the number of affected rows.
+    pub fn exec(&self, sql: &str, args: Vec<SqlValue>) -> Result<usize> {
+        let sql = sql.to_owned();
+        self.call(move |i| i.exec(&sql, args))
+    }
+
     // --- KvConfig ---------------------------------------------------------
 
     pub fn config_get(&self, key: &str) -> Result<Option<Vec<u8>>> {
@@ -158,6 +240,17 @@ impl DbInner {
     fn new(mut conn: Connection) -> Result<DbInner> {
         conn.execute_batch(SCHEMA)?;
         Ok(DbInner { conn })
+    }
+
+    fn query(&mut self, sql: &str, args: Vec<SqlValue>) -> Result<Vec<Vec<SqlValue>>> {
+        let p = params(args.into_iter().map(Value::from).collect());
+        let r = self.conn.query_params(sql, &p)?;
+        Ok(r.rows.iter().map(|row| row.iter().map(SqlValue::from).collect()).collect())
+    }
+
+    fn exec(&mut self, sql: &str, args: Vec<SqlValue>) -> Result<usize> {
+        let p = params(args.into_iter().map(Value::from).collect());
+        Ok(self.conn.execute_params(sql, &p)?)
     }
 
     fn config_get(&mut self, key: &str) -> Result<Option<Vec<u8>>> {
@@ -260,8 +353,14 @@ fn params(vals: Vec<Value>) -> Params {
     Params { positional: vals, named: Vec::new() }
 }
 
-fn now_text() -> String {
+/// Current UTC instant as RFC3339 text (nanosecond precision, `Z` suffix) —
+/// the timestamp format used across the wltbase-owned tables and model rows.
+pub fn now_rfc3339() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
+}
+
+fn now_text() -> String {
+    now_rfc3339()
 }
 
 fn ttl_text(ttl: Duration) -> String {

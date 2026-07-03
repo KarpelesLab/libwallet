@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::db::Db;
+use crate::db::{Db, SqlValue};
 use crate::error::{Error, Result};
 
 pub struct Env {
@@ -53,6 +53,20 @@ impl Env {
             self.db.config_set("first_run", &time_id_now_bytes())?;
         }
         Ok(())
+    }
+
+    // --- generic query layer (for model crates) ---------------------------
+
+    pub fn ensure_table(&self, ddl: &str) -> Result<()> {
+        self.db.ensure_table(ddl)
+    }
+
+    pub fn query(&self, sql: &str, args: Vec<SqlValue>) -> Result<Vec<Vec<SqlValue>>> {
+        self.db.query(sql, args)
+    }
+
+    pub fn exec(&self, sql: &str, args: Vec<SqlValue>) -> Result<usize> {
+        self.db.exec(sql, args)
     }
 
     // --- config / cache / current: thin delegations to the DB layer -------
