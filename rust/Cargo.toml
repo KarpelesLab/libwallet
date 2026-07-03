@@ -34,6 +34,7 @@ bottlers = "0"
 purecrypto = "0"
 pbkdf2 = "0.12"
 sha2 = "0.10"
+hmac = "0.12"
 tsslib = "0.2"
 bs58 = "0.5"
 

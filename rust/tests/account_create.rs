@@ -43,6 +43,33 @@ fn create_solana_account_from_ed25519_wallet() {
 }
 
 #[test]
+fn create_ethereum_account_from_secp256k1_wallet() {
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create(&env, "EVM", "secp256k1", &kds).unwrap();
+
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    assert_eq!(a.kind, "ethereum");
+    assert_eq!(a.curve, "secp256k1");
+    assert_eq!(a.path, "m/44/60/0/0");
+    assert_eq!(a.uri, format!("ethereum:{}", a.address));
+    // EIP-55 checksummed 0x-address, 42 chars.
+    assert!(a.address.starts_with("0x"));
+    assert_eq!(a.address.len(), 42);
+    assert!(a.address[2..].chars().all(|c| c.is_ascii_hexdigit()));
+
+    // Different index -> different derived address.
+    let a1 = account::create(&env, &w.id, "", "ethereum", 1).unwrap();
+    assert_ne!(a1.address, a.address);
+    assert_eq!(a1.path, "m/44/60/0/1");
+
+    // Persisted.
+    assert_eq!(account::for_wallet(&env, &w.id).unwrap().len(), 2);
+}
+
+#[test]
 fn solana_requires_ed25519_and_rejects_secp() {
     let (env, wallet_id, _) = wallet_env();
     // ethereum on an ed25519 wallet is unsupported; secp derivation not ported.

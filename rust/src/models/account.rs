@@ -79,28 +79,41 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
     let wallet = crate::models::wallet::fetch(env, wallet_id)?
         .ok_or_else(|| Error::Env("wallet not found".into()))?;
 
-    match typ {
-        "solana" => {
-            if wallet.curve != "ed25519" {
-                return Err(Error::Env(format!("solana account requires ed25519 wallet, got {}", wallet.curve)));
-            }
-        }
-        "ethereum" | "bitcoin" => {
-            return Err(Error::Env(format!("{typ} account derivation (secp256k1) not yet ported")));
-        }
-        other => return Err(Error::Env(format!("unsupported account type {other}"))),
-    }
-
     let name = if name.is_empty() { format!("Account {}", index + 1) } else { name.to_owned() };
-
-    // ed25519: the wallet pubkey IS the account key; base58 gives the address.
-    let pub_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(&wallet.pubkey)
-        .map_err(|e| Error::Env(format!("bad wallet pubkey: {e}")))?;
-    if pub_bytes.len() != 32 {
-        return Err(Error::Env("ed25519 wallet pubkey is not 32 bytes".into()));
+    if index < 0 {
+        return Err(Error::Env("index must be non-negative".into()));
     }
-    let address = bs58::encode(&pub_bytes).into_string();
+
+    // Derive (curve, path, account pubkey b64url, address, uri) per chain.
+    let (curve_out, path, pubkey_b64, address, uri): (String, String, String, String, String) =
+        match typ {
+            "solana" => {
+                if wallet.curve != "ed25519" {
+                    return Err(Error::Env(format!("solana account requires ed25519 wallet, got {}", wallet.curve)));
+                }
+                // The wallet pubkey IS the account key; base58 gives the address.
+                let pb = b64url_decode(&wallet.pubkey)?;
+                if pb.len() != 32 {
+                    return Err(Error::Env("ed25519 wallet pubkey is not 32 bytes".into()));
+                }
+                let addr = bs58::encode(&pb).into_string();
+                ("ed25519".into(), "m".into(), wallet.pubkey.clone(), addr.clone(), format!("solana:{addr}"))
+            }
+            "ethereum" => {
+                if wallet.curve != "secp256k1" {
+                    return Err(Error::Env(format!("ethereum account requires secp256k1 wallet, got {}", wallet.curve)));
+                }
+                // BIP32 non-hardened public derivation at m/44/60/0/{index}.
+                let pb = b64url_decode(&wallet.pubkey)?;
+                let cc = b64url_decode(&wallet.chaincode)?;
+                let child = crate::hdderive::derive_pub(&pb, &cc, &[44, 60, 0, index as u32])
+                    .map_err(|e| Error::Env(e.to_string()))?;
+                let addr = crate::hdderive::evm_address(&child).map_err(|e| Error::Env(e.to_string()))?;
+                ("secp256k1".into(), format!("m/44/60/0/{index}"), b64url(&child), addr.clone(), format!("ethereum:{addr}"))
+            }
+            "bitcoin" => return Err(Error::Env("bitcoin address (outscript) not yet ported".into())),
+            other => return Err(Error::Env(format!("unsupported account type {other}"))),
+        };
     let now = crate::now_rfc3339();
 
     let account = Account {
@@ -108,12 +121,12 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
         wallet: wallet_id.to_owned(),
         name,
         index,
-        kind: "solana".into(),
-        curve: "ed25519".into(),
-        path: "m".into(),
-        address: address.clone(),
-        uri: format!("solana:{address}"),
-        pubkey: wallet.pubkey.clone(),
+        kind: typ.to_owned(),
+        curve: curve_out,
+        path,
+        address,
+        uri,
+        pubkey: pubkey_b64,
         chaincode: wallet.chaincode.clone(),
         il: Value::Null,
         created: now.clone(),
@@ -141,6 +154,16 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
     )?;
     env.set_current("account", &account.id)?;
     Ok(account)
+}
+
+fn b64url_decode(s: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| Error::Env(format!("bad base64url: {e}")))
+}
+
+fn b64url(b: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
 fn row_to_account(row: &[SqlValue]) -> Account {

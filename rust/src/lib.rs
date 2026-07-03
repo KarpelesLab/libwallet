@@ -25,6 +25,8 @@ mod timeid;
 pub mod keystore;
 // Key descriptions (wltsign).
 pub mod sign;
+// HD public-key derivation for accounts (secp256k1/ecckd).
+pub mod hdderive;
 // Threshold-signature ceremonies (tsslib).
 pub mod tss;
 // Object models (ported from the Go wlt* packages).

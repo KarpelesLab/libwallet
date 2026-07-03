@@ -454,6 +454,7 @@ dependencies = [
  "chrono",
  "ethrpc-rs",
  "graphitesql",
+ "hmac",
  "num-bigint",
  "num-traits",
  "pbkdf2",
