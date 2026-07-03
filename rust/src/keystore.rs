@@ -58,7 +58,7 @@ pub fn password_to_ed25519(password: &str, salt: &[u8]) -> Result<PrivateKey, Ke
         return Err(KeystoreError::PasswordTooShort);
     }
     let mut seed = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password.as_bytes(), salt, 4096, &mut seed);
+    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(password.as_bytes(), salt, 4096, &mut seed);
     Ok(ed25519_from_seed(seed))
 }
 

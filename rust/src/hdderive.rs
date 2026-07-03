@@ -6,18 +6,15 @@
 //!
 //! Verified against BIP32 test vector 2 (`m/0`) and the EIP-55 spec vectors.
 
-use hmac::{Hmac, Mac};
 use num_bigint::{BigInt, Sign};
 use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 use purecrypto::hash::keccak256;
-use sha2::Sha512;
+use purecrypto::hash::HmacSha512;
 
 /// The secp256k1 group order n.
 fn secp_order() -> BigInt {
     BigInt::parse_bytes(b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16).unwrap()
 }
-
-type HmacSha512 = Hmac<Sha512>;
 
 #[derive(Debug)]
 pub struct DeriveError(pub String);
@@ -35,10 +32,10 @@ fn ckd_pub(parent_pub_compressed: &[u8; 33], chain_code: &[u8; 32], index: u32) 
     if index >= 0x8000_0000 {
         return Err(DeriveError(format!("hardened index {index} needs a private key")));
     }
-    let mut mac = HmacSha512::new_from_slice(chain_code).map_err(|e| DeriveError(e.to_string()))?;
+    let mut mac = HmacSha512::new(chain_code);
     mac.update(parent_pub_compressed);
     mac.update(&index.to_be_bytes());
-    let i = mac.finalize().into_bytes(); // 64 bytes
+    let i = mac.finalize(); // 64 bytes
 
     let mut il = [0u8; 32];
     il.copy_from_slice(&i[..32]);

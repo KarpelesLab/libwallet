@@ -75,8 +75,7 @@ const SNS_PARENT: &str = "58PwtjSDuFHuUkYjH9BYnnQKHfwo9reZhC2zMJv9JPkx";
 const SNS_PREFIX: &str = "SPL Name Service";
 
 fn sha256(data: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(data).into()
+    purecrypto::hash::sha256(data)
 }
 
 /// True if `bytes` decompresses to a valid Ed25519 point (i.e. is on-curve, so
