@@ -65,6 +65,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Info:version" => info::version(),
         "Info:paths" => info::paths(&handle.env),
         "Info:first_run" => info::first_run(&handle.env),
+        "Info:setWalletInfo" => info::set_wallet_info(&handle.env, params),
+        "Info:getWalletInfo" => info::get_wallet_info(&handle.env),
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
@@ -72,8 +74,9 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account:signMessage" => account::sign_message(&handle.env, params),
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
         "Account:signAndSendTransaction" => account::sign_and_send_transaction(&handle.env, params),
-        "Name:resolve" => names::resolve(&handle.env, params),
-        "Contract:lookup" => contract::lookup(&handle.env, params),
+        // Canonical Go names are plural; keep the singular as a compat alias.
+        "Names:resolve" | "Name:resolve" => names::resolve(&handle.env, params),
+        "Contracts:lookup" | "Contract:lookup" => contract::lookup(&handle.env, params),
         "Quote:get" => quote::get(&handle.env, params),
         "Wc:listSessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")
@@ -95,7 +98,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
         "Account:nextAddress" => account::next_address(&handle.env, params),
-        "Account:utxos" => account::utxos(&handle.env, params),
+        "Account:listUTXOs" | "Account:utxos" => account::utxos(&handle.env, params),
         "Account:allAddresses" => account::all_addresses(&handle.env, params),
         "Account:addressFormats" => account::address_formats(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),

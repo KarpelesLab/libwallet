@@ -56,6 +56,44 @@ pub fn paths(env: &Env) -> ApiResult {
     Ok(Value::Object(m))
 }
 
+/// `Info:setWalletInfo` — register the host wallet's identity (ClientId, Name,
+/// Version, LogLevel) in config; returns the stored record (Go
+/// `infoSetWalletInfo`).
+pub fn set_wallet_info(env: &Env, params: &Value) -> ApiResult {
+    for (param, field) in
+        [("ClientId", "clientId"), ("Name", "name"), ("Version", "version"), ("LogLevel", "logLevel")]
+    {
+        if let Some(v) = params.get(param).and_then(Value::as_str) {
+            env.config_set(&format!("walletinfo:{field}"), v.as_bytes()).map_err(ApiError::internal)?;
+        }
+    }
+    Ok(wallet_info_value(env))
+}
+
+/// `Info:getWalletInfo` — the configured wallet-identity record.
+pub fn get_wallet_info(env: &Env) -> ApiResult {
+    Ok(wallet_info_value(env))
+}
+
+fn wallet_info_value(env: &Env) -> Value {
+    let g = |field: &str| {
+        env.config_get(&format!("walletinfo:{field}"))
+            .ok()
+            .flatten()
+            .and_then(|b| String::from_utf8(b).ok())
+            .unwrap_or_default()
+    };
+    let log_level = g("logLevel");
+    let effective = if log_level.is_empty() { "info".to_owned() } else { log_level.clone() };
+    json!({
+        "clientId": g("clientId"),
+        "name": g("name"),
+        "version": g("version"),
+        "logLevel": log_level,
+        "effectiveLogLevel": effective,
+    })
+}
+
 /// `Info:first_run` — the first-launch TimeId. Port of `infoFirstRun`: decode
 /// the 16-byte config blob into `{type, unix, nano, idx}` (the JSON shape of
 /// `wltobj.TimeId`).

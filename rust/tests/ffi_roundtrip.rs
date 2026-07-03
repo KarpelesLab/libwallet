@@ -789,6 +789,43 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn wallet_info_roundtrip_via_ffi() {
+    let h = new_env();
+    // Set then get the wallet identity record.
+    let set = request(
+        h,
+        r#"{"path":"Info:setWalletInfo","params":{"ClientId":"cid-123","Name":"MyWallet","LogLevel":"debug"}}"#,
+    );
+    assert_eq!(set["result"], "success", "{set}");
+    assert_eq!(set["data"]["clientId"], "cid-123");
+
+    let got = request(h, r#"{"path":"Info:getWalletInfo"}"#);
+    assert_eq!(got["data"]["clientId"], "cid-123");
+    assert_eq!(got["data"]["name"], "MyWallet");
+    assert_eq!(got["data"]["logLevel"], "debug");
+    assert_eq!(got["data"]["effectiveLogLevel"], "debug");
+
+    // Empty logLevel resolves to the "info" effective default.
+    request(h, r#"{"path":"Info:setWalletInfo","params":{"LogLevel":""}}"#);
+    let d = request(h, r#"{"path":"Info:getWalletInfo"}"#);
+    assert_eq!(d["data"]["effectiveLogLevel"], "info");
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn canonical_go_endpoint_names_via_ffi() {
+    // The Dart client calls Go's plural names — they must route.
+    let h = new_env();
+    let n = request(h, r#"{"path":"Names:resolve","params":{"Name":"x","RPC":"http://127.0.0.1:1"}}"#);
+    // Resolves the route (errors on the unreachable RPC, not "unknown endpoint").
+    assert_eq!(n["result"], "error");
+    assert_ne!(n["code"], 404, "Names:resolve must be a known endpoint");
+    let c = request(h, r#"{"path":"Contracts:lookup","params":{}}"#);
+    assert_ne!(c["code"], 404, "Contracts:lookup must be a known endpoint");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn network_resolve_rpc_via_ffi() {
     let h = new_env();
     // Ephemeral bitcoin.bitcoin resolves to the modchain endpoint.
