@@ -313,34 +313,45 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
-    if account.kind != "ethereum" {
-        return Err(ApiError::new(400, "maxSendable is EVM-only here"));
-    }
     let rpc = resolve_rpc(env, params, &account.kind)?;
 
-    // balance (wei) and gasPrice.
-    let bal_dec = crate::rpc::eth_get_balance(&rpc, &account.address).map_err(ApiError::internal)?;
-    let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
-    let gp_hex = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
-    let gp_hex = gp_hex.as_str().unwrap_or("0x0");
-    let gas_price = BigInt::parse_bytes(gp_hex.strip_prefix("0x").unwrap_or(gp_hex).as_bytes(), 16)
-        .unwrap_or_else(|| BigInt::from(0));
-    let fee = BigInt::from(21000) * &gas_price;
-    let max = if balance <= fee { BigInt::from(0) } else { &balance - &fee };
-
-    // Decimals from the current network (default 18).
-    let decimals = crate::models::network::fetch(env, "@")
-        .ok()
-        .flatten()
-        .map(|n| n.native_decimals())
-        .unwrap_or(18);
-    let amt = |v: BigInt| crate::Amount::new_raw(v, decimals);
-    Ok(serde_json::json!({
-        "chain": "evm",
-        "balance": amt(balance),
-        "fee": amt(fee),
-        "max": amt(max),
-    }))
+    match account.kind.as_str() {
+        "ethereum" => {
+            // balance (wei) and gasPrice; fee = 21000 * gasPrice.
+            let bal_dec = crate::rpc::eth_get_balance(&rpc, &account.address).map_err(ApiError::internal)?;
+            let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+            let gp_hex = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+            let gp_hex = gp_hex.as_str().unwrap_or("0x0");
+            let gas_price = BigInt::parse_bytes(gp_hex.strip_prefix("0x").unwrap_or(gp_hex).as_bytes(), 16)
+                .unwrap_or_else(|| BigInt::from(0));
+            let fee = BigInt::from(21000) * &gas_price;
+            let max = if balance <= fee { BigInt::from(0) } else { &balance - &fee };
+            let decimals = crate::models::network::fetch(env, "@")
+                .ok().flatten().map(|n| n.native_decimals()).unwrap_or(18);
+            let amt = |v: BigInt| crate::Amount::new_raw(v, decimals);
+            Ok(serde_json::json!({ "chain": "evm", "balance": amt(balance), "fee": amt(fee), "max": amt(max) }))
+        }
+        "solana" => {
+            // max = balance - 5000 (signature fee) - rent-exempt reserve.
+            let res = crate::rpc::call(&rpc, "getBalance", serde_json::json!([account.address]))
+                .map_err(ApiError::internal)?;
+            let balance = res.get("value").and_then(Value::as_u64).unwrap_or(0);
+            const FEE: u64 = 5000;
+            let rent = crate::rpc::call(&rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
+                .ok().and_then(|v| v.as_u64()).unwrap_or(890_880);
+            let reserve = FEE + rent;
+            let max = balance.saturating_sub(reserve);
+            let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), 9);
+            Ok(serde_json::json!({
+                "chain": "solana",
+                "balance": amt(balance),
+                "fee": amt(FEE),
+                "reserved": [{ "kind": "sender_rent", "amount": amt(rent) }],
+                "max": amt(max),
+            }))
+        }
+        other => Err(ApiError::new(400, format!("maxSendable not supported for {other}"))),
+    }
 }
 
 /// `Account:tokenBalance` — the ERC-20 balance of an EVM account for a token
