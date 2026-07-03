@@ -59,6 +59,74 @@ fn type1_asymmetric_roundtrip() {
 }
 
 #[test]
+fn relay_message_builders() {
+    // irn_subscribe.
+    let sub = wc::build_subscribe(1, "topichex");
+    assert_eq!(sub["method"], "irn_subscribe");
+    assert_eq!(sub["jsonrpc"], "2.0");
+    assert_eq!(sub["params"]["topic"], "topichex");
+
+    // irn_publish: default TTL, prompt=true for sessionRequest.
+    let pub_req = wc::build_publish(2, "t", "envelopeb64", wc::TAG_SESSION_REQUEST, 0);
+    assert_eq!(pub_req["method"], "irn_publish");
+    assert_eq!(pub_req["params"]["ttl"], wc::IRN_DEFAULT_TTL);
+    assert_eq!(pub_req["params"]["tag"], wc::TAG_SESSION_REQUEST);
+    assert_eq!(pub_req["params"]["prompt"], true);
+    // A settle publish does not prompt, and honors an explicit ttl.
+    let settle = wc::build_publish(3, "t", "e", wc::TAG_SESSION_SETTLE, 60);
+    assert_eq!(settle["params"]["prompt"], false);
+    assert_eq!(settle["params"]["ttl"], 60);
+
+    // ack shape.
+    let ack = wc::build_ack(42);
+    assert_eq!(ack, serde_json::json!({"id":42,"jsonrpc":"2.0","result":true}));
+}
+
+#[test]
+fn parse_relay_frames() {
+    // A relay reply.
+    let resp = wc::parse_relay_frame(br#"{"id":7,"jsonrpc":"2.0","result":"subid"}"#).unwrap();
+    assert_eq!(resp, wc::RelayFrame::Response { id: 7, error: None });
+    // An error reply.
+    let err = wc::parse_relay_frame(br#"{"id":8,"error":{"code":-1,"message":"boom"}}"#).unwrap();
+    assert_eq!(err, wc::RelayFrame::Response { id: 8, error: Some("boom".into()) });
+    // An inbound subscription.
+    let note = wc::parse_relay_frame(
+        br#"{"id":9,"method":"irn_subscription","params":{"id":"sub","data":{"topic":"abc","message":"ENV","tag":1108}}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        note,
+        wc::RelayFrame::Subscription { ack_id: 9, topic: "abc".into(), message: "ENV".into(), tag: 1108 }
+    );
+}
+
+#[test]
+fn end_to_end_frame_to_plaintext() {
+    // A dapp seals a request to the pairing symKey and the relay wraps it in an
+    // irn_subscription frame; the wallet parses the frame and decrypts it.
+    let sym: [u8; 32] = seq(0, 32).try_into().unwrap();
+    let nonce: [u8; 12] = seq(50, 12).try_into().unwrap();
+    let payload = br#"{"id":1,"jsonrpc":"2.0","method":"personal_sign","params":[]}"#;
+    let envelope = wc::seal_type0_with_nonce(&sym, &nonce, payload);
+    let topic = wc::derive_topic(&sym);
+
+    let frame = format!(
+        r#"{{"id":5,"method":"irn_subscription","params":{{"id":"s","data":{{"topic":"{topic}","message":"{envelope}","tag":1108}}}}}}"#
+    );
+    let parsed = wc::parse_relay_frame(frame.as_bytes()).unwrap();
+    match parsed {
+        wc::RelayFrame::Subscription { ack_id, message, tag, .. } => {
+            assert_eq!(ack_id, 5);
+            assert_eq!(tag, wc::TAG_SESSION_REQUEST);
+            let (pt, _) = wc::open_envelope(Some(&sym), None, &message).unwrap();
+            assert_eq!(pt, payload);
+        }
+        other => panic!("expected subscription, got {other:?}"),
+    }
+}
+
+#[test]
 fn build_namespaces_filters_and_intersects() {
     let proposal = serde_json::json!({
         "requiredNamespaces": {

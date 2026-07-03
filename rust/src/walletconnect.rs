@@ -169,6 +169,84 @@ pub fn open_envelope(
     }
 }
 
+// ── Relay JSON-RPC protocol (irn) — transport-independent message layer ──────
+// The relay is a JSON-RPC 2.0 endpoint over WebSocket. These builders/parsers
+// are deterministic and testable; only the socket I/O (the write/read loops)
+// needs a live `irn` relay.
+
+/// Default publish TTL in seconds (Go `irnDefaultTTL`).
+pub const IRN_DEFAULT_TTL: i64 = 300;
+
+/// Relay message tags (Go `tagSession*`).
+pub const TAG_SESSION_PROPOSE: i64 = 1100;
+pub const TAG_SESSION_SETTLE: i64 = 1102;
+pub const TAG_SESSION_REQUEST: i64 = 1108;
+pub const TAG_SESSION_RESPONSE: i64 = 1109;
+pub const TAG_SESSION_EVENT: i64 = 1110;
+pub const TAG_SESSION_DELETE: i64 = 1112;
+
+/// A JSON-RPC 2.0 request for the relay.
+pub fn build_relay_request(id: i64, method: &str, params: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ "id": id, "jsonrpc": "2.0", "method": method, "params": params })
+}
+
+/// `irn_subscribe(topic)` request.
+pub fn build_subscribe(id: i64, topic: &str) -> serde_json::Value {
+    build_relay_request(id, "irn_subscribe", serde_json::json!({ "topic": topic }))
+}
+
+/// `irn_publish(topic, message, tag, ttl)` request. `prompt` is set for the
+/// session-propose / session-request tags (Go `Publish`). `ttl <= 0` defaults.
+pub fn build_publish(id: i64, topic: &str, message: &str, tag: i64, ttl: i64) -> serde_json::Value {
+    let ttl = if ttl <= 0 { IRN_DEFAULT_TTL } else { ttl };
+    let prompt = tag == TAG_SESSION_PROPOSE || tag == TAG_SESSION_REQUEST;
+    build_relay_request(
+        id,
+        "irn_publish",
+        serde_json::json!({ "topic": topic, "message": message, "ttl": ttl, "tag": tag, "prompt": prompt }),
+    )
+}
+
+/// The ack a subscriber sends for an inbound `irn_subscription` so the relay
+/// doesn't redeliver: `{id, jsonrpc:"2.0", result:true}`.
+pub fn build_ack(id: i64) -> serde_json::Value {
+    serde_json::json!({ "id": id, "jsonrpc": "2.0", "result": true })
+}
+
+/// A decoded inbound relay frame.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelayFrame {
+    /// A reply to one of our requests.
+    Response { id: i64, error: Option<String> },
+    /// An inbound `irn_subscription` event carrying a topic message.
+    Subscription { ack_id: i64, topic: String, message: String, tag: i64 },
+    /// Anything else (ignored by the client).
+    Other,
+}
+
+/// Parse an inbound relay JSON frame (Go `readLoop` peek + subscription decode).
+pub fn parse_relay_frame(data: &[u8]) -> Result<RelayFrame> {
+    let v: serde_json::Value =
+        serde_json::from_slice(data).map_err(|e| Error::Env(format!("relay frame json: {e}")))?;
+    let id = v.get("id").and_then(|x| x.as_i64()).unwrap_or(0);
+    if v.get("method").and_then(|m| m.as_str()) == Some("irn_subscription") {
+        let data = v.get("params").and_then(|p| p.get("data"));
+        let topic = data.and_then(|d| d.get("topic")).and_then(|t| t.as_str()).unwrap_or("").to_owned();
+        let message = data.and_then(|d| d.get("message")).and_then(|m| m.as_str()).unwrap_or("").to_owned();
+        let tag = data.and_then(|d| d.get("tag")).and_then(|t| t.as_i64()).unwrap_or(0);
+        return Ok(RelayFrame::Subscription { ack_id: id, topic, message, tag });
+    }
+    if v.get("result").is_some() || v.get("error").is_some() {
+        let error = v
+            .get("error")
+            .and_then(|e| e.get("message"))
+            .and_then(|m| m.as_str())
+            .map(|s| s.to_owned());
+        return Ok(RelayFrame::Response { id, error });
+    }
+    Ok(RelayFrame::Other)
+}
+
 /// Build the session-settle `namespaces` object for an approval (Go
 /// `buildNamespaces`). For each namespace in the proposal's required + optional
 /// namespaces (first occurrence wins), emit `{accounts, methods, events,
