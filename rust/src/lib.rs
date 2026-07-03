@@ -31,6 +31,8 @@ pub mod hdderive;
 pub mod evm;
 // Solana transaction building (wlttx Solana path).
 pub mod solana;
+// Bitcoin transaction building + threshold signing (wlttx Bitcoin path).
+pub mod bitcoin;
 // Blocking JSON-RPC client for blockchain nodes (wltnet).
 pub mod rpc;
 // Name resolution — ENS/SNS (wltnames).
