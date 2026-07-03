@@ -94,13 +94,30 @@ fn paths_reports_datadir() {
 }
 
 #[test]
-fn account_list_empty_and_create_501() {
+fn account_create_from_wallet_via_ffi() {
     let h = new_env();
+    // Need a wallet first.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap();
+
+    let created = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    assert_eq!(created["result"], "success");
+    assert_eq!(created["data"]["Type"], "solana");
+    assert_eq!(created["data"]["Path"], "m");
+    assert!(created["data"]["Id"].as_str().unwrap().starts_with("acct-"));
+    assert!(created["data"]["Address"].as_str().unwrap().len() > 30);
+
     let listed = request(h, r#"{"path":"Account","verb":"GET"}"#);
-    assert_eq!(listed["result"], "success");
-    assert_eq!(listed["data"].as_array().unwrap().len(), 0);
-    let created = request(h, r#"{"path":"Account","verb":"POST","params":{}}"#);
-    assert_eq!(created["code"], 501);
+    assert_eq!(listed["data"].as_array().unwrap().len(), 1);
     LibwalletDestroy(h);
 }
 
