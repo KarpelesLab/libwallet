@@ -225,6 +225,48 @@ fn full_flow_create_wallet_account_and_sign_message() {
 }
 
 #[test]
+fn evm_wallet_account_and_sign_transaction_via_ffi() {
+    let h = new_env();
+    // Create a secp256k1 wallet.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> =
+        (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+
+    // Derive an ethereum account.
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    assert!(a["data"]["Address"].as_str().unwrap().starts_with("0x"));
+
+    // Sign a legacy transaction (all shares unlocked for DKLs).
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signTransaction","params":{{"Id":"{account_id}",
+                "Transaction":{{"nonce":0,"gas":21000,"gasPrice":"20000000000","to":"0x000000000000000000000000000000000000dEaD","value":"1000000000000000000","chainId":1}},
+                "Keys":[{{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    assert_eq!(signed["result"], "success", "signTransaction failed: {signed:?}");
+    let raw = signed["data"]["raw"].as_str().unwrap();
+    assert!(raw.starts_with("0x"));
+    assert!(raw.len() > 60); // a real signed tx
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

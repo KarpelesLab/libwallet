@@ -45,6 +45,57 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
 }
 
+/// `Account:signTransaction` — build and threshold-sign an EVM transaction for
+/// the account, returning the signed raw tx as `0x`-hex. Broadcast
+/// (signAndSend) layers eth_sendRawTransaction on top once RPC is wired.
+pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let tx = params
+        .get("Transaction")
+        .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+
+    let req = crate::evm::LegacyTxRequest {
+        nonce: tx.get("nonce").and_then(Value::as_u64).unwrap_or(0),
+        gas: tx.get("gas").and_then(Value::as_u64).unwrap_or(21000),
+        gas_price: tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0").to_string(),
+        to: tx.get("to").and_then(Value::as_str).unwrap_or("").to_string(),
+        value: tx.get("value").and_then(Value::as_str).unwrap_or("0").to_string(),
+        data: match tx.get("data").and_then(Value::as_str) {
+            Some(h) => decode_hex(h)?,
+            None => Vec::new(),
+        },
+        chain_id: tx.get("chainId").and_then(Value::as_u64).unwrap_or(1),
+    };
+
+    let keys: Vec<crate::sign::KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    let unlock: Vec<(String, String)> = keys
+        .iter()
+        .filter(|k| k.kind == "Password")
+        .map(|k| (k.id.clone(), k.key.clone()))
+        .collect();
+
+    let raw = crate::evm::sign_legacy_tx(env, account_id, &unlock, &req).map_err(ApiError::internal)?;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
+}
+
+fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    if s.len() % 2 != 0 {
+        return Err(ApiError::new(400, "odd-length hex"));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| ApiError::new(400, e.to_string())))
+        .collect()
+}
+
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {
