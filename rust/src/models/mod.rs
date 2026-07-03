@@ -3,6 +3,7 @@
 //! fetch/list/create functions over the generic [`crate::Env`] query layer.
 
 pub mod account;
+pub mod asset;
 pub mod contact;
 pub mod crash;
 pub mod wallet;

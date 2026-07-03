@@ -3,6 +3,7 @@
 //! handlers are added and this match grows toward the ~107 Go endpoints.
 
 mod account;
+mod asset;
 mod contact;
 mod crash;
 mod info;
@@ -19,6 +20,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::crash::init(env)?;
     crate::models::wallet::init(env)?;
     crate::models::account::init(env)?;
+    crate::models::asset::init(env)?;
     Ok(())
 }
 
@@ -53,6 +55,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
         "Account" => account::route(&handle.env, verb, params),
+        "Asset" => asset::route(&handle.env, verb, params),
         _ => Err(ApiError::not_found(path)),
     }
 }
