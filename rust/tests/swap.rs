@@ -35,6 +35,46 @@ fn okx_token_addr_and_slippage() {
     assert_eq!(swap::normalize_slippage(9999), 5000);
 }
 
+#[test]
+fn erc20_approve_selector_is_keccak() {
+    // 0x095ea7b3 == keccak256("approve(address,uint256)")[:4].
+    let h = purecrypto::hash::keccak256(b"approve(address,uint256)");
+    assert_eq!(format!("{:02x}{:02x}{:02x}{:02x}", h[0], h[1], h[2], h[3]), "095ea7b3");
+}
+
+#[test]
+fn encode_erc20_approve_calldata() {
+    use num_bigint::BigInt;
+    // approve(0x1111…1111, 1000): selector + 32-byte spender + 32-byte amount.
+    let data = swap::encode_erc20_approve(
+        "0x1111111111111111111111111111111111111111",
+        &BigInt::from(1000),
+    )
+    .unwrap();
+    assert_eq!(
+        data,
+        "0x095ea7b3\
+         0000000000000000000000001111111111111111111111111111111111111111\
+         00000000000000000000000000000000000000000000000000000000000003e8"
+    );
+    assert_eq!(data.len(), 2 + 8 + 64 + 64);
+
+    // Unlimited = uint256 max, all-Fs amount word, flagged unlimited.
+    let max = swap::max_uint256();
+    assert!(swap::is_unlimited_approval(&max));
+    let unlimited = swap::encode_erc20_approve("0xABCDABCDABCDABCDABCDABCDABCDABCDABCDABCD", &max).unwrap();
+    assert!(unlimited.ends_with(&"f".repeat(64)));
+    // Lowercased address in the calldata.
+    assert!(unlimited.contains("abcdabcdabcdabcdabcdabcdabcdabcdabcdabcd"));
+
+    // Small amounts aren't unlimited.
+    assert!(!swap::is_unlimited_approval(&BigInt::from(1000)));
+
+    // Malformed spender / negative amount error.
+    assert!(swap::encode_erc20_approve("0x1234", &BigInt::from(1)).is_err());
+    assert!(swap::encode_erc20_approve("0x1111111111111111111111111111111111111111", &BigInt::from(-1)).is_err());
+}
+
 /// One-shot mock serving a KLB envelope wrapping `data_json`.
 fn mock(data_json: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

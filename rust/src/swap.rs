@@ -120,6 +120,53 @@ pub fn normalize_slippage(bps: u16) -> u16 {
     }
 }
 
+/// The unlimited-approval amount (uint256 max, 2^256 − 1).
+pub fn max_uint256() -> BigInt {
+    (BigInt::from(1) << 256) - 1
+}
+
+/// True when an approval amount has the top bit set (≥ 2^255) — the "unlimited"
+/// threshold, matching Go `isUnlimitedApprovalAmount`.
+pub fn is_unlimited_approval(amount: &BigInt) -> bool {
+    *amount >= (BigInt::from(1) << 255)
+}
+
+/// Encode ERC-20 `approve(spender, amount)` calldata (Go `encodeERC20Approve`):
+/// `0x` + selector `095ea7b3` + the 32-byte left-padded spender + the 32-byte
+/// left-padded amount. Errors on a malformed address or an out-of-range amount.
+pub fn encode_erc20_approve(spender: &str, amount: &BigInt) -> Result<String> {
+    let lower = spender.to_lowercase();
+    let hexs = lower
+        .strip_prefix("0x")
+        .ok_or_else(|| Error::Env("erc20 approve spender must be a 0x-prefixed address".into()))?;
+    if hexs.len() != 40 {
+        return Err(Error::Env(format!(
+            "erc20 approve spender must be 20 bytes (40 hex chars), got {}",
+            hexs.len()
+        )));
+    }
+    let addr = (0..40)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hexs[i..i + 2], 16))
+        .collect::<std::result::Result<Vec<u8>, _>>()
+        .map_err(|e| Error::Env(format!("erc20 approve spender: {e}")))?;
+    if amount.sign() == num_bigint::Sign::Minus {
+        return Err(Error::Env("erc20 approve amount must be non-negative".into()));
+    }
+    if amount.bits() > 256 {
+        return Err(Error::Env("erc20 approve amount overflows uint256".into()));
+    }
+
+    let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let amt = amount.to_bytes_be().1; // big-endian magnitude
+    let mut out = String::from("0x095ea7b3");
+    out.push_str(&"00".repeat(12)); // address left-pad
+    out.push_str(&hex(&addr));
+    out.push_str(&"00".repeat(32 - amt.len())); // amount left-pad
+    out.push_str(&hex(&amt));
+    Ok(out)
+}
+
 fn native_decimals(kind: &str) -> i64 {
     if kind == "solana" {
         9

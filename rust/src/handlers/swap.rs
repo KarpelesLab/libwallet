@@ -46,3 +46,32 @@ pub fn quote(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?;
     Ok(serde_json::to_value(q).unwrap())
 }
+
+/// `Swap:buildApprovalData` — the ERC-20 `approve(spender, amount)` calldata for
+/// an EVM swap. `Unlimited` uses uint256 max; otherwise `Amount` is base units.
+/// The host wraps this in a Transaction for signAndSend (the stateful
+/// quote-cached buildApproval endpoint is the execute-pass concern).
+pub fn build_approval_data(_env: &Env, params: &Value) -> ApiResult {
+    use num_bigint::BigInt;
+    let spender = params
+        .get("Spender")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Spender required"))?;
+    let unlimited = params.get("Unlimited").and_then(Value::as_bool).unwrap_or(false);
+    let amount = if unlimited {
+        swap::max_uint256()
+    } else {
+        let s = params
+            .get("Amount")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::new(400, "Amount required (or Unlimited)"))?;
+        BigInt::parse_bytes(s.as_bytes(), 10).ok_or_else(|| ApiError::new(400, "bad Amount"))?
+    };
+    let data = swap::encode_erc20_approve(spender, &amount).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({
+        "data": data,
+        "spender": spender,
+        "amount": amount.to_string(),
+        "isUnlimited": swap::is_unlimited_approval(&amount),
+    }))
+}
