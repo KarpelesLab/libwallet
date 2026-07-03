@@ -270,6 +270,61 @@ pub fn xpub(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "xpub": xpub }))
 }
 
+/// `Account:nextAddress` — the next unused HD receive/change address for a
+/// bitcoin-family account (Go `accountNextAddress`). Uses the account xpub +
+/// modchain_lookupTxoBIP32 to find the highest used index and derives the next.
+pub fn next_address(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "bitcoin" {
+        return Err(ApiError::new(400, "nextAddress is bitcoin-only"));
+    }
+    let change = params.get("Change").and_then(Value::as_bool).unwrap_or(false);
+
+    // Resolve the current network to get the bitcoin chain id + RPC.
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+    if net.kind != "bitcoin" {
+        return Err(ApiError::new(400, format!("current network is {}, not bitcoin", net.kind)));
+    }
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let xpub = account.xpub().map_err(ApiError::internal)?;
+    let pubkey = decode_b64url_33(&account.pubkey)?;
+    let chaincode = decode_b64url_32(&account.chaincode)?;
+
+    let (address, index, path) =
+        crate::bitcoin::next_address(&rpc, &xpub, &pubkey, &chaincode, &net.chain_id, change)
+            .map_err(ApiError::internal)?;
+    Ok(serde_json::json!({
+        "address": address,
+        "index": index,
+        "path": path,
+        "chain": if change { "change" } else { "receive" },
+    }))
+}
+
+fn decode_b64url_33(s: &str) -> Result<[u8; 33], ApiError> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| ApiError::new(400, e.to_string()))?
+        .try_into()
+        .map_err(|_| ApiError::new(400, "pubkey is not 33 bytes"))
+}
+
+fn decode_b64url_32(s: &str) -> Result<[u8; 32], ApiError> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| ApiError::new(400, e.to_string()))?
+        .try_into()
+        .map_err(|_| ApiError::new(400, "chaincode is not 32 bytes"))
+}
+
 /// `Account:nativeAsset` — the live native-currency asset for an account:
 /// resolve the current network (must match the account chain), fetch the
 /// balance, and build the Asset (Key/Name/Symbol/Amount). With an optional

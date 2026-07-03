@@ -62,6 +62,55 @@ pub fn parse_btc_amount(v: &serde_json::Value) -> Result<u64> {
     }
 }
 
+/// The receive/change address type + address-network name for a Bitcoin-family
+/// chain (Go `Account.bitcoinAddress`): segwit P2WPKH (bech32) for
+/// bitcoin/litecoin/monacoin, P2PKH for bitcoin-cash (cashaddr) and dogecoin.
+fn hd_address_kind(chain_id: &str) -> Result<(&'static str, &'static str)> {
+    match chain_id {
+        "bitcoin" => Ok(("p2wpkh", "bitcoin")),
+        "litecoin" => Ok(("p2wpkh", "litecoin")),
+        "monacoin" => Ok(("p2wpkh", "monacoin")),
+        "bitcoin-cash" => Ok(("p2pkh", "bitcoincash")),
+        "dogecoin" => Ok(("p2pkh", "dogecoin")),
+        other => Err(Error::Env(format!("unsupported bitcoin-family chainId: {other}"))),
+    }
+}
+
+/// Encode a compressed secp256k1 pubkey as the HD receive/change address for
+/// `chain_id`, via outscript (P2WPKH/P2PKH per [`hd_address_kind`]).
+pub fn hd_address(pubkey_compressed: &[u8; 33], chain_id: &str) -> Result<String> {
+    let (script_type, network) = hd_address_kind(chain_id)?;
+    let pk = SecpPublicKey::from_sec1(pubkey_compressed)
+        .map_err(|e| Error::Env(format!("bad pubkey: {e:?}")))?;
+    outscript::script::Script::new(pk)
+        .address(script_type, &[network])
+        .map_err(|e| Error::Env(format!("address encode: {e}")))
+}
+
+/// The next unused HD address on the receive (`change=false`) or change chain,
+/// found via `modchain_lookupTxoBIP32` (returns the highest used index `lastI`)
+/// and derived at `m/<chain>/<lastI+1>` below the account xpub. Port of Go
+/// `accountNextAddress`. Returns `(address, index, path)`.
+pub fn next_address(
+    rpc: &str,
+    xpub: &str,
+    account_pubkey: &[u8; 33],
+    account_chaincode: &[u8; 32],
+    chain_id: &str,
+    change: bool,
+) -> Result<(String, u32, String)> {
+    let chain: u32 = if change { 1 } else { 0 };
+    let base_path = format!("m/{chain}");
+    let raw = crate::rpc::call(rpc, "modchain_lookupTxoBIP32", serde_json::json!([xpub, base_path, true]))?;
+    // lastI = highest used index, -1 when the chain is entirely unused.
+    let last_i = raw.get("lastI").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let next_index = (last_i + 1) as u32;
+    let child = crate::hdderive::derive_pub(account_pubkey, account_chaincode, &[chain, next_index])
+        .map_err(|e| Error::Env(e.to_string()))?;
+    let address = hd_address(&child, chain_id)?;
+    Ok((address, next_index, format!("{base_path}/{next_index}")))
+}
+
 /// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
 /// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
 pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
