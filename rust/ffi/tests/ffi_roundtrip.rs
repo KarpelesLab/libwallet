@@ -5,6 +5,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::time::Duration;
 
@@ -35,8 +36,14 @@ fn request(h: usize, body: &str) -> serde_json::Value {
     serde_json::from_str(&json).expect("valid JSON envelope")
 }
 
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Fresh, unique data dir per call — tests run in parallel and must not share
+/// one sql.db (concurrent opens race to Busy/Corrupt).
 fn new_env() -> usize {
-    let dir = std::env::temp_dir().join(format!("libwallet-ffi-test-{}", std::process::id()));
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("libwallet-ffi-test-{}-{}", std::process::id(), n));
+    std::fs::create_dir_all(&dir).unwrap();
     let c_dir = CString::new(dir.to_str().unwrap()).unwrap();
     let h = LibwalletInit(c_dir.as_ptr());
     assert!(h > 0, "init returned a valid handle");
@@ -61,6 +68,28 @@ fn version_shape() {
     assert!(resp["data"].get("version").is_some());
     assert!(resp["data"].get("gitTag").is_some());
     assert!(resp["data"].get("dateTag").is_some());
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn first_run_is_db_backed() {
+    let h = new_env();
+    let resp = request(h, r#"{"path":"Info:first_run"}"#);
+    assert_eq!(resp["result"], "success");
+    // Seeded on first init; shape is the TimeId {type,unix,nano,idx}.
+    assert!(resp["data"]["unix"].as_u64().unwrap() > 1_700_000_000);
+    assert!(resp["data"].get("nano").is_some());
+    assert_eq!(resp["data"]["type"], "");
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn paths_reports_datadir() {
+    let h = new_env();
+    let resp = request(h, r#"{"path":"Info:paths"}"#);
+    assert_eq!(resp["result"], "success");
+    assert!(resp["data"]["DataDir"].as_str().unwrap().contains("libwallet-ffi-test"));
+    assert!(resp["data"].get("TempDir").is_some());
     LibwalletDestroy(h);
 }
 

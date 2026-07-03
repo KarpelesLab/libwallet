@@ -6,12 +6,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::env::Env;
+use wltbase::Env;
+
 use crate::EventCallback;
 
 pub struct Handle {
-    // Wired now, read once handlers start touching the environment (Phase 1).
-    #[allow(dead_code)]
     pub env: Arc<Env>,
     pub shutdown: AtomicBool,
     /// Registered host event callback (set via LibwalletSetEventCallback).

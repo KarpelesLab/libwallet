@@ -15,7 +15,6 @@
 //!   (same allocator on both sides).
 
 mod dispatch;
-mod env;
 mod handle;
 mod handlers;
 mod response;
@@ -27,8 +26,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use env::Env;
 use handle::Handle;
+use wltbase::Env;
 
 /// `void (*)(const char* response_json, uintptr_t user_data)`
 pub type ResponseCallback = unsafe extern "C" fn(response_json: *const c_char, user_data: usize);

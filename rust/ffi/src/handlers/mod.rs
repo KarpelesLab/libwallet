@@ -29,10 +29,19 @@ pub type ApiResult = Result<Value, ApiError>;
 
 /// Route a request to its handler. `_verb`/`_params`/`_handle` are threaded
 /// through for handlers that need them; Phase 0 only wires the Info endpoints.
-pub fn route(_handle: &Handle, path: &str, _verb: &str, _params: &Value) -> ApiResult {
+pub fn route(handle: &Handle, path: &str, _verb: &str, _params: &Value) -> ApiResult {
     match path {
         "Info:ping" => info::ping(),
         "Info:version" => info::version(),
+        "Info:paths" => info::paths(&handle.env),
+        "Info:first_run" => info::first_run(&handle.env),
         _ => Err(ApiError::not_found(path)),
+    }
+}
+
+impl ApiError {
+    /// Wrap a wltbase error as a 500.
+    pub fn internal(e: impl std::fmt::Display) -> Self {
+        ApiError::new(500, e.to_string())
     }
 }
