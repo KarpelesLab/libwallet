@@ -68,3 +68,15 @@ pub fn balance_of(rpc: &str, token: &str, owner: &str) -> Result<BigInt> {
 pub fn allowance(rpc: &str, token: &str, owner: &str, spender: &str) -> Result<BigInt> {
     call_uint256(rpc, token, &encode_allowance(owner, spender)?)
 }
+
+/// `decimals()` selector = keccak256("decimals()")[:4].
+const DECIMALS: &str = "313ce567";
+
+/// The ERC-20 token's `decimals()` (0..=255).
+pub fn decimals(rpc: &str, token: &str) -> Result<i64> {
+    let v = call_uint256(rpc, token, &format!("0x{DECIMALS}"))?;
+    v.try_into()
+        .ok()
+        .and_then(|d: i64| if (0..=255).contains(&d) { Some(d) } else { None })
+        .ok_or_else(|| Error::Env("ERC-20 decimals out of range".into()))
+}

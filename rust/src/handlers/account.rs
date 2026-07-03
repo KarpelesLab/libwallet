@@ -315,6 +315,18 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
     let rpc = resolve_rpc(env, params, &account.kind)?;
 
+    // ERC-20 token max: the whole token balance is spendable (native gas is
+    // paid separately), Go maxSendableEVMERC20.
+    if let Some(token) = params.get("Token").and_then(Value::as_str) {
+        if account.kind != "ethereum" {
+            return Err(ApiError::new(400, "Token maxSendable is EVM-only"));
+        }
+        let balance = crate::erc20::balance_of(&rpc, token, &account.address).map_err(ApiError::internal)?;
+        let dec = crate::erc20::decimals(&rpc, token).map_err(ApiError::internal)?;
+        let amt = crate::Amount::new_raw(balance, dec);
+        return Ok(serde_json::json!({ "chain": "evm", "token": token, "balance": amt, "max": amt }));
+    }
+
     match account.kind.as_str() {
         "ethereum" => {
             // balance (wei) and gasPrice; fee = 21000 * gasPrice.

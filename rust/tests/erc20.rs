@@ -77,3 +77,13 @@ fn empty_result_is_zero() {
     let bal = erc20::balance_of(&url, "0xToken", "0x1111111111111111111111111111111111111111").unwrap();
     assert_eq!(bal.to_string(), "0");
 }
+
+#[test]
+fn decimals_selector_and_decode() {
+    // selector = keccak256("decimals()")[:4].
+    let h = purecrypto::hash::keccak256(b"decimals()");
+    assert_eq!(format!("{:02x}{:02x}{:02x}{:02x}", h[0], h[1], h[2], h[3]), "313ce567");
+    // eth_call returns the decimals in a uint256 word (6 for USDC).
+    let url = mock(r#""0x0000000000000000000000000000000000000000000000000000000000000006""#);
+    assert_eq!(erc20::decimals(&url, "0xToken").unwrap(), 6);
+}
