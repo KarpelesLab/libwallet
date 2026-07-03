@@ -15,6 +15,11 @@ pub fn resolve(_env: &Env, params: &Value) -> ApiResult {
         .get("RPC")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
-    let address = crate::names::resolve_ens(rpc, name).map_err(ApiError::internal)?;
+    let address = if name.trim().to_lowercase().ends_with(".sol") {
+        crate::names::resolve_sns(rpc, name)
+    } else {
+        crate::names::resolve_ens(rpc, name)
+    }
+    .map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "name": name, "address": address }))
 }
