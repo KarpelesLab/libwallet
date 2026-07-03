@@ -39,6 +39,8 @@ pub mod rpc;
 pub mod rest;
 // Market-quote lookup via the REST backend (wltquote).
 pub mod quote;
+// Coin metadata lookup via the REST backend (wltasset CoinInfo).
+pub mod coininfo;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).

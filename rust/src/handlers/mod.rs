@@ -4,6 +4,7 @@
 
 mod account;
 mod asset;
+mod coininfo;
 mod contact;
 mod contract;
 mod crash;
@@ -72,6 +73,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Name:resolve" => names::resolve(&handle.env, params),
         "Contract:lookup" => contract::lookup(&handle.env, params),
         "Quote:get" => quote::get(&handle.env, params),
+        "Coin:info" => coininfo::info(&handle.env, params),
         "Account:balance" => account::balance(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
         "Network:testRPC" => network::test_rpc(&handle.env, params),
