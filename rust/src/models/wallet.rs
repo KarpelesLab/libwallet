@@ -15,9 +15,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use xuid::Xuid;
 
+use tsslib::tss::PartyId;
+
 use crate::keystore;
 use crate::sign::{KeyDescription, Recipient};
-use crate::tss::{frost_group_pubkey, frost_keygen_with_parties};
+use crate::tss::{ed25519_verify, frost_group_pubkey, frost_keygen_with_parties, frost_sign_local, Key};
 use crate::{Env, Error, Result, SqlValue};
 
 const WALLET_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Wallet" ("Id" text, "Name" text, "Curve" text, "Protocol" text, "Threshold" integer, "Gen" integer, "Pubkey" text, "Chaincode" text, "Created" text, "Modified" text, PRIMARY KEY ("Id"));"#;
@@ -229,6 +231,72 @@ fn persist(env: &Env, w: &Wallet) -> Result<()> {
 
 fn b64url(b: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
+}
+
+fn b64url_decode(s: &str) -> Result<Vec<u8>> {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s)
+        .map_err(|e| Error::Env(format!("bad base64url: {e}")))
+}
+
+/// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
+/// Password-protected shares. `unlock` pairs each contributing WalletKey id
+/// with its password; at least `threshold + 1` are required. The produced
+/// signature is verified against the wallet's stored group public key before
+/// being returned. This is the crypto path behind Account:signAndSend for
+/// on-device wallets (StoreKey/RemoteKey unlocking follows).
+pub fn sign_frost_local(
+    env: &Env,
+    wallet_id: &str,
+    unlock: &[(String, String)],
+    msg: &[u8],
+) -> Result<Vec<u8>> {
+    let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.protocol != "frost" {
+        return Err(Error::Env(format!("wallet protocol {} is not frost", wallet.protocol)));
+    }
+    let threshold = wallet.threshold.max(0) as usize;
+
+    let mut committee: Vec<(PartyId, Key)> = Vec::with_capacity(unlock.len());
+    for (wk_id, password) in unlock {
+        let wk = wallet
+            .keys
+            .iter()
+            .find(|k| &k.id == wk_id)
+            .ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
+        if wk.kind != "Password" {
+            return Err(Error::Env(format!("key {wk_id} is {} (only Password unlock supported)", wk.kind)));
+        }
+        // Party key + decrypt salt both derive from the WalletKey UUID.
+        let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
+        let uuid_bytes = xid.uuid().as_bytes().to_vec();
+
+        let unlock_key = keystore::password_to_ed25519(password, &uuid_bytes)
+            .map_err(|e| Error::Env(e.to_string()))?;
+        let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+        let key = Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
+            .map_err(|e| Error::Env(format!("load share: {e:?}")))?;
+
+        let pid = PartyId::new(hex_bytes(&uuid_bytes), "", uuid_bytes.clone());
+        committee.push((pid, key));
+    }
+
+    let sig = frost_sign_local(&committee, threshold, msg).map_err(|e| Error::Env(e.to_string()))?;
+
+    // Defense in depth: the produced signature must verify under the stored key.
+    let pk: [u8; 32] = b64url_decode(&wallet.pubkey)?
+        .try_into()
+        .map_err(|_| Error::Env("stored pubkey is not 32 bytes".into()))?;
+    let sig64: [u8; 64] =
+        sig.clone().try_into().map_err(|_| Error::Env("signature is not 64 bytes".into()))?;
+    if !ed25519_verify(&pk, msg, &sig64) {
+        return Err(Error::Env("produced signature failed verification".into()));
+    }
+    Ok(sig)
+}
+
+fn hex_bytes(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn row_to_wallet(row: &[SqlValue]) -> Wallet {

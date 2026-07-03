@@ -55,6 +55,38 @@ fn create_local_frost_wallet_persists() {
 }
 
 #[test]
+fn create_then_sign_roundtrip() {
+    // The full loop: create an on-device wallet, then sign with two of its
+    // password-protected shares. sign_frost_local self-verifies the signature
+    // against the wallet's stored group key.
+    let env = env();
+    let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create(&env, "Signer", "ed25519", &kds).unwrap();
+
+    // Unlock two shares (threshold+1) with their passwords.
+    let unlock = vec![
+        (w.keys[0].id.clone(), "passwordone".to_string()),
+        (w.keys[1].id.clone(), "passwordtwo".to_string()),
+    ];
+    let sig = wallet::sign_frost_local(&env, &w.id, &unlock, b"hello chain").unwrap();
+    assert_eq!(sig.len(), 64);
+
+    // A different committee (shares 0 and 2) also signs.
+    let unlock2 = vec![
+        (w.keys[0].id.clone(), "passwordone".to_string()),
+        (w.keys[2].id.clone(), "passwordthree".to_string()),
+    ];
+    assert_eq!(wallet::sign_frost_local(&env, &w.id, &unlock2, b"hello chain").unwrap().len(), 64);
+
+    // Wrong password can't unlock a share.
+    let bad = vec![
+        (w.keys[0].id.clone(), "passwordone".to_string()),
+        (w.keys[1].id.clone(), "WRONG".to_string()),
+    ];
+    assert!(wallet::sign_frost_local(&env, &w.id, &bad, b"hello chain").is_err());
+}
+
+#[test]
 fn create_rejects_too_few_keys() {
     let env = env();
     assert!(wallet::create(&env, "x", "ed25519", &[pw("aaaaaa"), pw("bbbbbb")]).is_err());
