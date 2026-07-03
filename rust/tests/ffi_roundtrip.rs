@@ -94,6 +94,17 @@ fn paths_reports_datadir() {
 }
 
 #[test]
+fn account_list_empty_and_create_501() {
+    let h = new_env();
+    let listed = request(h, r#"{"path":"Account","verb":"GET"}"#);
+    assert_eq!(listed["result"], "success");
+    assert_eq!(listed["data"].as_array().unwrap().len(), 0);
+    let created = request(h, r#"{"path":"Account","verb":"POST","params":{}}"#);
+    assert_eq!(created["code"], 501);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn contact_create_then_list() {
     let h = new_env();
     // Create
