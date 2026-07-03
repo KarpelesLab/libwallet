@@ -120,6 +120,45 @@ pub fn normalize_slippage(bps: u16) -> u16 {
     }
 }
 
+/// Whether OKX routes swaps on this EVM chain id (Go `okxSupportedEVMChains`).
+pub fn okx_supported_evm_chain(chain_id: &str) -> bool {
+    matches!(
+        chain_id,
+        "1" | "10" | "25" | "56" | "100" | "137" | "169" | "196" | "250" | "324" | "480"
+            | "1101" | "5000" | "8217" | "8453" | "34443" | "42161" | "42220" | "43114"
+            | "59144" | "81457" | "534352"
+    )
+}
+
+/// Whether swaps are available on a network + the eligible providers (Go
+/// `computeAvailability`). OKX is the only routed provider; EVM is gated per
+/// chain id, Solana to mainnet.
+#[derive(Debug, Clone, Serialize)]
+pub struct Availability {
+    pub available: bool,
+    pub network: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
+/// Compute swap availability for `kind`.`chain_id`.
+pub fn availability(kind: &str, chain_id: &str) -> Availability {
+    let network = format!("{kind}.{chain_id}");
+    let (providers, reason): (Vec<String>, &str) = match kind {
+        "solana" if chain_id == "mainnet" => (vec!["okx_solana".into()], ""),
+        "evm" if okx_supported_evm_chain(chain_id) => (vec!["okx_evm".into()], ""),
+        _ => (vec![], "unsupported_chain"),
+    };
+    Availability {
+        available: !providers.is_empty(),
+        network,
+        providers,
+        reason: reason.to_owned(),
+    }
+}
+
 /// The unlimited-approval amount (uint256 max, 2^256 − 1).
 pub fn max_uint256() -> BigInt {
     (BigInt::from(1) << 256) - 1

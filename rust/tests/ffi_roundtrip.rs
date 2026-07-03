@@ -666,6 +666,23 @@ fn network_resolve_rpc_via_ffi() {
 }
 
 #[test]
+fn swap_availability_via_ffi() {
+    let h = new_env();
+    // Current network defaults to ephemeral evm.1 (Ethereum) — swaps available.
+    let resp = request(h, r#"{"path":"Swap:availability"}"#);
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"]["available"], true);
+    assert_eq!(resp["data"]["network"], "evm.1");
+    assert_eq!(resp["data"]["providers"][0], "okx_evm");
+
+    // An unsupported chain via the Network param.
+    let sol = request(h, r#"{"path":"Swap:availability","params":{"Network":"solana.devnet"}}"#);
+    assert_eq!(sol["data"]["available"], false);
+    assert_eq!(sol["data"]["reason"], "unsupported_chain");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn quote_get_via_ffi() {
     let h = new_env();
     let base = mock_node(

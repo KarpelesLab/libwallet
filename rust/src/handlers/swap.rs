@@ -47,6 +47,16 @@ pub fn quote(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(q).unwrap())
 }
 
+/// `Swap:availability` — whether swaps are available on the current (or given)
+/// network, and the eligible providers (Go `swapAvailability`).
+pub fn availability(env: &Env, params: &Value) -> ApiResult {
+    let net_id = params.get("Network").and_then(Value::as_str).unwrap_or("@");
+    let net = crate::models::network::fetch(env, net_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "network not found"))?;
+    Ok(serde_json::to_value(swap::availability(&net.kind, &net.chain_id)).unwrap())
+}
+
 /// `Swap:buildApprovalData` — the ERC-20 `approve(spender, amount)` calldata for
 /// an EVM swap. `Unlimited` uses uint256 max; otherwise `Amount` is base units.
 /// The host wraps this in a Transaction for signAndSend (the stateful

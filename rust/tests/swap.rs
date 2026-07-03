@@ -36,6 +36,28 @@ fn okx_token_addr_and_slippage() {
 }
 
 #[test]
+fn availability_gates_by_chain() {
+    // EVM: supported chain ids are available; others aren't.
+    let eth = swap::availability("evm", "1");
+    assert!(eth.available);
+    assert_eq!(eth.providers, vec!["okx_evm".to_string()]);
+    assert_eq!(eth.network, "evm.1");
+    assert!(swap::availability("evm", "137").available); // Polygon
+    let unsup = swap::availability("evm", "999999");
+    assert!(!unsup.available);
+    assert_eq!(unsup.reason, "unsupported_chain");
+    assert!(unsup.providers.is_empty());
+
+    // Solana: mainnet only.
+    assert!(swap::availability("solana", "mainnet").available);
+    assert_eq!(swap::availability("solana", "mainnet").providers, vec!["okx_solana".to_string()]);
+    assert!(!swap::availability("solana", "devnet").available);
+
+    // Bitcoin: never.
+    assert!(!swap::availability("bitcoin", "bitcoin").available);
+}
+
+#[test]
 fn erc20_approve_selector_is_keccak() {
     // 0x095ea7b3 == keccak256("approve(address,uint256)")[:4].
     let h = purecrypto::hash::keccak256(b"approve(address,uint256)");
