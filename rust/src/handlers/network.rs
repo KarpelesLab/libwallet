@@ -52,6 +52,21 @@ pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
     }
 }
 
+/// `Network:resolveRPC` — the RPC URL to dial for a network {Id}. Resolves the
+/// modchain/Helius/explicit cases (Go Network.getRPC); auto EVM selection is not
+/// ported and returns an error.
+pub fn resolve_rpc(env: &Env, params: &Value) -> ApiResult {
+    let id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id required"))?;
+    let net = crate::models::network::fetch(env, id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "network not found"))?;
+    let rpc = net.resolved_rpc().map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "rpc": rpc, "type": net.kind, "chainId": net.chain_id }))
+}
+
 /// `Network:setCurrent` — mark a network as the active one.
 pub fn set_current(env: &Env, params: &Value) -> ApiResult {
     let id = params

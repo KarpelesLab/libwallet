@@ -12,6 +12,13 @@ use serde_json::{json, Map, Value};
 
 use crate::{Env, Result, SqlValue};
 
+/// modchain API key (public build constant, matching Go `wltnet.ModChainApiKey`).
+/// Bitcoin-family chains route all RPC through modchain with this key.
+const MODCHAIN_API_KEY: &str = "crapi-nx4p6j-ifez-cjli-p5wj-uml43cte";
+/// Solana Helius endpoints, matching Go getRPC (public build constants).
+const HELIUS_MAINNET: &str = "https://kristi-cykm4t-fast-mainnet.helius-rpc.com";
+const HELIUS_DEVNET: &str = "https://trudie-xvrnf4-fast-devnet.helius-rpc.com";
+
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Network" ("Id" text, "Type" text, "ChainId" text, "Name" text, "RPC" text, "CurrencySymbol" text, "CurrencyDecimals" integer, "BlockExplorer" text, "TestNet" numeric, "Priority" integer, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
 CREATE UNIQUE INDEX IF NOT EXISTS "Network_typeChain" ON "Network" ("Type", "ChainId");"#;
 const COLS: &str = r#""Id", "Type", "ChainId", "Name", "RPC", "CurrencySymbol", "CurrencyDecimals", "BlockExplorer", "TestNet", "Priority", "Created", "Updated""#;
@@ -62,6 +69,34 @@ impl Network {
 
     fn chain_info(&self) -> Option<&'static chains::ChainInfo> {
         parse_chain_id(&self.chain_id).and_then(chains::get)
+    }
+
+    /// The RPC URL to dial for this network (port of the static cases of Go
+    /// `Network.getRPC`):
+    /// - an explicit, non-"auto" `rpc` is used as-is (all types);
+    /// - Bitcoin family always routes through modchain (URL + API key + chain);
+    /// - Solana falls back to the Helius devnet/mainnet endpoint;
+    /// - EVM with `rpc == "" | "auto"` needs the live chain-info RPC picker
+    ///   (freshness-aware, not ported) — returns an error so the caller supplies
+    ///   an explicit RPC.
+    pub fn resolved_rpc(&self) -> Result<String> {
+        let explicit = !self.rpc.is_empty() && self.rpc != "auto";
+        match self.kind.as_str() {
+            "bitcoin" => Ok(format!(
+                "https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{}/rpc",
+                self.chain_id
+            )),
+            "solana" if explicit => Ok(self.rpc.clone()),
+            "solana" => Ok(match self.chain_id.as_str() {
+                "devnet" => HELIUS_DEVNET.to_owned(),
+                _ => HELIUS_MAINNET.to_owned(),
+            }),
+            "evm" if explicit => Ok(self.rpc.clone()),
+            "evm" => Err(crate::Error::Env(
+                "auto EVM RPC selection is not ported; supply an explicit RPC".into(),
+            )),
+            other => Err(crate::Error::Env(format!("no RPC resolution for type {other}"))),
+        }
     }
 
     /// The network's native currency symbol (Go `Network.NativeSymbol`): EVM

@@ -25,6 +25,50 @@ fn ephemeral_evm_uses_chain_registry() {
 }
 
 #[test]
+fn resolved_rpc_by_type() {
+    let env = env();
+    // Bitcoin family always routes through modchain (URL + key + chain id).
+    let btc = network::fetch(&env, "bitcoin.bitcoin").unwrap().unwrap();
+    let rpc = btc.resolved_rpc().unwrap();
+    assert!(rpc.starts_with("https://rpc.modchain.net/api/"), "{rpc}");
+    assert!(rpc.ends_with("/bitcoin/rpc"), "{rpc}");
+
+    // Solana without an explicit RPC falls back to the Helius endpoint.
+    let sol = network::fetch(&env, "solana.mainnet").unwrap().unwrap();
+    assert!(sol.resolved_rpc().unwrap().contains("mainnet.helius-rpc.com"));
+    let dev = network::fetch(&env, "solana.devnet").unwrap().unwrap();
+    assert!(dev.resolved_rpc().unwrap().contains("devnet.helius-rpc.com"));
+
+    // EVM without an explicit RPC needs the live picker — errors.
+    assert!(network::fetch(&env, "evm.1").unwrap().unwrap().resolved_rpc().is_err());
+}
+
+#[test]
+fn resolved_rpc_uses_explicit_url_when_set() {
+    let env = env();
+    env.exec(
+        r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+        vec![
+            SqlValue::Text("net-x".into()),
+            SqlValue::Text("evm".into()),
+            SqlValue::Text("1".into()),
+            SqlValue::Text("Custom".into()),
+            SqlValue::Text("https://my-node.example/rpc".into()),
+            SqlValue::Text("ETH".into()),
+            SqlValue::Int(18),
+            SqlValue::Text("auto".into()),
+            SqlValue::Int(0),
+            SqlValue::Int(0),
+            SqlValue::Text("2026-01-01T00:00:00.000000000Z".into()),
+            SqlValue::Text("2026-01-01T00:00:00.000000000Z".into()),
+        ],
+    )
+    .unwrap();
+    let n = network::fetch(&env, "net-x").unwrap().unwrap();
+    assert_eq!(n.resolved_rpc().unwrap(), "https://my-node.example/rpc");
+}
+
+#[test]
 fn native_symbol_by_type_and_chain() {
     let env = env();
     // EVM from the chain registry.

@@ -533,6 +533,22 @@ fn invalid_handle_errors() {
 }
 
 #[test]
+fn network_resolve_rpc_via_ffi() {
+    let h = new_env();
+    // Ephemeral bitcoin.bitcoin resolves to the modchain endpoint.
+    let resp = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"bitcoin.bitcoin"}}"#);
+    assert_eq!(resp["result"], "success", "{resp}");
+    let rpc = resp["data"]["rpc"].as_str().unwrap();
+    assert!(rpc.starts_with("https://rpc.modchain.net/api/"), "{rpc}");
+    assert!(rpc.ends_with("/bitcoin/rpc"), "{rpc}");
+
+    // Auto EVM is not resolvable locally -> error.
+    let ev = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"evm.1"}}"#);
+    assert_eq!(ev["result"], "error");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn quote_get_via_ffi() {
     let h = new_env();
     let base = mock_node(
