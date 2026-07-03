@@ -1,5 +1,4 @@
-//! Wallet object endpoints — read surface (fetch/list). Creation is TSS key
-//! generation and is deferred to Phase 3, so POST returns 501 for now.
+//! Wallet object endpoints — fetch/list and create (ed25519/FROST local path).
 
 use serde_json::Value;
 
@@ -19,7 +18,22 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 Ok(serde_json::to_value(list).unwrap())
             }
         },
-        "POST" => Err(ApiError::new(501, "wallet creation (TSS keygen) not yet ported")),
+        "POST" => {
+            #[derive(serde::Deserialize)]
+            struct CreateReq {
+                #[serde(rename = "Name", default)]
+                name: String,
+                #[serde(rename = "Curve", default)]
+                curve: String,
+                #[serde(rename = "Keys", default)]
+                keys: Vec<crate::sign::KeyDescription>,
+            }
+            let req: CreateReq =
+                serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
+            let w = crate::models::wallet::create(env, &req.name, &req.curve, &req.keys)
+                .map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(w).unwrap())
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Wallet"))),
     }
 }

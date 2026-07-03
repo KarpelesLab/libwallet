@@ -80,8 +80,15 @@ pub fn seal(payload: &[u8], recipients: &[PublicKey]) -> Result<Vec<u8>, Keystor
     Ok(bottle.to_cbor()?)
 }
 
-/// Open a CBOR-encoded encrypted Bottle with the given private keys, returning
-/// the decrypted payload.
+/// Wrap `payload` in an unencrypted CBOR bottle (the Plain scheme: the share is
+/// stored as-is, matching Go's Type=="Plain" path).
+pub fn wrap_plain(payload: &[u8]) -> Result<Vec<u8>, KeystoreError> {
+    let bottle = Bottle::new(payload.to_vec());
+    Ok(bottle.to_cbor()?)
+}
+
+/// Open a CBOR-encoded Bottle (encrypted or plain) with the given private keys,
+/// returning the payload.
 pub fn open(
     cbor: &[u8],
     keys: impl IntoIterator<Item = PrivateKey>,

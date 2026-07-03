@@ -140,15 +140,31 @@ fn crash_list_empty_on_fresh_env() {
 }
 
 #[test]
-fn wallet_list_empty_and_create_501() {
+fn wallet_create_then_list_via_ffi() {
     let h = new_env();
     let listed = request(h, r#"{"path":"Wallet","verb":"GET"}"#);
     assert_eq!(listed["result"], "success");
     assert_eq!(listed["data"].as_array().unwrap().len(), 0);
 
-    let created = request(h, r#"{"path":"Wallet","verb":"POST","params":{"Name":"x"}}"#);
-    assert_eq!(created["result"], "error");
-    assert_eq!(created["code"], 501);
+    // Create an all-local ed25519 wallet with three password-protected shares.
+    let created = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"Main","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    assert_eq!(created["result"], "success");
+    let id = created["data"]["Id"].as_str().unwrap();
+    assert!(id.starts_with("wlt-"));
+    assert_eq!(created["data"]["Curve"], "ed25519");
+    assert_eq!(created["data"]["Keys"].as_array().unwrap().len(), 3);
+    assert_eq!(created["data"]["Pubkey"].as_str().unwrap().len(), 43);
+    // The encrypted share must never cross the FFI.
+    assert!(created["data"]["Keys"][0].get("Data").is_none());
+
+    let listed = request(h, r#"{"path":"Wallet","verb":"GET"}"#);
+    assert_eq!(listed["data"].as_array().unwrap().len(), 1);
     LibwalletDestroy(h);
 }
 
