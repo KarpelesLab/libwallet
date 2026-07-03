@@ -31,6 +31,8 @@ pub mod hdderive;
 pub mod evm;
 // Blocking JSON-RPC client for blockchain nodes (wltnet).
 pub mod rpc;
+// Name resolution — ENS/SNS (wltnames).
+pub mod names;
 // Threshold-signature ceremonies (tsslib).
 pub mod tss;
 // Object models (ported from the Go wlt* packages).
