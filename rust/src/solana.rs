@@ -21,6 +21,86 @@ fn shortvec(mut n: usize, out: &mut Vec<u8>) {
     }
 }
 
+/// Read a compact-u16 (shortvec) length; returns `(value, bytes_consumed)`.
+/// Groups of 7 bits, little-endian, at most 3 bytes.
+pub fn read_compact_u16(bytes: &[u8]) -> Option<(u16, usize)> {
+    let mut val: u32 = 0;
+    let mut i = 0;
+    loop {
+        let b = *bytes.get(i)?;
+        val |= ((b & 0x7f) as u32) << (i * 7);
+        i += 1;
+        if b & 0x80 == 0 {
+            break;
+        }
+        if i >= 3 {
+            return None;
+        }
+    }
+    if val > u16::MAX as u32 {
+        None
+    } else {
+        Some((val as u16, i))
+    }
+}
+
+/// If `pubkey` appears in a serialized Solana message's account-keys within the
+/// required-signers range, return its slot (Go `solanaFindSignerSlot`). A
+/// versioned message's leading version byte is skipped.
+pub fn find_signer_slot(msg: &[u8], pubkey: &[u8; 32]) -> Option<usize> {
+    if msg.is_empty() {
+        return None;
+    }
+    let mut pos = if msg[0] & 0x80 != 0 { 1 } else { 0 };
+    if msg.len() < pos + 3 {
+        return None;
+    }
+    let num_required_signatures = msg[pos] as usize;
+    pos += 3; // numRequiredSignatures, numReadonlySigned, numReadonlyUnsigned
+
+    let (num_keys, consumed) = read_compact_u16(&msg[pos..])?;
+    pos += consumed;
+    let num_keys = num_keys as usize;
+    if pos + num_keys * 32 > msg.len() {
+        return None;
+    }
+    for i in 0..num_keys {
+        let start = pos + i * 32;
+        if &msg[start..start + 32] == pubkey.as_slice() {
+            return if i < num_required_signatures { Some(i) } else { None };
+        }
+    }
+    None
+}
+
+/// Strip the signature array from a full serialized transaction, returning the
+/// message bytes (Go `solanaExtractMessage`).
+pub fn extract_message(tx: &[u8]) -> Option<&[u8]> {
+    let (num_sigs, consumed) = read_compact_u16(tx)?;
+    let sig_end = consumed + num_sigs as usize * 64;
+    if sig_end > tx.len() {
+        None
+    } else {
+        Some(&tx[sig_end..])
+    }
+}
+
+/// Whether `payload` parses as a Solana transaction (bare message or full tx)
+/// naming `pubkey` as a required signer — the blind-signing guard for
+/// `signMessage` (Go `solanaPayloadIsSignableTx`). Signing such a payload as a
+/// "message" would forge a fund-moving transaction signature.
+pub fn payload_is_signable_tx(payload: &[u8], pubkey: &[u8; 32]) -> bool {
+    if find_signer_slot(payload, pubkey).is_some() {
+        return true;
+    }
+    if let Some(msg) = extract_message(payload) {
+        if find_signer_slot(msg, pubkey).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Serialize a legacy transfer message: `from` sends `lamports` to `to` at
 /// `recent_blockhash`. Account order is [from(signer,writable), to(writable),
 /// SystemProgram(readonly)]; the returned bytes are what the signer signs.

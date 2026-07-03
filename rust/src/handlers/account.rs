@@ -48,6 +48,16 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
         }
         // Solana / ed25519 — FROST signature, base58 in its canonical encoding.
         _ => {
+            // Blind-signing guard: refuse a "message" that is actually a Solana
+            // transaction naming this account as a signer (matches Go).
+            if let Some(pk) = crate::solana::pubkey_from_b64url(&account.pubkey) {
+                if crate::solana::payload_is_signable_tx(&msg, &pk) {
+                    return Err(ApiError::new(
+                        400,
+                        "refusing to sign: message parses as a Solana transaction for this account — use signTransaction",
+                    ));
+                }
+            }
             let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
                 .map_err(ApiError::internal)?;
             Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
