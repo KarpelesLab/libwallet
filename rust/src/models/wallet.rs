@@ -261,6 +261,25 @@ fn b64url_decode(s: &str) -> Result<Vec<u8>> {
         .map_err(|e| Error::Env(format!("bad base64url: {e}")))
 }
 
+/// Resolve the decryption key for a WalletKey from the unlock material:
+/// Password derives via PBKDF2 (salt = the WalletKey UUID); StoreKey takes the
+/// device's 32-byte Ed25519 seed (base64url) that the host supplies at sign
+/// time. (RemoteKey unlock happens on the backend and is not handled here.)
+fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottlers::PrivateKey> {
+    match kind {
+        "Password" => {
+            crate::keystore::password_to_ed25519(material, uuid).map_err(|e| Error::Env(e.to_string()))
+        }
+        "StoreKey" => {
+            let seed: [u8; 32] = b64url_decode(material)?
+                .try_into()
+                .map_err(|_| Error::Env("StoreKey seed must be 32 bytes".into()))?;
+            Ok(crate::keystore::ed25519_from_seed(seed))
+        }
+        other => Err(Error::Env(format!("unlock type {other} not supported locally"))),
+    }
+}
+
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
 /// Password-protected shares. `unlock` pairs each contributing WalletKey id
 /// with its password; at least `threshold + 1` are required. The produced
@@ -286,15 +305,11 @@ pub fn sign_frost_local(
             .iter()
             .find(|k| &k.id == wk_id)
             .ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
-        if wk.kind != "Password" {
-            return Err(Error::Env(format!("key {wk_id} is {} (only Password unlock supported)", wk.kind)));
-        }
         // Party key + decrypt salt both derive from the WalletKey UUID.
         let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
         let uuid_bytes = xid.uuid().as_bytes().to_vec();
 
-        let unlock_key = keystore::password_to_ed25519(password, &uuid_bytes)
-            .map_err(|e| Error::Env(e.to_string()))?;
+        let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid_bytes)?;
         let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
         let key = Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
             .map_err(|e| Error::Env(format!("load share: {e:?}")))?;
@@ -345,12 +360,9 @@ pub fn dkls_sign_digest(
             .iter()
             .find(|k| &k.id == wk_id)
             .ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
-        if wk.kind != "Password" {
-            return Err(Error::Env(format!("key {wk_id} is {} (only Password unlock supported)", wk.kind)));
-        }
         let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
         let uuid = xid.uuid().as_bytes().to_vec();
-        let unlock_key = keystore::password_to_ed25519(password, &uuid).map_err(|e| Error::Env(e.to_string()))?;
+        let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid)?;
         let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
         let key = tsslib::dklstss::Key::from_json(
             std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?,

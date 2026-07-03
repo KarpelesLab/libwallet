@@ -87,6 +87,39 @@ fn create_then_sign_roundtrip() {
 }
 
 #[test]
+fn create_and_sign_storekey_wallet() {
+    use libwallet::keystore;
+    use libwallet::sign::KeyDescription;
+    let env = env();
+
+    // A device keypair: its PKIX public key is the StoreKey descriptor.
+    let seed = [5u8; 32];
+    let device = keystore::ed25519_from_seed(seed);
+    let pkix = keystore::public_key_to_pkix_b64(&device.public()).unwrap();
+    let seed_b64 = keystore::seed_to_b64url(&seed);
+
+    let sk = |p: &str| KeyDescription { kind: "StoreKey".into(), key: p.into(), id: String::new() };
+    let kds = vec![sk(&pkix), sk(&pkix), sk(&pkix)];
+    let w = wallet::create(&env, "SK", "ed25519", &kds).unwrap();
+    assert!(w.keys.iter().all(|k| k.kind == "StoreKey"));
+
+    // Unlock two shares with the device seed and sign.
+    let unlock = vec![
+        (w.keys[0].id.clone(), seed_b64.clone()),
+        (w.keys[1].id.clone(), seed_b64.clone()),
+    ];
+    let sig = wallet::sign_frost_local(&env, &w.id, &unlock, b"msg").unwrap();
+    assert_eq!(sig.len(), 64);
+
+    // The wrong device seed can't unlock.
+    let bad = vec![
+        (w.keys[0].id.clone(), keystore::seed_to_b64url(&[9u8; 32])),
+        (w.keys[1].id.clone(), seed_b64.clone()),
+    ];
+    assert!(wallet::sign_frost_local(&env, &w.id, &bad, b"msg").is_err());
+}
+
+#[test]
 fn create_rejects_too_few_keys() {
     let env = env();
     assert!(wallet::create(&env, "x", "ed25519", &[pw("aaaaaa"), pw("bbbbbb")]).is_err());

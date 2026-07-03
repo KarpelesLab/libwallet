@@ -44,6 +44,12 @@ pub fn ed25519_from_seed(seed: [u8; 32]) -> PrivateKey {
     PrivateKey::Ed25519(Ed25519PrivateKey::from_bytes(seed))
 }
 
+/// base64url (no-pad) encoding of a 32-byte seed — the StoreKey unlock material
+/// a host passes at sign time.
+pub fn seed_to_b64url(seed: &[u8; 32]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(seed)
+}
+
 /// Derive an Ed25519 key from a password + salt via PBKDF2-HMAC-SHA256, 4096
 /// iterations, 32-byte output — matching Go wltwallet `passwordToEd25519`
 /// (salt is the WalletKey UUID bytes).
