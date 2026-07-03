@@ -247,6 +247,99 @@ pub fn parse_relay_frame(data: &[u8]) -> Result<RelayFrame> {
     Ok(RelayFrame::Other)
 }
 
+/// The relay transport: a bidirectional text-frame channel (the WebSocket to
+/// the `irn` relay). Abstracted so the client loop is testable with a mock and
+/// the live socket (tungstenite) is a thin impl.
+pub trait RelayTransport {
+    /// Send one text frame.
+    fn send_text(&mut self, text: &str) -> Result<()>;
+    /// Receive the next text frame, or `None` if none is available / closed.
+    fn recv_text(&mut self) -> Result<Option<String>>;
+}
+
+/// A JSON-RPC relay client over a [`RelayTransport`] (Go `RelayClient`): assigns
+/// request ids, subscribes/publishes, and dispatches inbound frames, auto-acking
+/// `irn_subscription` events. The transport (socket) I/O is injected.
+pub struct RelayClient<T: RelayTransport> {
+    transport: T,
+    next_id: i64,
+}
+
+impl<T: RelayTransport> RelayClient<T> {
+    pub fn new(transport: T) -> Self {
+        RelayClient { transport, next_id: 0 }
+    }
+
+    fn next_id(&mut self) -> i64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    /// `irn_subscribe(topic)` — returns the request id sent.
+    pub fn subscribe(&mut self, topic: &str) -> Result<i64> {
+        let id = self.next_id();
+        self.transport.send_text(&build_subscribe(id, topic).to_string())?;
+        Ok(id)
+    }
+
+    /// `irn_publish(topic, message, tag, ttl)` — returns the request id sent.
+    pub fn publish(&mut self, topic: &str, message: &str, tag: i64, ttl: i64) -> Result<i64> {
+        let id = self.next_id();
+        self.transport.send_text(&build_publish(id, topic, message, tag, ttl).to_string())?;
+        Ok(id)
+    }
+
+    /// Receive and parse the next relay frame, auto-acking subscription events
+    /// (so the relay stops redelivering). Returns `None` when no frame is ready.
+    pub fn poll(&mut self) -> Result<Option<RelayFrame>> {
+        let raw = match self.transport.recv_text()? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        let frame = parse_relay_frame(raw.as_bytes())?;
+        if let RelayFrame::Subscription { ack_id, .. } = &frame {
+            self.transport.send_text(&build_ack(*ack_id).to_string())?;
+        }
+        Ok(Some(frame))
+    }
+
+    /// Consume the client, returning the underlying transport.
+    pub fn into_transport(self) -> T {
+        self.transport
+    }
+}
+
+/// A [`RelayTransport`] backed by a tungstenite WebSocket over any byte stream
+/// (`S`). The caller performs the ws/wss handshake (TLS is out of scope for this
+/// layer); this wraps the resulting socket. Set the stream non-blocking for a
+/// `recv_text` that returns `None` instead of blocking.
+pub struct WsTransport<S: std::io::Read + std::io::Write> {
+    socket: tungstenite::WebSocket<S>,
+}
+
+impl<S: std::io::Read + std::io::Write> WsTransport<S> {
+    pub fn new(socket: tungstenite::WebSocket<S>) -> Self {
+        WsTransport { socket }
+    }
+}
+
+impl<S: std::io::Read + std::io::Write> RelayTransport for WsTransport<S> {
+    fn send_text(&mut self, text: &str) -> Result<()> {
+        self.socket
+            .send(tungstenite::Message::Text(text.to_owned()))
+            .map_err(|e| Error::Env(format!("ws send: {e}")))
+    }
+
+    fn recv_text(&mut self) -> Result<Option<String>> {
+        match self.socket.read() {
+            Ok(tungstenite::Message::Text(t)) => Ok(Some(t)),
+            Ok(_) => Ok(None), // ping/pong/binary/close — no payload for the client
+            Err(tungstenite::Error::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(Error::Env(format!("ws read: {e}"))),
+        }
+    }
+}
+
 /// A decoded inbound WalletConnect JSON-RPC message (Go `handleIncoming`
 /// dispatch), after the relay envelope is decrypted.
 #[derive(Debug, Clone, PartialEq)]

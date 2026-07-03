@@ -58,6 +58,91 @@ fn type1_asymmetric_roundtrip() {
     );
 }
 
+/// In-memory transport for the client-logic test.
+struct MockTransport {
+    sent: std::collections::VecDeque<String>,
+    inbox: std::collections::VecDeque<String>,
+}
+impl wc::RelayTransport for MockTransport {
+    fn send_text(&mut self, text: &str) -> libwallet::Result<()> {
+        self.sent.push_back(text.to_owned());
+        Ok(())
+    }
+    fn recv_text(&mut self) -> libwallet::Result<Option<String>> {
+        Ok(self.inbox.pop_front())
+    }
+}
+
+#[test]
+fn relay_client_subscribe_publish_and_dispatch() {
+    let mut client = wc::RelayClient::new(MockTransport {
+        sent: Default::default(),
+        inbox: Default::default(),
+    });
+
+    // subscribe + publish assign incrementing ids and emit the right frames.
+    let sub_id = client.subscribe("topichex").unwrap();
+    let pub_id = client.publish("topichex", "ENV", wc::TAG_SESSION_RESPONSE, 0).unwrap();
+    assert_eq!((sub_id, pub_id), (1, 2));
+
+    // A pre-seeded inbox tests poll + auto-ack deterministically.
+    let mut inbox = std::collections::VecDeque::new();
+    inbox.push_back(
+        r#"{"id":9,"method":"irn_subscription","params":{"data":{"topic":"t","message":"m","tag":1108}}}"#.to_string(),
+    );
+    let mut client = wc::RelayClient::new(MockTransport { sent: Default::default(), inbox });
+    let frame = client.poll().unwrap().unwrap();
+    assert_eq!(frame, wc::RelayFrame::Subscription { ack_id: 9, topic: "t".into(), message: "m".into(), tag: 1108 });
+    // The client auto-acked id 9.
+    let t = client.into_transport();
+    assert_eq!(t.sent.len(), 1);
+    assert_eq!(t.sent[0], wc::build_ack(9).to_string());
+}
+
+#[test]
+fn relay_client_over_real_websocket_loopback() {
+    use std::net::{TcpListener, TcpStream};
+    // A local WS server: accepts one connection, echoes the wallet's subscribe
+    // as a fact, then pushes an irn_subscription and reads the ack.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        // Read the subscribe frame the client sends.
+        let msg = ws.read().unwrap();
+        let text = msg.into_text().unwrap();
+        assert!(text.contains("irn_subscribe"), "got {text}");
+        assert!(text.contains("mytopic"));
+        // Push an inbound subscription event to the wallet.
+        ws.send(tungstenite::Message::Text(
+            r#"{"id":42,"method":"irn_subscription","params":{"data":{"topic":"mytopic","message":"CIPHER","tag":1108}}}"#.into(),
+        ))
+        .unwrap();
+        // Read the wallet's ack.
+        let ack = ws.read().unwrap().into_text().unwrap();
+        assert!(ack.contains("\"id\":42"), "ack: {ack}");
+        assert!(ack.contains("\"result\":true"));
+    });
+
+    let stream = TcpStream::connect(addr).unwrap();
+    let (socket, _resp) = tungstenite::client(format!("ws://{addr}/"), stream).unwrap();
+    let mut client = wc::RelayClient::new(wc::WsTransport::new(socket));
+
+    client.subscribe("mytopic").unwrap();
+    // Poll for the server's pushed subscription (real bytes over the socket).
+    let frame = loop {
+        if let Some(f) = client.poll().unwrap() {
+            break f;
+        }
+    };
+    assert_eq!(
+        frame,
+        wc::RelayFrame::Subscription { ack_id: 42, topic: "mytopic".into(), message: "CIPHER".into(), tag: 1108 }
+    );
+    server.join().unwrap();
+}
+
 #[test]
 fn process_inbound_classifies_and_guards() {
     let sym: [u8; 32] = seq(0, 32).try_into().unwrap();
