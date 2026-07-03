@@ -270,6 +270,26 @@ pub fn xpub(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "xpub": xpub }))
 }
 
+/// `Account:utxos` — the account's spendable NATIVE UTXOs (Go
+/// `fetchBitcoinUTXOs`), for hosts that build/sign Bitcoin transactions.
+pub fn utxos(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "bitcoin" {
+        return Err(ApiError::new(400, "utxos is bitcoin-only"));
+    }
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let xpub = account.xpub().map_err(ApiError::internal)?;
+    let utxos = crate::bitcoin::list_utxos(&rpc, &xpub).map_err(ApiError::internal)?;
+    let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
+    Ok(serde_json::json!({ "utxos": utxos, "count": utxos.len(), "total_sats": total }))
+}
+
 /// `Account:nextAddress` — the next unused HD receive/change address for a
 /// bitcoin-family account (Go `accountNextAddress`). Uses the account xpub +
 /// modchain_lookupTxoBIP32 to find the highest used index and derives the next.

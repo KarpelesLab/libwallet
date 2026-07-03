@@ -5,7 +5,9 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use libwallet::bitcoin::{hd_address, native_balance_satoshi, next_address, parse_btc_amount};
+use libwallet::bitcoin::{
+    hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount,
+};
 use serde_json::json;
 
 fn unhex(s: &str) -> Vec<u8> {
@@ -68,6 +70,31 @@ fn native_balance_sums_only_native_assets() {
 fn native_balance_empty_is_zero() {
     let url = mock(r#"{"assets":[]}"#);
     assert_eq!(native_balance_satoshi(&url, "addr").unwrap(), 0);
+}
+
+#[test]
+fn list_utxos_skips_spent_and_parses_amounts() {
+    // Two unspent NATIVE outputs plus one spent one (must be dropped), and a
+    // non-NATIVE asset that's ignored.
+    let url = mock(
+        r#"{"assets":[
+            {"asset":"NATIVE","txo":[
+                {"txo":"aa11:0","height":800000,"amt":"0.00100000","path":"m/0/0","script":"p2wpkh"},
+                {"txo":"bb22:1","height":0,"amt":"0.00050000","path":"m/1/3","script":"p2wpkh"},
+                {"txo":"cc33:2","height":790000,"amt":"5.0","path":"m/0/1","script":"p2wpkh","spent":{"tx":"deadbeef"}}
+            ]},
+            {"asset":"SOMETOKEN","txo":[{"txo":"ff99:0","amt":"9.0","script":"p2pkh"}]}
+        ]}"#,
+    );
+    let utxos = list_utxos(&url, "xpub-ignored").unwrap();
+    assert_eq!(utxos.len(), 2, "spent + non-NATIVE dropped");
+    assert_eq!(utxos[0].txo, "aa11:0");
+    assert_eq!(utxos[0].amount_sats, 100_000);
+    assert_eq!(utxos[0].path, "m/0/0");
+    assert_eq!(utxos[1].txo, "bb22:1");
+    assert_eq!(utxos[1].amount_sats, 50_000);
+    let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
+    assert_eq!(total, 150_000);
 }
 
 #[test]

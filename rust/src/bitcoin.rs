@@ -111,6 +111,63 @@ pub fn next_address(
     Ok((address, next_index, format!("{base_path}/{next_index}")))
 }
 
+/// A spendable output discovered via `modchain_assets` (Go `bitcoinTxo`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DiscoveredUtxo {
+    /// `"<txid>:<vout>"`.
+    pub txo: String,
+    /// Value in satoshi.
+    pub amount_sats: u64,
+    /// Block height (0 when unconfirmed).
+    pub height: i64,
+    /// Full HD path (`"m/0/0"`) — how the spending key is derived.
+    pub path: String,
+    /// Script flavor (`p2pkh`, `p2wpkh`, …).
+    pub script: String,
+}
+
+/// List the account's spendable NATIVE UTXOs from `modchain_assets(xpub)` (Go
+/// `fetchBitcoinUTXOs`). Skips entries modchain marked spent. Amounts decode via
+/// the BtcAmount rules. Does not apply the in-memory just-spent tracker (that
+/// lands with the auto-input tx builder).
+pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
+    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([xpub]))?;
+    let assets = raw
+        .get("assets")
+        .and_then(|a| a.as_array())
+        .ok_or_else(|| Error::Env("modchain_assets: no assets array".into()))?;
+    let mut out = Vec::new();
+    for a in assets {
+        if a.get("asset").and_then(|s| s.as_str()) != Some("NATIVE") {
+            continue;
+        }
+        let txos = match a.get("txo").and_then(|t| t.as_array()) {
+            Some(t) => t,
+            None => continue,
+        };
+        for t in txos {
+            // Spent when the "spent" field is present and non-null.
+            let spent = t.get("spent").map(|s| !s.is_null()).unwrap_or(false);
+            if spent {
+                continue;
+            }
+            let txo = t.get("txo").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            if txo.is_empty() {
+                continue;
+            }
+            let amount_sats = t.get("amt").map(parse_btc_amount).transpose()?.unwrap_or(0);
+            out.push(DiscoveredUtxo {
+                txo,
+                amount_sats,
+                height: t.get("height").and_then(|v| v.as_i64()).unwrap_or(0),
+                path: t.get("path").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                script: t.get("script").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+            });
+        }
+    }
+    Ok(out)
+}
+
 /// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
 /// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
 pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
