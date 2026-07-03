@@ -306,10 +306,12 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
 /// fee path). {RPC?} — returns {chain, balance, fee, max} as amounts.
 pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
     use num_bigint::BigInt;
+    // "Id" (Account:maxSendable) or "Account" (Transaction:maxSendable).
     let account_id = params
         .get("Id")
+        .or_else(|| params.get("Account"))
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+        .ok_or_else(|| ApiError::new(400, "Id/Account required"))?;
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;

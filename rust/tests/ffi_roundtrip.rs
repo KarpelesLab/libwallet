@@ -889,6 +889,17 @@ fn canonical_go_endpoint_names_via_ffi() {
     assert_ne!(n["code"], 404, "Names:resolve must be a known endpoint");
     let c = request(h, r#"{"path":"Contracts:lookup","params":{}}"#);
     assert_ne!(c["code"], 404, "Contracts:lookup must be a known endpoint");
+
+    // Asset:invalidateCache clears the quote cache and reports success.
+    let inv = request(h, r#"{"path":"Asset:invalidateCache"}"#);
+    assert_eq!(inv["result"], "success", "{inv}");
+    assert_eq!(inv["data"]["invalidated"], true);
+
+    // Transaction:maxSendable is an alias for Account:maxSendable (known route):
+    // with no account it hits the handler's 400, not the router's 404.
+    let tms = request(h, r#"{"path":"Transaction:maxSendable","params":{}}"#);
+    assert_eq!(tms["result"], "error");
+    assert_eq!(tms["code"], 400, "known endpoint -> handler validation, not 404");
     LibwalletDestroy(h);
 }
 

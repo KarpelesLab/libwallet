@@ -97,7 +97,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Swap:countryAvailability" => swap::country_availability(&handle.env, params),
         "Account:balance" => account::balance(&handle.env, params),
         "Account:tokenBalance" => account::token_balance(&handle.env, params),
-        "Account:maxSendable" => account::max_sendable(&handle.env, params),
+        "Account:maxSendable" | "Transaction:maxSendable" => account::max_sendable(&handle.env, params),
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
         "Account:nextAddress" => account::next_address(&handle.env, params),
@@ -109,6 +109,11 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Network:resolveRPC" => network::resolve_rpc(&handle.env, params),
         "Network:setCurrent" => network::set_current(&handle.env, params),
         "Asset" => asset::route(&handle.env, verb, params),
+        "Asset:invalidateCache" => {
+            // Drop the cached quote table so the next Asset conversion refetches.
+            handle.env.cache_delete(&[crate::quote::CACHE_KEY]).map_err(ApiError::internal)?;
+            Ok(serde_json::json!({ "invalidated": true }))
+        }
         "Network" => network::route(&handle.env, verb, params),
         "Token" => token::route(&handle.env, verb, params),
         "Token:listCurated" => token::list_curated(&handle.env, params),
