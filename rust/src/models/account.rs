@@ -114,7 +114,20 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
                 let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
                 ("secp256k1".into(), format!("m/44/60/0/{index}"), b64url(&child), addr.clone(), format!("ethereum:{addr}"), Value::String(il))
             }
-            "bitcoin" => return Err(Error::Env("bitcoin address (outscript) not yet ported".into())),
+            "bitcoin" => {
+                if wallet.curve != "secp256k1" {
+                    return Err(Error::Env(format!("bitcoin account requires secp256k1 wallet, got {}", wallet.curve)));
+                }
+                // BIP32 non-hardened derivation at m/44/0/0/{index}, then P2PKH.
+                let pb = b64url_decode(&wallet.pubkey)?;
+                let cc = b64url_decode(&wallet.chaincode)?;
+                let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, &[44, 0, 0, index as u32])
+                    .map_err(|e| Error::Env(e.to_string()))?;
+                let h160 = outscript::hash::hash160(&child);
+                let addr = outscript::address::encode_base58_addr(0x00, &h160); // BTC mainnet P2PKH
+                let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
+                ("secp256k1".into(), format!("m/44/0/0/{index}"), b64url(&child), addr.clone(), format!("bitcoin:{addr}"), Value::String(il))
+            }
             other => return Err(Error::Env(format!("unsupported account type {other}"))),
         };
     let now = crate::now_rfc3339();

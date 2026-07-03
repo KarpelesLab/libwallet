@@ -70,6 +70,24 @@ fn create_ethereum_account_from_secp256k1_wallet() {
 }
 
 #[test]
+fn create_bitcoin_account_p2pkh() {
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+
+    let a = account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+    assert_eq!(a.kind, "bitcoin");
+    assert_eq!(a.curve, "secp256k1");
+    assert_eq!(a.path, "m/44/0/0/0");
+    // Mainnet P2PKH addresses start with '1' and are base58.
+    assert!(a.address.starts_with('1'), "P2PKH address: {}", a.address);
+    assert!(!a.address.contains(['0', 'O', 'I', 'l']));
+    assert_eq!(a.uri, format!("bitcoin:{}", a.address));
+}
+
+#[test]
 fn solana_requires_ed25519_and_rejects_secp() {
     let (env, wallet_id, _) = wallet_env();
     // ethereum on an ed25519 wallet is unsupported; secp derivation not ported.
