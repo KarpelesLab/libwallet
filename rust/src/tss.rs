@@ -249,6 +249,31 @@ pub fn frost_group_pubkey(key: &Key) -> [u8; 32] {
     key.group_public_key.compress()
 }
 
+/// Import a raw Ed25519 secret scalar (big-endian) as a 1-of-1 FROST key — the
+/// `Wallet:importPrivateKey` migration path for ed25519. The party holds the
+/// whole secret, so the caller should reshare afterward.
+pub fn frost_import_key(priv_be: &[u8], party_key: &[u8]) -> Result<(PartyId, Key), TssError> {
+    let scalar = tsslib::frost::scalar_from_be_mod_l(priv_be);
+    let party = PartyId::new(hex(party_key), "", party_key.to_vec());
+    let key = tsslib::frosttss::import_key(&scalar, &party)
+        .map_err(|e| TssError(format!("frost import: {e:?}")))?;
+    Ok((party, key))
+}
+
+/// Import a raw secp256k1 secret scalar (32-byte big-endian) as a 1-of-1 DKLs
+/// key — the `Wallet:importPrivateKey` migration path for secp256k1.
+pub fn dkls_import_key(
+    priv_be: &[u8; 32],
+    party_key: &[u8],
+) -> Result<(PartyId, tsslib::dklstss::Key), TssError> {
+    let scalar = purecrypto::ec::secp256k1::Scalar::from_bytes_be(priv_be)
+        .map_err(|e| TssError(format!("secp scalar: {e:?}")))?;
+    let party = PartyId::new(hex(party_key), "", party_key.to_vec());
+    let key = tsslib::dklstss::import_key(&scalar, &party)
+        .map_err(|e| TssError(format!("dkls import: {e:?}")))?;
+    Ok((party, key))
+}
+
 /// Verify a standard Ed25519 signature against a 32-byte public key. Used to
 /// confirm a FROST aggregate signature is valid under the group key — the same
 /// check any external Ed25519 verifier (or chain node) performs.
