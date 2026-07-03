@@ -9,6 +9,25 @@ use outscript::crypto::secp256k1::SecpPublicKey;
 
 use crate::{Env, Error, Result};
 
+/// Serialize a BIP-32 extended **public** key (`xpub…`) from a compressed
+/// secp256k1 pubkey + 32-byte chain code, as Go `Account.Xpub` does via
+/// `ecckd.FromPublicKey`: mainnet version, depth 0, zero parent fingerprint and
+/// child number, base58check (double-SHA256 checksum). The account uses the
+/// wallet chain code (matching Go), so this reproduces the exact xpub string.
+pub fn build_xpub(pubkey_compressed: &[u8; 33], chaincode: &[u8; 32]) -> String {
+    let mut data = Vec::with_capacity(78 + 4);
+    data.extend_from_slice(&[0x04, 0x88, 0xb2, 0x1e]); // BitcoinMainnetPublic
+    data.push(0x00); // depth
+    data.extend_from_slice(&[0, 0, 0, 0]); // parent fingerprint
+    data.extend_from_slice(&[0, 0, 0, 0]); // child number
+    data.extend_from_slice(chaincode);
+    data.extend_from_slice(pubkey_compressed);
+    let h1 = purecrypto::hash::sha256(&data);
+    let h2 = purecrypto::hash::sha256(&h1);
+    data.extend_from_slice(&h2[..4]);
+    bs58::encode(&data).into_string()
+}
+
 /// Parse a modchain `balance` value (outscript BtcAmount JSON) into satoshi.
 /// Mirrors Go `BtcAmount.UnmarshalText`: a JSON number/string, where a value
 /// without a decimal point is whole BTC (×1e8), a decimal value is scaled to

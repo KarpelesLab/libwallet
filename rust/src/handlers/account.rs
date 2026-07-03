@@ -243,14 +243,31 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
             raw.saturating_sub(rent).to_string()
         }
         "bitcoin" => {
-            // Sum unspent NATIVE outputs via modchain_assets (satoshi).
-            crate::bitcoin::native_balance_satoshi(rpc, &account.address)
+            // Prefer the xpub (gap-limit scan across receive+change) when the
+            // account has one; fall back to the single address. Matches Go
+            // bitcoinBalance, which passes the xpub to modchain_assets.
+            let lookup = account.xpub().unwrap_or_else(|_| account.address.clone());
+            crate::bitcoin::native_balance_satoshi(rpc, &lookup)
                 .map_err(ApiError::internal)?
                 .to_string()
         }
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
+}
+
+/// `Account:xpub` — the BIP-32 extended public key for a bitcoin/ethereum
+/// account (Go `Account:xpub`). Used for gap-limit UTXO/history discovery.
+pub fn xpub(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let xpub = account.xpub().map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "xpub": xpub }))
 }
 
 /// `Account:nativeAsset` — the live native-currency asset for an account:

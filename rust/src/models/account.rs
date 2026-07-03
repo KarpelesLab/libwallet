@@ -173,6 +173,28 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
     Ok(account)
 }
 
+impl Account {
+    /// The BIP-32 extended public key (`xpub…`) for this account, built from its
+    /// compressed pubkey + chain code (Go `Account.Xpub`). Secp256k1-family
+    /// (bitcoin/ethereum) only; errors when pubkey/chaincode are missing or the
+    /// wrong length.
+    pub fn xpub(&self) -> Result<String> {
+        if self.pubkey.is_empty() {
+            return Err(Error::Env("account has no pubkey".into()));
+        }
+        if self.chaincode.is_empty() {
+            return Err(Error::Env("account has no chaincode".into()));
+        }
+        let pb: [u8; 33] = b64url_decode(&self.pubkey)?
+            .try_into()
+            .map_err(|_| Error::Env("pubkey is not 33 bytes (compressed secp256k1)".into()))?;
+        let cc: [u8; 32] = b64url_decode(&self.chaincode)?
+            .try_into()
+            .map_err(|_| Error::Env("chaincode is not 32 bytes".into()))?;
+        Ok(crate::bitcoin::build_xpub(&pb, &cc))
+    }
+}
+
 fn b64url_decode(s: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s)

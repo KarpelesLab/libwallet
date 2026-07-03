@@ -387,6 +387,31 @@ fn native_asset_via_ffi() {
 }
 
 #[test]
+fn bitcoin_xpub_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"BTC","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"bitcoin","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    let resp = request(h, &format!(r#"{{"path":"Account:xpub","params":{{"Id":"{account_id}"}}}}"#));
+    assert_eq!(resp["result"], "success", "{resp}");
+    let xpub = resp["data"]["xpub"].as_str().unwrap();
+    assert!(xpub.starts_with("xpub"), "got {xpub}");
+    assert_eq!(xpub.len(), 111);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn bitcoin_balance_via_ffi() {
     let h = new_env();
     let w = request(
