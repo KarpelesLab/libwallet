@@ -3,7 +3,7 @@
 //! drift, on-wire / on-disk compatibility with deployed data is broken.
 
 use num_bigint::BigInt;
-use wltobj::{Amount, TimeId};
+use libwallet::{Amount, TimeId};
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()

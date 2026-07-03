@@ -2,6 +2,7 @@
 //! object CRUD registration becomes an arm here. As packages are ported their
 //! handlers are added and this match grows toward the ~107 Go endpoints.
 
+mod account;
 mod contact;
 mod crash;
 mod info;
@@ -10,13 +11,14 @@ mod wallet;
 use serde_json::Value;
 
 use crate::handle::Handle;
-use wltbase::Env;
+use crate::Env;
 
 /// Create all model tables on a fresh env (mirrors the Go per-package InitEnv).
-pub fn init_models(env: &Env) -> wltbase::Result<()> {
-    wltcontact::init(env)?;
-    wltcrash::init(env)?;
-    wltwallet::init(env)?;
+pub fn init_models(env: &Env) -> crate::Result<()> {
+    crate::models::contact::init(env)?;
+    crate::models::crash::init(env)?;
+    crate::models::wallet::init(env)?;
+    crate::models::account::init(env)?;
     Ok(())
 }
 
@@ -50,6 +52,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
+        "Account" => account::route(&handle.env, verb, params),
         _ => Err(ApiError::not_found(path)),
     }
 }

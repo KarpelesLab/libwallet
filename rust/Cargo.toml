@@ -1,18 +1,36 @@
-[workspace]
-resolver = "2"
-members = ["ffi", "wltbase", "wltobj", "wltcontact", "wltcrash", "wltwallet"]
-
-# libwallet — Rust backend port.
+# libwallet — Rust backend port (single crate).
 #
-# The Go packages under ../wlt* are being reimplemented here. Each Go package
-# will become a member crate (wltbase, wltwallet, ...) under this workspace as
-# the port progresses; for now only the FFI boundary (`ffi`) exists so the
-# Dart client can talk to the Rust build exactly as it did to the Go build.
+# The Go packages under ../wlt* are ported as modules here (db/env from
+# wltbase, amount/timeid from wltobj, models/* for the object types) rather
+# than separate crates. The FFI boundary lives in src/lib.rs and builds the
+# cdylib the Dart client loads.
 
-[workspace.package]
+[package]
+name = "libwallet"
+version = "0.5.0"
 edition = "2021"
 license = "LicenseRef-KarpelesLab-NonCommercial"
 repository = "https://github.com/KarpelesLab/libwallet"
+
+# cdylib  -> liblibwallet.so / liblibwallet.dylib  (dlopen'd by the Dart client)
+# staticlib -> liblibwallet.a (iOS static bridge)
+# rlib      -> integration tests / future consumers
+[lib]
+name = "libwallet"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+graphitesql = "0.0.13"
+xuid-rs = "0.1.0"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+num-bigint = "0.4"
+num-traits = "0.2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [profile.release]
 opt-level = 3

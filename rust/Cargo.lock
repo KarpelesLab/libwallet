@@ -182,12 +182,15 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "libwallet"
 version = "0.5.0"
 dependencies = [
+ "chrono",
+ "graphitesql",
+ "num-bigint",
+ "num-traits",
  "serde",
  "serde_json",
- "wltbase",
- "wltcontact",
- "wltcrash",
- "wltwallet",
+ "tempfile",
+ "uuid",
+ "xuid-rs",
 ]
 
 [[package]]
@@ -505,55 +508,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
-]
-
-[[package]]
-name = "wltbase"
-version = "0.5.0"
-dependencies = [
- "chrono",
- "graphitesql",
- "tempfile",
- "xuid-rs",
-]
-
-[[package]]
-name = "wltcontact"
-version = "0.5.0"
-dependencies = [
- "serde",
- "serde_json",
- "wltbase",
- "xuid-rs",
-]
-
-[[package]]
-name = "wltcrash"
-version = "0.5.0"
-dependencies = [
- "serde",
- "serde_json",
- "uuid",
- "wltbase",
-]
-
-[[package]]
-name = "wltobj"
-version = "0.5.0"
-dependencies = [
- "num-bigint",
- "num-traits",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "wltwallet"
-version = "0.5.0"
-dependencies = [
- "serde",
- "serde_json",
- "wltbase",
 ]
 
 [[package]]

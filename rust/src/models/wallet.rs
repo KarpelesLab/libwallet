@@ -10,7 +10,7 @@
 //! tag. The Dart client only reads Id/Wallet/Type/Key/Gen.
 
 use serde::{Deserialize, Serialize};
-use wltbase::{Env, Result, SqlValue};
+use crate::{Env, Result, SqlValue};
 
 const WALLET_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Wallet" ("Id" text, "Name" text, "Curve" text, "Protocol" text, "Threshold" integer, "Gen" integer, "Pubkey" text, "Chaincode" text, "Created" text, "Modified" text, PRIMARY KEY ("Id"));"#;
 const WALLETKEY_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "WalletKey" ("Id" text, "Wallet" text, "Type" text, "Schema" text, "Key" text, "Data" blob, "Gen" integer, PRIMARY KEY ("Id"));"#;

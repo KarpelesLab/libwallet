@@ -1,8 +1,8 @@
-use wltbase::{Env, SqlValue};
+use libwallet::{Env, SqlValue};
 
 fn seed() -> Env {
     let env = Env::init_memory().unwrap();
-    wltwallet::init(&env).unwrap();
+    libwallet::models::wallet::init(&env).unwrap();
 
     env.exec(
         r#"INSERT INTO "Wallet" ("Id","Name","Curve","Protocol","Threshold","Gen","Pubkey","Chaincode","Created","Modified") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
@@ -42,7 +42,7 @@ fn seed() -> Env {
 #[test]
 fn fetch_embeds_keys() {
     let env = seed();
-    let w = wltwallet::fetch(&env, "wlt-abc").unwrap().expect("found");
+    let w = libwallet::models::wallet::fetch(&env, "wlt-abc").unwrap().expect("found");
     assert_eq!(w.name, "Main");
     assert_eq!(w.curve, "secp256k1");
     assert_eq!(w.protocol, "dkls23");
@@ -55,7 +55,7 @@ fn fetch_embeds_keys() {
 #[test]
 fn data_is_never_serialized() {
     let env = seed();
-    let w = wltwallet::fetch(&env, "wlt-abc").unwrap().unwrap();
+    let w = libwallet::models::wallet::fetch(&env, "wlt-abc").unwrap().unwrap();
     let j = serde_json::to_value(&w).unwrap();
     assert_eq!(j["Keys"].as_array().unwrap().len(), 3);
     let k0 = &j["Keys"][0];
@@ -70,7 +70,7 @@ fn data_is_never_serialized() {
 #[test]
 fn list_returns_wallet_with_keys() {
     let env = seed();
-    let all = wltwallet::list(&env).unwrap();
+    let all = libwallet::models::wallet::list(&env).unwrap();
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].keys.len(), 3);
 }
@@ -78,5 +78,5 @@ fn list_returns_wallet_with_keys() {
 #[test]
 fn missing_wallet_is_none() {
     let env = seed();
-    assert!(wltwallet::fetch(&env, "wlt-nope").unwrap().is_none());
+    assert!(libwallet::models::wallet::fetch(&env, "wlt-nope").unwrap().is_none());
 }

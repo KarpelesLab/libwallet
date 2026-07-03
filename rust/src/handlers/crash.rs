@@ -2,19 +2,19 @@
 
 use serde_json::Value;
 
-use wltbase::Env;
+use crate::Env;
 
 use super::{ApiError, ApiResult};
 
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {
-            Some(id) => match wltcrash::fetch(env, id).map_err(ApiError::internal)? {
+            Some(id) => match crate::models::crash::fetch(env, id).map_err(ApiError::internal)? {
                 Some(c) => Ok(serde_json::to_value(c).unwrap()),
                 None => Err(ApiError::new(404, "crash not found")),
             },
             None => {
-                let list = wltcrash::list(env).map_err(ApiError::internal)?;
+                let list = crate::models::crash::list(env).map_err(ApiError::internal)?;
                 Ok(serde_json::to_value(list).unwrap())
             }
         },

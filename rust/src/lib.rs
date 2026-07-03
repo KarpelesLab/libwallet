@@ -14,10 +14,26 @@
 //!   returns them via `LibwalletFree`, which reconstructs and drops them
 //!   (same allocator on both sides).
 
+// Core infrastructure (ported from Go wltbase).
+mod db;
+mod env;
+mod error;
+// Value types (ported from Go wltobj).
+mod amount;
+mod timeid;
+// Object models (ported from the Go wlt* packages).
+pub mod models;
+// FFI boundary + request dispatch.
 mod dispatch;
 mod handle;
 mod handlers;
 mod response;
+
+pub use amount::{Amount, AmountError};
+pub use db::{now_rfc3339, SqlValue};
+pub use env::Env;
+pub use error::{Error, Result};
+pub use timeid::{ParseTimeIdError, TimeId};
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -27,7 +43,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use handle::Handle;
-use wltbase::Env;
 
 /// `void (*)(const char* response_json, uintptr_t user_data)`
 pub type ResponseCallback = unsafe extern "C" fn(response_json: *const c_char, user_data: usize);
@@ -43,7 +58,9 @@ fn get_handle(h: usize) -> Option<Arc<Handle>> {
 }
 
 /// Read a C string into an owned Rust String. Returns Err on null / non-UTF8.
-unsafe fn cstr_to_string(ptr: *const c_char) -> Result<String, String> {
+/// (Uses std Result explicitly — the crate root re-exports the wltbase Result
+/// alias, which would otherwise shadow it here.)
+unsafe fn cstr_to_string(ptr: *const c_char) -> std::result::Result<String, String> {
     if ptr.is_null() {
         return Err("null pointer".into());
     }

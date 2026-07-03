@@ -3,10 +3,10 @@
 //! Establishes the object-model pattern reused by the other CRUD packages:
 //! a serde struct whose field renames match the Go JSON keys, a table DDL
 //! matching the psql schema, and fetch/list/create functions over the generic
-//! [`wltbase::Env`] query layer.
+//! [`crate::Env`] query layer.
 
 use serde::{Deserialize, Serialize};
-use wltbase::{Env, Result, SqlValue};
+use crate::{Env, Result, SqlValue};
 use xuid::Xuid;
 
 /// Table DDL, matching the Go psql `Contact` schema (column names = Go field
@@ -62,7 +62,7 @@ pub fn list(env: &Env) -> Result<Vec<Contact>> {
 pub fn create(env: &Env, mut c: Contact) -> Result<Contact> {
     validate_type(&c.kind)?;
     c.id = Xuid::new(ID_PREFIX).to_string();
-    let now = wltbase::now_rfc3339();
+    let now = crate::now_rfc3339();
     c.created = now.clone();
     c.updated = now;
 
@@ -89,7 +89,7 @@ pub fn create(env: &Env, mut c: Contact) -> Result<Contact> {
 fn validate_type(kind: &str) -> Result<()> {
     match kind {
         "ethereum" | "bitcoin" | "solana" => Ok(()),
-        other => Err(wltbase::Error::Env(format!("unsupported contact type {other}"))),
+        other => Err(crate::Error::Env(format!("unsupported contact type {other}"))),
     }
 }
 

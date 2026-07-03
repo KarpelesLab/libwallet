@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use wltbase::Env;
+use crate::Env;
 
 use crate::EventCallback;
 

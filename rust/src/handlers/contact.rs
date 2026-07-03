@@ -7,26 +7,26 @@
 
 use serde_json::Value;
 
-use wltbase::Env;
+use crate::Env;
 
 use super::{ApiError, ApiResult};
 
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {
-            Some(id) => match wltcontact::fetch(env, id).map_err(ApiError::internal)? {
+            Some(id) => match crate::models::contact::fetch(env, id).map_err(ApiError::internal)? {
                 Some(c) => Ok(serde_json::to_value(c).unwrap()),
                 None => Err(ApiError::new(404, "contact not found")),
             },
             None => {
-                let list = wltcontact::list(env).map_err(ApiError::internal)?;
+                let list = crate::models::contact::list(env).map_err(ApiError::internal)?;
                 Ok(serde_json::to_value(list).unwrap())
             }
         },
         "POST" => {
-            let c: wltcontact::Contact =
+            let c: crate::models::contact::Contact =
                 serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
-            let created = wltcontact::create(env, c).map_err(ApiError::internal)?;
+            let created = crate::models::contact::create(env, c).map_err(ApiError::internal)?;
             Ok(serde_json::to_value(created).unwrap())
         }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Contact"))),

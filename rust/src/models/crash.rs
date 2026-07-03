@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use wltbase::{Env, Result, SqlValue};
+use crate::{Env, Result, SqlValue};
 
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Crash" ("Id" text, "Where" text, "Message" text, "Stack" text, "Created" text, PRIMARY KEY ("Id"));"#;
 const COLS: &str = r#""Id", "Where", "Message", "Stack", "Created""#;
@@ -43,7 +43,7 @@ pub fn list(env: &Env) -> Result<Vec<Crash>> {
 /// Record a crash and return its id. Called when a panic is caught.
 pub fn log(env: &Env, where_: &str, message: &str, stack: &str) -> Result<String> {
     let id = Uuid::new_v4().to_string();
-    let created = wltbase::now_rfc3339();
+    let created = crate::now_rfc3339();
     let sql = format!(r#"INSERT INTO "Crash" ({COLS}) VALUES (?1, ?2, ?3, ?4, ?5)"#);
     env.exec(
         &sql,

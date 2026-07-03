@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use wltbase::Env;
+use libwallet::Env;
 
 #[test]
 fn config_roundtrip() {
@@ -63,7 +63,7 @@ fn current_created_is_preserved_across_updates() {
 /// dir so the committed fixture is never mutated.
 #[test]
 fn opens_existing_go_database() {
-    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../../wlttest/test/sql.db");
+    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../wlttest/test/sql.db");
     let src = std::path::Path::new(fixture);
     assert!(src.exists(), "fixture present at {fixture}");
 
