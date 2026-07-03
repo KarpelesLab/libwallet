@@ -32,6 +32,11 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
             let w = crate::models::wallet::create(env, &req.name, &req.curve, &req.keys)
                 .map_err(ApiError::internal)?;
+            // Notify the host (balance poller / UI) that a wallet appeared.
+            env.broadcast(&crate::response::event(
+                "wallet:created",
+                serde_json::json!({ "id": w.id, "curve": w.curve }),
+            ));
             Ok(serde_json::to_value(w).unwrap())
         }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Wallet"))),

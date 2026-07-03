@@ -10,7 +10,8 @@ use std::sync::mpsc::{channel, Sender};
 use std::time::Duration;
 
 use libwallet::{
-    LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest, ResponseCallback,
+    EventCallback, LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest,
+    LibwalletSetEventCallback, ResponseCallback,
 };
 
 /// C callback: copy the JSON out, free the library string, forward the copy
@@ -413,6 +414,42 @@ fn solana_sign_and_send_via_ffi() {
     );
     assert_eq!(sent["result"], "success", "solana signAndSend failed: {sent:?}");
     assert_eq!(sent["data"]["signature"], "soLtxSignature123");
+    LibwalletDestroy(h);
+}
+
+extern "C" fn capture_event(json: *const c_char, user_data: usize) {
+    let s = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
+    LibwalletFree(json as *mut c_char);
+    let tx = unsafe { &*(user_data as *const Sender<String>) };
+    let _ = tx.send(s);
+}
+
+#[test]
+fn event_bridge_delivers_wallet_created() {
+    let h = new_env();
+
+    // Register an event callback that forwards events over a channel.
+    let (tx, rx) = channel::<String>();
+    let ud = Box::into_raw(Box::new(tx)) as usize;
+    let cb: EventCallback = capture_event;
+    LibwalletSetEventCallback(h, Some(cb), ud);
+
+    // Creating a wallet broadcasts a "wallet:created" event.
+    let _ = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+
+    let event = rx.recv_timeout(Duration::from_secs(5)).expect("event delivered");
+    let j: serde_json::Value = serde_json::from_str(&event).unwrap();
+    assert_eq!(j["result"], "event");
+    assert_eq!(j["event"], "wallet:created");
+    assert!(j["data"]["id"].as_str().unwrap().starts_with("wlt-"));
+
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
     LibwalletDestroy(h);
 }
 

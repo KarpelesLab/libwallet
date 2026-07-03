@@ -182,6 +182,19 @@ pub extern "C" fn LibwalletSetEventCallback(h: usize, cb: Option<EventCallback>,
             return;
         }
         *handle.event_cb.lock().unwrap() = cb.map(|c| (c, user_data));
+
+        // Wire the env broadcast sink to the C event callback: env.broadcast()
+        // from any handler forwards the event JSON to the host.
+        let sink: Option<Box<dyn Fn(&str) + Send + Sync>> = cb.map(|c| {
+            let ud = user_data;
+            Box::new(move |json: &str| {
+                let cstr = CString::new(json)
+                    .unwrap_or_else(|_| CString::new(r#"{"result":"event"}"#).unwrap());
+                let ptr = cstr.into_raw();
+                unsafe { c(ptr, ud) };
+            }) as Box<dyn Fn(&str) + Send + Sync>
+        });
+        handle.env.set_event_sink(sink);
     }));
 }
 
@@ -201,6 +214,7 @@ pub extern "C" fn LibwalletDestroy(h: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let handle = REGISTRY.lock().unwrap().remove(&h);
         if let Some(handle) = handle {
+            handle.env.set_event_sink(None);
             handle.shutdown_and_wait();
         }
     }));

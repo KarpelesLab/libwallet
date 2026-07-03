@@ -4,14 +4,20 @@
 //! emitter hub, balance poller and asset cache land in later phases.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::db::{Db, SqlValue};
 use crate::error::{Error, Result};
 
+/// A host event sink — receives server-pushed event JSON (the Rust analogue of
+/// Go's BroadcastJson → event FD → host callback).
+pub type EventSink = Box<dyn Fn(&str) + Send + Sync>;
+
 pub struct Env {
     pub data_dir: PathBuf,
     db: Db,
+    event_sink: Mutex<Option<EventSink>>,
 }
 
 impl Env {
@@ -30,16 +36,29 @@ impl Env {
             .ok_or_else(|| Error::Env(format!("non-UTF8 data path: {dir:?}")))?;
         let db = Db::open(sql_path)?;
 
-        let env = Env { data_dir: dir, db };
+        let env = Env { data_dir: dir, db, event_sink: Mutex::new(None) };
         env.init_config()?;
         Ok(env)
     }
 
     /// In-memory environment for tests (mirrors Go `InitTempEnv`).
     pub fn init_memory() -> Result<Env> {
-        let env = Env { data_dir: PathBuf::new(), db: Db::open_memory()? };
+        let env = Env { data_dir: PathBuf::new(), db: Db::open_memory()?, event_sink: Mutex::new(None) };
         env.init_config()?;
         Ok(env)
+    }
+
+    /// Register (or, with None, clear) the host event sink.
+    pub fn set_event_sink(&self, sink: Option<EventSink>) {
+        *self.event_sink.lock().unwrap() = sink;
+    }
+
+    /// Push a server-side event JSON to the host, if a sink is registered.
+    /// Mirrors Go apirouter.BroadcastJson.
+    pub fn broadcast(&self, event_json: &str) {
+        if let Some(sink) = self.event_sink.lock().unwrap().as_ref() {
+            sink(event_json);
+        }
     }
 
     /// Seed `version` and `first_run` on first launch, exactly as the Go env
