@@ -270,6 +270,19 @@ pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
     Ok(out)
 }
 
+/// The maximum sendable satoshi for `xpub`: sum all UTXOs and subtract the fee
+/// to spend them all into a single output (Go `maxSendableBitcoin`, one output,
+/// no change). Returns `(total, fee, max)` in satoshi.
+pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u64, u64)> {
+    let utxos = list_utxos(rpc, xpub)?;
+    let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
+    // Convert discovered UTXOs to the vsize estimator's shape.
+    let inputs: Vec<DiscoveredUtxo> = utxos;
+    let fee = estimate_vsize(&inputs, 1) * fee_rate; // one recipient, no change
+    let max = total.saturating_sub(fee);
+    Ok((total, fee, max))
+}
+
 /// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
 /// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
 pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {

@@ -378,6 +378,21 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
                 "max": amt(max),
             }))
         }
+        "bitcoin" => {
+            // max = sum(UTXOs) − fee to spend them all into one output.
+            let xpub = account.xpub().map_err(ApiError::internal)?;
+            let fee_rate = params.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
+            let (total, fee, max) =
+                crate::bitcoin::max_sendable_sats(&rpc, &xpub, fee_rate).map_err(ApiError::internal)?;
+            let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), 8);
+            Ok(serde_json::json!({
+                "chain": "bitcoin",
+                "balance": amt(total),
+                "fee": amt(fee),
+                "max": amt(max),
+                "bitcoinFeeRate": fee_rate,
+            }))
+        }
         other => Err(ApiError::new(400, format!("maxSendable not supported for {other}"))),
     }
 }

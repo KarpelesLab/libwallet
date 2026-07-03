@@ -6,8 +6,8 @@ use std::net::TcpListener;
 use std::thread;
 
 use libwallet::bitcoin::{
-    address_formats, hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount,
-    scan_chain,
+    address_formats, hd_address, list_utxos, max_sendable_sats, native_balance_satoshi,
+    next_address, parse_btc_amount, scan_chain,
 };
 use serde_json::json;
 
@@ -65,6 +65,22 @@ fn native_balance_sums_only_native_assets() {
     );
     let sats = native_balance_satoshi(&url, "bc1qexampleaddr").unwrap();
     assert_eq!(sats, 500_000 + 123);
+}
+
+#[test]
+fn max_sendable_subtracts_fee_for_all_inputs() {
+    // Two p2wpkh UTXOs (68 vB each). vsize = 11 + 1*31 + 2*68 = 178.
+    // fee @ 5 sat/vB = 890. total = 100000 + 50000 = 150000. max = 149110.
+    let url = mock(
+        r#"{"assets":[{"asset":"NATIVE","txo":[
+            {"txo":"aa:0","amt":"0.00100000","path":"m/0/0","script":"p2wpkh"},
+            {"txo":"bb:1","amt":"0.00050000","path":"m/0/1","script":"p2wpkh"}
+        ]}]}"#,
+    );
+    let (total, fee, max) = max_sendable_sats(&url, "xpub", 5).unwrap();
+    assert_eq!(total, 150_000);
+    assert_eq!(fee, 178 * 5);
+    assert_eq!(max, 150_000 - 178 * 5);
 }
 
 #[test]
