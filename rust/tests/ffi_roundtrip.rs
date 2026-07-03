@@ -186,6 +186,45 @@ fn wallet_create_then_list_via_ffi() {
 }
 
 #[test]
+fn full_flow_create_wallet_account_and_sign_message() {
+    let h = new_env();
+    // 1. Create wallet.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk0 = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let wk1 = w["data"]["Keys"][1]["Id"].as_str().unwrap().to_string();
+
+    // 2. Create account.
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // 3. Sign a message ("hello" = base64 aGVsbG8=) with two password shares.
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{wk0}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{wk1}","Key":"passwordtwo"}}]}}}}"#
+        ),
+    );
+    assert_eq!(signed["result"], "success", "signMessage failed: {signed:?}");
+    let sig = signed["data"]["signature"].as_str().unwrap();
+    // base58 Ed25519 signature (~88 chars for 64 bytes).
+    assert!(sig.len() > 80, "signature looks too short: {sig}");
+    assert!(!sig.contains(['0', 'O', 'I', 'l']));
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

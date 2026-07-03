@@ -63,6 +63,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
         "Account" => account::route(&handle.env, verb, params),
+        "Account:signMessage" => account::sign_message(&handle.env, params),
         "Asset" => asset::route(&handle.env, verb, params),
         "Network" => network::route(&handle.env, verb, params),
         "Token" => token::route(&handle.env, verb, params),
