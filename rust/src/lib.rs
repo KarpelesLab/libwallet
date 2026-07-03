@@ -43,6 +43,8 @@ pub mod quote;
 pub mod coininfo;
 // Token-swap quotes via the OKX DEX proxy (wltswap).
 pub mod swap;
+// WalletConnect v2 envelope crypto + pairing URI (wltwc).
+pub mod walletconnect;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).
