@@ -9,12 +9,14 @@
 //! WalletKey layer's concern and lands with the TSS work; the two schemes that
 //! reduce to a local keypair — StoreKey and Password — are supported here.
 
+use base64::Engine;
 use bottlers::{Bottle, Keychain, Opener, PrivateKey, PublicKey};
 use purecrypto::ec::Ed25519PrivateKey;
 
 #[derive(Debug)]
 pub enum KeystoreError {
     PasswordTooShort,
+    Decode(String),
     Bottle(bottlers::BottleError),
 }
 
@@ -22,6 +24,7 @@ impl std::fmt::Display for KeystoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             KeystoreError::PasswordTooShort => write!(f, "password is too short"),
+            KeystoreError::Decode(s) => write!(f, "decode error: {s}"),
             KeystoreError::Bottle(e) => write!(f, "bottle error: {e:?}"),
         }
     }
@@ -51,6 +54,22 @@ pub fn password_to_ed25519(password: &str, salt: &[u8]) -> Result<PrivateKey, Ke
     let mut seed = [0u8; 32];
     pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password.as_bytes(), salt, 4096, &mut seed);
     Ok(ed25519_from_seed(seed))
+}
+
+/// Parse a StoreKey recipient: a base64url (no-pad) PKIX/DER SubjectPublicKeyInfo
+/// (as Go stores in `WalletKey.Key`) into a bottlers public key.
+pub fn public_key_from_pkix_b64(b64: &str) -> Result<PublicKey, KeystoreError> {
+    let der = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(b64)
+        .map_err(|e| KeystoreError::Decode(e.to_string()))?;
+    bottlers::pkix::parse_public_key(&der).map_err(KeystoreError::Bottle)
+}
+
+/// The base64url (no-pad) PKIX encoding of a public key — the value stored in
+/// `WalletKey.Key` for StoreKey/Password shares.
+pub fn public_key_to_pkix_b64(key: &PublicKey) -> Result<String, KeystoreError> {
+    let der = bottlers::pkix::marshal_public_key(key).map_err(KeystoreError::Bottle)?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(der))
 }
 
 /// Encrypt `payload` to `recipients` and CBOR-encode it (the WalletKey.Data
