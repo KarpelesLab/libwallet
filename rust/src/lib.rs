@@ -23,6 +23,8 @@ mod amount;
 mod timeid;
 // Key-share storage crypto (bottlers/purecrypto).
 pub mod keystore;
+// Threshold-signature ceremonies (tsslib).
+pub mod tss;
 // Object models (ported from the Go wlt* packages).
 pub mod models;
 // FFI boundary + request dispatch.
