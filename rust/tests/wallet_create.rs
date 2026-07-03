@@ -93,8 +93,24 @@ fn create_rejects_too_few_keys() {
 }
 
 #[test]
-fn secp256k1_create_not_yet_supported() {
+fn create_secp256k1_dkls_wallet_persists() {
     let env = env();
     let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
-    assert!(wallet::create(&env, "x", "secp256k1", &kds).is_err());
+    let w = wallet::create(&env, "EVM Wallet", "secp256k1", &kds).unwrap();
+
+    assert_eq!(w.curve, "secp256k1");
+    assert_eq!(w.protocol, "dkls23");
+    assert_eq!(w.threshold, 1);
+    assert_eq!(w.keys.len(), 3);
+    // 33-byte SEC1-compressed secp256k1 pubkey -> 44 base64url chars.
+    assert_eq!(w.pubkey.len(), 44);
+    for k in &w.keys {
+        assert_eq!(k.schema, "dkls23");
+        assert!(!k.data.is_empty());
+    }
+
+    let got = wallet::fetch(&env, &w.id).unwrap().expect("found");
+    assert_eq!(got.pubkey, w.pubkey);
+    assert_eq!(got.protocol, "dkls23");
+    assert_eq!(got.keys.len(), 3);
 }

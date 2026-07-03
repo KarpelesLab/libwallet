@@ -117,11 +117,6 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     if key_descs.len() < 3 {
         return Err(Error::Env(format!("need at least 3 keys, got {}", key_descs.len())));
     }
-    match curve {
-        "" | "ed25519" => {}
-        "secp256k1" => return Err(Error::Env("secp256k1 (DKLs23) create not yet ported".into())),
-        other => return Err(Error::Env(format!("unsupported curve {other:?}"))),
-    }
     let threshold: usize = 1;
     let n = key_descs.len();
     if threshold >= n {
@@ -133,10 +128,27 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     let wk_ids: Vec<Xuid> = (0..n).map(|_| Xuid::new("wkey")).collect();
     let party_keys: Vec<Vec<u8>> = wk_ids.iter().map(|x| x.uuid().as_bytes().to_vec()).collect();
 
-    let shares = frost_keygen_with_parties(party_keys, threshold)
-        .map_err(|e| Error::Env(format!("keygen failed: {e}")))?;
+    // Keygen per curve: FROST (ed25519) or DKLs23 (secp256k1). Both yield, for
+    // each party key, that share's Go-compatible JSON, plus the group pubkey.
+    let (pubkey, protocol, curve_out, shares): (String, &str, &str, Vec<(Vec<u8>, String)>) =
+        match curve {
+            "" | "ed25519" => {
+                let ks = frost_keygen_with_parties(party_keys, threshold)
+                    .map_err(|e| Error::Env(format!("frost keygen: {e}")))?;
+                let pk = b64url(&frost_group_pubkey(&ks[0].1));
+                let shares = shares_json(ks, |k| k.to_json().map_err(|e| format!("{e:?}")))?;
+                (pk, "frost", "ed25519", shares)
+            }
+            "secp256k1" => {
+                let ks = crate::tss::dkls_keygen_local(party_keys, threshold)
+                    .map_err(|e| Error::Env(format!("dkls keygen: {e}")))?;
+                let pk = b64url(&crate::tss::dkls_group_pubkey(&ks[0].1).map_err(|e| Error::Env(e.to_string()))?);
+                let shares = shares_json(ks, |k| k.to_json().map_err(|e| format!("{e:?}")))?;
+                (pk, "dkls23", "secp256k1", shares)
+            }
+            other => return Err(Error::Env(format!("unsupported curve {other:?}"))),
+        };
 
-    let pubkey = b64url(&frost_group_pubkey(&shares[0].1));
     let mut cc = Uuid::new_v4().into_bytes().to_vec();
     cc.extend_from_slice(&Uuid::new_v4().into_bytes());
     let chaincode = b64url(&cc);
@@ -146,12 +158,11 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     for (i, kd) in key_descs.iter().enumerate() {
         let uuid = wk_ids[i].uuid();
         let uuid_bytes = uuid.as_bytes();
-        let key = shares
+        let json = shares
             .iter()
-            .find(|(p, _)| p.key.as_slice() == uuid_bytes.as_slice())
-            .map(|(_, k)| k)
+            .find(|(pk, _)| pk.as_slice() == uuid_bytes.as_slice())
+            .map(|(_, j)| j.clone())
             .ok_or_else(|| Error::Env("share/party mismatch".into()))?;
-        let json = key.to_json().map_err(|e| Error::Env(format!("key json: {e:?}")))?;
 
         let (data, key_field) = match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
             Recipient::Encrypt(pk) => {
@@ -172,7 +183,7 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
             id: wk_ids[i].to_string(),
             wallet: wallet_id.clone(),
             kind: kd.kind.clone(),
-            schema: "frost".into(),
+            schema: protocol.into(),
             key: key_field,
             data,
             generation: 1,
@@ -182,8 +193,8 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     let wallet = Wallet {
         id: wallet_id,
         name: name.to_owned(),
-        curve: "ed25519".into(),
-        protocol: "frost".into(),
+        curve: curve_out.into(),
+        protocol: protocol.into(),
         threshold: threshold as i64,
         generation: 0,
         pubkey,
@@ -231,6 +242,17 @@ fn persist(env: &Env, w: &Wallet) -> Result<()> {
 
 fn b64url(b: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
+}
+
+/// Turn a keygen result into `(party_key_bytes, share_json)` pairs, so the
+/// encrypt/persist loop is shared across protocols.
+fn shares_json<K>(
+    ks: Vec<(PartyId, K)>,
+    to_json: impl Fn(&K) -> std::result::Result<String, String>,
+) -> Result<Vec<(Vec<u8>, String)>> {
+    ks.into_iter()
+        .map(|(p, k)| to_json(&k).map(|j| (p.key, j)).map_err(Error::Env))
+        .collect()
 }
 
 fn b64url_decode(s: &str) -> Result<Vec<u8>> {

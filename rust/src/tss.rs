@@ -168,6 +168,36 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// Generate a threshold DKLs23 (secp256k1 / ECDSA) key locally. Unlike FROST,
+/// tsslib's DKLs keygen is a synchronous local function (no broker), so the
+/// whole DKG runs in one call. Party keys are the WalletKey UUIDs, as in
+/// [`frost_keygen_with_parties`]. Returns each share paired with its party id.
+pub fn dkls_keygen_local(
+    party_keys: Vec<Vec<u8>>,
+    threshold: usize,
+) -> Result<Vec<(PartyId, tsslib::dklstss::Key)>, TssError> {
+    let n = party_keys.len();
+    if n == 0 || threshold >= n {
+        return Err(TssError(format!("invalid n={n}, threshold={threshold}")));
+    }
+    let ids: Vec<PartyId> =
+        party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect();
+    let sorted = PartyId::sort(ids, 0);
+    let mut rng = purecrypto::rng::OsRng;
+    let keys = tsslib::dklstss::keygen(n, threshold, &sorted, &mut rng)
+        .map_err(|e| TssError(format!("dkls keygen: {e:?}")))?;
+    Ok(sorted.into_iter().zip(keys).collect())
+}
+
+/// The wallet's group public key as the 33-byte SEC1-compressed secp256k1
+/// encoding (Wallet.Pubkey for secp256k1 wallets).
+pub fn dkls_group_pubkey(key: &tsslib::dklstss::Key) -> Result<[u8; 33], TssError> {
+    key.ecdsa_pub
+        .to_affine()
+        .map(|a| a.to_sec1_compressed())
+        .ok_or_else(|| TssError("group key is the identity point".into()))
+}
+
 /// The wallet's group public key as the 32-byte compressed Ed25519 encoding
 /// (RFC 8032). This is `Wallet.Pubkey` (before base64url) and matches Go
 /// `GroupPublicKey.ToEd25519PubKey().Serialize()`. Any share carries it.
