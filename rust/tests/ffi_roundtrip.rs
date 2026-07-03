@@ -327,6 +327,34 @@ fn evm_sign_and_send_via_ffi() {
 }
 
 #[test]
+fn account_balance_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // Mock node reports 1 ETH (0xde0b6b3a7640000 wei).
+    let rpc = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}"#);
+    let bal = request(
+        h,
+        &format!(r#"{{"path":"Account:balance","params":{{"Id":"{account_id}","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(bal["result"], "success", "balance failed: {bal:?}");
+    assert_eq!(bal["data"]["balance"], "1000000000000000000");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

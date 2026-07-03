@@ -107,6 +107,37 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "hash": hash, "raw": raw }))
 }
 
+/// `Account:balance` — the account's native balance via the node RPC. For an
+/// ethereum account this is eth_getBalance (wei); solana uses getBalance
+/// (lamports). Returned as a decimal string.
+pub fn balance(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let rpc = params
+        .get("RPC")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+
+    let bal = match account.kind.as_str() {
+        "ethereum" => crate::rpc::eth_get_balance(rpc, &account.address).map_err(ApiError::internal)?,
+        "solana" => {
+            let res = crate::rpc::call(rpc, "getBalance", serde_json::json!([account.address]))
+                .map_err(ApiError::internal)?;
+            res.get("value")
+                .and_then(Value::as_u64)
+                .map(|v| v.to_string())
+                .ok_or_else(|| ApiError::new(502, "unexpected getBalance response"))?
+        }
+        other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
+    };
+    Ok(serde_json::json!({ "address": account.address, "balance": bal }))
+}
+
 fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if s.len() % 2 != 0 {

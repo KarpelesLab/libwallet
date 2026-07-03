@@ -68,6 +68,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
         "Account:signAndSendTransaction" => account::sign_and_send_transaction(&handle.env, params),
         "Name:resolve" => names::resolve(&handle.env, params),
+        "Account:balance" => account::balance(&handle.env, params),
         "Asset" => asset::route(&handle.env, verb, params),
         "Network" => network::route(&handle.env, verb, params),
         "Token" => token::route(&handle.env, verb, params),
