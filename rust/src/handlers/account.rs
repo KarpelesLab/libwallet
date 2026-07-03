@@ -101,10 +101,67 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
         .get("RPC")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "RPC endpoint required"))?;
-    let signed = sign_transaction(env, params)?;
-    let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
-    let hash = crate::rpc::eth_send_raw_transaction(rpc_url, raw).map_err(ApiError::internal)?;
-    Ok(serde_json::json!({ "hash": hash, "raw": raw }))
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+
+    match account.kind.as_str() {
+        "ethereum" => {
+            let signed = sign_transaction(env, params)?;
+            let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
+            let hash = crate::rpc::eth_send_raw_transaction(rpc_url, raw).map_err(ApiError::internal)?;
+            Ok(serde_json::json!({ "hash": hash, "raw": raw }))
+        }
+        "solana" => solana_send(env, rpc_url, &account, params),
+        other => Err(ApiError::new(400, format!("signAndSend not supported for {other}"))),
+    }
+}
+
+/// Build, FROST-sign, and broadcast a Solana transfer: fetch a recent
+/// blockhash, serialize the transfer, sign, assemble, base58-encode, and
+/// sendTransaction. Returns the transaction signature.
+fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let to_b58 = tx.get("to").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "to required"))?;
+    let lamports: u64 = tx.get("value").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // Recent blockhash from the node.
+    let bh = crate::rpc::call(rpc, "getLatestBlockhash", serde_json::json!([])).map_err(ApiError::internal)?;
+    let bh_b58 = bh
+        .get("value")
+        .and_then(|v| v.get("blockhash"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(502, "no blockhash in response"))?;
+    let blockhash = b58_32(bh_b58)?;
+    let from = crate::solana::pubkey_from_b64url(&account.pubkey)
+        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+    let to = b58_32(to_b58)?;
+
+    let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
+    let keys: Vec<crate::sign::KeyDescription> =
+        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    let unlock: Vec<(String, String)> =
+        keys.iter().filter(|k| k.kind == "Password").map(|k| (k.id.clone(), k.key.clone())).collect();
+    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+        .map_err(ApiError::internal)?;
+
+    let tx_bytes = crate::solana::assemble_tx(&msg, &sig);
+    let tx_b58 = bs58::encode(&tx_bytes).into_string();
+    let signature = crate::rpc::call(rpc, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))
+        .map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
+}
+
+fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
+    bs58::decode(s)
+        .into_vec()
+        .ok()
+        .and_then(|v| v.try_into().ok())
+        .ok_or_else(|| ApiError::new(400, format!("bad base58 32-byte value: {s}")))
 }
 
 /// `Account:balance` — the account's native balance via the node RPC. For an
