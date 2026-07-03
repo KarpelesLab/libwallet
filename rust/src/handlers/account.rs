@@ -281,6 +281,28 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
 }
 
+/// `Account:tokenBalance` — the ERC-20 balance of an EVM account for a token
+/// contract, via eth_call balanceOf. {Token, RPC?} — decimal string base units.
+pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let token = params
+        .get("Token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Token (contract address) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "ethereum" {
+        return Err(ApiError::new(400, "tokenBalance is EVM-only"));
+    }
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let bal = crate::erc20::balance_of(&rpc, token, &account.address).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "token": token, "owner": account.address, "balance": bal.to_string() }))
+}
+
 /// `Account:xpub` — the BIP-32 extended public key for a bitcoin/ethereum
 /// account (Go `Account:xpub`). Used for gap-limit UTXO/history discovery.
 pub fn xpub(env: &Env, params: &Value) -> ApiResult {

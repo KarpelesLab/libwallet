@@ -45,6 +45,8 @@ pub mod coininfo;
 pub mod swap;
 // WalletConnect v2 envelope crypto + pairing URI (wltwc).
 pub mod walletconnect;
+// ERC-20 read calls (balanceOf / allowance).
+pub mod erc20;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).
