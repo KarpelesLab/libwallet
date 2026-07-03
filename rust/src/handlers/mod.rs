@@ -89,6 +89,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Swap:countryAvailability" => swap::country_availability(&handle.env, params),
         "Account:balance" => account::balance(&handle.env, params),
         "Account:tokenBalance" => account::token_balance(&handle.env, params),
+        "Account:maxSendable" => account::max_sendable(&handle.env, params),
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
         "Account:nextAddress" => account::next_address(&handle.env, params),

@@ -301,6 +301,48 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
 }
 
+/// `Account:maxSendable` — the maximum native amount an EVM account can send:
+/// balance − (21000 × gasPrice) reserved for the fee (Go maxSendableEVM, legacy
+/// fee path). {RPC?} — returns {chain, balance, fee, max} as amounts.
+pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
+    use num_bigint::BigInt;
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "ethereum" {
+        return Err(ApiError::new(400, "maxSendable is EVM-only here"));
+    }
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+
+    // balance (wei) and gasPrice.
+    let bal_dec = crate::rpc::eth_get_balance(&rpc, &account.address).map_err(ApiError::internal)?;
+    let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+    let gp_hex = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+    let gp_hex = gp_hex.as_str().unwrap_or("0x0");
+    let gas_price = BigInt::parse_bytes(gp_hex.strip_prefix("0x").unwrap_or(gp_hex).as_bytes(), 16)
+        .unwrap_or_else(|| BigInt::from(0));
+    let fee = BigInt::from(21000) * &gas_price;
+    let max = if balance <= fee { BigInt::from(0) } else { &balance - &fee };
+
+    // Decimals from the current network (default 18).
+    let decimals = crate::models::network::fetch(env, "@")
+        .ok()
+        .flatten()
+        .map(|n| n.native_decimals())
+        .unwrap_or(18);
+    let amt = |v: BigInt| crate::Amount::new_raw(v, decimals);
+    Ok(serde_json::json!({
+        "chain": "evm",
+        "balance": amt(balance),
+        "fee": amt(fee),
+        "max": amt(max),
+    }))
+}
+
 /// `Account:tokenBalance` — the ERC-20 balance of an EVM account for a token
 /// contract, via eth_call balanceOf. {Token, RPC?} — decimal string base units.
 pub fn token_balance(env: &Env, params: &Value) -> ApiResult {

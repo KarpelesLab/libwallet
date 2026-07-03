@@ -444,6 +444,41 @@ fn bitcoin_balance_via_ffi() {
 }
 
 #[test]
+fn max_sendable_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // balance = 1 ETH (0xde0b6b3a7640000 wei); gasPrice = 20 gwei
+    // (0x4a817c800). fee = 21000 * 20e9 = 4.2e14 wei; max = 1e18 - 4.2e14.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
+    ]);
+    let resp = request(
+        h,
+        &format!(r#"{{"path":"Account:maxSendable","params":{{"Id":"{account_id}","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"]["chain"], "evm");
+    assert_eq!(resp["data"]["balance"]["v"], "1000000000000000000");
+    assert_eq!(resp["data"]["fee"]["v"], "420000000000000"); // 21000 * 20e9
+    assert_eq!(resp["data"]["max"]["v"], "999580000000000000"); // 1e18 - fee
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn solana_balance_subtracts_rent_via_ffi() {
     let h = new_env();
     let w = request(
