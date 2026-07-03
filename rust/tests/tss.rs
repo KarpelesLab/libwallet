@@ -73,6 +73,25 @@ fn frost_signature_verifies_as_standard_ed25519() {
 }
 
 #[test]
+fn dkls_keygen_then_sign() {
+    // DKLs23 (secp256k1 / ECDSA), party-keyed by UUIDs.
+    let uuids: Vec<Vec<u8>> = vec![vec![0x11; 16], vec![0x22; 16], vec![0x33; 16]];
+    let shares = libwallet::tss::dkls_keygen_local(uuids, 1).unwrap();
+    assert_eq!(shares.len(), 3);
+    // 33-byte compressed group pubkey.
+    let pk = libwallet::tss::dkls_group_pubkey(&shares[0].1).unwrap();
+    assert_eq!(pk.len(), 33);
+    assert!(pk[0] == 0x02 || pk[0] == 0x03);
+
+    let keys: Vec<_> = shares.iter().map(|(_, k)| k.clone()).collect();
+    let hash = [0x9au8; 32]; // a 32-byte message digest
+    let (r, s, v) = libwallet::tss::dkls_sign_local(&keys, 1, &hash).unwrap();
+    assert_eq!(r.len(), 32);
+    assert_eq!(s.len(), 32);
+    assert!(v <= 1);
+}
+
+#[test]
 fn too_small_committee_rejected() {
     let shares = frost_keygen_local(3, 1).unwrap();
     // threshold+1 = 2 required; one share is not enough.

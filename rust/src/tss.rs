@@ -189,6 +189,30 @@ pub fn dkls_keygen_local(
     Ok(sorted.into_iter().zip(keys).collect())
 }
 
+/// Sign a 32-byte message `hash` with DKLs23 threshold ECDSA. `sorted_keys`
+/// must be the full key set in keygen (sorted) order; the first `threshold + 1`
+/// parties form the signing committee. Returns `(r, s, v)` — the ECDSA scalars
+/// (32 bytes each, big-endian) plus the recovery parity. `dklstss::sign` is
+/// synchronous (no broker), like keygen.
+pub fn dkls_sign_local(
+    sorted_keys: &[tsslib::dklstss::Key],
+    threshold: usize,
+    hash: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8), TssError> {
+    if sorted_keys.len() < threshold + 1 {
+        return Err(TssError(format!(
+            "need at least {} keys, got {}",
+            threshold + 1,
+            sorted_keys.len()
+        )));
+    }
+    let signer_idx: Vec<usize> = (0..=threshold).collect();
+    let mut rng = purecrypto::rng::OsRng;
+    let sig = tsslib::dklstss::sign(sorted_keys, &signer_idx, hash, &mut rng)
+        .map_err(|e| TssError(format!("dkls sign: {e:?}")))?;
+    Ok((sig.r, sig.s, sig.v))
+}
+
 /// The wallet's group public key as the 33-byte SEC1-compressed secp256k1
 /// encoding (Wallet.Pubkey for secp256k1 wallets).
 pub fn dkls_group_pubkey(key: &tsslib::dklstss::Key) -> Result<[u8; 33], TssError> {
