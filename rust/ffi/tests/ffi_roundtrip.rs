@@ -129,6 +129,19 @@ fn crash_list_empty_on_fresh_env() {
 }
 
 #[test]
+fn wallet_list_empty_and_create_501() {
+    let h = new_env();
+    let listed = request(h, r#"{"path":"Wallet","verb":"GET"}"#);
+    assert_eq!(listed["result"], "success");
+    assert_eq!(listed["data"].as_array().unwrap().len(), 0);
+
+    let created = request(h, r#"{"path":"Wallet","verb":"POST","params":{"Name":"x"}}"#);
+    assert_eq!(created["result"], "error");
+    assert_eq!(created["code"], 501);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

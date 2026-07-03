@@ -19,6 +19,7 @@ serde_json = "1"
 wltbase = { path = "../wltbase" }
 wltcontact = { path = "../wltcontact" }
 wltcrash = { path = "../wltcrash" }
+wltwallet = { path = "../wltwallet" }
 
 [dev-dependencies]
 serde_json = "1"

@@ -5,6 +5,7 @@
 mod contact;
 mod crash;
 mod info;
+mod wallet;
 
 use serde_json::Value;
 
@@ -15,6 +16,7 @@ use wltbase::Env;
 pub fn init_models(env: &Env) -> wltbase::Result<()> {
     wltcontact::init(env)?;
     wltcrash::init(env)?;
+    wltwallet::init(env)?;
     Ok(())
 }
 
@@ -47,6 +49,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Info:first_run" => info::first_run(&handle.env),
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
+        "Wallet" => wallet::route(&handle.env, verb, params),
         _ => Err(ApiError::not_found(path)),
     }
 }

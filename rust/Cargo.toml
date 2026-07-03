@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["ffi", "wltbase", "wltobj", "wltcontact", "wltcrash"]
+members = ["ffi", "wltbase", "wltobj", "wltcontact", "wltcrash", "wltwallet"]
 
 # libwallet — Rust backend port.
 #
