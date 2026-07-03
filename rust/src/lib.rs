@@ -21,6 +21,8 @@ mod error;
 // Value types (ported from Go wltobj).
 mod amount;
 mod timeid;
+// Key-share storage crypto (bottlers/purecrypto).
+pub mod keystore;
 // Object models (ported from the Go wlt* packages).
 pub mod models;
 // FFI boundary + request dispatch.

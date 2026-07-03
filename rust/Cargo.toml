@@ -30,6 +30,10 @@ num-traits = "0.2"
 uuid = { version = "1", features = ["v4"] }
 ethrpc-rs = "0.3.0"
 base64 = "0.22"
+bottlers = "0"
+purecrypto = "0"
+pbkdf2 = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
