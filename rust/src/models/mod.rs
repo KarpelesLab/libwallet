@@ -6,4 +6,5 @@ pub mod account;
 pub mod asset;
 pub mod contact;
 pub mod crash;
+pub mod network;
 pub mod wallet;
