@@ -789,6 +789,42 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn wallet_import_private_key_via_ffi() {
+    let h = new_env();
+    // Import a raw 32-byte secp256k1 key as a 1-of-1 wallet.
+    let priv_hex = "0a11111111111111111111111111111111111111111111111111111111111111";
+    let body = format!(
+        r#"{{"path":"Wallet:importPrivateKey","params":{{"Name":"Imported","Curve":"secp256k1","PrivateKey":"{priv_hex}","Keys":[{{"Type":"Password","Key":"mypassword"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "{w}");
+    assert_eq!(w["data"]["Protocol"], "dkls23");
+    assert_eq!(w["data"]["Curve"], "secp256k1");
+    assert_eq!(w["data"]["Threshold"], 0);
+    assert_eq!(w["data"]["Keys"].as_array().unwrap().len(), 1);
+    // 33-byte compressed secp pubkey -> 44 base64url chars.
+    let pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+    assert_eq!(pubkey.len(), 44);
+    // The encrypted share is stored but never serialized.
+    assert!(w["data"]["Keys"][0].get("Data").is_none());
+
+    // Import is deterministic: the same key yields the same group pubkey.
+    let w2 = request(h, &body);
+    assert_eq!(w2["data"]["Pubkey"], pubkey);
+
+    // A different key -> a different pubkey.
+    let other = format!(
+        r#"{{"path":"Wallet:importPrivateKey","params":{{"Curve":"secp256k1","PrivateKey":"0b22222222222222222222222222222222222222222222222222222222222222","Keys":[{{"Type":"Password","Key":"pw"}}]}}}}"#
+    );
+    assert_ne!(request(h, &other)["data"]["Pubkey"], pubkey);
+
+    // Bad length is rejected.
+    let bad = request(h, r#"{"path":"Wallet:importPrivateKey","params":{"Curve":"secp256k1","PrivateKey":"0x1234","Keys":[{"Type":"Password","Key":"pw"}]}}"#);
+    assert_eq!(bad["result"], "error");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn storekey_derive_password_matches_wallet_key_via_ffi() {
     let h = new_env();
     // A Password wallet stores each key's derived PKIX pubkey in WalletKey.Key;

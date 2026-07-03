@@ -207,6 +207,87 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     Ok(wallet)
 }
 
+/// Import a raw 32-byte private-key scalar as a 1-of-1 wallet (Go
+/// `Wallet:importPrivateKey`): wrap the key as a single TSS share, seal it to
+/// the one recipient, and persist. `priv_bytes` is the big-endian scalar.
+pub fn import_private_key(
+    env: &Env,
+    name: &str,
+    curve: &str,
+    priv_bytes: &[u8],
+    key_desc: &KeyDescription,
+) -> Result<Wallet> {
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_id = Xuid::new("wkey");
+    let uuid = wk_id.uuid();
+    let uuid_bytes = uuid.as_bytes();
+
+    let (pubkey, protocol, curve_out, share_json): (String, &str, &str, String) = match curve {
+        "" | "ed25519" => {
+            let (_p, key) = crate::tss::frost_import_key(priv_bytes, uuid_bytes)
+                .map_err(|e| Error::Env(format!("frost import: {e}")))?;
+            let pk = b64url(&frost_group_pubkey(&key));
+            (pk, "frost", "ed25519", key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?)
+        }
+        "secp256k1" => {
+            let arr: [u8; 32] = priv_bytes
+                .try_into()
+                .map_err(|_| Error::Env("secp256k1 private key must be 32 bytes".into()))?;
+            let (_p, key) = crate::tss::dkls_import_key(&arr, uuid_bytes)
+                .map_err(|e| Error::Env(format!("dkls import: {e}")))?;
+            let pk = b64url(&crate::tss::dkls_group_pubkey(&key).map_err(|e| Error::Env(e.to_string()))?);
+            (pk, "dkls23", "secp256k1", key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?)
+        }
+        other => return Err(Error::Env(format!("unsupported curve {other:?}"))),
+    };
+
+    let mut cc = Uuid::new_v4().into_bytes().to_vec();
+    cc.extend_from_slice(&Uuid::new_v4().into_bytes());
+    let chaincode = b64url(&cc);
+    let now = crate::now_rfc3339();
+
+    // Seal the single share to its recipient (same schemes as create).
+    let (data, key_field) = match key_desc.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
+        Recipient::Encrypt(pk) => {
+            let sealed = keystore::seal(share_json.as_bytes(), &[pk.clone()])
+                .map_err(|e| Error::Env(e.to_string()))?;
+            let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
+            (sealed, pkix)
+        }
+        Recipient::Plain => (
+            keystore::wrap_plain(share_json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?,
+            String::new(),
+        ),
+        Recipient::Remote => {
+            return Err(Error::Env("RemoteKey shares need the backend (not yet ported)".into()))
+        }
+    };
+
+    let wallet = Wallet {
+        id: wallet_id.clone(),
+        name: name.to_owned(),
+        curve: curve_out.into(),
+        protocol: protocol.into(),
+        threshold: 0,
+        generation: 0,
+        pubkey,
+        chaincode,
+        created: now.clone(),
+        modified: now,
+        keys: vec![WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet_id,
+            kind: key_desc.kind.clone(),
+            schema: protocol.into(),
+            key: key_field,
+            data,
+            generation: 1,
+        }],
+    };
+    persist(env, &wallet)?;
+    Ok(wallet)
+}
+
 fn persist(env: &Env, w: &Wallet) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "Wallet" ({WALLET_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#),

@@ -71,6 +71,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
+        "Wallet:importPrivateKey" => wallet::import_private_key(&handle.env, params),
         "Account" => account::route(&handle.env, verb, params),
         "Account:signMessage" => account::sign_message(&handle.env, params),
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
