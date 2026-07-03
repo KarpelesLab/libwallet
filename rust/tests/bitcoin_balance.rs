@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::thread;
 
 use libwallet::bitcoin::{
-    hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount,
+    hd_address, list_utxos, native_balance_satoshi, next_address, parse_btc_amount, scan_chain,
 };
 use serde_json::json;
 
@@ -112,6 +112,28 @@ fn hd_address_encodes_p2wpkh_and_p2pkh() {
     assert!(hd_address(&pk, "dogecoin").unwrap().starts_with('D'));
     // unknown chain errors.
     assert!(hd_address(&pk, "ethereum").is_err());
+}
+
+#[test]
+fn scan_chain_derives_through_next_clean() {
+    // lastI=2 -> derive indices 0,1,2 (used) + 3 (clean).
+    let url = mock(r#"{"lastI":2}"#);
+    let pk: [u8; 33] = unhex("0339a36013301597daef41fbe593a02cc513d0b55527ec2df1050e2e8ff49c85c2")
+        .try_into()
+        .unwrap();
+    let cc: [u8; 32] = unhex("873dff81c02f525623fd1fe5167eac3a55a049de3d314bb42ee227ffed37d508")
+        .try_into()
+        .unwrap();
+    let addrs = scan_chain(&url, "xpub", &pk, &cc, "bitcoin", false).unwrap();
+    assert_eq!(addrs.len(), 4); // 0..=lastI+1
+    assert_eq!(addrs[0].path, "m/0/0");
+    assert!(!addrs[0].clean);
+    assert!(!addrs[2].clean);
+    assert!(addrs[3].clean, "index past lastI is the clean one");
+    assert_eq!(addrs[3].path, "m/0/3");
+    for a in &addrs {
+        assert!(a.address.starts_with("bc1q"), "got {}", a.address);
+    }
 }
 
 #[test]

@@ -87,6 +87,46 @@ pub fn hd_address(pubkey_compressed: &[u8; 33], chain_id: &str) -> Result<String
         .map_err(|e| Error::Env(format!("address encode: {e}")))
 }
 
+/// One derived HD address on a receive/change chain (Go `scanChain` entry).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HdAddress {
+    pub index: u32,
+    pub address: String,
+    pub path: String,
+    /// True for the first unused (clean) index past the highest used one.
+    pub clean: bool,
+}
+
+/// Derive addresses `0..=lastI+1` on the receive (`change=false`) or change
+/// chain (Go `scanChain`): `modchain_lookupTxoBIP32` gives `lastI` (the highest
+/// used index), and each index is derived + encoded, the last marked `clean`.
+pub fn scan_chain(
+    rpc: &str,
+    xpub: &str,
+    account_pubkey: &[u8; 33],
+    account_chaincode: &[u8; 32],
+    chain_id: &str,
+    change: bool,
+) -> Result<Vec<HdAddress>> {
+    let chain: u32 = if change { 1 } else { 0 };
+    let base_path = format!("m/{chain}");
+    let raw = crate::rpc::call(rpc, "modchain_lookupTxoBIP32", serde_json::json!([xpub, base_path, false]))?;
+    let last_i = raw.get("lastI").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let mut out = Vec::new();
+    for i in 0..=(last_i + 1) {
+        let index = i as u32;
+        let child = crate::hdderive::derive_pub(account_pubkey, account_chaincode, &[chain, index])
+            .map_err(|e| Error::Env(e.to_string()))?;
+        out.push(HdAddress {
+            index,
+            address: hd_address(&child, chain_id)?,
+            path: format!("{base_path}/{index}"),
+            clean: i > last_i,
+        });
+    }
+    Ok(out)
+}
+
 /// The next unused HD address on the receive (`change=false`) or change chain,
 /// found via `modchain_lookupTxoBIP32` (returns the highest used index `lastI`)
 /// and derived at `m/<chain>/<lastI+1>` below the account xpub. Port of Go

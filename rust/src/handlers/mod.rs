@@ -79,6 +79,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account:xpub" => account::xpub(&handle.env, params),
         "Account:nextAddress" => account::next_address(&handle.env, params),
         "Account:utxos" => account::utxos(&handle.env, params),
+        "Account:allAddresses" => account::all_addresses(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
         "Network:testRPC" => network::test_rpc(&handle.env, params),
         "Network:resolveRPC" => network::resolve_rpc(&handle.env, params),

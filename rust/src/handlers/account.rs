@@ -270,6 +270,37 @@ pub fn xpub(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "xpub": xpub }))
 }
 
+/// `Account:allAddresses` — all used HD addresses (receive + change) plus the
+/// next clean address on each chain (Go `accountAllAddresses`).
+pub fn all_addresses(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "bitcoin" {
+        return Err(ApiError::new(400, "allAddresses is bitcoin-only"));
+    }
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+    if net.kind != "bitcoin" {
+        return Err(ApiError::new(400, format!("current network is {}, not bitcoin", net.kind)));
+    }
+    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let xpub = account.xpub().map_err(ApiError::internal)?;
+    let pubkey = decode_b64url_33(&account.pubkey)?;
+    let chaincode = decode_b64url_32(&account.chaincode)?;
+
+    let receive = crate::bitcoin::scan_chain(&rpc, &xpub, &pubkey, &chaincode, &net.chain_id, false)
+        .map_err(ApiError::internal)?;
+    let change = crate::bitcoin::scan_chain(&rpc, &xpub, &pubkey, &chaincode, &net.chain_id, true)
+        .map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "receive": receive, "change": change }))
+}
+
 /// `Account:utxos` — the account's spendable NATIVE UTXOs (Go
 /// `fetchBitcoinUTXOs`), for hosts that build/sign Bitcoin transactions.
 pub fn utxos(env: &Env, params: &Value) -> ApiResult {
