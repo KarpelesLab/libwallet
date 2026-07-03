@@ -1,0 +1,21 @@
+[package]
+name = "libwallet"
+version = "0.5.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# cdylib  -> liblibwallet.so / liblibwallet.dylib  (dlopen'd by the Dart client)
+# staticlib -> liblibwallet.a (for the iOS static bridge, LibwalletBridge.m)
+[lib]
+name = "libwallet"
+# rlib is needed so integration tests (and future workspace crates) can link
+# against the library; cdylib/staticlib are the shipped FFI artifacts.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+serde_json = "1"
