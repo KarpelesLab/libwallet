@@ -1,0 +1,51 @@
+[
+  {
+    "chainKey": "evm.137",
+    "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    "label": "Uniswap V3: SwapRouter02",
+    "kind": "router",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD",
+    "label": "Uniswap: Universal Router",
+    "kind": "router",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "label": "Uniswap: Permit2",
+    "kind": "permit2",
+    "project": "uniswap"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC",
+    "label": "OpenSea: Seaport 1.5",
+    "kind": "marketplace",
+    "project": "opensea"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0x0000000000000068F116a894984e2DB1123eB395",
+    "label": "OpenSea: Seaport 1.6",
+    "kind": "marketplace",
+    "project": "opensea"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+    "label": "Aave V3: Pool",
+    "kind": "lending_pool",
+    "project": "aave"
+  },
+  {
+    "chainKey": "evm.137",
+    "address": "0xBA12222222228d8Ba445958a75a0704d566BF2C8",
+    "label": "Balancer V2: Vault",
+    "kind": "amm_vault",
+    "project": "balancer"
+  }
+]

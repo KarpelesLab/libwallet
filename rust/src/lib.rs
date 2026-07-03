@@ -37,6 +37,8 @@ pub mod bitcoin;
 pub mod rpc;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
+// Curated contract labels (wltcontract).
+pub mod contract;
 // Threshold-signature ceremonies (tsslib).
 pub mod tss;
 // Object models (ported from the Go wlt* packages).
