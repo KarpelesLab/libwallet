@@ -34,6 +34,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::token::init(env)?;
     crate::models::nft::init(env)?;
     crate::models::transaction::init(env)?;
+    crate::models::wc_session::init(env)?;
     Ok(())
 }
 
@@ -74,6 +75,11 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Name:resolve" => names::resolve(&handle.env, params),
         "Contract:lookup" => contract::lookup(&handle.env, params),
         "Quote:get" => quote::get(&handle.env, params),
+        "Wc:listSessions" => {
+            let list = crate::models::wc_session::list_by_state(&handle.env, "active")
+                .map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(list).unwrap())
+        }
         "Coin:info" => coininfo::info(&handle.env, params),
         "Swap:quote" => swap::quote(&handle.env, params),
         "Swap:buildApprovalData" => swap::build_approval_data(&handle.env, params),

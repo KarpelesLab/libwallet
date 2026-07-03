@@ -11,3 +11,4 @@ pub mod nft;
 pub mod token;
 pub mod transaction;
 pub mod wallet;
+pub mod wc_session;
