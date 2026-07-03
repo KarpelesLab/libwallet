@@ -38,11 +38,21 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
 
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
-        .map_err(ApiError::internal)?;
-
-    // Solana signatures are base58 in their canonical chain encoding.
-    Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
+    match account.kind.as_str() {
+        // EIP-191 personal_sign — 65-byte R‖S‖V, hex-encoded.
+        "ethereum" => {
+            let sig = crate::evm::personal_sign(env, account_id, &unlock, &msg)
+                .map_err(ApiError::internal)?;
+            let hex: String = sig.iter().map(|b| format!("{b:02x}")).collect();
+            Ok(serde_json::json!({ "signature": format!("0x{hex}") }))
+        }
+        // Solana / ed25519 — FROST signature, base58 in its canonical encoding.
+        _ => {
+            let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+                .map_err(ApiError::internal)?;
+            Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
+        }
+    }
 }
 
 /// `Account:signTransaction` — build and threshold-sign an EVM transaction for

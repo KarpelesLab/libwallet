@@ -75,6 +75,45 @@ pub fn sign_tx(
     tx.to_bytes().map_err(Error::Env)
 }
 
+/// EIP-191 `personal_sign`: sign `message` under the EVM prefix
+/// `"\x19Ethereum Signed Message:\n<len>" + message`, keccak-hashed, with the
+/// account's DKLs key. Returns the 65-byte `R ‖ S ‖ V` signature (V ∈ {27, 28},
+/// low-S normalized) that off-chain verifiers / ecrecover expect.
+pub fn personal_sign(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    message: &[u8],
+) -> Result<Vec<u8>> {
+    let acct = account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "ethereum" {
+        return Err(Error::Env("personal_sign is EVM-only".into()));
+    }
+    let tweak = il_to_tweak(&acct.il)?;
+
+    let mut full = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+    full.extend_from_slice(message);
+    let digest = keccak256(&full);
+
+    let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
+    let (s, v) = normalize_low_s(s, v);
+
+    let mut sig = Vec::with_capacity(65);
+    sig.extend_from_slice(&pad32(&r));
+    sig.extend_from_slice(&pad32(&s));
+    sig.push(27 + v);
+    Ok(sig)
+}
+
+/// The EIP-191 keccak digest for `message` — the hash `personal_sign` signs and
+/// ecrecover uses to recover the signer.
+pub fn personal_sign_digest(message: &[u8]) -> [u8; 32] {
+    let mut full = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
+    full.extend_from_slice(message);
+    keccak256(&full)
+}
+
 /// Recover the 0x-address that signed a serialized EVM transaction.
 pub fn recover_sender(raw: &[u8]) -> Result<String> {
     let tx = EvmTx::from_bytes(raw).map_err(Error::Env)?;
@@ -103,6 +142,14 @@ fn il_to_tweak(il: &serde_json::Value) -> Result<[u8; 32]> {
 
 fn secp_n() -> BigInt {
     BigInt::parse_bytes(b"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16).unwrap()
+}
+
+/// Right-align `b` into a 32-byte big-endian buffer.
+fn pad32(b: &[u8]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    let n = b.len().min(32);
+    out[32 - n..].copy_from_slice(&b[b.len() - n..]);
+    out
 }
 
 /// Enforce EIP-2 low-s: if s > n/2, replace with n-s and flip the parity.
