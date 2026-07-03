@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wltbase = { path = "../wltbase" }
 wltcontact = { path = "../wltcontact" }
+wltcrash = { path = "../wltcrash" }
 
 [dev-dependencies]
 serde_json = "1"

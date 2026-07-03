@@ -3,6 +3,7 @@
 //! handlers are added and this match grows toward the ~107 Go endpoints.
 
 mod contact;
+mod crash;
 mod info;
 
 use serde_json::Value;
@@ -13,6 +14,7 @@ use wltbase::Env;
 /// Create all model tables on a fresh env (mirrors the Go per-package InitEnv).
 pub fn init_models(env: &Env) -> wltbase::Result<()> {
     wltcontact::init(env)?;
+    wltcrash::init(env)?;
     Ok(())
 }
 
@@ -44,6 +46,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Info:paths" => info::paths(&handle.env),
         "Info:first_run" => info::first_run(&handle.env),
         "Contact" => contact::route(&handle.env, verb, params),
+        "Crash" => crash::route(&handle.env, verb, params),
         _ => Err(ApiError::not_found(path)),
     }
 }

@@ -120,6 +120,15 @@ fn contact_create_then_list() {
 }
 
 #[test]
+fn crash_list_empty_on_fresh_env() {
+    let h = new_env();
+    let resp = request(h, r#"{"path":"Crash","verb":"GET"}"#);
+    assert_eq!(resp["result"], "success");
+    assert_eq!(resp["data"].as_array().unwrap().len(), 0);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

@@ -186,6 +186,7 @@ dependencies = [
  "serde_json",
  "wltbase",
  "wltcontact",
+ "wltcrash",
 ]
 
 [[package]]
@@ -523,6 +524,16 @@ dependencies = [
  "serde_json",
  "wltbase",
  "xuid-rs",
+]
+
+[[package]]
+name = "wltcrash"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "uuid",
+ "wltbase",
 ]
 
 [[package]]
