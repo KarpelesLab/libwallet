@@ -684,6 +684,31 @@ extern "C" fn capture_event(json: *const c_char, user_data: usize) {
 }
 
 #[test]
+fn web3_injection_script_substitutes_config() {
+    let h = new_env();
+
+    // Missing required fields → 400.
+    let bad = request(h, r#"{"path":"Web3:injectionScript","params":{"Name":"W"}}"#);
+    assert_eq!(bad["result"], "error");
+    assert_eq!(bad["code"], 400);
+
+    let ok = request(
+        h,
+        r#"{"path":"Web3:injectionScript","params":{"Name":"MyWallet","Rdns":"co.echelle.wallet","Uuid":"abc-123","Bridge":"__hostBridge","Icon":"data:image/png;base64,AA"}}"#,
+    );
+    assert_eq!(ok["result"], "success", "{ok}");
+    let script = ok["data"]["script"].as_str().expect("script string");
+    // Placeholder was substituted with the real config JSON.
+    assert!(!script.contains("__LIBWALLET_CONFIG__"), "placeholder must be replaced");
+    assert!(script.contains(r#""bridge":"__hostBridge""#), "config injected");
+    assert!(script.contains(r#""rdns":"co.echelle.wallet""#));
+    // No network selected → default ephemeral EVM chain 1 → initialChainId 0x1.
+    assert!(script.contains(r#""initialChainId":"0x1""#), "seeds current chain id");
+
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn walletconnect_ffi_pair_and_approve_over_loopback() {
     use libwallet::walletconnect as wc;
     use std::net::TcpListener;
