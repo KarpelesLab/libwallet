@@ -129,6 +129,42 @@ pub fn list(env: &Env) -> Result<Vec<Transaction>> {
     Ok(rows.iter().map(|r| row_to_tx(r)).collect())
 }
 
+/// Insert (or replace) a transaction row after signing/broadcast. `Amount`
+/// columns are stored as their JSON encoding (matching the read path's decode).
+pub fn persist(env: &Env, tx: &Transaction) -> Result<()> {
+    let amount_json = |a: &Option<Amount>| -> String {
+        a.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).unwrap_or_default()
+    };
+    let raw_bytes = base64::engine::general_purpose::STANDARD.decode(&tx.raw).unwrap_or_default();
+    env.exec(r#"DELETE FROM "Transaction" WHERE "Id" = ?1"#, vec![SqlValue::Text(tx.id.clone())])?;
+    env.exec(
+        &format!(r#"INSERT INTO "Transaction" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)"#),
+        vec![
+            SqlValue::Text(tx.id.clone()),
+            SqlValue::Text(tx.kind.clone()),
+            SqlValue::Text(tx.asset.clone()),
+            SqlValue::Text(tx.from.clone()),
+            SqlValue::Text(tx.to.clone()),
+            SqlValue::Int(tx.gas as i64),
+            SqlValue::Text(tx.gas_price.clone()),
+            SqlValue::Text(tx.max_fee_per_gas.clone()),
+            SqlValue::Text(tx.max_priority_fee_per_gas.clone()),
+            SqlValue::Text(amount_json(&tx.fee)),
+            SqlValue::Int(tx.nonce as i64),
+            SqlValue::Text(tx.format.clone()),
+            SqlValue::Blob(raw_bytes),
+            SqlValue::Text(tx.hash.clone()),
+            SqlValue::Text(tx.url.clone()),
+            SqlValue::Text(tx.network.clone()),
+            SqlValue::Text(amount_json(&tx.amount)),
+            SqlValue::Text(amount_json(&tx.value)),
+            SqlValue::Text(tx.data.clone()),
+            SqlValue::Text(tx.created.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
 fn amount_at(row: &[SqlValue], i: usize) -> Option<Amount> {
     row.get(i)
         .and_then(|v| v.as_text())

@@ -65,6 +65,17 @@ pub fn list(env: &Env) -> Result<Vec<Account>> {
     Ok(rows.iter().map(|r| row_to_account(r)).collect())
 }
 
+/// Resolve an account by its id (acct-…) or, failing that, its address —
+/// mirrors Go `wltacct.FindAccount`, which a Transaction's `From` uses.
+pub fn find(env: &Env, id_or_address: &str) -> Result<Option<Account>> {
+    if let Some(a) = fetch(env, id_or_address)? {
+        return Ok(Some(a));
+    }
+    let sql = format!(r#"SELECT {COLS} FROM "Account" WHERE "Address" = ?1"#);
+    let rows = env.query(&sql, vec![SqlValue::Text(id_or_address.to_owned())])?;
+    Ok(rows.first().map(|r| row_to_account(r)))
+}
+
 /// Accounts belonging to a wallet (used by wallet-scoped views).
 pub fn for_wallet(env: &Env, wallet_id: &str) -> Result<Vec<Account>> {
     let sql = format!(r#"SELECT {COLS} FROM "Account" WHERE "Wallet" = ?1 ORDER BY "Index" ASC"#);

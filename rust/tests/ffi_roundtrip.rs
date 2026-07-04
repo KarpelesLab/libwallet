@@ -327,6 +327,64 @@ fn evm_wallet_account_and_sign_transaction_via_ffi() {
     LibwalletDestroy(h);
 }
 
+#[test]
+fn transaction_sign_and_send_evm_backfills_and_broadcasts() {
+    let h = new_env();
+    // secp256k1 wallet + ethereum account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
+    );
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    // Mock node answers, in call order: nonce, gasPrice, estimateGas, sendRaw.
+    let rpc = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x5"}"#.into(),          // eth_getTransactionCount = 5
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.into(),  // eth_gasPrice = 20 gwei
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x5208"}"#.into(),       // eth_estimateGas = 21000
+        r#"{"jsonrpc":"2.0","id":1,"result":"0xdeadbeef"}"#.into(),   // eth_sendRawTransaction = hash
+    ]);
+
+    // No nonce/gas/gasPrice supplied → all backfilled from the node.
+    let sent = request(
+        h,
+        &format!(
+            r#"{{"path":"Transaction:signAndSend","params":{{
+                "from":"{address}","type":"transfer","to":"0x000000000000000000000000000000000000dEaD",
+                "amount":{{"v":"1000000000000000000","e":0}},"RPC":"{rpc}",
+                "Keys":[{{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                        {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    assert_eq!(sent["result"], "success", "signAndSend failed: {sent}");
+    assert_eq!(sent["data"]["hash"], "0xdeadbeef");
+    assert_eq!(sent["data"]["nonce"], 5);
+    assert_eq!(sent["data"]["gas"], 21000);
+    assert_eq!(sent["data"]["gasPrice"], "20000000000");
+    assert_eq!(sent["data"]["format"], "legacy");
+    let id = sent["data"]["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with("tx-"));
+    let raw = sent["data"]["raw"].as_str().unwrap();
+    assert!(raw.starts_with("0x") && raw.len() > 60);
+
+    // The broadcast tx was persisted and is fetchable.
+    let got = request(h, &format!(r#"{{"path":"Transaction","verb":"GET","params":{{"Id":"{id}"}}}}"#));
+    assert_eq!(got["data"]["hash"], "0xdeadbeef");
+    assert_eq!(got["data"]["from"], address);
+    LibwalletDestroy(h);
+}
+
 /// One-shot mock JSON-RPC node returning `response_json`; yields its URL.
 fn mock_node(response_json: &str) -> String {
     use std::io::{Read, Write};
