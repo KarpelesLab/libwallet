@@ -819,6 +819,30 @@ fn onboarding_view_account_and_wc_sessions_alias_via_ffi() {
 }
 
 #[test]
+fn transaction_validate_via_ffi() {
+    let h = new_env();
+    // A well-formed transfer validates.
+    let ok = request(
+        h,
+        r#"{"path":"Transaction:validate","params":{"type":"transfer","amount":{"v":"100","e":0},"asset":"evm.1.NATIVE"}}"#,
+    );
+    assert_eq!(ok["result"], "success", "{ok}");
+    assert_eq!(ok["data"]["valid"], true);
+
+    // Missing asset / zero amount / bad type are rejected.
+    assert_eq!(request(h, r#"{"path":"Transaction:validate","params":{"type":"transfer","amount":{"v":"100","e":0}}}"#)["code"], 400);
+    assert_eq!(request(h, r#"{"path":"Transaction:validate","params":{"type":"transfer","amount":{"v":"0","e":0},"asset":"x"}}"#)["code"], 400);
+    assert_eq!(request(h, r#"{"path":"Transaction:validate","params":{"type":"bogus"}}"#)["code"], 400);
+    // erc20_transfer requires asset + to.
+    assert_eq!(request(h, r#"{"path":"Transaction:validate","params":{"type":"erc20_transfer","amount":{"v":"1","e":0},"asset":"x"}}"#)["code"], 400);
+    let erc20 = request(h, r#"{"path":"Transaction:validate","params":{"type":"erc20_transfer","amount":{"v":"1","e":0},"asset":"x","to":"0xabc"}}"#);
+    assert_eq!(erc20["data"]["valid"], true);
+    // raw evm needs no fields.
+    assert_eq!(request(h, r#"{"path":"Transaction:validate","params":{"type":"evm"}}"#)["data"]["valid"], true);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_multi_create_via_ffi() {
     let h = new_env();
     let r = request(

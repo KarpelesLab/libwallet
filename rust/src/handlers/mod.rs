@@ -126,6 +126,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Token:listCurated" => token::list_curated(&handle.env, params),
         "Nft" => nft::route(&handle.env, verb, params),
         "Transaction" => transaction::route(&handle.env, verb, params),
+        "Transaction:validate" => transaction::validate(&handle.env, params),
         _ => Err(ApiError::not_found(path)),
     }
 }
