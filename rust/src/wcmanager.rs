@@ -171,6 +171,22 @@ impl<T: wc::RelayTransport> WcManager<T> {
     }
 }
 
+/// Format an inbound WalletConnect message as a host event JSON (broadcast by
+/// the relay reader thread so the host UI can react to proposals/requests).
+pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
+    let (kind, body) = match msg {
+        wc::WcInbound::Propose { id, params } => ("wc_sessionPropose", serde_json::json!({ "id": id, "params": params })),
+        wc::WcInbound::Request { id, method, params } => {
+            ("wc_sessionRequest", serde_json::json!({ "id": id, "method": method, "params": params }))
+        }
+        wc::WcInbound::Settle { id } => ("wc_sessionSettle", serde_json::json!({ "id": id })),
+        wc::WcInbound::Delete { id } => ("wc_sessionDelete", serde_json::json!({ "id": id })),
+        wc::WcInbound::Response { id, error } => ("wc_response", serde_json::json!({ "id": id, "error": error })),
+        wc::WcInbound::Other { id, method } => ("wc_other", serde_json::json!({ "id": id, "method": method })),
+    };
+    crate::response::event(kind, serde_json::json!({ "topic": topic, "payload": body }))
+}
+
 fn b64url(b: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)

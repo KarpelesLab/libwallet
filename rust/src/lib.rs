@@ -238,6 +238,7 @@ pub extern "C" fn LibwalletDestroy(h: usize) {
     let _ = catch_unwind(AssertUnwindSafe(|| {
         let handle = REGISTRY.lock().unwrap().remove(&h);
         if let Some(handle) = handle {
+            handle.env.wc_stop(); // stop the relay reader before tearing down
             handle.env.set_event_sink(None);
             handle.shutdown_and_wait();
         }

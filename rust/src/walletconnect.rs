@@ -358,6 +358,35 @@ impl<S: std::io::Read + std::io::Write> WsTransport<S> {
     }
 }
 
+/// Forward through a boxed transport, so the manager can be stored behind
+/// `WcManager<Box<dyn RelayTransport + Send>>` in the FFI environment.
+impl RelayTransport for Box<dyn RelayTransport + Send> {
+    fn send_text(&mut self, text: &str) -> Result<()> {
+        (**self).send_text(text)
+    }
+    fn recv_text(&mut self) -> Result<Option<String>> {
+        (**self).recv_text()
+    }
+}
+
+/// Connect a non-blocking `WsTransport` to a `ws://host:port/path` relay (plain
+/// TCP; `wss://` TLS needs a tungstenite TLS feature and is out of scope here).
+/// The handshake runs blocking, then the socket is switched to non-blocking so
+/// the reader loop's `recv_text` returns `None` instead of blocking.
+pub fn connect_ws(url: &str) -> Result<WsTransport<std::net::TcpStream>> {
+    let rest = url.strip_prefix("ws://").ok_or_else(|| Error::Env("relay URL must be ws://".into()))?;
+    let authority = rest.split('/').next().unwrap_or(rest);
+    let hostport = if authority.contains(':') { authority.to_owned() } else { format!("{authority}:80") };
+    let stream = std::net::TcpStream::connect(&hostport)
+        .map_err(|e| Error::Env(format!("relay connect {hostport}: {e}")))?;
+    let (socket, _resp) =
+        tungstenite::client(url, stream).map_err(|e| Error::Env(format!("ws handshake: {e}")))?;
+    if let Ok(s) = socket.get_ref().set_nonblocking(true) {
+        let _ = s;
+    }
+    Ok(WsTransport::new(socket))
+}
+
 impl<S: std::io::Read + std::io::Write> RelayTransport for WsTransport<S> {
     fn send_text(&mut self, text: &str) -> Result<()> {
         self.socket

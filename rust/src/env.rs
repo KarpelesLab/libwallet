@@ -4,20 +4,36 @@
 //! emitter hub, balance poller and asset cache land in later phases.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::db::{Db, SqlValue};
 use crate::error::{Error, Result};
+use crate::walletconnect::RelayTransport;
+use crate::wcmanager::WcManager;
 
 /// A host event sink — receives server-pushed event JSON (the Rust analogue of
 /// Go's BroadcastJson → event FD → host callback).
 pub type EventSink = Box<dyn Fn(&str) + Send + Sync>;
 
+/// The WalletConnect manager over a boxed relay transport (stored in the Env so
+/// the connection persists across FFI requests).
+type BoxedWcManager = WcManager<Box<dyn RelayTransport + Send>>;
+
+/// The running WalletConnect connection: the shared manager plus its relay
+/// reader thread and stop flag.
+struct WcRuntime {
+    manager: Arc<Mutex<BoxedWcManager>>,
+    stop: Arc<AtomicBool>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
 pub struct Env {
     pub data_dir: PathBuf,
     db: Db,
     event_sink: Mutex<Option<EventSink>>,
+    wc: Mutex<Option<WcRuntime>>,
 }
 
 impl Env {
@@ -36,16 +52,69 @@ impl Env {
             .ok_or_else(|| Error::Env(format!("non-UTF8 data path: {dir:?}")))?;
         let db = Db::open(sql_path)?;
 
-        let env = Env { data_dir: dir, db, event_sink: Mutex::new(None) };
+        let env = Env { data_dir: dir, db, event_sink: Mutex::new(None), wc: Mutex::new(None) };
         env.init_config()?;
         Ok(env)
     }
 
     /// In-memory environment for tests (mirrors Go `InitTempEnv`).
     pub fn init_memory() -> Result<Env> {
-        let env = Env { data_dir: PathBuf::new(), db: Db::open_memory()?, event_sink: Mutex::new(None) };
+        let env = Env {
+            data_dir: PathBuf::new(),
+            db: Db::open_memory()?,
+            event_sink: Mutex::new(None),
+            wc: Mutex::new(None),
+        };
         env.init_config()?;
         Ok(env)
+    }
+
+    /// Start the WalletConnect relay connection (`WalletConnect:start`): install
+    /// the manager over `transport` and spawn a reader thread that pumps inbound
+    /// relay frames and broadcasts them to the host. The reader holds a `Weak`
+    /// self-reference so it exits when the Env is dropped (or on `wc_stop`).
+    pub fn wc_start(self: &Arc<Self>, transport: Box<dyn RelayTransport + Send>) -> Result<()> {
+        let mut guard = self.wc.lock().unwrap();
+        if guard.is_some() {
+            return Err(Error::Env("walletconnect already started".into()));
+        }
+        let manager = Arc::new(Mutex::new(WcManager::new(transport)));
+        let stop = Arc::new(AtomicBool::new(false));
+        let weak: Weak<Env> = Arc::downgrade(self);
+        let (mgr, stop2) = (manager.clone(), stop.clone());
+        let reader = std::thread::spawn(move || {
+            while !stop2.load(Ordering::SeqCst) {
+                let env = match weak.upgrade() {
+                    Some(e) => e,
+                    None => break,
+                };
+                let got = mgr.lock().unwrap().pump(&env);
+                if let Ok(Some((topic, msg))) = got {
+                    env.broadcast(&crate::wcmanager::inbound_event(&topic, &msg));
+                }
+                drop(env);
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        *guard = Some(WcRuntime { manager, stop, reader: Some(reader) });
+        Ok(())
+    }
+
+    /// Stop the WalletConnect connection and join its reader (`WalletConnect:stop`;
+    /// also called on Destroy).
+    pub fn wc_stop(&self) {
+        if let Some(mut rt) = self.wc.lock().unwrap().take() {
+            rt.stop.store(true, Ordering::SeqCst);
+            if let Some(h) = rt.reader.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    /// The running WalletConnect manager, if started — for the pair/approve/respond
+    /// endpoints.
+    pub fn wc_manager(&self) -> Option<Arc<Mutex<BoxedWcManager>>> {
+        self.wc.lock().unwrap().as_ref().map(|rt| rt.manager.clone())
     }
 
     /// Register (or, with None, clear) the host event sink.

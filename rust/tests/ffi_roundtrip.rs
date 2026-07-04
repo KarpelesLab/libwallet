@@ -684,6 +684,101 @@ extern "C" fn capture_event(json: *const c_char, user_data: usize) {
 }
 
 #[test]
+fn walletconnect_ffi_pair_and_approve_over_loopback() {
+    use libwallet::walletconnect as wc;
+    use std::net::TcpListener;
+
+    // A local WS relay + dApp: accept the wallet, echo/collect its frames, push a
+    // sessionPropose, and confirm the wallet's approve publishes a settle.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let sym: [u8; 32] = (0u8..32).collect::<Vec<_>>().try_into().unwrap();
+    let topic = wc::derive_topic(&sym);
+    let sym_hex: String = sym.iter().map(|b| format!("{b:02x}")).collect();
+    let (dapp_priv, dapp_pub) = wc::new_x25519_keypair();
+    let dapp_pub_hex: String = dapp_pub.iter().map(|b| format!("{b:02x}")).collect();
+
+    let topic_srv = topic.clone();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        // 1. wallet subscribes to the pairing topic.
+        let sub = ws.read().unwrap().into_text().unwrap();
+        assert!(sub.contains("irn_subscribe") && sub.contains(&topic_srv), "sub: {sub}");
+        // 2. push a Type-0 sessionPropose on the pairing topic.
+        let propose = format!(
+            r#"{{"id":100,"jsonrpc":"2.0","method":"wc_sessionPropose","params":{{"proposer":{{"publicKey":"{dapp_pub_hex}","metadata":{{"name":"dApp"}}}},"requiredNamespaces":{{"eip155":{{"chains":["eip155:1"],"methods":["personal_sign"],"events":["chainChanged"]}}}}}}}}"#
+        );
+        let env0 = wc::seal_type0_with_nonce(&sym, &[1u8; 12], propose.as_bytes());
+        ws.send(tungstenite::Message::Text(format!(
+            r#"{{"id":1,"method":"irn_subscription","params":{{"data":{{"topic":"{topic_srv}","message":"{env0}","tag":1100}}}}}}"#
+        )))
+        .unwrap();
+        // 3. collect the wallet's remaining frames until we see a sessionSettle
+        // publish (the approve). Ack subscriptions/publishes with {result:true}.
+        let mut saw_settle = false;
+        for _ in 0..8 {
+            match ws.read() {
+                Ok(m) if m.is_text() => {
+                    let t = m.into_text().unwrap();
+                    if t.contains("wc_sessionSettle") || (t.contains("irn_publish") && t.contains("\"tag\":1102")) {
+                        saw_settle = true;
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        assert!(saw_settle, "wallet must publish a sessionSettle after approve");
+    });
+
+    let h = new_env();
+    // Capture host events (the reader thread broadcasts the inbound proposal).
+    let (tx, rx) = channel::<String>();
+    let ud = Box::into_raw(Box::new(tx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), ud);
+
+    // start + pair.
+    let started = request(h, &format!(r#"{{"path":"WalletConnect:start","params":{{"RelayUrl":"ws://{addr}/"}}}}"#));
+    assert_eq!(started["result"], "success", "{started}");
+    let uri = format!("wc:{topic}@2?relay-protocol=irn&symKey={sym_hex}");
+    let paired = request(h, &format!(r#"{{"path":"WalletConnect:pair","params":{{"Uri":"{uri}"}}}}"#));
+    assert_eq!(paired["result"], "success", "{paired}");
+    assert_eq!(paired["data"]["pairingTopic"], topic);
+
+    // The reader thread pumps the pushed proposal and broadcasts it as an event.
+    let mut proposal_event = None;
+    for _ in 0..40 {
+        if let Ok(ev) = rx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "wc_sessionPropose" {
+                proposal_event = Some(j);
+                break;
+            }
+        }
+    }
+    let pe = proposal_event.expect("sessionPropose event delivered");
+    assert_eq!(pe["data"]["payload"]["id"], 100);
+
+    // Approve the proposal — publishes settle + response.
+    let proposal = &pe["data"]["payload"]["params"];
+    let approve = request(
+        h,
+        &format!(
+            r#"{{"path":"WalletConnect:approveSession","params":{{"PairingTopic":"{topic}","ProposalId":100,"Proposal":{proposal},"Accounts":["eip155:1:0xabc"],"Methods":["personal_sign"]}}}}"#
+        ),
+    );
+    assert_eq!(approve["result"], "success", "{approve}");
+    assert!(approve["data"]["sessionTopic"].as_str().unwrap().len() == 64);
+
+    server.join().unwrap();
+    let _ = dapp_priv;
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

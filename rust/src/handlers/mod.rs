@@ -18,6 +18,7 @@ mod swap;
 mod token;
 mod transaction;
 mod wallet;
+mod wc;
 
 use serde_json::Value;
 
@@ -87,6 +88,11 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Quote:get" => quote::get(&handle.env, params),
         "StoreKey:create" => storekey::create(&handle.env, params),
         "StoreKey:derivePassword" => storekey::derive_password(&handle.env, params),
+        "WalletConnect:start" => wc::start(&handle.env, params),
+        "WalletConnect:stop" => wc::stop(&handle.env),
+        "WalletConnect:pair" => wc::pair(&handle.env, params),
+        "WalletConnect:approveSession" => wc::approve_session(&handle.env, params),
+        "WalletConnect:respond" => wc::respond(&handle.env, params),
         "Wc:listSessions" | "WalletConnect:sessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")
                 .map_err(ApiError::internal)?;
