@@ -207,14 +207,30 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     Ok(wallet)
 }
 
-/// Import a raw 32-byte private-key scalar as a 1-of-1 wallet (Go
-/// `Wallet:importPrivateKey`): wrap the key as a single TSS share, seal it to
-/// the one recipient, and persist. `priv_bytes` is the big-endian scalar.
+/// Import a raw 32-byte private-key scalar as a 1-of-1 wallet with a fresh random
+/// chain code (Go `Wallet:importPrivateKey`).
 pub fn import_private_key(
     env: &Env,
     name: &str,
     curve: &str,
     priv_bytes: &[u8],
+    key_desc: &KeyDescription,
+) -> Result<Wallet> {
+    let mut cc = Uuid::new_v4().into_bytes().to_vec();
+    cc.extend_from_slice(&Uuid::new_v4().into_bytes());
+    import_scalar(env, name, curve, priv_bytes, &cc, key_desc)
+}
+
+/// Import a raw scalar as a 1-of-1 wallet with an explicit `chaincode` (Go
+/// `buildImportedWallet`): wrap the key as a single TSS share, seal it to the one
+/// recipient, and persist. `priv_bytes` is the big-endian scalar. `import_private_key`
+/// and `import_mnemonic` differ only in the chain code they pass.
+pub fn import_scalar(
+    env: &Env,
+    name: &str,
+    curve: &str,
+    priv_bytes: &[u8],
+    chaincode_bytes: &[u8],
     key_desc: &KeyDescription,
 ) -> Result<Wallet> {
     let wallet_id = Xuid::new("wlt").to_string();
@@ -241,9 +257,7 @@ pub fn import_private_key(
         other => return Err(Error::Env(format!("unsupported curve {other:?}"))),
     };
 
-    let mut cc = Uuid::new_v4().into_bytes().to_vec();
-    cc.extend_from_slice(&Uuid::new_v4().into_bytes());
-    let chaincode = b64url(&cc);
+    let chaincode = b64url(chaincode_bytes);
     let now = crate::now_rfc3339();
 
     // Seal the single share to its recipient (same schemes as create).
@@ -286,6 +300,25 @@ pub fn import_private_key(
     };
     persist(env, &wallet)?;
     Ok(wallet)
+}
+
+/// Import a BIP-39 mnemonic as a 1-of-1 wallet (Go `Wallet:importMnemonic`):
+/// validate the mnemonic, derive the seed and the BIP-32/SLIP-0010 master, and
+/// import the master scalar with the derived chain code (so HD accounts derive
+/// correctly).
+pub fn import_mnemonic(
+    env: &Env,
+    name: &str,
+    curve: &str,
+    mnemonic: &str,
+    passphrase: &str,
+    key_desc: &KeyDescription,
+) -> Result<Wallet> {
+    let mnemonic = mnemonic.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::bip39::mnemonic_to_entropy(&mnemonic)?; // checksum validation
+    let seed = crate::bip39::mnemonic_to_seed(&mnemonic, passphrase);
+    let (master, cc) = crate::bip39::master_from_seed(&seed, curve)?;
+    import_scalar(env, name, curve, &master, &cc, key_desc)
 }
 
 fn persist(env: &Env, w: &Wallet) -> Result<()> {

@@ -789,6 +789,37 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn wallet_import_mnemonic_via_ffi() {
+    let h = new_env();
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let body = format!(
+        r#"{{"path":"Wallet:importMnemonic","params":{{"Name":"M","Curve":"secp256k1","Mnemonic":"{m}","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "{w}");
+    assert_eq!(w["data"]["Protocol"], "dkls23");
+    assert_eq!(w["data"]["Threshold"], 0);
+    let pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+    // The wallet chaincode is the derived BIP-32 master chain code.
+    let cc = w["data"]["Chaincode"].as_str().unwrap();
+    assert!(!cc.is_empty());
+
+    // Deterministic: the same mnemonic yields the same wallet key.
+    assert_eq!(request(h, &body)["data"]["Pubkey"], pubkey);
+
+    // A passphrase changes the derived key.
+    let with_pass = format!(
+        r#"{{"path":"Wallet:importMnemonic","params":{{"Curve":"secp256k1","Mnemonic":"{m}","Passphrase":"TREZOR","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#
+    );
+    assert_ne!(request(h, &with_pass)["data"]["Pubkey"], pubkey);
+
+    // A bad-checksum mnemonic errors.
+    let bad = r#"{"path":"Wallet:importMnemonic","params":{"Curve":"secp256k1","Mnemonic":"abandon abandon abandon","Keys":[{"Type":"Password","Key":"password1"}]}}"#;
+    assert_eq!(request(h, bad)["result"], "error");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_import_private_key_via_ffi() {
     let h = new_env();
     // Import a raw 32-byte secp256k1 key as a 1-of-1 wallet.
@@ -814,12 +845,12 @@ fn wallet_import_private_key_via_ffi() {
 
     // A different key -> a different pubkey.
     let other = format!(
-        r#"{{"path":"Wallet:importPrivateKey","params":{{"Curve":"secp256k1","PrivateKey":"0b22222222222222222222222222222222222222222222222222222222222222","Keys":[{{"Type":"Password","Key":"pw"}}]}}}}"#
+        r#"{{"path":"Wallet:importPrivateKey","params":{{"Curve":"secp256k1","PrivateKey":"0b22222222222222222222222222222222222222222222222222222222222222","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#
     );
     assert_ne!(request(h, &other)["data"]["Pubkey"], pubkey);
 
     // Bad length is rejected.
-    let bad = request(h, r#"{"path":"Wallet:importPrivateKey","params":{"Curve":"secp256k1","PrivateKey":"0x1234","Keys":[{"Type":"Password","Key":"pw"}]}}"#);
+    let bad = request(h, r#"{"path":"Wallet:importPrivateKey","params":{"Curve":"secp256k1","PrivateKey":"0x1234","Keys":[{"Type":"Password","Key":"password1"}]}}"#);
     assert_eq!(bad["result"], "error");
     LibwalletDestroy(h);
 }

@@ -51,6 +51,8 @@ pub mod erc20;
 pub mod remotekey;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
+// BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).
+pub mod bip39;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).
