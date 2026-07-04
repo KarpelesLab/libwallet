@@ -43,6 +43,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
 
 /// Error returned by an endpoint handler. `code` mirrors the numeric HTTP-ish
 /// codes the Go side used (400/404/500/503...).
+#[derive(Debug)]
 pub struct ApiError {
     pub message: String,
     pub code: i64,
@@ -135,6 +136,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Network" => network::route(&handle.env, verb, params),
         "Token" => token::route(&handle.env, verb, params),
         "Token:listCurated" => token::list_curated(&handle.env, params),
+        "Token:discoverToken" => token::discover_token(&handle.env, params),
         "Nft" => nft::route(&handle.env, verb, params),
         "Transaction" => transaction::route(&handle.env, verb, params),
         "Transaction:validate" => transaction::validate(&handle.env, params),
