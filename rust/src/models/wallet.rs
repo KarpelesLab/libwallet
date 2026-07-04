@@ -321,6 +321,92 @@ pub fn import_mnemonic(
     import_scalar(env, name, curve, &master, &cc, key_desc)
 }
 
+/// Serialize a wallet for `Wallet:backup` — includes the encrypted key `Data`
+/// (base64, as Go marshals `[]byte`), unlike the FFI response which skips it.
+/// Returns the `{Filename, Data}` backup entry (Go `doBackup`).
+pub fn backup_entry(w: &Wallet) -> Result<serde_json::Value> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    if w.keys.is_empty() {
+        return Err(Error::Env("wallet has no keys, cannot be backed up".into()));
+    }
+    let keys: Vec<serde_json::Value> = w
+        .keys
+        .iter()
+        .map(|k| {
+            serde_json::json!({
+                "Id": k.id, "Wallet": k.wallet, "Type": k.kind, "Schema": k.schema,
+                "Key": k.key, "Data": STANDARD.encode(&k.data), "Gen": k.generation,
+            })
+        })
+        .collect();
+    let wj = serde_json::json!({
+        "Id": w.id, "Name": w.name, "Curve": w.curve, "Protocol": w.protocol,
+        "Threshold": w.threshold, "Gen": w.generation, "Pubkey": w.pubkey,
+        "Chaincode": w.chaincode, "Created": w.created, "Modified": w.modified, "Keys": keys,
+    });
+    let buf = serde_json::to_vec(&wj).map_err(|e| Error::Env(e.to_string()))?;
+    let uuid = Xuid::parse_prefix(&w.id, "wlt")
+        .map_err(|_| Error::Env("bad wallet id".into()))?
+        .uuid();
+    Ok(serde_json::json!({
+        "Filename": format!("wallet_{}.dat", URL_SAFE_NO_PAD.encode(uuid.as_bytes())),
+        "Data": URL_SAFE_NO_PAD.encode(&buf),
+    }))
+}
+
+/// Restore a wallet from a `Wallet:backup` entry's base64url `Data` (Go
+/// `restoreSingleWalletFile`): decode + parse + persist. Skips a wallet that
+/// already exists. Returns the restored wallet id.
+pub fn restore_entry(env: &Env, data_b64url: &str) -> Result<String> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    let buf = URL_SAFE_NO_PAD.decode(data_b64url).map_err(|e| Error::Env(format!("bad backup base64: {e}")))?;
+    let wj: serde_json::Value =
+        serde_json::from_slice(&buf).map_err(|e| Error::Env(format!("bad backup json: {e}")))?;
+    let s = |k: &str| wj.get(k).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+    let id = s("Id");
+    if id.is_empty() {
+        return Err(Error::Env("backup missing wallet Id".into()));
+    }
+    if fetch(env, &id)?.is_some() {
+        return Ok(id); // already present — idempotent restore
+    }
+    let keys: Vec<WalletKey> = wj
+        .get("Keys")
+        .and_then(|k| k.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|k| {
+                    let ks = |f: &str| k.get(f).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                    WalletKey {
+                        id: ks("Id"),
+                        wallet: ks("Wallet"),
+                        kind: ks("Type"),
+                        schema: ks("Schema"),
+                        key: ks("Key"),
+                        data: STANDARD.decode(ks("Data")).unwrap_or_default(),
+                        generation: k.get("Gen").and_then(|v| v.as_u64()).unwrap_or(1),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let w = Wallet {
+        id: id.clone(),
+        name: s("Name"),
+        curve: s("Curve"),
+        protocol: s("Protocol"),
+        threshold: wj.get("Threshold").and_then(|v| v.as_i64()).unwrap_or(0),
+        generation: wj.get("Gen").and_then(|v| v.as_u64()).unwrap_or(0),
+        pubkey: s("Pubkey"),
+        chaincode: s("Chaincode"),
+        created: s("Created"),
+        modified: s("Modified"),
+        keys,
+    };
+    persist(env, &w)?;
+    Ok(id)
+}
+
 fn persist(env: &Env, w: &Wallet) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "Wallet" ({WALLET_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#),

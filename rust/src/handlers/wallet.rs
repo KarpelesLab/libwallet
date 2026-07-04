@@ -43,6 +43,45 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     }
 }
 
+/// `Wallet:backup` {Id?} — export the wallet(s) as backup entries (including the
+/// encrypted key shares). One wallet when `Id` is given, else all (Go
+/// apiWalletBackup).
+pub fn backup(env: &Env, params: &Value) -> ApiResult {
+    let entries = match params.get("Id").and_then(Value::as_str) {
+        Some(id) => {
+            let w = crate::models::wallet::fetch(env, id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "wallet not found"))?;
+            vec![crate::models::wallet::backup_entry(&w).map_err(ApiError::internal)?]
+        }
+        None => crate::models::wallet::list(env)
+            .map_err(ApiError::internal)?
+            .iter()
+            .map(crate::models::wallet::backup_entry)
+            .collect::<crate::Result<Vec<_>>>()
+            .map_err(ApiError::internal)?,
+    };
+    Ok(Value::Array(entries))
+}
+
+/// `Wallet:restore` {Files: [{Data}]} — restore wallets from backup entries (Go
+/// apiWalletRestore). Returns the restored wallet ids.
+pub fn restore(env: &Env, params: &Value) -> ApiResult {
+    let files = params
+        .get("Files")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::new(400, "Files (backup entries) required"))?;
+    let mut restored = Vec::new();
+    for f in files {
+        let data = f
+            .get("Data")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ApiError::new(400, "backup entry missing Data"))?;
+        restored.push(crate::models::wallet::restore_entry(env, data).map_err(ApiError::internal)?);
+    }
+    Ok(serde_json::json!({ "restored": restored }))
+}
+
 /// `Wallet:importMnemonic` {Mnemonic, Passphrase?, Curve, Name, Keys(1)} — import
 /// a BIP-39 mnemonic as a 1-of-1 wallet (Go apiImportMnemonic).
 pub fn import_mnemonic(env: &Env, params: &Value) -> ApiResult {

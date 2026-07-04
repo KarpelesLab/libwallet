@@ -789,6 +789,57 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn wallet_backup_restore_roundtrip_via_ffi() {
+    let src = new_env();
+    // Create a wallet + capture its pubkey and key ids.
+    let w = request(
+        src,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"Backup","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+
+    // Back it up — the entry carries the encrypted shares (Data).
+    let backup = request(src, &format!(r#"{{"path":"Wallet:backup","params":{{"Id":"{wallet_id}"}}}}"#));
+    assert_eq!(backup["result"], "success", "{backup}");
+    let entry = &backup["data"][0];
+    assert!(entry["Filename"].as_str().unwrap().starts_with("wallet_"));
+    let data = entry["Data"].as_str().unwrap().to_string();
+    LibwalletDestroy(src);
+
+    // Restore into a FRESH environment.
+    let dst = new_env();
+    let restored = request(
+        dst,
+        &format!(r#"{{"path":"Wallet:restore","params":{{"Files":[{{"Data":"{data}"}}]}}}}"#),
+    );
+    assert_eq!(restored["result"], "success", "{restored}");
+    assert_eq!(restored["data"]["restored"][0], wallet_id);
+
+    // The restored wallet has the same pubkey...
+    let got = request(dst, &format!(r#"{{"path":"Wallet","verb":"GET","params":{{"Id":"{wallet_id}"}}}}"#));
+    assert_eq!(got["data"]["Pubkey"], pubkey);
+
+    // ...and still signs — proving the encrypted shares survived the roundtrip.
+    let a = request(
+        dst,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let acct = a["data"]["Id"].as_str().unwrap().to_string();
+    let wk0 = got["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let wk1 = got["data"]["Keys"][1]["Id"].as_str().unwrap().to_string();
+    let sig = request(
+        dst,
+        &format!(r#"{{"path":"Account:signMessage","params":{{"Id":"{acct}","Message":"aGk=","Keys":[{{"Type":"Password","Id":"{wk0}","Key":"passwordone"}},{{"Type":"Password","Id":"{wk1}","Key":"passwordtwo"}}]}}}}"#),
+    );
+    assert_eq!(sig["result"], "success", "restored wallet must sign: {sig}");
+    LibwalletDestroy(dst);
+}
+
+#[test]
 fn wallet_import_mnemonic_via_ffi() {
     let h = new_env();
     let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

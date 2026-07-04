@@ -73,6 +73,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet" => wallet::route(&handle.env, verb, params),
         "Wallet:importPrivateKey" => wallet::import_private_key(&handle.env, params),
         "Wallet:importMnemonic" => wallet::import_mnemonic(&handle.env, params),
+        "Wallet:backup" => wallet::backup(&handle.env, params),
+        "Wallet:restore" => wallet::restore(&handle.env, params),
         "Account" => account::route(&handle.env, verb, params),
         "Account:signMessage" => account::sign_message(&handle.env, params),
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
