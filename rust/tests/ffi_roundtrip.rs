@@ -913,6 +913,19 @@ fn network_test_rpc_and_set_current() {
 }
 
 #[test]
+fn lifecycle_update_echoes_status() {
+    let h = new_env();
+    let r = request(h, r#"{"path":"Lifecycle:update","params":{"Status":"background"}}"#);
+    assert_eq!(r["result"], "success", "{r}");
+    assert_eq!(r["data"]["status"], "background");
+    // Empty/absent status is accepted (resume default).
+    let r2 = request(h, r#"{"path":"Lifecycle:update","params":{}}"#);
+    assert_eq!(r2["result"], "success");
+    assert_eq!(r2["data"]["status"], "");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

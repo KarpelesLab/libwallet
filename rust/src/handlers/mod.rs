@@ -9,6 +9,7 @@ mod contact;
 mod contract;
 mod crash;
 mod info;
+mod lifecycle;
 mod names;
 mod network;
 mod nft;
@@ -152,6 +153,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Transaction" => transaction::route(&handle.env, verb, params),
         "Transaction:validate" => transaction::validate(&handle.env, params),
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
+        "Lifecycle:update" => lifecycle::update(&handle.env, params),
         _ => Err(ApiError::not_found(path)),
     }
 }
