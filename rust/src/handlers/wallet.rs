@@ -43,6 +43,29 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     }
 }
 
+/// `Wallet:multiCreate` {Name, Keys} — create both a secp256k1 (dkls23) and an
+/// ed25519 (frost) wallet with the same key set (Go apiMultiCreateWallet).
+/// Returns both wallets.
+pub fn multi_create(env: &Env, params: &Value) -> ApiResult {
+    let name = params.get("Name").and_then(Value::as_str).unwrap_or("").to_owned();
+    let keys: Vec<crate::sign::KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    let secp = crate::models::wallet::create(env, &name, "secp256k1", &keys).map_err(ApiError::internal)?;
+    let ed = crate::models::wallet::create(env, &name, "ed25519", &keys).map_err(ApiError::internal)?;
+    for w in [&secp, &ed] {
+        env.broadcast(&crate::response::event(
+            "wallet:created",
+            serde_json::json!({ "id": w.id, "curve": w.curve }),
+        ));
+    }
+    Ok(serde_json::json!({
+        "secp256k1": serde_json::to_value(&secp).unwrap(),
+        "ed25519": serde_json::to_value(&ed).unwrap(),
+    }))
+}
+
 /// `Wallet:backup` {Id?} — export the wallet(s) as backup entries (including the
 /// encrypted key shares). One wallet when `Id` is given, else all (Go
 /// apiWalletBackup).

@@ -819,6 +819,28 @@ fn onboarding_view_account_and_wc_sessions_alias_via_ffi() {
 }
 
 #[test]
+fn wallet_multi_create_via_ffi() {
+    let h = new_env();
+    let r = request(
+        h,
+        r#"{"path":"Wallet:multiCreate","params":{"Name":"Multi","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    assert_eq!(r["result"], "success", "{r}");
+    // Both curves created with the same key set.
+    assert_eq!(r["data"]["secp256k1"]["Protocol"], "dkls23");
+    assert_eq!(r["data"]["ed25519"]["Protocol"], "frost");
+    assert_eq!(r["data"]["secp256k1"]["Pubkey"].as_str().unwrap().len(), 44);
+    assert_eq!(r["data"]["ed25519"]["Pubkey"].as_str().unwrap().len(), 43);
+    // Both are persisted.
+    let listed = request(h, r#"{"path":"Wallet","verb":"GET"}"#);
+    assert_eq!(listed["data"].as_array().unwrap().len(), 2);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_backup_restore_roundtrip_via_ffi() {
     let src = new_env();
     // Create a wallet + capture its pubkey and key ids.
