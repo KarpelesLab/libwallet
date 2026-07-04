@@ -93,6 +93,10 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "WalletConnect:pair" => wc::pair(&handle.env, params),
         "WalletConnect:approveSession" => wc::approve_session(&handle.env, params),
         "WalletConnect:respond" => wc::respond(&handle.env, params),
+        "WalletConnect:rejectSession" => wc::reject_session(&handle.env, params),
+        "WalletConnect:respondError" => wc::respond_error(&handle.env, params),
+        "WalletConnect:emitEvent" => wc::emit_event(&handle.env, params),
+        "WalletConnect:disconnect" => wc::disconnect(&handle.env, params),
         "Wc:listSessions" | "WalletConnect:sessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")
                 .map_err(ApiError::internal)?;

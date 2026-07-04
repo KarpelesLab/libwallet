@@ -68,3 +68,47 @@ pub fn respond(env: &Env, params: &Value) -> ApiResult {
     mgr.lock().unwrap().respond(env, topic, id, result).map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "responded": true }))
 }
+
+/// `WalletConnect:rejectSession` {PairingTopic, Code?, Message?} — reject a
+/// pending proposal.
+pub fn reject_session(env: &Env, params: &Value) -> ApiResult {
+    let pairing = params.get("PairingTopic").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "PairingTopic required"))?;
+    let code = params.get("Code").and_then(Value::as_i64).unwrap_or(0);
+    let message = params.get("Message").and_then(Value::as_str).unwrap_or("");
+    let mgr = manager(env)?;
+    mgr.lock().unwrap().reject(env, pairing, code, message).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "rejected": true }))
+}
+
+/// `WalletConnect:respondError` {Topic, Id, Code?, Message?} — publish a JSON-RPC
+/// error for a session request.
+pub fn respond_error(env: &Env, params: &Value) -> ApiResult {
+    let topic = params.get("Topic").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Topic required"))?;
+    let id = params.get("Id").and_then(Value::as_i64).ok_or_else(|| ApiError::new(400, "Id required"))?;
+    let code = params.get("Code").and_then(Value::as_i64).unwrap_or(0);
+    let message = params.get("Message").and_then(Value::as_str).unwrap_or("");
+    let mgr = manager(env)?;
+    mgr.lock().unwrap().respond_error(env, topic, id, code, message).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "responded": true }))
+}
+
+/// `WalletConnect:emitEvent` {Topic, Name, Data?, ChainID?} — push a
+/// `wc_sessionEvent` (chainChanged / accountsChanged).
+pub fn emit_event(env: &Env, params: &Value) -> ApiResult {
+    let topic = params.get("Topic").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Topic required"))?;
+    let name = params.get("Name").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Name required"))?;
+    let data = params.get("Data").cloned().unwrap_or(Value::Null);
+    let chain = params.get("ChainID").and_then(Value::as_str).unwrap_or("");
+    let mgr = manager(env)?;
+    mgr.lock().unwrap().emit_event(env, topic, name, data, chain).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "emitted": true }))
+}
+
+/// `WalletConnect:disconnect` {Topic} — tear down a session (sends
+/// `wc_sessionDelete` and marks it disconnected locally).
+pub fn disconnect(env: &Env, params: &Value) -> ApiResult {
+    let topic = params.get("Topic").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Topic required"))?;
+    let mgr = manager(env)?;
+    mgr.lock().unwrap().disconnect(env, topic).map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "disconnected": true }))
+}

@@ -15,11 +15,14 @@ const SESSION_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 /// A WalletConnect session manager driving one relay connection.
 pub struct WcManager<T: wc::RelayTransport> {
     client: wc::RelayClient<T>,
+    /// Pending `wc_sessionPropose` ids keyed by pairing topic (mirrors Go's
+    /// `proposalsByPairing`) so `reject` can address the right proposal.
+    pending_proposals: std::collections::HashMap<String, i64>,
 }
 
 impl<T: wc::RelayTransport> WcManager<T> {
     pub fn new(transport: T) -> Self {
-        WcManager { client: wc::RelayClient::new(transport) }
+        WcManager { client: wc::RelayClient::new(transport), pending_proposals: std::collections::HashMap::new() }
     }
 
     /// `WalletConnect:pair`: parse the pairing URI, generate the wallet's
@@ -62,6 +65,10 @@ impl<T: wc::RelayTransport> WcManager<T> {
             b64url_decode(&s.self_priv).ok().and_then(|v| v.try_into().ok())
         };
         let inbound = wc::process_inbound(&sym, self_priv.as_ref(), active, &message)?;
+        // Track the pending proposal so a later reject can address it.
+        if let wc::WcInbound::Propose { id, .. } = &inbound {
+            self.pending_proposals.insert(topic.clone(), *id);
+        }
         Ok(Some((topic, inbound)))
     }
 
@@ -148,7 +155,85 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let resp_env = wc::seal_type0(&pairing_sym, response.to_string().as_bytes());
         self.client.publish(pairing_topic, &resp_env, wc::TAG_SESSION_SETTLE, 0)?;
 
+        self.pending_proposals.remove(pairing_topic);
         Ok(session_topic)
+    }
+
+    /// `WalletConnect:rejectSession`: publish a JSON-RPC error for the pending
+    /// proposal on `pairing_topic` (Go `RejectProposal`). Defaults: code 5000,
+    /// message "User rejected".
+    pub fn reject(&mut self, env: &Env, pairing_topic: &str, code: i64, message: &str) -> Result<()> {
+        let proposal_id = self
+            .pending_proposals
+            .remove(pairing_topic)
+            .ok_or_else(|| Error::Env("no pending proposal on that pairing topic".into()))?;
+        let pairing = wc_session::fetch_by_topic(env, pairing_topic)?
+            .ok_or_else(|| Error::Env("pairing session not found".into()))?;
+        let sym: [u8; 32] = b64url_decode(&pairing.sym_key)?
+            .try_into()
+            .map_err(|_| Error::Env("pairing symKey not 32 bytes".into()))?;
+        let code = if code == 0 { 5000 } else { code };
+        let message = if message.is_empty() { "User rejected" } else { message };
+        let rpc = wc::build_jsonrpc_error(proposal_id, code, message);
+        let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+        self.client.publish(pairing_topic, &env0, wc::TAG_SESSION_SETTLE, 0)?;
+        Ok(())
+    }
+
+    /// `WalletConnect:respondError`: publish a JSON-RPC error for a
+    /// `wc_sessionRequest` (Go `RespondSessionError`). Default code 5000.
+    pub fn respond_error(&mut self, env: &Env, topic: &str, id: i64, code: i64, message: &str) -> Result<()> {
+        let sym = self.session_sym(env, topic)?;
+        let code = if code == 0 { 5000 } else { code };
+        let rpc = wc::build_jsonrpc_error(id, code, message);
+        let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+        self.client.publish(topic, &env0, wc::TAG_SESSION_RESPONSE, 0)?;
+        Ok(())
+    }
+
+    /// `WalletConnect:emitEvent`: publish `wc_sessionEvent` on a session (Go
+    /// `EmitSessionEvent`) — used for chainChanged / accountsChanged pushes.
+    pub fn emit_event(&mut self, env: &Env, topic: &str, name: &str, data: serde_json::Value, chain_id: &str) -> Result<()> {
+        let sym = self.session_sym(env, topic)?;
+        let rpc = serde_json::json!({
+            "id": rpc_id(),
+            "jsonrpc": "2.0",
+            "method": "wc_sessionEvent",
+            "params": { "event": { "name": name, "data": data }, "chainId": chain_id },
+        });
+        let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+        self.client.publish(topic, &env0, wc::TAG_SESSION_EVENT, 0)?;
+        Ok(())
+    }
+
+    /// `WalletConnect:disconnect`: send `wc_sessionDelete` to the peer and mark
+    /// the session disconnected locally (Go `Disconnect` + `handleSessionDelete`).
+    pub fn disconnect(&mut self, env: &Env, topic: &str) -> Result<()> {
+        let s = wc_session::fetch_by_topic(env, topic)?
+            .ok_or_else(|| Error::Env("unknown topic".into()))?;
+        let sym: [u8; 32] = b64url_decode(&s.sym_key)?
+            .try_into()
+            .map_err(|_| Error::Env("session symKey not 32 bytes".into()))?;
+        let rpc = serde_json::json!({
+            "id": rpc_id(),
+            "jsonrpc": "2.0",
+            "method": "wc_sessionDelete",
+            "params": { "code": 6000, "message": "User disconnected" },
+        });
+        let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+        // Best-effort publish, then always tear down locally.
+        let _ = self.client.publish(topic, &env0, wc::TAG_SESSION_DELETE, 0);
+        wc_session::set_state(env, &s.id, "disconnected")?;
+        Ok(())
+    }
+
+    /// Fetch an active session by topic and decode its 32-byte symmetric key.
+    fn session_sym(&self, env: &Env, topic: &str) -> Result<[u8; 32]> {
+        let s = wc_session::fetch_by_topic(env, topic)?
+            .ok_or_else(|| Error::Env("unknown topic".into()))?;
+        b64url_decode(&s.sym_key)?
+            .try_into()
+            .map_err(|_| Error::Env("session symKey not 32 bytes".into()))
     }
 
     /// `WalletConnect:respond`: publish a JSON-RPC result for a `wc_sessionRequest`
@@ -185,6 +270,14 @@ pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
         wc::WcInbound::Other { id, method } => ("wc_other", serde_json::json!({ "id": id, "method": method })),
     };
     crate::response::event(kind, serde_json::json!({ "topic": topic, "payload": body }))
+}
+
+/// A JSON-RPC id for outbound notifications (Go uses `time.Now().UnixNano()`).
+fn rpc_id() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
 }
 
 fn b64url(b: &[u8]) -> String {

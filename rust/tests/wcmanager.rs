@@ -120,4 +120,88 @@ fn full_session_handshake() {
     assert_eq!(settle["method"], "wc_sessionSettle");
     assert_eq!(settle["params"]["namespaces"]["eip155"]["accounts"][0], "eip155:1:0xabc");
     assert_eq!(settle["params"]["controller"]["publicKey"], hex(&wallet_pub));
+
+    // Helper: decrypt the last publish on the session topic under the session key.
+    let last_session_publish = |relay: &MockRelay| -> serde_json::Value {
+        let m = relay
+            .sent()
+            .into_iter()
+            .filter(|m| m["method"] == "irn_publish" && m["params"]["topic"] == session_topic)
+            .next_back()
+            .expect("a publish on the session topic");
+        let env = m["params"]["message"].as_str().unwrap().to_owned();
+        let (pt, _) = wc::open_envelope(Some(&session_sym), None, &env).unwrap();
+        serde_json::from_slice(&pt).unwrap()
+    };
+
+    // 5. respondError — a JSON-RPC error for a session request.
+    mgr.respond_error(&env, &session_topic, 100, 4001, "User rejected request").unwrap();
+    let err = last_session_publish(&relay);
+    assert_eq!(err["id"], 100);
+    assert_eq!(err["error"]["code"], 4001);
+    assert_eq!(err["error"]["message"], "User rejected request");
+
+    // 6. emitEvent — wc_sessionEvent (chainChanged) on the session.
+    mgr.emit_event(&env, &session_topic, "chainChanged", serde_json::json!("0x1"), "eip155:1").unwrap();
+    let ev = last_session_publish(&relay);
+    assert_eq!(ev["method"], "wc_sessionEvent");
+    assert_eq!(ev["params"]["event"]["name"], "chainChanged");
+    assert_eq!(ev["params"]["event"]["data"], "0x1");
+    assert_eq!(ev["params"]["chainId"], "eip155:1");
+
+    // 7. disconnect — wc_sessionDelete + local state flips to "disconnected".
+    mgr.disconnect(&env, &session_topic).unwrap();
+    let del = last_session_publish(&relay);
+    assert_eq!(del["method"], "wc_sessionDelete");
+    assert_eq!(del["params"]["code"], 6000);
+    let gone = libwallet::models::wc_session::fetch_by_topic(&env, &session_topic).unwrap().unwrap();
+    assert_eq!(gone.state, "disconnected");
+}
+
+/// A second pairing that the wallet rejects: the JSON-RPC error is published on
+/// the pairing topic under the pairing key, addressing the pending proposal id.
+#[test]
+fn reject_pending_proposal() {
+    let env = Env::init_memory().unwrap();
+    libwallet::models::wc_session::init(&env).unwrap();
+
+    let sym: [u8; 32] = (10u8..42).collect::<Vec<_>>().try_into().unwrap();
+    let topic = wc::derive_topic(&sym);
+    let uri = format!("wc:{topic}@2?relay-protocol=irn&symKey={}", hex(&sym));
+    let (_dapp_priv, dapp_pub) = wc::new_x25519_keypair();
+
+    let relay = MockRelay::default();
+    let mut mgr = WcManager::new(relay.clone());
+    mgr.pair(&env, &uri).unwrap();
+
+    // Rejecting before any proposal arrives is an error.
+    assert!(mgr.reject(&env, &topic, 0, "").is_err());
+
+    // dApp sends a proposal; pump records it as pending.
+    let propose = serde_json::json!({
+        "id": 777, "jsonrpc": "2.0", "method": "wc_sessionPropose",
+        "params": { "proposer": { "publicKey": hex(&dapp_pub) },
+            "requiredNamespaces": { "eip155": { "chains": ["eip155:1"], "methods": ["personal_sign"], "events": [] } } }
+    });
+    let env0 = wc::seal_type0(&sym, propose.to_string().as_bytes());
+    relay.push(&format!(r#"{{"id":1,"method":"irn_subscription","params":{{"data":{{"topic":"{topic}","message":"{env0}","tag":1100}}}}}}"#));
+    mgr.pump(&env).unwrap().unwrap();
+
+    // Reject with default code/message.
+    mgr.reject(&env, &topic, 0, "").unwrap();
+    let m = relay
+        .sent()
+        .into_iter()
+        .filter(|m| m["method"] == "irn_publish" && m["params"]["topic"] == topic)
+        .next_back()
+        .expect("reject published on pairing topic");
+    let env_msg = m["params"]["message"].as_str().unwrap().to_owned();
+    let (pt, _) = wc::open_envelope(Some(&sym), None, &env_msg).unwrap();
+    let reject: serde_json::Value = serde_json::from_slice(&pt).unwrap();
+    assert_eq!(reject["id"], 777);
+    assert_eq!(reject["error"]["code"], 5000);
+    assert_eq!(reject["error"]["message"], "User rejected");
+
+    // The proposal is consumed — a second reject fails.
+    assert!(mgr.reject(&env, &topic, 0, "").is_err());
 }
