@@ -9,6 +9,14 @@ use crate::Env;
 
 use super::{ApiError, ApiResult};
 
+/// `StoreKey:create` -> {private, public}: generate a fresh 64-byte store key
+/// (base64url) and the Ed25519 PKIX public key it derives to (Go
+/// `storekeyCreate`). The host persists `private` on the device.
+pub fn create(_env: &Env, _params: &Value) -> ApiResult {
+    let (private, public) = crate::keystore::create_store_key().map_err(ApiError::internal)?;
+    Ok(json!({ "private": private, "public": public }))
+}
+
 /// `StoreKey:derivePassword` {Password, WalletKeyId} -> {Public_Key}: PBKDF2
 /// (salt = the WalletKey UUID) to an Ed25519 key, returned as its base64url
 /// PKIX public key (Go `storekeyDerivePassword`).

@@ -80,6 +80,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Names:resolve" | "Name:resolve" => names::resolve(&handle.env, params),
         "Contracts:lookup" | "Contract:lookup" => contract::lookup(&handle.env, params),
         "Quote:get" => quote::get(&handle.env, params),
+        "StoreKey:create" => storekey::create(&handle.env, params),
         "StoreKey:derivePassword" => storekey::derive_password(&handle.env, params),
         "Wc:listSessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")

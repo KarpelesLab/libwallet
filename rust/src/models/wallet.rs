@@ -343,19 +343,17 @@ fn b64url_decode(s: &str) -> Result<Vec<u8>> {
 }
 
 /// Resolve the decryption key for a WalletKey from the unlock material:
-/// Password derives via PBKDF2 (salt = the WalletKey UUID); StoreKey takes the
-/// device's 32-byte Ed25519 seed (base64url) that the host supplies at sign
-/// time. (RemoteKey unlock happens on the backend and is not handled here.)
+/// Password derives via PBKDF2 (salt = the WalletKey UUID); StoreKey runs the
+/// host-supplied 64-byte store key through `storeKeyToEd25519` (PBKDF2 with the
+/// store key's own halves), matching Go `walletkey.go`. (RemoteKey unlock happens
+/// on the backend and is not handled here.)
 fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottlers::PrivateKey> {
     match kind {
         "Password" => {
             crate::keystore::password_to_ed25519(material, uuid).map_err(|e| Error::Env(e.to_string()))
         }
         "StoreKey" => {
-            let seed: [u8; 32] = b64url_decode(material)?
-                .try_into()
-                .map_err(|_| Error::Env("StoreKey seed must be 32 bytes".into()))?;
-            Ok(crate::keystore::ed25519_from_seed(seed))
+            crate::keystore::store_key_to_ed25519(material).map_err(|e| Error::Env(e.to_string()))
         }
         other => Err(Error::Env(format!("unlock type {other} not supported locally"))),
     }

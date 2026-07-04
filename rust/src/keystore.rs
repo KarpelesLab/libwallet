@@ -50,6 +50,40 @@ pub fn seed_to_b64url(seed: &[u8; 32]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(seed)
 }
 
+/// base64url (no-pad) of a 64-byte store key.
+pub fn seed_to_b64url_64(store: &[u8; 64]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(store)
+}
+
+/// Generate a fresh 64-byte store key (base64url) and the Ed25519 PKIX public
+/// key it derives to (Go `StoreKey:create`).
+pub fn create_store_key() -> Result<(String, String), KeystoreError> {
+    use purecrypto::rng::RngCore;
+    let mut raw = [0u8; 64];
+    purecrypto::rng::OsRng.fill_bytes(&mut raw);
+    let store_b64 = seed_to_b64url_64(&raw);
+    let pk = store_key_to_ed25519(&store_b64)?;
+    let pub_b64 = public_key_to_pkix_b64(&pk.public())?;
+    Ok((store_b64, pub_b64))
+}
+
+/// Derive the Ed25519 key a StoreKey resolves to (Go `storeKeyToEd25519`): the
+/// 64-byte base64url store key is split, then
+/// `PBKDF2-HMAC-SHA256(store[:32], salt = store[32:], 4096, 32)` gives the seed.
+/// This is the StoreKey scheme's unlock derivation and the input to
+/// `StoreKey:create`'s public key.
+pub fn store_key_to_ed25519(store_key_b64url: &str) -> Result<PrivateKey, KeystoreError> {
+    let k = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(store_key_b64url)
+        .map_err(|e| KeystoreError::Decode(e.to_string()))?;
+    if k.len() != 64 {
+        return Err(KeystoreError::Decode(format!("storeKey must be 64 bytes, got {}", k.len())));
+    }
+    let mut seed = [0u8; 32];
+    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(&k[..32], &k[32..], 4096, &mut seed);
+    Ok(ed25519_from_seed(seed))
+}
+
 /// Derive an Ed25519 key from a password + salt via PBKDF2-HMAC-SHA256, 4096
 /// iterations, 32-byte output — matching Go wltwallet `passwordToEd25519`
 /// (salt is the WalletKey UUID bytes).

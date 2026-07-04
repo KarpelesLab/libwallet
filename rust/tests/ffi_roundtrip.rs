@@ -825,6 +825,53 @@ fn wallet_import_private_key_via_ffi() {
 }
 
 #[test]
+fn storekey_create_and_unlock_via_ffi() {
+    let h = new_env();
+    // Generate a device store key + its derived public key.
+    let sk = request(h, r#"{"path":"StoreKey:create"}"#);
+    assert_eq!(sk["result"], "success", "{sk}");
+    let private = sk["data"]["private"].as_str().unwrap().to_string();
+    let public = sk["data"]["public"].as_str().unwrap().to_string();
+    assert_eq!(private.len(), 86, "64-byte store key -> 86 base64url chars");
+    assert!(!public.is_empty());
+
+    // Build a StoreKey wallet whose recipient is that public key, then sign by
+    // unlocking with the store key — end-to-end proof of the StoreKey scheme.
+    let body = format!(
+        r#"{{"path":"Wallet","verb":"POST","params":{{"Name":"SK","Curve":"ed25519","Keys":[
+            {{"Type":"StoreKey","Key":"{public}"}},
+            {{"Type":"StoreKey","Key":"{public}"}},
+            {{"Type":"StoreKey","Key":"{public}"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "{w}");
+    let k0 = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let k1 = w["data"]["Keys"][1]["Id"].as_str().unwrap().to_string();
+    let account_id = w["data"]["Id"].as_str().unwrap().to_string();
+
+    let sign = request(
+        h,
+        &format!(r#"{{"path":"Account:signMessage","params":{{"Id":"NEEDACCT"}}}}"#),
+    );
+    let _ = sign; // signMessage needs an account; sign via the model path instead below.
+
+    // Sign the wallet directly through a solana account.
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{account_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let acct = a["data"]["Id"].as_str().unwrap().to_string();
+    let msg_b64 = "aGVsbG8="; // "hello"
+    let signed = request(
+        h,
+        &format!(r#"{{"path":"Account:signMessage","params":{{"Id":"{acct}","Message":"{msg_b64}","Keys":[{{"Type":"StoreKey","Id":"{k0}","Key":"{private}"}},{{"Type":"StoreKey","Id":"{k1}","Key":"{private}"}}]}}}}"#),
+    );
+    assert_eq!(signed["result"], "success", "StoreKey unlock+sign: {signed}");
+    assert!(signed["data"]["signature"].as_str().unwrap().len() > 40);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn storekey_derive_password_matches_wallet_key_via_ffi() {
     let h = new_env();
     // A Password wallet stores each key's derived PKIX pubkey in WalletKey.Key;
