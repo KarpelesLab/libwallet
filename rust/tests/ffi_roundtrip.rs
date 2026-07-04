@@ -228,6 +228,64 @@ fn full_flow_create_wallet_account_and_sign_message() {
 }
 
 #[test]
+fn wallet_key_recrypt_changes_password_via_ffi() {
+    let h = new_env();
+    // Create a 2-of-3 Password wallet + a Solana account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk0 = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let wk1 = w["data"]["Keys"][1]["Id"].as_str().unwrap().to_string();
+
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // Recrypt key 0: passwordone -> newpassword1 (object-scoped path).
+    let rec = request(
+        h,
+        &format!(
+            r#"{{"path":"Wallet/Key/{wk0}:recrypt","verb":"POST","params":{{"Old":{{"Type":"Password","Key":"passwordone"}},"New":{{"Type":"Password","Key":"newpassword1"}}}}}}"#
+        ),
+    );
+    assert_eq!(rec["result"], "success", "recrypt failed: {rec}");
+    assert_eq!(rec["data"]["Id"], wk0);
+    assert_eq!(rec["data"]["Type"], "Password");
+    assert!(rec["data"].get("Data").is_none(), "encrypted Data must never cross FFI");
+
+    // The OLD password must no longer unlock key 0.
+    let old_fail = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{wk0}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{wk1}","Key":"passwordtwo"}}]}}}}"#
+        ),
+    );
+    assert_eq!(old_fail["result"], "error", "old password should no longer work: {old_fail}");
+
+    // The NEW password unlocks it and the 2-of-3 signature verifies.
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{wk0}","Key":"newpassword1"}},
+                {{"Type":"Password","Id":"{wk1}","Key":"passwordtwo"}}]}}}}"#
+        ),
+    );
+    assert_eq!(signed["result"], "success", "signMessage with new password failed: {signed}");
+    assert!(signed["data"]["signature"].as_str().unwrap().len() > 80);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn evm_wallet_account_and_sign_transaction_via_ffi() {
     let h = new_env();
     // Create a secp256k1 wallet.

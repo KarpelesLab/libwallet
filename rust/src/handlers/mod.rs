@@ -18,6 +18,7 @@ mod swap;
 mod token;
 mod transaction;
 mod wallet;
+mod wallet_key;
 mod wc;
 mod web3;
 
@@ -64,6 +65,16 @@ pub type ApiResult = Result<Value, ApiError>;
 /// Route a request to its handler. `_verb`/`_params`/`_handle` are threaded
 /// through for handlers that need them; Phase 0 only wires the Info endpoints.
 pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResult {
+    // Object-scoped `Wallet/Key/<id>[:action]` paths (the Dart client addresses
+    // wallet keys by id in the path, not via a params field).
+    if path == "Wallet/Key" {
+        return wallet_key::list(&handle.env);
+    }
+    if let Some(rest) = path.strip_prefix("Wallet/Key/") {
+        let (id, action) = rest.split_once(':').unwrap_or((rest, ""));
+        return wallet_key::route(&handle.env, verb, id, action, params);
+    }
+
     match path {
         "Info:ping" => info::ping(),
         "Info:version" => info::version(),

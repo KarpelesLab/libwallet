@@ -110,6 +110,69 @@ pub fn keys_for(env: &Env, wallet_id: &str) -> Result<Vec<WalletKey>> {
     Ok(rows.iter().map(|r| row_to_key(r)).collect())
 }
 
+/// Load a single WalletKey (including its encrypted `Data`) by id.
+pub fn fetch_key(env: &Env, key_id: &str) -> Result<Option<WalletKey>> {
+    let sql = format!(r#"SELECT {WALLETKEY_COLS} FROM "WalletKey" WHERE "Id" = ?1"#);
+    let rows = env.query(&sql, vec![SqlValue::Text(key_id.to_owned())])?;
+    Ok(rows.first().map(|r| row_to_key(r)))
+}
+
+/// `Wallet/Key:recrypt` — decrypt a WalletKey's share with the `old` descriptor
+/// and re-encrypt it under `new`, in place (Go `walletKeyRecrypt`). The raw
+/// bottle payload is re-sealed as-is, so `Schema` and the underlying share are
+/// preserved. Only local schemes (Password / StoreKey / Plain) are supported;
+/// RemoteKey re-encryption needs the backend fleet keys and is rejected.
+pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescription) -> Result<WalletKey> {
+    let mut wk = fetch_key(env, key_id)?.ok_or_else(|| Error::Env("wallet key not found".into()))?;
+    let xid: Xuid = key_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {key_id}: {e}")))?;
+    let uuid = xid.uuid().as_bytes().to_vec();
+
+    // Decrypt with the old descriptor.
+    let payload = match old.kind.as_str() {
+        "Plain" => keystore::open(&wk.data, std::iter::empty())
+            .map_err(|e| Error::Env(format!("open plain: {e}")))?,
+        "Password" | "StoreKey" => {
+            let priv_key = resolve_unlock_key(&old.kind, &old.key, &uuid)?;
+            keystore::open(&wk.data, std::iter::once(priv_key))
+                .map_err(|e| Error::Env(format!("decrypt with old key: {e}")))?
+        }
+        other => return Err(Error::Env(format!("recrypt old type {other} not supported locally"))),
+    };
+
+    // Re-encrypt with the new descriptor.
+    match new.kind.as_str() {
+        "Plain" => {
+            wk.data = keystore::wrap_plain(&payload).map_err(|e| Error::Env(e.to_string()))?;
+            wk.key = String::new();
+        }
+        "Password" | "StoreKey" => {
+            let priv_key = resolve_unlock_key(&new.kind, &new.key, &uuid)?;
+            let pub_key = priv_key.public();
+            wk.key = keystore::public_key_to_pkix_b64(&pub_key).map_err(|e| Error::Env(e.to_string()))?;
+            wk.data = keystore::seal(&payload, &[pub_key]).map_err(|e| Error::Env(e.to_string()))?;
+        }
+        other => return Err(Error::Env(format!("recrypt new type {other} not supported locally"))),
+    }
+    wk.kind = new.kind.clone();
+
+    // Persist the updated row (delete + reinsert — SQLite upsert without a
+    // dedicated statement; the Id is the primary key).
+    env.exec(r#"DELETE FROM "WalletKey" WHERE "Id" = ?1"#, vec![SqlValue::Text(wk.id.clone())])?;
+    env.exec(
+        &format!(r#"INSERT INTO "WalletKey" ({WALLETKEY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"#),
+        vec![
+            SqlValue::Text(wk.id.clone()),
+            SqlValue::Text(wk.wallet.clone()),
+            SqlValue::Text(wk.kind.clone()),
+            SqlValue::Text(wk.schema.clone()),
+            SqlValue::Text(wk.key.clone()),
+            SqlValue::Blob(wk.data.clone()),
+            SqlValue::Int(wk.generation as i64),
+        ],
+    )?;
+    Ok(wk)
+}
+
 /// Create an all-local ed25519/FROST wallet: keygen (party-keyed by each
 /// WalletKey UUID), derive the group pubkey, encrypt each share per its
 /// KeyDescription, and persist. Port of Wallet:create's initializeFrostWallet.
