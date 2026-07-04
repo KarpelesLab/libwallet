@@ -56,6 +56,14 @@ pub fn paths(env: &Env) -> ApiResult {
     Ok(Value::Object(m))
 }
 
+/// `Info:onboarding` — whether the wallet has any account / wallet yet, so the
+/// host can decide between the create-flow and the main UI (Go `infoOnboarding`).
+pub fn onboarding(env: &Env) -> ApiResult {
+    let has_wallet = !crate::models::wallet::list(env).map_err(ApiError::internal)?.is_empty();
+    let has_account = !crate::models::account::list(env).map_err(ApiError::internal)?.is_empty();
+    Ok(json!({ "has_account": has_account, "has_wallet": has_wallet }))
+}
+
 /// `Info:setWalletInfo` — register the host wallet's identity (ClientId, Name,
 /// Version, LogLevel) in config; returns the stored record (Go
 /// `infoSetWalletInfo`).

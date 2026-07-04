@@ -65,6 +65,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Info:ping" => info::ping(),
         "Info:version" => info::version(),
         "Info:paths" => info::paths(&handle.env),
+        "Info:onboarding" => info::onboarding(&handle.env),
         "Info:first_run" => info::first_run(&handle.env),
         "Info:setWalletInfo" => info::set_wallet_info(&handle.env, params),
         "Info:getWalletInfo" => info::get_wallet_info(&handle.env),
@@ -85,7 +86,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Quote:get" => quote::get(&handle.env, params),
         "StoreKey:create" => storekey::create(&handle.env, params),
         "StoreKey:derivePassword" => storekey::derive_password(&handle.env, params),
-        "Wc:listSessions" => {
+        "Wc:listSessions" | "WalletConnect:sessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")
                 .map_err(ApiError::internal)?;
             Ok(serde_json::to_value(list).unwrap())
@@ -104,6 +105,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account:maxSendable" | "Transaction:maxSendable" => account::max_sendable(&handle.env, params),
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
+        "Account:createView" => account::create_view(&handle.env, params),
         "Account:nextAddress" => account::next_address(&handle.env, params),
         "Account:listUTXOs" | "Account:utxos" => account::utxos(&handle.env, params),
         "Account:allAddresses" => account::all_addresses(&handle.env, params),

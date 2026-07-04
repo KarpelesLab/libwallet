@@ -789,6 +789,36 @@ fn balance_without_rpc_or_network_errors_cleanly() {
 }
 
 #[test]
+fn onboarding_view_account_and_wc_sessions_alias_via_ffi() {
+    let h = new_env();
+    // Fresh env: no wallet, no account.
+    let ob0 = request(h, r#"{"path":"Info:onboarding"}"#);
+    assert_eq!(ob0["data"]["has_wallet"], false);
+    assert_eq!(ob0["data"]["has_account"], false);
+
+    // A view-only account needs no wallet.
+    let v = request(
+        h,
+        r#"{"path":"Account:createView","params":{"Type":"ethereum","Address":"0x000000000000000000000000000000000000dEaD","Name":"Watch"}}"#,
+    );
+    assert_eq!(v["result"], "success", "{v}");
+    assert_eq!(v["data"]["Type"], "ethereum");
+    assert_eq!(v["data"]["Address"], "0x000000000000000000000000000000000000dEaD");
+    assert_eq!(v["data"]["Wallet"], ""); // view-only
+    assert_eq!(v["data"]["Curve"], "secp256k1");
+
+    // Now onboarding reports an account.
+    let ob1 = request(h, r#"{"path":"Info:onboarding"}"#);
+    assert_eq!(ob1["data"]["has_account"], true);
+
+    // WalletConnect:sessions is the Go name for the active-session list.
+    let s = request(h, r#"{"path":"WalletConnect:sessions"}"#);
+    assert_eq!(s["result"], "success", "{s}");
+    assert_eq!(s["data"].as_array().unwrap().len(), 0);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_backup_restore_roundtrip_via_ffi() {
     let src = new_env();
     // Create a wallet + capture its pubkey and key ids.

@@ -173,6 +173,58 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
     Ok(account)
 }
 
+/// Create a view-only account from a bare address (Go `CreateViewAccount`,
+/// address path): no wallet, no derivation — just a watch address. Curve is
+/// ed25519 for solana, secp256k1 otherwise.
+pub fn create_view(env: &Env, name: &str, typ: &str, address: &str) -> Result<Account> {
+    if typ != "ethereum" && typ != "bitcoin" && typ != "solana" {
+        return Err(Error::Env(format!("unsupported account type {typ}")));
+    }
+    if address.is_empty() {
+        return Err(Error::Env("address required for a view account".into()));
+    }
+    let name = if name.is_empty() { "View Account".to_owned() } else { name.to_owned() };
+    let curve = if typ == "solana" { "ed25519" } else { "secp256k1" };
+    let now = crate::now_rfc3339();
+    let account = Account {
+        id: Xuid::new("acct").to_string(),
+        wallet: String::new(), // view-only: no signing wallet
+        name,
+        index: 0,
+        kind: typ.to_owned(),
+        curve: curve.to_owned(),
+        path: String::new(),
+        address: address.to_owned(),
+        uri: format!("{typ}:{address}"),
+        pubkey: String::new(),
+        chaincode: String::new(),
+        il: Value::Null,
+        created: now.clone(),
+        updated: now,
+    };
+    env.exec(
+        &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),
+        vec![
+            SqlValue::Text(account.id.clone()),
+            SqlValue::Text(account.wallet.clone()),
+            SqlValue::Text(account.name.clone()),
+            SqlValue::Int(account.index),
+            SqlValue::Text(account.kind.clone()),
+            SqlValue::Text(account.curve.clone()),
+            SqlValue::Text(account.path.clone()),
+            SqlValue::Text(account.address.clone()),
+            SqlValue::Text(account.uri.clone()),
+            SqlValue::Text(account.pubkey.clone()),
+            SqlValue::Text(account.chaincode.clone()),
+            SqlValue::Text("null".into()),
+            SqlValue::Text(account.created.clone()),
+            SqlValue::Text(account.updated.clone()),
+        ],
+    )?;
+    env.set_current("account", &account.id)?;
+    Ok(account)
+}
+
 impl Account {
     /// The BIP-32 extended public key (`xpub…`) for this account, built from its
     /// compressed pubkey + chain code (Go `Account.Xpub`). Secp256k1-family

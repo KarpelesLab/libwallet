@@ -435,6 +435,16 @@ pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "token": token, "owner": account.address, "balance": bal.to_string() }))
 }
 
+/// `Account:createView` {Name?, Type, Address} — a watch-only account from a
+/// bare address (Go accountCreateView, address path).
+pub fn create_view(env: &Env, params: &Value) -> ApiResult {
+    let typ = params.get("Type").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Type required"))?;
+    let address = params.get("Address").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Address required"))?;
+    let name = params.get("Name").and_then(Value::as_str).unwrap_or("");
+    let a = crate::models::account::create_view(env, name, typ, address).map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(a).unwrap())
+}
+
 /// `Account:xpub` — the BIP-32 extended public key for a bitcoin/ethereum
 /// account (Go `Account:xpub`). Used for gap-limit UTXO/history discovery.
 pub fn xpub(env: &Env, params: &Value) -> ApiResult {
