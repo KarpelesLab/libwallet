@@ -45,6 +45,8 @@ pub mod coininfo;
 pub mod swap;
 // WalletConnect v2 envelope crypto + pairing URI (wltwc).
 pub mod walletconnect;
+// WalletConnect v2 session state machine (wltwc Manager).
+pub mod wcmanager;
 // ERC-20 read calls (balanceOf / allowance).
 pub mod erc20;
 // Cross-device (RemoteKey) spot message routing (wltwallet broker).

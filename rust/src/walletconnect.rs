@@ -96,6 +96,41 @@ pub fn x25519_public(priv_key: &[u8; 32]) -> [u8; 32] {
     x25519(priv_key, &X25519_BASEPOINT)
 }
 
+/// A fresh random X25519 keypair `(private, public)` (the wallet's per-session
+/// proposal keypair).
+pub fn new_x25519_keypair() -> ([u8; 32], [u8; 32]) {
+    use purecrypto::rng::RngCore;
+    let mut priv_key = [0u8; 32];
+    purecrypto::rng::OsRng.fill_bytes(&mut priv_key);
+    let pub_key = x25519_public(&priv_key);
+    (priv_key, pub_key)
+}
+
+/// Seal a Type-0 envelope with a fresh random nonce (production path).
+pub fn seal_type0(sym_key: &[u8; 32], plaintext: &[u8]) -> String {
+    use purecrypto::rng::RngCore;
+    let mut nonce = [0u8; 12];
+    purecrypto::rng::OsRng.fill_bytes(&mut nonce);
+    seal_type0_with_nonce(sym_key, &nonce, plaintext)
+}
+
+/// Lowercase-hex encode (WC uses hex for public keys in JSON-RPC bodies).
+pub fn hex_lower(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Decode a hex or base64url 32-byte public key (Go `hexOrB64Decode`).
+pub fn decode_pubkey32(s: &str) -> Option<[u8; 32]> {
+    if s.len() == 64 {
+        let mut out = [0u8; 32];
+        for i in 0..32 {
+            out[i] = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+        }
+        return Some(out);
+    }
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s).ok()?.try_into().ok()
+}
+
 /// Derive the per-message symKey for a Type-1 envelope: `HKDF-SHA256(X25519(priv,
 /// peerPub))` with empty salt/info (Go `deriveSymKey`).
 pub fn derive_sym_key(priv_key: &[u8; 32], peer_pub: &[u8; 32]) -> [u8; 32] {

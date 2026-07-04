@@ -79,6 +79,40 @@ pub fn create_pairing(
     Ok(s)
 }
 
+/// Persist a new active session row (Go `ApproveProposal`'s `newSess.save`): a
+/// distinct row on the derived session topic, keyed by the session symKey.
+#[allow(clippy::too_many_arguments)]
+pub fn create_active(
+    env: &Env,
+    session_topic: &str,
+    pairing_topic: &str,
+    session_sym_b64: &str,
+    self_priv_b64: &str,
+    self_pub_b64: &str,
+    peer_pub_b64: &str,
+    namespaces_json: &str,
+    expiry: &str,
+) -> Result<WcSession> {
+    let now = crate::now_rfc3339();
+    let s = WcSession {
+        id: Xuid::new(ID_PREFIX).to_string(),
+        topic: session_topic.to_owned(),
+        pairing_topic: pairing_topic.to_owned(),
+        state: "active".to_owned(),
+        sym_key: session_sym_b64.to_owned(),
+        self_priv: self_priv_b64.to_owned(),
+        self_pub: self_pub_b64.to_owned(),
+        peer_pub: peer_pub_b64.to_owned(),
+        peer_metadata: String::new(),
+        namespaces: namespaces_json.to_owned(),
+        expiry: expiry.to_owned(),
+        created: now.clone(),
+        updated: now,
+    };
+    insert(env, &s)?;
+    Ok(s)
+}
+
 fn insert(env: &Env, s: &WcSession) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "WalletConnect" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)"#),
