@@ -385,6 +385,99 @@ fn transaction_sign_and_send_evm_backfills_and_broadcasts() {
     LibwalletDestroy(h);
 }
 
+#[test]
+fn transaction_simulate_evm_decodes_erc20_and_effects() {
+    let h = new_env();
+    // ERC-20 transfer(0x…aa, 1000) calldata against token 0x…bb.
+    let token = "0x00000000000000000000000000000000000000bb";
+    let data = "0xa9059cbb\
+        00000000000000000000000000000000000000000000000000000000000000aa\
+        00000000000000000000000000000000000000000000000000000000000003e8";
+    // callTracer frame with a Transfer log; then prestateTracer (no diff).
+    let call_tracer = r#"{"jsonrpc":"2.0","id":1,"result":{"type":"CALL","from":"0x1111111111111111111111111111111111111111","to":"0x00000000000000000000000000000000000000bb","value":"0x0","gasUsed":"0x5208","logs":[{"address":"0x00000000000000000000000000000000000000BB","topics":["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef","0x0000000000000000000000001111111111111111111111111111111111111111","0x00000000000000000000000000000000000000000000000000000000000000aa"],"data":"0x00000000000000000000000000000000000000000000000000000000000003e8"}],"calls":[]}}"#;
+    let prestate = r#"{"jsonrpc":"2.0","id":1,"result":{"pre":{},"post":{}}}"#;
+    let rpc = mock_multi(vec![call_tracer.into(), prestate.into()]);
+
+    let sim = request(
+        h,
+        &format!(
+            r#"{{"path":"Transaction:simulate","params":{{"type":"erc20_transfer","from":"0x1111111111111111111111111111111111111111","to":"{token}","data":"{data}","RPC":"{rpc}"}}}}"#
+        ),
+    );
+    assert_eq!(sim["result"], "success", "{sim}");
+    assert_eq!(sim["data"]["chain"], "evm");
+    assert_eq!(sim["data"]["willRevert"], false);
+    assert_eq!(sim["data"]["decodedMethod"], "erc20_transfer");
+    assert_eq!(sim["data"]["decodedArgs"]["token"], token);
+    assert_eq!(sim["data"]["decodedArgs"]["amount"], "1000");
+    assert_eq!(sim["data"]["gasEstimate"], 21000);
+    let eff = &sim["data"]["effects"][0];
+    assert_eq!(eff["type"], "erc20_transfer");
+    assert_eq!(eff["amount"], "1000");
+    assert_eq!(eff["token"], token); // lowercased
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn transaction_simulate_evm_reports_revert() {
+    let h = new_env();
+    // callTracer frame carrying an Error(string) revert of "Boom".
+    let revert_data = "0x08c379a0\
+        0000000000000000000000000000000000000000000000000000000000000020\
+        0000000000000000000000000000000000000000000000000000000000000004\
+        426f6f6d00000000000000000000000000000000000000000000000000000000";
+    let call_tracer = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"result":{{"type":"CALL","from":"0x1111111111111111111111111111111111111111","to":"0x00000000000000000000000000000000000000bb","error":"execution reverted","revertReason":"{revert_data}","calls":[]}}}}"#
+    );
+    let prestate = r#"{"jsonrpc":"2.0","id":1,"result":{"pre":{},"post":{}}}"#;
+    let rpc = mock_multi(vec![call_tracer, prestate.into()]);
+
+    let sim = request(
+        h,
+        &format!(
+            r#"{{"path":"Transaction:simulate","params":{{"type":"evm","from":"0x1111111111111111111111111111111111111111","to":"0x00000000000000000000000000000000000000bb","data":"0xdeadbeef","RPC":"{rpc}"}}}}"#
+        ),
+    );
+    assert_eq!(sim["result"], "success", "{sim}");
+    assert_eq!(sim["data"]["willRevert"], true);
+    assert_eq!(sim["data"]["revertReason"], "Boom");
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn transaction_simulate_evm_fallback_and_unlimited_approve_warning() {
+    let h = new_env();
+    // Unlimited approve(spender, 2^256-1) — no callTracer support on the node,
+    // so simulate falls back to eth_call + eth_estimateGas.
+    let max = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    let data = format!(
+        "0x095ea7b3\
+        00000000000000000000000000000000000000000000000000000000000000cc{max}"
+    );
+    // debug_traceCall errors (method not found) → fallback; eth_call ok;
+    // eth_estimateGas → 0xabcd; second debug_traceCall (prestate) errors.
+    let err = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"method not found"}}"#;
+    let ok = r#"{"jsonrpc":"2.0","id":1,"result":"0x"}"#;
+    let gas = r#"{"jsonrpc":"2.0","id":1,"result":"0xabcd"}"#;
+    let rpc = mock_multi(vec![err.into(), ok.into(), gas.into(), err.into()]);
+
+    let sim = request(
+        h,
+        &format!(
+            r#"{{"path":"Transaction:simulate","params":{{"type":"erc20_approve","from":"0x1111111111111111111111111111111111111111","to":"0x00000000000000000000000000000000000000bb","data":"{data}","RPC":"{rpc}"}}}}"#
+        ),
+    );
+    assert_eq!(sim["result"], "success", "{sim}");
+    assert_eq!(sim["data"]["decodedMethod"], "erc20_approve");
+    assert_eq!(sim["data"]["gasEstimate"], 0xabcd);
+    // Fallback synthesizes one effect from the decode.
+    assert_eq!(sim["data"]["effects"][0]["type"], "erc20_approve");
+    // The unlimited-approve warning fires.
+    let warns = sim["data"]["warnings"].as_array().unwrap();
+    assert!(warns.iter().any(|w| w["code"] == "erc20_approve_unlimited"), "{sim}");
+    LibwalletDestroy(h);
+}
+
 /// One-shot mock JSON-RPC node returning `response_json`; yields its URL.
 fn mock_node(response_json: &str) -> String {
     use std::io::{Read, Write};

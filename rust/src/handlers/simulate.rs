@@ -1,0 +1,460 @@
+//! `Transaction:simulate` — preview a transaction without signing (port of the
+//! EVM path of wlttx/simulate.go). Decodes the top-level call, then simulates
+//! against the node: prefer `debug_traceCall` (callTracer for the full effect
+//! tree + revert, prestateTracer for native balance changes), falling back to
+//! `eth_call` + `eth_estimateGas`. Non-blocking approval warnings
+//! (recipient-is-contract, unlimited-approve) are appended best-effort.
+//!
+//! Solana/Bitcoin simulation is deferred (returns `{chain, decodedMethod:
+//! "unknown"}`); their raw-tx decoders follow.
+
+use num_bigint::BigInt;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::Env;
+
+use super::{ApiError, ApiResult};
+
+// keccak256("Transfer(address,address,uint256)") / ("Approval(...)").
+const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+const APPROVAL_TOPIC: &str = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
+const ERC20_TRANSFER_SELECTOR: &str = "a9059cbb";
+const ERC20_APPROVE_SELECTOR: &str = "095ea7b3";
+
+/// `Transaction:simulate` {tx fields, RPC?}. Resolves the current network and
+/// runs the per-chain simulator.
+pub fn simulate(env: &Env, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").unwrap_or(params);
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+
+    if net.kind != "evm" {
+        // Solana/Bitcoin simulators not yet ported.
+        return Ok(json!({ "chain": net.kind, "decodedMethod": "unknown" }));
+    }
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
+    };
+    Ok(simulate_evm(&rpc, tx))
+}
+
+fn simulate_evm(rpc: &str, tx: &Value) -> Value {
+    let (decoded_method, decoded_args) = decode_evm_call(tx);
+
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    let from = tx.get("from").and_then(Value::as_str).unwrap_or("");
+    let data_hex = strip_hex(tx.get("data").and_then(Value::as_str).unwrap_or(""));
+
+    let mut call = json!({ "to": to, "data": format!("0x{data_hex}") });
+    if !from.is_empty() {
+        call["from"] = json!(from);
+    }
+    // eth_call value comes from tx.Value (Go simulateEVM), not tx.Amount.
+    if let Some(v) = amount_bigint(tx.get("value")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
+        call["value"] = json!(format!("0x{v:x}"));
+    }
+    if let Some(g) = tx.get("gas").and_then(Value::as_u64).filter(|g| *g > 0) {
+        call["gas"] = json!(format!("0x{g:x}"));
+    }
+
+    let mut will_revert = false;
+    let mut revert_reason = String::new();
+    let mut gas_estimate: u64 = 0;
+    let mut effects: Vec<Value> = Vec::new();
+
+    // Prefer callTracer for the full effect tree + revert.
+    let call_tracer = json!({ "tracer": "callTracer", "tracerConfig": { "withLog": true } });
+    let traced = crate::rpc::call(rpc, "debug_traceCall", json!([call, "latest", call_tracer]));
+    if let Ok(raw) = traced {
+        if let Ok(frame) = serde_json::from_value::<CallFrame>(raw) {
+            if !frame.error.is_empty() {
+                will_revert = true;
+                revert_reason = decode_revert_hex(&frame.revert_reason);
+                if revert_reason.is_empty() {
+                    revert_reason = frame.error.clone();
+                }
+            }
+            effects = extract_effects(&frame);
+            if let Some(g) = hex_u64(&frame.gas_used) {
+                gas_estimate = g;
+            }
+        }
+    } else {
+        // Fall back to eth_call + eth_estimateGas.
+        match crate::rpc::call(rpc, "eth_call", json!([call, "latest"])) {
+            Ok(_) => {
+                if let Ok(g) = crate::rpc::call(rpc, "eth_estimateGas", json!([call])) {
+                    if let Some(g) = g.as_str().and_then(hex_u64) {
+                        gas_estimate = g;
+                    }
+                }
+                if let Some(eff) = effect_from_decoded(from, &decoded_method, &decoded_args) {
+                    effects.push(eff);
+                }
+            }
+            Err(e) => {
+                will_revert = true;
+                revert_reason = decode_evm_revert(&e.to_string());
+            }
+        }
+    }
+
+    // Second pass: native-balance diff via prestateTracer (best-effort).
+    let mut balance_changes: Vec<Value> = Vec::new();
+    let pre_cfg = json!({ "tracer": "prestateTracer", "tracerConfig": { "diffMode": true } });
+    if let Ok(raw) = crate::rpc::call(rpc, "debug_traceCall", json!([call, "latest", pre_cfg])) {
+        balance_changes = extract_balance_changes(&raw);
+    }
+
+    let warnings = evm_warnings(rpc, tx, &data_hex);
+
+    // Assemble the SimulationResult with Go's omitempty semantics.
+    let mut out = json!({ "chain": "evm", "willRevert": will_revert });
+    if !revert_reason.is_empty() {
+        out["revertReason"] = json!(revert_reason);
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    if !decoded_method.is_empty() {
+        out["decodedMethod"] = json!(decoded_method);
+    }
+    if !decoded_args.is_null() {
+        out["decodedArgs"] = decoded_args;
+    }
+    if !effects.is_empty() {
+        out["effects"] = json!(effects);
+    }
+    if !balance_changes.is_empty() {
+        out["balanceChanges"] = json!(balance_changes);
+    }
+    if gas_estimate > 0 {
+        out["gasEstimate"] = json!(gas_estimate);
+    }
+    out
+}
+
+#[derive(Deserialize, Default)]
+struct CallFrame {
+    #[serde(rename = "type", default)]
+    typ: String,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    to: String,
+    #[serde(default)]
+    value: String,
+    #[serde(rename = "gasUsed", default)]
+    gas_used: String,
+    #[serde(default)]
+    error: String,
+    #[serde(rename = "revertReason", default)]
+    revert_reason: String,
+    #[serde(default)]
+    logs: Vec<CallLog>,
+    #[serde(default)]
+    calls: Vec<CallFrame>,
+}
+
+#[derive(Deserialize, Default)]
+struct CallLog {
+    #[serde(default)]
+    address: String,
+    #[serde(default)]
+    topics: Vec<String>,
+    #[serde(default)]
+    data: String,
+}
+
+/// Walk a callTracer frame tree, pulling out every value-carrying CALL/CREATE
+/// and every ERC-20 Transfer/Approval log as an Effect.
+fn extract_effects(root: &CallFrame) -> Vec<Value> {
+    let mut out = Vec::new();
+    walk_frame(root, &mut out);
+    out
+}
+
+fn walk_frame(f: &CallFrame, out: &mut Vec<Value>) {
+    if (f.typ == "CALL" || f.typ == "CREATE" || f.typ == "CREATE2")
+        && !f.value.is_empty()
+        && f.value != "0x"
+        && f.value != "0x0"
+    {
+        if let Some(v) = hex_bigint(&f.value) {
+            if v.sign() == num_bigint::Sign::Plus {
+                out.push(json!({
+                    "type": "native_transfer",
+                    "from": f.from.to_lowercase(),
+                    "to": f.to.to_lowercase(),
+                    "amount": v.to_string(),
+                }));
+            }
+        }
+    }
+    for lg in &f.logs {
+        let Some(topic0) = lg.topics.first() else { continue };
+        if topic0 == TRANSFER_TOPIC {
+            if let Some(eff) = decode_log(lg, "erc20_transfer") {
+                out.push(eff);
+            }
+        } else if topic0 == APPROVAL_TOPIC {
+            if let Some(eff) = decode_log(lg, "erc20_approve") {
+                out.push(eff);
+            }
+        }
+    }
+    for c in &f.calls {
+        walk_frame(c, out);
+    }
+}
+
+/// Decode a Transfer/Approval log (indexed from/to in topics[1,2], amount in
+/// data) into an Effect. `kind` selects the effect type.
+fn decode_log(lg: &CallLog, kind: &str) -> Option<Value> {
+    if lg.topics.len() < 3 {
+        return None;
+    }
+    let from = format!("0x{}", topic_to_address(&lg.topics[1]));
+    let to = format!("0x{}", topic_to_address(&lg.topics[2]));
+    let amt = hex_bigint(&lg.data)?;
+    Some(json!({
+        "type": kind,
+        "token": lg.address.to_lowercase(),
+        "from": from,
+        "to": to,
+        "amount": amt.to_string(),
+    }))
+}
+
+fn topic_to_address(topic: &str) -> String {
+    let t = topic.strip_prefix("0x").unwrap_or(topic);
+    if t.len() < 40 {
+        return t.to_lowercase();
+    }
+    t[t.len() - 40..].to_lowercase()
+}
+
+/// Synthesize a single Effect from the top-level decode when no tracer tree is
+/// available.
+fn effect_from_decoded(from: &str, method: &str, args: &Value) -> Option<Value> {
+    let from = from.to_lowercase();
+    let s = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    match method {
+        "native_transfer" => Some(json!({ "type": "native_transfer", "from": from, "to": s("to").to_lowercase(), "amount": s("amount") })),
+        "erc20_transfer" => Some(json!({ "type": "erc20_transfer", "token": s("token").to_lowercase(), "from": from, "to": s("to").to_lowercase(), "amount": s("amount") })),
+        "erc20_approve" => Some(json!({ "type": "erc20_approve", "token": s("token").to_lowercase(), "from": from, "to": s("spender").to_lowercase(), "amount": s("amount") })),
+        _ => None,
+    }
+}
+
+/// Recognize the ERC-20 transfer/approve shape and a plain native transfer.
+/// Returns (decodedMethod, decodedArgs).
+fn decode_evm_call(tx: &Value) -> (String, Value) {
+    let data = strip_hex(tx.get("data").and_then(Value::as_str).unwrap_or(""));
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    if data.is_empty() {
+        if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
+            return ("native_transfer".into(), json!({ "to": to, "amount": amount_string(tx.get("amount"), &amt) }));
+        }
+        return (String::new(), Value::Null);
+    }
+    if data.len() < 8 {
+        return ("unknown".into(), json!({ "selector": format!("0x{data}") }));
+    }
+    let selector = &data[..8];
+    if selector == ERC20_TRANSFER_SELECTOR {
+        if let Some((addr, amt)) = decode_erc20_args(&data[8..]) {
+            return ("erc20_transfer".into(), json!({ "token": to, "to": addr, "amount": amt.to_string() }));
+        }
+    } else if selector == ERC20_APPROVE_SELECTOR {
+        if let Some((addr, amt)) = decode_erc20_args(&data[8..]) {
+            return ("erc20_approve".into(), json!({ "token": to, "spender": addr, "amount": amt.to_string() }));
+        }
+    }
+    ("unknown".into(), json!({ "selector": format!("0x{selector}"), "data": format!("0x{data}") }))
+}
+
+/// Parse a 64-byte ABI-encoded (address, uint256).
+fn decode_erc20_args(hex_args: &str) -> Option<(String, BigInt)> {
+    if hex_args.len() < 128 {
+        return None;
+    }
+    let addr_hex = &hex_args[24..64];
+    if addr_hex.chars().any(|c| !c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let amt = BigInt::parse_bytes(hex_args[64..128].as_bytes(), 16)?;
+    Some((format!("0x{addr_hex}"), amt))
+}
+
+/// Decode a callTracer revertReason blob (`Error(string)` = 0x08c379a0).
+fn decode_revert_hex(s: &str) -> String {
+    let raw = match hex_bytes(s.strip_prefix("0x").unwrap_or(s)) {
+        Some(r) if r.len() >= 4 + 64 => r,
+        _ => return s.to_owned(),
+    };
+    if hex_lower(&raw[..4]) != "08c379a0" {
+        return s.to_owned();
+    }
+    let length = BigInt::from_bytes_be(num_bigint::Sign::Plus, &raw[4 + 32..4 + 64]);
+    let length: i64 = (&length).try_into().unwrap_or(-1);
+    if length <= 0 || (raw.len() as i64) < 4 + 64 + length {
+        return s.to_owned();
+    }
+    String::from_utf8_lossy(&raw[4 + 64..4 + 64 + length as usize]).into_owned()
+}
+
+/// Pull a human reason out of an eth_call error string (`Error(string)`).
+fn decode_evm_revert(msg: &str) -> String {
+    let Some(idx) = msg.find("0x") else { return msg.to_owned() };
+    let hex_part = &msg[idx..];
+    let mut end = hex_part.len();
+    for (i, c) in hex_part.char_indices().skip(2) {
+        if !c.is_ascii_hexdigit() {
+            end = i;
+            break;
+        }
+    }
+    let payload = &hex_part[..end];
+    let raw = match hex_bytes(payload.strip_prefix("0x").unwrap_or(payload)) {
+        Some(r) if r.len() >= 4 => r,
+        _ => return msg.to_owned(),
+    };
+    if raw.len() >= 4 + 64 && hex_lower(&raw[..4]) == "08c379a0" {
+        let length = BigInt::from_bytes_be(num_bigint::Sign::Plus, &raw[4 + 32..4 + 64]);
+        let length: i64 = (&length).try_into().unwrap_or(-1);
+        if length > 0 && (raw.len() as i64) >= 4 + 64 + length {
+            return String::from_utf8_lossy(&raw[4 + 64..4 + 64 + length as usize]).into_owned();
+        }
+    }
+    msg.to_owned()
+}
+
+/// prestateTracer diff → per-address native-balance deltas.
+fn extract_balance_changes(raw: &Value) -> Vec<Value> {
+    #[derive(Deserialize)]
+    struct Diff {
+        #[serde(default)]
+        pre: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
+        #[serde(default)]
+        post: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Value>>,
+    }
+    let Ok(diff) = serde_json::from_value::<Diff>(raw.clone()) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (addr, pre) in &diff.pre {
+        seen.insert(addr.clone());
+        let pre_bal = pre.get("balance").and_then(hex_bigint_val);
+        let post_bal = diff.post.get(addr).and_then(|p| p.get("balance")).and_then(hex_bigint_val);
+        if pre_bal.is_none() && post_bal.is_none() {
+            continue;
+        }
+        let delta = post_bal.unwrap_or_else(|| BigInt::from(0)) - pre_bal.unwrap_or_else(|| BigInt::from(0));
+        if delta.sign() != num_bigint::Sign::NoSign {
+            out.push(json!({ "address": addr.to_lowercase(), "delta": delta.to_string() }));
+        }
+    }
+    for (addr, post) in &diff.post {
+        if seen.contains(addr) {
+            continue;
+        }
+        if let Some(bal) = post.get("balance").and_then(hex_bigint_val).filter(|b| b.sign() == num_bigint::Sign::Plus) {
+            out.push(json!({ "address": addr.to_lowercase(), "delta": bal.to_string() }));
+        }
+    }
+    out
+}
+
+/// Non-blocking EVM approval warnings (recipient-is-contract, unlimited-approve).
+fn evm_warnings(rpc: &str, tx: &Value, data_hex: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("");
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    let has_value = amount_bigint(tx.get("amount")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false)
+        || amount_bigint(tx.get("value")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false);
+
+    if (typ == "transfer" || typ == "evm") && !to.is_empty() && has_value && data_hex.is_empty() && is_contract(rpc, to) {
+        out.push(json!({
+            "code": "recipient_is_contract",
+            "severity": "warn",
+            "message": format!("recipient {to} is a contract — plain transfers to contracts without a payable fallback are permanently lost"),
+            "field": "to",
+        }));
+    }
+
+    if data_hex.len() >= 8 + 128 && &data_hex[..8] == ERC20_APPROVE_SELECTOR {
+        if let Some((_, amount)) = decode_erc20_args(&data_hex[8..]) {
+            // Unlimited = top bit set (> 2^255).
+            if amount >= (BigInt::from(1) << 255) {
+                out.push(json!({
+                    "code": "erc20_approve_unlimited",
+                    "severity": "warn",
+                    "message": "this transaction grants an unlimited allowance to the spender — a compromised or malicious spender contract can drain the entire token balance at any time",
+                    "field": "amount",
+                }));
+            }
+        }
+    }
+    out
+}
+
+fn is_contract(rpc: &str, addr: &str) -> bool {
+    let Ok(v) = crate::rpc::call(rpc, "eth_getCode", json!([addr, "latest"])) else { return false };
+    let code = v.as_str().unwrap_or("");
+    strip_hex(code).chars().any(|c| c != '0')
+}
+
+// ── small helpers ──────────────────────────────────────────────────────────
+
+fn strip_hex(s: &str) -> String {
+    s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s).to_owned()
+}
+
+fn hex_u64(s: &str) -> Option<u64> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    if s.is_empty() {
+        return None;
+    }
+    u64::from_str_radix(s, 16).ok()
+}
+
+fn hex_bigint(s: &str) -> Option<BigInt> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    BigInt::parse_bytes(s.as_bytes(), 16)
+}
+
+fn hex_bigint_val(v: &Value) -> Option<BigInt> {
+    hex_bigint(v.as_str()?)
+}
+
+fn hex_bytes(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+fn hex_lower(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// The significand of an Amount-shaped JSON value ({v,e,f} or decimal string).
+fn amount_bigint(v: Option<&Value>) -> Option<BigInt> {
+    let v = v?;
+    if let Some(obj) = v.as_object() {
+        return obj.get("v").and_then(Value::as_str).and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10));
+    }
+    v.as_str().and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10))
+}
+
+/// The decimal-point string of an Amount (Go `Amount.String`), used for the
+/// native_transfer decodedArgs amount. Falls back to the significand.
+fn amount_string(v: Option<&Value>, significand: &BigInt) -> String {
+    if let Some(a) = v.and_then(|x| serde_json::from_value::<crate::Amount>(x.clone()).ok()) {
+        return a.to_string();
+    }
+    significand.to_string()
+}

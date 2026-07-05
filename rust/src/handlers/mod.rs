@@ -12,6 +12,7 @@ mod info;
 mod lifecycle;
 mod names;
 mod network;
+mod simulate;
 mod nft;
 mod quote;
 mod storekey;
@@ -153,6 +154,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Transaction" => transaction::route(&handle.env, verb, params),
         "Transaction:validate" => transaction::validate(&handle.env, params),
         "Transaction:signAndSend" => transaction::sign_and_send(&handle.env, params),
+        "Transaction:simulate" => simulate::simulate(&handle.env, params),
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
         _ => Err(ApiError::not_found(path)),
