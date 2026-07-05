@@ -1243,6 +1243,78 @@ fn web3_personal_sign_via_message_approval() {
 }
 
 #[test]
+fn web3_eth_send_transaction_via_approval() {
+    let h = new_env();
+    let site = "https://dex.example.com";
+
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let next_request_id = |erx: &std::sync::mpsc::Receiver<String>| -> String {
+        for _ in 0..50 {
+            if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+                let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+                if j["event"] == "request" {
+                    return j["data"]["request_id"].as_str().unwrap().to_owned();
+                }
+            }
+        }
+        panic!("no request event");
+    };
+
+    // Connect the account.
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let cid = next_request_id(&erx);
+    request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
+
+    // eth_sendTransaction with all fees pinned (only the broadcast hits the node).
+    let mock = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"0xhashbeef"}"#.into()]);
+    let tx = format!(
+        r#"{{"from":"{address}","to":"0x000000000000000000000000000000000000dEaD","value":"0xde0b6b3a7640000","gas":"0x5208","gasPrice":"0x4a817c800","nonce":"0x1"}}"#
+    );
+    let (srx, sud) = request_async(
+        h,
+        &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_sendTransaction","params":[{tx}]}}}}}}"#),
+    );
+    let sid = next_request_id(&erx);
+    // The approval carries the normalized transaction (hex quantities decoded).
+    let approve = request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","RPC":"{mock}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    assert_eq!(approve["result"], "success", "tx approve failed: {approve}");
+
+    let resp = srx.recv_timeout(Duration::from_secs(30)).expect("eth_sendTransaction resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    assert_eq!(j["data"], "0xhashbeef");
+
+    drop(unsafe { Box::from_raw(cud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

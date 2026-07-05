@@ -85,6 +85,12 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
                 return Err(e);
             }
         }
+        "transaction_sign" => {
+            if let Err(e) = approve_transaction_sign(env, &req, params) {
+                release(env, id);
+                return Err(e);
+            }
+        }
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
@@ -135,6 +141,30 @@ fn approve_connect(env: &Env, req: &Request, params: &Value) -> Result<(), ApiEr
             .map(|a| a.address)
             .collect();
         env.broadcast(&crate::response::event("js:accountsChanged", json!({ "accounts": addrs })));
+    }
+    Ok(())
+}
+
+/// Build, sign, and broadcast the pending `transaction_sign` request and store
+/// the tx hash + Transaction in the request Result (Go `approveTransactionSign`).
+/// EVM only — reuses transaction::sign_and_send. The host provides Keys (and,
+/// for now, the RPC endpoint) in the approve params.
+fn approve_transaction_sign(env: &Env, req: &Request, params: &Value) -> Result<(), ApiError> {
+    let tx = req.transaction.clone().ok_or_else(|| ApiError::new(400, "transaction_sign: missing Transaction"))?;
+    let mut sas_params = serde_json::json!({ "Transaction": tx });
+    if let Some(keys) = params.get("Keys") {
+        sas_params["Keys"] = keys.clone();
+    }
+    if let Some(rpc) = params.get("RPC") {
+        sas_params["RPC"] = rpc.clone();
+    }
+    let signed = super::transaction::sign_and_send(env, &sas_params)?;
+
+    if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
+        r.result = signed.get("hash").cloned();
+        r.transaction = Some(signed);
+        r.updated = crate::now_rfc3339();
+        request::save(env, &r).map_err(ApiError::internal)?;
     }
     Ok(())
 }

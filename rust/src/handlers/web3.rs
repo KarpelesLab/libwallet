@@ -60,6 +60,7 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             Ok(json!(eth_accounts_permission(env, &key, &conn)))
         }
         "personal_sign" => personal_sign(env, &key, &q_params),
+        "eth_sendTransaction" => eth_send_transaction(env, &key, &q_params),
         other => Err(ApiError::new(
             501,
             format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
@@ -112,6 +113,71 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// `eth_sendTransaction` params [txObject] — normalize the dApp's hex-quantity
+/// tx, authorize the sender, raise a `transaction_sign` approval, and return the
+/// broadcast tx hash (the approval arm builds/signs/broadcasts + persists).
+fn eth_send_transaction(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let raw_tx = q_params.first().and_then(Value::as_object).ok_or_else(|| ApiError::new(400, "eth_sendTransaction requires a transaction object"))?;
+    let from = raw_tx.get("from").and_then(Value::as_str).unwrap_or("").to_string();
+
+    // Authorization: `from` must be a connected EVM address for this origin.
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    let authorized = collect_evm_addresses(env, &conn).iter().any(|a| a.eq_ignore_ascii_case(&from));
+    if !authorized {
+        return Err(ApiError::new(400, "eth_sendTransaction: from address is not a connected account for this origin"));
+    }
+
+    // Normalize hex quantities to the shape transaction::sign_and_send expects.
+    let mut tx = json!({ "type": "evm", "from": from });
+    if let Some(to) = raw_tx.get("to").and_then(Value::as_str) {
+        tx["to"] = json!(to);
+    }
+    if let Some(d) = raw_tx.get("data").and_then(Value::as_str) {
+        tx["data"] = json!(d);
+    }
+    if let Some(v) = raw_tx.get("value").and_then(Value::as_str).and_then(hex_qty_dec) {
+        tx["value"] = json!(v);
+    }
+    if let Some(g) = raw_tx.get("gas").and_then(Value::as_str).and_then(hex_qty_u64) {
+        tx["gas"] = json!(g);
+    }
+    if let Some(n) = raw_tx.get("nonce").and_then(Value::as_str).and_then(hex_qty_u64) {
+        tx["nonce"] = json!(n);
+    }
+    if let Some(p) = raw_tx.get("gasPrice").and_then(Value::as_str).and_then(hex_qty_dec) {
+        tx["gasPrice"] = json!(p);
+    }
+    if let Some(p) = raw_tx.get("maxFeePerGas").and_then(Value::as_str).and_then(hex_qty_dec) {
+        tx["maxFeePerGas"] = json!(p);
+    }
+    if let Some(p) = raw_tx.get("maxPriorityFeePerGas").and_then(Value::as_str).and_then(hex_qty_dec) {
+        tx["maxPriorityFeePerGas"] = json!(p);
+    }
+
+    let req = crate::models::request::Request {
+        kind: "transaction_sign".into(),
+        host: host.to_owned(),
+        account: Some(from),
+        transaction: Some(tx),
+        value: Some(json!({ "method": "eth_sendTransaction", "chain": "evm" })),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
+}
+
+/// Convert a 0x-hex quantity to a decimal string.
+fn hex_qty_dec(s: &str) -> Option<String> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+    Some(BigInt::parse_bytes(s.as_bytes(), 16)?.to_string())
+}
+
+/// Convert a 0x-hex quantity to u64.
+fn hex_qty_u64(s: &str) -> Option<u64> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+    u64::from_str_radix(s, 16).ok()
 }
 
 /// Raise a `connect` approval request and block until the host resolves it. On
