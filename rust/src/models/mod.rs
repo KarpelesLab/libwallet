@@ -8,6 +8,7 @@ pub mod contact;
 pub mod crash;
 pub mod network;
 pub mod nft;
+pub mod request;
 pub mod token;
 pub mod transaction;
 pub mod wallet;

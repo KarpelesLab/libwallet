@@ -1012,6 +1012,94 @@ fn walletconnect_ffi_pair_and_approve_over_loopback() {
     LibwalletDestroy(h);
 }
 
+/// Fire a request WITHOUT blocking for its response; returns the response
+/// channel + the user_data box pointer (free it after collecting the response).
+fn request_async(h: usize, body: &str) -> (std::sync::mpsc::Receiver<String>, usize) {
+    let (tx, rx) = channel::<String>();
+    let ud = Box::into_raw(Box::new(tx)) as usize;
+    let req = CString::new(body).unwrap();
+    LibwalletRequest(h, req.as_ptr(), Some(capture as ResponseCallback), ud);
+    (rx, ud)
+}
+
+#[test]
+fn request_approve_round_trip() {
+    let h = new_env();
+    // Capture host events to learn the request id.
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+
+    // Request:test blocks until approved — fire it async.
+    let (rrx, rud) = request_async(h, r#"{"path":"Request:test"}"#);
+
+    // The pending request surfaces as a "request" host event.
+    let mut req_id = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                req_id = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let req_id = req_id.expect("request event delivered");
+
+    // Approve it; the blocked Request:test then resolves as accepted.
+    let appr = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{req_id}"}}}}"#));
+    assert_eq!(appr["result"], "success", "{appr}");
+    assert_eq!(appr["data"]["Status"], "accepted");
+
+    let resp = rrx.recv_timeout(Duration::from_secs(5)).expect("Request:test resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    assert_eq!(j["data"]["Status"], "accepted");
+    assert_eq!(j["data"]["Type"], "test");
+
+    drop(unsafe { Box::from_raw(rud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn request_reject_round_trip() {
+    let h = new_env();
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+
+    let (rrx, rud) = request_async(h, r#"{"path":"Request:test"}"#);
+
+    let mut req_id = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                req_id = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let req_id = req_id.expect("request event delivered");
+
+    let rej = request(h, &format!(r#"{{"path":"Request:reject","params":{{"Id":"{req_id}"}}}}"#));
+    assert_eq!(rej["result"], "success", "{rej}");
+
+    // The blocked Request:test resolves with status "rejected".
+    let resp = rrx.recv_timeout(Duration::from_secs(5)).expect("Request:test resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["data"]["Status"], "rejected", "{j}");
+
+    // Approving an already-resolved request now fails.
+    let again = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{req_id}"}}}}"#));
+    assert_eq!(again["result"], "error");
+
+    drop(unsafe { Box::from_raw(rud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
 #[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();

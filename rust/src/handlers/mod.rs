@@ -12,6 +12,7 @@ mod info;
 mod lifecycle;
 mod names;
 mod network;
+mod request;
 mod simulate;
 mod nft;
 mod quote;
@@ -41,6 +42,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::nft::init(env)?;
     crate::models::transaction::init(env)?;
     crate::models::wc_session::init(env)?;
+    crate::models::request::init(env)?;
     Ok(())
 }
 
@@ -157,6 +159,10 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Transaction:simulate" => simulate::simulate(&handle.env, params),
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
+        "Request" => request::route(&handle.env, verb, params),
+        "Request:test" => request::test(&handle.env),
+        "Request:approve" => request::approve(&handle.env, params),
+        "Request:reject" => request::reject(&handle.env, params),
         _ => Err(ApiError::not_found(path)),
     }
 }

@@ -34,6 +34,10 @@ pub struct Env {
     db: Db,
     event_sink: Mutex<Option<EventSink>>,
     wc: Mutex<Option<WcRuntime>>,
+    /// Waiters for pending user-approval requests, keyed by request id. `run`
+    /// registers a sender here and blocks on the receiver; `Request:approve`/
+    /// `reject` looks it up and delivers the terminal status.
+    request_waiters: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<String>>>,
 }
 
 impl Env {
@@ -52,7 +56,13 @@ impl Env {
             .ok_or_else(|| Error::Env(format!("non-UTF8 data path: {dir:?}")))?;
         let db = Db::open(sql_path)?;
 
-        let env = Env { data_dir: dir, db, event_sink: Mutex::new(None), wc: Mutex::new(None) };
+        let env = Env {
+            data_dir: dir,
+            db,
+            event_sink: Mutex::new(None),
+            wc: Mutex::new(None),
+            request_waiters: Mutex::new(std::collections::HashMap::new()),
+        };
         env.init_config()?;
         Ok(env)
     }
@@ -64,9 +74,39 @@ impl Env {
             db: Db::open_memory()?,
             event_sink: Mutex::new(None),
             wc: Mutex::new(None),
+            request_waiters: Mutex::new(std::collections::HashMap::new()),
         };
         env.init_config()?;
         Ok(env)
+    }
+
+    /// Register a waiter for a pending approval request and return the receiver
+    /// to block on. A pre-existing waiter for the same id is dropped (its
+    /// receiver then sees a disconnect, matching Go's channel-close semantics).
+    pub fn request_register(&self, id: &str) -> std::sync::mpsc::Receiver<String> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.request_waiters.lock().unwrap().insert(id.to_owned(), tx);
+        rx
+    }
+
+    /// Deliver the terminal status to a request's waiter. Returns false if no
+    /// waiter is registered (timed out / already resolved).
+    pub fn request_resolve(&self, id: &str, status: &str) -> bool {
+        let sender = self.request_waiters.lock().unwrap().remove(id);
+        match sender {
+            Some(tx) => tx.send(status.to_owned()).is_ok(),
+            None => false,
+        }
+    }
+
+    /// Whether a request is still awaiting a response (its waiter exists).
+    pub fn request_pending(&self, id: &str) -> bool {
+        self.request_waiters.lock().unwrap().contains_key(id)
+    }
+
+    /// Drop a request's waiter (on timeout cleanup).
+    pub fn request_take(&self, id: &str) {
+        self.request_waiters.lock().unwrap().remove(id);
     }
 
     /// Start the WalletConnect relay connection (`WalletConnect:start`): install
