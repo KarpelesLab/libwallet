@@ -79,6 +79,12 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
                 return Err(e);
             }
         }
+        "message_sign" => {
+            if let Err(e) = approve_message_sign(env, &req, params) {
+                release(env, id);
+                return Err(e);
+            }
+        }
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
@@ -129,6 +135,50 @@ fn approve_connect(env: &Env, req: &Request, params: &Value) -> Result<(), ApiEr
             .map(|a| a.address)
             .collect();
         env.broadcast(&crate::response::event("js:accountsChanged", json!({ "accounts": addrs })));
+    }
+    Ok(())
+}
+
+/// Sign the pending `message_sign` request with the host-supplied Keys and
+/// store the 0x-hex signature in the request Result (Go `approveMessageSign`).
+/// Only `personal_sign` (EVM) is wired; typed-data / solana / mpurse follow.
+fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), ApiError> {
+    use base64::Engine;
+    let value = req.value.as_ref().ok_or_else(|| ApiError::new(400, "message_sign: missing Value"))?;
+    let method = value.get("method").and_then(Value::as_str).unwrap_or("");
+    let account_id = req.account.as_deref().ok_or_else(|| ApiError::new(400, "message_sign: missing account"))?;
+
+    let keys: Vec<crate::sign::KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    let unlock: Vec<(String, String)> = keys
+        .iter()
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .map(|k| (k.id.clone(), k.key.clone()))
+        .collect();
+    if unlock.is_empty() {
+        return Err(ApiError::new(400, "message_sign approval requires Keys"));
+    }
+
+    let sig_hex = match method {
+        "personal_sign" => {
+            let msg_b64 = value.get("messageBytes").and_then(Value::as_str).unwrap_or("");
+            let message = base64::engine::general_purpose::STANDARD
+                .decode(msg_b64)
+                .map_err(|e| ApiError::new(400, format!("decode message bytes: {e}")))?;
+            let sig = crate::evm::personal_sign(env, account_id, &unlock, &message)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            format!("0x{}", sig.iter().map(|b| format!("{b:02x}")).collect::<String>())
+        }
+        other => return Err(ApiError::new(501, format!("message_sign method {other} not yet ported"))),
+    };
+
+    // Persist the signature into the request row so `run` returns it.
+    if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
+        r.result = Some(Value::String(sig_hex));
+        r.updated = crate::now_rfc3339();
+        request::save(env, &r).map_err(ApiError::internal)?;
     }
     Ok(())
 }

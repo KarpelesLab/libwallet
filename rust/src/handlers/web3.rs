@@ -59,11 +59,59 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
             Ok(json!(eth_accounts_permission(env, &key, &conn)))
         }
+        "personal_sign" => personal_sign(env, &key, &q_params),
         other => Err(ApiError::new(
             501,
             format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
         )),
     }
+}
+
+/// `personal_sign` params [messageHex, signAddr?] — raise a `message_sign`
+/// approval; the Request:approve message_sign arm performs the EIP-191 sign and
+/// stores the 0x-hex signature in the request Result, which we return.
+fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let msg_hex = q_params.first().and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "personal_sign requires a message"))?;
+    if !msg_hex.starts_with("0x") {
+        return Err(ApiError::new(400, "personal_sign: value must start with 0x"));
+    }
+    let message = decode_hex_0x(msg_hex).ok_or_else(|| ApiError::new(400, "personal_sign: invalid value hex"))?;
+
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    if conn.is_empty() {
+        return Err(ApiError::new(400, "no addr available"));
+    }
+    // Choose the account: params[1] address if given, else the first connected.
+    let account = match q_params.get(1).and_then(Value::as_str) {
+        Some(addr) => {
+            let want = addr.to_lowercase();
+            conn.iter()
+                .filter_map(|c| crate::models::account::find(env, &c.account).ok().flatten())
+                .find(|a| a.address.to_lowercase() == want)
+                .ok_or_else(|| ApiError::new(400, "requested address not connected"))?
+        }
+        None => crate::models::account::find(env, &conn[0].account)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, "connected account not found"))?,
+    };
+
+    use base64::Engine;
+    let value = json!({
+        "method": "personal_sign",
+        "chain": "evm",
+        "account": account.address,
+        "origin": host,
+        "messageBytes": base64::engine::general_purpose::STANDARD.encode(&message),
+    });
+    let req = crate::models::request::Request {
+        kind: "message_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(value),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
 /// Raise a `connect` approval request and block until the host resolves it. On

@@ -1171,6 +1171,78 @@ fn web3_request_read_methods_and_connect_flow() {
 }
 
 #[test]
+fn web3_personal_sign_via_message_approval() {
+    let h = new_env();
+    let site = "https://dapp.example.com";
+
+    // EVM wallet + ethereum account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+
+    // Helper: block until the next "request" host event, returning its id.
+    let next_request_id = |erx: &std::sync::mpsc::Receiver<String>| -> String {
+        for _ in 0..50 {
+            if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+                let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+                if j["event"] == "request" {
+                    return j["data"]["request_id"].as_str().unwrap().to_owned();
+                }
+            }
+        }
+        panic!("no request event");
+    };
+
+    // 1. Connect the account to the site.
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let cid = next_request_id(&erx);
+    let ca = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
+    assert_eq!(ca["result"], "success", "{ca}");
+
+    // 2. personal_sign "hello" (0x68656c6c6f) → message_sign approval.
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"personal_sign","params":["0x68656c6c6f"]}}}}}}"#));
+    let sid = next_request_id(&erx);
+    let sa = request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    assert_eq!(sa["result"], "success", "message_sign approve failed: {sa}");
+
+    // personal_sign resolves with the 0x R‖S‖V signature.
+    let resp = srx.recv_timeout(Duration::from_secs(30)).expect("personal_sign resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    let sig = j["data"].as_str().unwrap();
+    assert!(sig.starts_with("0x"), "sig: {sig}");
+    assert_eq!(sig.len(), 132, "65-byte R||S||V signature"); // 0x + 130 hex
+    let v = &sig[sig.len() - 2..];
+    assert!(v == "1b" || v == "1c", "EIP-191 V must be 27/28, got {v}");
+
+    drop(unsafe { Box::from_raw(cud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 
