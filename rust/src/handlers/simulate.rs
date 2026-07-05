@@ -30,8 +30,11 @@ pub fn simulate(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(400, "no current network"))?;
 
+    if net.kind == "bitcoin" {
+        // Decode-from-raw only (no RPC); the UTXO dry-run preview follows.
+        return Ok(simulate_bitcoin(tx));
+    }
     if net.kind != "evm" && net.kind != "solana" {
-        // Bitcoin simulator not yet ported.
         return Ok(json!({ "chain": net.kind, "decodedMethod": "unknown" }));
     }
     let rpc = match params.get("RPC").and_then(Value::as_str) {
@@ -42,6 +45,59 @@ pub fn simulate(env: &Env, params: &Value) -> ApiResult {
         "evm" => Ok(simulate_evm(&rpc, tx)),
         _ => simulate_solana(&rpc, tx),
     }
+}
+
+/// Bitcoin simulate: decode the built `raw` tx into its inputs/outputs (Go
+/// `simulateBitcoin`, decode-from-raw path). The UTXO dry-run preview (no raw)
+/// needs the build machinery and is deferred; here we surface the native
+/// transfer decode plus, when `raw` is present, the on-wire shape.
+fn simulate_bitcoin(tx: &Value) -> Value {
+    let mut out = json!({ "chain": "bitcoin" });
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    if !to.is_empty() {
+        if let Some(amt) = amount_bigint(tx.get("amount")) {
+            out["decodedMethod"] = json!("native_transfer");
+            out["decodedArgs"] = json!({ "to": to, "amount": amount_string(tx.get("amount"), &amt) });
+        }
+    }
+
+    let raw = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty()).and_then(decode_tx_bytes);
+    let Some(raw) = raw else { return out };
+
+    match outscript::btctx::BtcTx::from_bytes(&raw) {
+        Ok(btx) => {
+            let outputs: Vec<Value> = btx
+                .outputs
+                .iter()
+                .map(|o| json!({ "amount": o.amount.0, "script": hex_lower(&o.script) }))
+                .collect();
+            let inputs: Vec<Value> = btx
+                .inputs
+                .iter()
+                .map(|i| json!({ "txid": hex_lower(&i.txid), "vout": i.vout }))
+                .collect();
+            if !outputs.is_empty() {
+                out["bitcoinOutputs"] = json!(outputs);
+            }
+            if !inputs.is_empty() {
+                out["bitcoinInputs"] = json!(inputs);
+            }
+            // Fee is only known when the caller carried it (per-input amounts
+            // need a prev-tx lookup we don't do here — matches Go).
+            if let Some(fee) = amount_bigint(tx.get("fee")) {
+                if let Ok(f) = (&fee).try_into() {
+                    let f: i64 = f;
+                    out["bitcoinFee"] = json!(f);
+                }
+            }
+            out["bitcoinVSize"] = json!(raw.len());
+        }
+        Err(e) => {
+            out["willRevert"] = json!(true);
+            out["revertReason"] = json!(format!("decode btc tx: {e}"));
+        }
+    }
+    out
 }
 
 /// Solana simulate: `simulateTransaction` on the already-built `raw` bytes
@@ -589,6 +645,61 @@ mod tests {
         assert_eq!(out["logs"][0], "Program log: ok");
         assert_eq!(out["decodedMethod"], "native_transfer");
         assert_eq!(out["decodedArgs"]["amount"], "1000");
+    }
+
+    fn insert_network(env: &Env, kind: &str, chain: &str) {
+        env.exec(
+            r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+            vec![
+                SqlValue::Text(format!("net-{kind}")),
+                SqlValue::Text(kind.into()),
+                SqlValue::Text(chain.into()),
+                SqlValue::Text(kind.into()),
+                SqlValue::Text("https://unused.example".into()),
+                SqlValue::Text("X".into()),
+                SqlValue::Int(8),
+                SqlValue::Text("".into()),
+                SqlValue::Int(0),
+                SqlValue::Int(0),
+                SqlValue::Text(crate::now_rfc3339()),
+                SqlValue::Text(crate::now_rfc3339()),
+            ],
+        )
+        .unwrap();
+        env.set_current("network", &format!("net-{kind}")).unwrap();
+    }
+
+    #[test]
+    fn simulate_bitcoin_decodes_raw_tx() {
+        let env = Env::init_memory().unwrap();
+        crate::models::network::init(&env).unwrap();
+        insert_network(&env, "bitcoin", "bitcoin");
+
+        // version | 1 input (txid=32×0x11, vout 0, empty scriptsig, seq) |
+        // 1 output (1 BTC = 0x05F5E100 sats LE, empty script) | locktime.
+        let raw = "0x01000000\
+            01\
+            1111111111111111111111111111111111111111111111111111111111111111\
+            00000000\
+            00ffffffff\
+            01\
+            00e1f50500000000\
+            00\
+            00000000";
+        let params = json!({
+            "to": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2",
+            "amount": { "v": "100000000", "e": 0 },
+            "fee": { "v": "1234", "e": 0 },
+            "raw": raw,
+        });
+        let out = simulate(&env, &params).unwrap();
+        assert_eq!(out["chain"], "bitcoin");
+        assert_eq!(out["decodedMethod"], "native_transfer");
+        assert_eq!(out["bitcoinOutputs"][0]["amount"], 100000000u64);
+        assert_eq!(out["bitcoinInputs"][0]["txid"], "1111111111111111111111111111111111111111111111111111111111111111");
+        assert_eq!(out["bitcoinInputs"][0]["vout"], 0);
+        assert_eq!(out["bitcoinFee"], 1234);
+        assert_eq!(out["bitcoinVSize"], 60);
     }
 
     #[test]
