@@ -78,6 +78,7 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             Ok(Value::Null)
         }
         "solana_signMessage" => solana_sign_message(env, &key, &q_params),
+        "wallet_switchEthereumChain" => wallet_switch_chain(env, &key, &q_params),
         other => Err(ApiError::new(
             501,
             format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
@@ -130,6 +131,52 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// `wallet_switchEthereumChain` params [{chainId:"0x…"}] (or a bare hex string) —
+/// raise a `chain_switch` approval; the approve arm sets the current network.
+/// EVM→EVM only, so the account address is unchanged (no re-derivation needed).
+fn wallet_switch_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let p = q_params.first().ok_or_else(|| ApiError::new(400, "wallet_switchEthereumChain requires 1 parameter"))?;
+    let chain_hex = match p {
+        Value::String(s) => s.clone(),
+        Value::Object(o) => o.get("chainId").and_then(Value::as_str).unwrap_or("").to_string(),
+        _ => String::new(),
+    };
+    if chain_hex.is_empty() {
+        return Err(ApiError::new(400, r#"wallet_switchEthereumChain: expected { chainId: "0x…" } or a bare hex chainId"#));
+    }
+    let chain_dec = parse_chain_id_any(&chain_hex).ok_or_else(|| ApiError::new(400, format!("failed to parse chain id {chain_hex}")))?;
+    // Known if already stored or present in the static chain registry.
+    let target_id = format!("evm.{chain_dec}");
+    let known = crate::models::network::by_id_opt(env, &target_id) || chain_dec.parse::<u64>().map(|c| ethrpc_rs::chains::get(c).is_some()).unwrap_or(false);
+    if !known {
+        return Err(ApiError::new(4902, "Unrecognized chain ID. Try adding the chain using wallet_addEthereumChain first."));
+    }
+    let value = json!({
+        "method": "wallet_switchEthereumChain",
+        "chain": "evm",
+        "targetNetwork": target_id,
+        "chainId": chain_hex,
+    });
+    let req = crate::models::request::Request {
+        kind: "chain_switch".into(),
+        host: host.to_owned(),
+        value: Some(value),
+        ..Default::default()
+    };
+    super::request::run(env, req)?;
+    Ok(Value::Null)
+}
+
+/// Parse a chain id given as decimal or 0x-hex into its decimal-string form.
+fn parse_chain_id_any(s: &str) -> Option<String> {
+    let n = if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        BigInt::parse_bytes(h.as_bytes(), 16)?
+    } else {
+        BigInt::parse_bytes(s.as_bytes(), 10)?
+    };
+    Some(n.to_string())
 }
 
 /// `solana_signMessage` params [{message: base64, pubkey?: base58}] — raise a

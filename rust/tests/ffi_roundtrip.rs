@@ -1382,6 +1382,53 @@ fn web3_solana_connect_and_sign_message() {
 }
 
 #[test]
+fn web3_wallet_switch_ethereum_chain() {
+    let h = new_env();
+    let site = "https://app.example.com";
+
+    // Starts on ephemeral EVM chain 1.
+    let c0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    assert_eq!(c0["data"], "0x1");
+
+    // Unknown chain → 4902 synchronously (no approval raised).
+    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0xdeadbeef"}}]}}}}}}"#));
+    assert_eq!(bad["result"], "error", "{bad}");
+    assert_eq!(bad["code"], 4902);
+
+    // Switch to Polygon (0x89 = 137, in the static registry) via chain_switch.
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+
+    let (rx, ud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0x89"}}]}}}}}}"#));
+    let mut req_id = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                assert_eq!(j["data"]["request"]["Value"]["targetNetwork"], "evm.137");
+                req_id = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let req_id = req_id.expect("chain_switch request");
+    let appr = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{req_id}"}}}}"#));
+    assert_eq!(appr["result"], "success", "{appr}");
+    let resp = rx.recv_timeout(Duration::from_secs(5)).expect("switch resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+
+    // eth_chainId now reflects the switch.
+    let c1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    assert_eq!(c1["data"], "0x89");
+
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

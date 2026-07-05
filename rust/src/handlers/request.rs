@@ -91,6 +91,12 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
                 return Err(e);
             }
         }
+        "chain_switch" => {
+            if let Err(e) = approve_chain_switch(env, &req, params) {
+                release(env, id);
+                return Err(e);
+            }
+        }
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
@@ -141,6 +147,28 @@ fn approve_connect(env: &Env, req: &Request, params: &Value) -> Result<(), ApiEr
             .map(|a| a.address)
             .collect();
         env.broadcast(&crate::response::event("js:accountsChanged", json!({ "accounts": addrs })));
+    }
+    Ok(())
+}
+
+/// Apply an approved `chain_switch`: set the current network to the target
+/// (Go `applyChainSwitchSelection`, EVM→EVM minimal form — the account address
+/// is chain-independent so no re-derivation is needed). The host may override
+/// the target via the `Network` param; otherwise the request's target is used.
+fn approve_chain_switch(env: &Env, req: &Request, params: &Value) -> Result<(), ApiError> {
+    let target = params
+        .get("Network")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| req.value.as_ref().and_then(|v| v.get("targetNetwork")).and_then(Value::as_str).map(str::to_owned))
+        .ok_or_else(|| ApiError::new(400, "chain_switch: no target network"))?;
+    env.set_current("network", &target).map_err(ApiError::internal)?;
+    // Record the applied selection on the request for the host.
+    if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
+        r.result = Some(json!({ "network": target }));
+        r.updated = crate::now_rfc3339();
+        request::save(env, &r).map_err(ApiError::internal)?;
     }
     Ok(())
 }

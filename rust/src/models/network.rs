@@ -247,7 +247,9 @@ pub fn init(env: &Env) -> Result<()> {
 pub fn fetch(env: &Env, id: &str) -> Result<Option<Network>> {
     if id == "@" {
         if let Some(cur) = env.get_current("network")? {
-            return by_id(env, &cur);
+            // Resolve the current selection the same way as a direct fetch:
+            // a stored id via by_id, an ephemeral "type.chainId" via the split.
+            return fetch(env, &cur);
         }
         // Default when nothing is selected: Ethereum mainnet (ephemeral).
         return Ok(Some(ephemeral("evm", "1")));
@@ -262,6 +264,11 @@ fn by_id(env: &Env, id: &str) -> Result<Option<Network>> {
     let sql = format!(r#"SELECT {COLS} FROM "Network" WHERE "Id" = ?1"#);
     let rows = env.query(&sql, vec![SqlValue::Text(id.to_owned())])?;
     Ok(rows.first().map(|r| row_to_network(r)))
+}
+
+/// Whether a stored network row exists for `id` (best-effort; false on error).
+pub fn by_id_opt(env: &Env, id: &str) -> bool {
+    matches!(by_id(env, id), Ok(Some(_)))
 }
 
 pub fn list(env: &Env) -> Result<Vec<Network>> {
