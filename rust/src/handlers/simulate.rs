@@ -30,15 +30,80 @@ pub fn simulate(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(400, "no current network"))?;
 
-    if net.kind != "evm" {
-        // Solana/Bitcoin simulators not yet ported.
+    if net.kind != "evm" && net.kind != "solana" {
+        // Bitcoin simulator not yet ported.
         return Ok(json!({ "chain": net.kind, "decodedMethod": "unknown" }));
     }
     let rpc = match params.get("RPC").and_then(Value::as_str) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
     };
-    Ok(simulate_evm(&rpc, tx))
+    match net.kind.as_str() {
+        "evm" => Ok(simulate_evm(&rpc, tx)),
+        _ => simulate_solana(&rpc, tx),
+    }
+}
+
+/// Solana simulate: `simulateTransaction` on the already-built `raw` bytes
+/// (Go `simulateSolana`). Surfaces logs, unitsConsumed, and revert status.
+fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
+    let raw = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let raw = raw.and_then(decode_tx_bytes).ok_or_else(|| {
+        ApiError::new(400, "solana tx has no raw bytes; build/validate it first")
+    })?;
+    let b64 = base64_std(&raw);
+
+    let mut out = json!({ "chain": "solana" });
+    let sim = crate::rpc::call(
+        rpc,
+        "simulateTransaction",
+        json!([b64, { "sigVerify": false, "encoding": "base64", "commitment": "processed" }]),
+    );
+    match sim {
+        Err(e) => {
+            out["willRevert"] = json!(true);
+            out["revertReason"] = json!(e.to_string());
+        }
+        Ok(resp) => {
+            let value = resp.get("value");
+            if let Some(logs) = value.and_then(|v| v.get("logs")).filter(|v| v.is_array()) {
+                out["logs"] = logs.clone();
+            }
+            if let Some(units) = value.and_then(|v| v.get("unitsConsumed")).and_then(Value::as_u64) {
+                out["unitsConsumed"] = json!(units);
+            }
+            let err = value.and_then(|v| v.get("err")).filter(|v| !v.is_null());
+            if let Some(err) = err {
+                out["willRevert"] = json!(true);
+                out["revertReason"] = json!(err.to_string());
+            } else {
+                out["willRevert"] = json!(false);
+            }
+        }
+    }
+    // Decode a native transfer from the tx shape (Go simulateSolana tail).
+    if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
+        out["decodedMethod"] = json!("native_transfer");
+        out["decodedArgs"] = json!({
+            "to": tx.get("to").and_then(Value::as_str).unwrap_or(""),
+            "amount": amount_string(tx.get("amount"), &amt),
+        });
+    }
+    Ok(out)
+}
+
+/// Decode a tx `raw` field as base64 (standard) or 0x-hex.
+fn decode_tx_bytes(s: &str) -> Option<Vec<u8>> {
+    if let Some(h) = s.strip_prefix("0x") {
+        return hex_bytes(h);
+    }
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.decode(s).ok()
+}
+
+fn base64_std(b: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(b)
 }
 
 fn simulate_evm(rpc: &str, tx: &Value) -> Value {
@@ -457,4 +522,99 @@ fn amount_string(v: Option<&Value>, significand: &BigInt) -> String {
         return a.to_string();
     }
     significand.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::SqlValue;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn mock_rpc(result_json: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#);
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[test]
+    fn simulate_solana_reports_logs_and_units() {
+        let env = Env::init_memory().unwrap();
+        crate::models::network::init(&env).unwrap();
+        let rpc = mock_rpc(r#"{"value":{"err":null,"logs":["Program log: ok"],"unitsConsumed":1234}}"#);
+        env.exec(
+            r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+            vec![
+                SqlValue::Text("net-sol".into()),
+                SqlValue::Text("solana".into()),
+                SqlValue::Text("mainnet".into()),
+                SqlValue::Text("Solana".into()),
+                SqlValue::Text(rpc.clone()),
+                SqlValue::Text("SOL".into()),
+                SqlValue::Int(9),
+                SqlValue::Text("".into()),
+                SqlValue::Int(0),
+                SqlValue::Int(0),
+                SqlValue::Text(crate::now_rfc3339()),
+                SqlValue::Text(crate::now_rfc3339()),
+            ],
+        )
+        .unwrap();
+        env.set_current("network", "net-sol").unwrap();
+
+        // A dummy raw tx (bytes don't matter — the mock ignores them).
+        let raw_b64 = base64_std(&[1u8, 2, 3, 4]);
+        let params = json!({
+            "to": "So11111111111111111111111111111111111111112",
+            "amount": { "v": "1000", "e": 0 },
+            "raw": raw_b64,
+        });
+        let out = simulate(&env, &params).unwrap();
+        assert_eq!(out["chain"], "solana");
+        assert_eq!(out["willRevert"], false);
+        assert_eq!(out["unitsConsumed"], 1234);
+        assert_eq!(out["logs"][0], "Program log: ok");
+        assert_eq!(out["decodedMethod"], "native_transfer");
+        assert_eq!(out["decodedArgs"]["amount"], "1000");
+    }
+
+    #[test]
+    fn simulate_solana_without_raw_errors() {
+        let env = Env::init_memory().unwrap();
+        crate::models::network::init(&env).unwrap();
+        env.exec(
+            r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+            vec![
+                SqlValue::Text("net-sol".into()),
+                SqlValue::Text("solana".into()),
+                SqlValue::Text("mainnet".into()),
+                SqlValue::Text("Solana".into()),
+                SqlValue::Text("https://unused.example".into()),
+                SqlValue::Text("SOL".into()),
+                SqlValue::Int(9),
+                SqlValue::Text("".into()),
+                SqlValue::Int(0),
+                SqlValue::Int(0),
+                SqlValue::Text(crate::now_rfc3339()),
+                SqlValue::Text(crate::now_rfc3339()),
+            ],
+        )
+        .unwrap();
+        env.set_current("network", "net-sol").unwrap();
+        let err = simulate(&env, &json!({ "to": "x", "amount": { "v": "1", "e": 0 } })).unwrap_err();
+        assert_eq!(err.code, 400);
+    }
 }
