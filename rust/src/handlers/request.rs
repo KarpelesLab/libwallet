@@ -191,22 +191,31 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
         return Err(ApiError::new(400, "message_sign approval requires Keys"));
     }
 
-    let sig_hex = match method {
+    let msg_b64 = value.get("messageBytes").and_then(Value::as_str).unwrap_or("");
+    let message = base64::engine::general_purpose::STANDARD
+        .decode(msg_b64)
+        .map_err(|e| ApiError::new(400, format!("decode message bytes: {e}")))?;
+
+    let result: Value = match method {
         "personal_sign" => {
-            let msg_b64 = value.get("messageBytes").and_then(Value::as_str).unwrap_or("");
-            let message = base64::engine::general_purpose::STANDARD
-                .decode(msg_b64)
-                .map_err(|e| ApiError::new(400, format!("decode message bytes: {e}")))?;
             let sig = crate::evm::personal_sign(env, account_id, &unlock, &message)
                 .map_err(|e| ApiError::new(400, e.to_string()))?;
-            format!("0x{}", sig.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            Value::String(format!("0x{}", sig.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        }
+        "solana_signMessage" => {
+            let account = crate::models::account::find(env, account_id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "account not found"))?;
+            let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &message)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            json!({ "signature": bs58::encode(&sig).into_string(), "publicKey": account.address })
         }
         other => return Err(ApiError::new(501, format!("message_sign method {other} not yet ported"))),
     };
 
-    // Persist the signature into the request row so `run` returns it.
+    // Persist the result into the request row so `run` returns it.
     if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
-        r.result = Some(Value::String(sig_hex));
+        r.result = Some(result);
         r.updated = crate::now_rfc3339();
         request::save(env, &r).map_err(ApiError::internal)?;
     }

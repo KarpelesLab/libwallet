@@ -61,6 +61,23 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         }
         "personal_sign" => personal_sign(env, &key, &q_params),
         "eth_sendTransaction" => eth_send_transaction(env, &key, &q_params),
+        "solana_connect" | "solana_requestAccounts" => {
+            connect_request(env, &key, method, "solana", &[])?;
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!({ "publicKey": connected_addresses(env, &conn) }))
+        }
+        "solana_accounts" => {
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!(connected_addresses(env, &conn)))
+        }
+        "solana_disconnect" => {
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            for c in &conn {
+                crate::models::connected_site::delete(env, &c.id).map_err(ApiError::internal)?;
+            }
+            Ok(Value::Null)
+        }
+        "solana_signMessage" => solana_sign_message(env, &key, &q_params),
         other => Err(ApiError::new(
             501,
             format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
@@ -113,6 +130,54 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// `solana_signMessage` params [{message: base64, pubkey?: base58}] — raise a
+/// `message_sign` approval (solana family); the approve arm FROST-signs and the
+/// Result carries {signature, publicKey}.
+fn solana_sign_message(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let obj = q_params.first().and_then(Value::as_object).ok_or_else(|| ApiError::new(400, "solana_signMessage param must be an object"))?;
+    let msg_b64 = obj.get("message").and_then(Value::as_str).filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "solana_signMessage: message is required"))?;
+    let pubkey = obj.get("pubkey").and_then(Value::as_str).unwrap_or("");
+
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    if conn.is_empty() {
+        return Err(ApiError::new(400, "no account connected"));
+    }
+    let account = if pubkey.is_empty() {
+        crate::models::account::find(env, &conn[0].account).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "connected account not found"))?
+    } else {
+        conn.iter()
+            .filter_map(|c| crate::models::account::find(env, &c.account).ok().flatten())
+            .find(|a| a.address == pubkey)
+            .ok_or_else(|| ApiError::new(400, "requested pubkey not connected"))?
+    };
+
+    let value = json!({
+        "method": "solana_signMessage",
+        "chain": "solana",
+        "account": account.address,
+        "origin": host,
+        "messageBytes": msg_b64, // already base64 from the dApp
+    });
+    let req = crate::models::request::Request {
+        kind: "message_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(value),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// Addresses of a host's connected accounts (any curve — used by solana_*).
+fn connected_addresses(env: &Env, conn: &[crate::models::connected_site::ConnectedSite]) -> Vec<String> {
+    conn.iter()
+        .filter_map(|c| crate::models::account::find(env, &c.account).ok().flatten())
+        .map(|a| a.address)
+        .collect()
 }
 
 /// `eth_sendTransaction` params [txObject] — normalize the dApp's hex-quantity

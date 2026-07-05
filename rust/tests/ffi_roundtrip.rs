@@ -1315,6 +1315,73 @@ fn web3_eth_send_transaction_via_approval() {
 }
 
 #[test]
+fn web3_solana_connect_and_sign_message() {
+    let h = new_env();
+    let site = "https://sol.example.com";
+
+    // ed25519 wallet + solana account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"SOL","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let next_request_id = |erx: &std::sync::mpsc::Receiver<String>| -> String {
+        for _ in 0..50 {
+            if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+                let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+                if j["event"] == "request" {
+                    return j["data"]["request_id"].as_str().unwrap().to_owned();
+                }
+            }
+        }
+        panic!("no request event");
+    };
+
+    // solana_connect → connect approval → {publicKey:[address]}.
+    let (crx, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
+    let cid = next_request_id(&erx);
+    request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
+    let cresp = crx.recv_timeout(Duration::from_secs(5)).expect("solana_connect resolved");
+    let cj: serde_json::Value = serde_json::from_str(&cresp).unwrap();
+    assert_eq!(cj["data"]["publicKey"][0], address, "{cj}");
+
+    // solana_signMessage {message: base64("hello")} → message_sign → FROST sign.
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_signMessage","params":[{{"message":"aGVsbG8="}}]}}}}}}"#));
+    let sid = next_request_id(&erx);
+    request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}}]}}}}"#,
+            wk[0], wk[1]
+        ),
+    );
+    let sresp = srx.recv_timeout(Duration::from_secs(30)).expect("solana_signMessage resolved");
+    let sj: serde_json::Value = serde_json::from_str(&sresp).unwrap();
+    assert_eq!(sj["result"], "success", "{sj}");
+    assert_eq!(sj["data"]["publicKey"], address);
+    let sig = sj["data"]["signature"].as_str().unwrap();
+    assert!(sig.len() > 80, "base58 ed25519 signature: {sig}"); // ~88 chars for 64 bytes
+
+    drop(unsafe { Box::from_raw(cud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 
