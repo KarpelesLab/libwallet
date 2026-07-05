@@ -1101,6 +1101,76 @@ fn request_reject_round_trip() {
 }
 
 #[test]
+fn web3_request_read_methods_and_connect_flow() {
+    let h = new_env();
+    let site = "https://app.example.com";
+
+    // Read-only methods (default network = ephemeral EVM chain 1).
+    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}/x","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    assert_eq!(chain["data"], "0x1", "{chain}");
+    let netv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"net_version","params":[]}}}}}}"#));
+    assert_eq!(netv["data"], "1");
+    let cv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"web3_clientVersion","params":[]}}}}}}"#));
+    assert!(cv["data"].as_str().unwrap().starts_with("libwallet/"));
+    // keccak256("") = c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+    let sha3 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"web3_sha3","params":["0x"]}}}}}}"#));
+    assert_eq!(sha3["data"], "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+    // No connections yet.
+    let acc0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
+    assert_eq!(acc0["data"], serde_json::json!([]));
+
+    // Set up an EVM account to connect.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    // eth_requestAccounts raises a connect approval; capture it and approve.
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+
+    let (rrx, rud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+
+    let mut req_id = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                // The connect request carries the rich Value payload.
+                assert_eq!(j["data"]["request"]["Value"]["method"], "eth_requestAccounts");
+                req_id = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let req_id = req_id.expect("connect request event");
+    let appr = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{req_id}","Accounts":["{account_id}"]}}}}"#));
+    assert_eq!(appr["result"], "success", "{appr}");
+
+    // eth_requestAccounts now resolves with the connected address.
+    let resp = rrx.recv_timeout(Duration::from_secs(5)).expect("eth_requestAccounts resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    assert_eq!(j["data"][0], address);
+
+    // And eth_accounts reflects the persisted connection.
+    let acc1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
+    assert_eq!(acc1["data"][0], address);
+
+    drop(unsafe { Box::from_raw(rud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

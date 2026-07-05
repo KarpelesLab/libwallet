@@ -73,6 +73,12 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
     let req = claim(env, id)?;
     match req.kind.as_str() {
         "test" => {}
+        "connect" => {
+            if let Err(e) = approve_connect(env, &req, params) {
+                release(env, id);
+                return Err(e);
+            }
+        }
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
@@ -90,6 +96,41 @@ pub fn reject(env: &Env, params: &Value) -> ApiResult {
     respond(env, id, "rejected")?;
     let out = request::fetch(env, id).map_err(ApiError::internal)?.unwrap_or(req);
     Ok(serde_json::to_value(out).unwrap())
+}
+
+/// Persist the approved `connect` accounts for the request's host and emit a
+/// `js:accountsChanged` host event (Go `requestDoApprove` connect arm).
+fn approve_connect(env: &Env, req: &Request, params: &Value) -> Result<(), ApiError> {
+    let accounts: Vec<String> = params
+        .get("Accounts")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default();
+    if accounts.is_empty() {
+        return Err(ApiError::new(400, "no accounts in approve connect (empty means rejected)"));
+    }
+    let mut newly = false;
+    for acct_id in &accounts {
+        // Resolve by id or address, then link the canonical account id.
+        let acct = crate::models::account::find(env, acct_id)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, format!("account {acct_id} not found")))?;
+        let before = crate::models::connected_site::for_host(env, &req.host).map_err(ApiError::internal)?;
+        if !before.iter().any(|c| c.account == acct.id) {
+            newly = true;
+        }
+        crate::models::connected_site::connect(env, &req.host, &acct.id).map_err(ApiError::internal)?;
+    }
+    if newly {
+        let conn = crate::models::connected_site::for_host(env, &req.host).map_err(ApiError::internal)?;
+        let addrs: Vec<String> = conn
+            .iter()
+            .filter_map(|c| crate::models::account::fetch(env, &c.account).ok().flatten())
+            .map(|a| a.address)
+            .collect();
+        env.broadcast(&crate::response::event("js:accountsChanged", json!({ "accounts": addrs })));
+    }
+    Ok(())
 }
 
 /// Atomically move a still-pending request into `processing` so approve/reject

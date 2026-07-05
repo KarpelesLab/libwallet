@@ -24,6 +24,11 @@ const DATE_TAG: &str = match option_env!("LIBWALLET_DATE_TAG") {
     None => "",
 };
 
+/// The `web3_clientVersion` string (Go: `"libwallet/" + dateTag + "-" + gitTag`).
+pub fn web3_client_version() -> String {
+    format!("libwallet/{DATE_TAG}-{GIT_TAG}")
+}
+
 /// `Info:ping` — liveness check. Returns the string "pong".
 pub fn ping() -> ApiResult {
     Ok(json!("pong"))

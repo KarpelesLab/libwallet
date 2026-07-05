@@ -43,6 +43,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::transaction::init(env)?;
     crate::models::wc_session::init(env)?;
     crate::models::request::init(env)?;
+    crate::models::connected_site::init(env)?;
     Ok(())
 }
 
@@ -158,6 +159,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Transaction:signAndSend" => transaction::sign_and_send(&handle.env, params),
         "Transaction:simulate" => simulate::simulate(&handle.env, params),
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
+        "Web3:request" => web3::request(&handle.env, params),
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
         "Request" => request::route(&handle.env, verb, params),
         "Request:test" => request::test(&handle.env),

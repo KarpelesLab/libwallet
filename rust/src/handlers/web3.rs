@@ -1,12 +1,194 @@
-//! Web3 provider endpoints (port of `wltbase/injection.go`). Currently the
-//! `Web3:injectionScript` builder; the full EIP-1193 `Web3:request` router
-//! (wltbase/web3.go) lands with the connected-site permission model.
+//! Web3 provider endpoints (port of `wltbase/injection.go` + `web3.go`). The
+//! `Web3:injectionScript` builder plus the EIP-1193 `Web3:request` router.
+//! Read-only + connect methods are wired here; the signing/send methods
+//! (personal_sign, eth_sendTransaction, eth_signTypedData, solana_*, mpurse_*)
+//! layer their transaction_sign / message_sign approvals on top and land next.
 
+use num_bigint::BigInt;
 use serde_json::{json, Value};
 
 use crate::Env;
 
 use super::{ApiError, ApiResult};
+
+/// `Web3:request` {url, query:{method, params}} — the EIP-1193 provider entry.
+/// Resolves the requesting site's `scheme://host` key, its connected accounts,
+/// and the current network, then dispatches the JSON-RPC method.
+pub fn request(env: &Env, params: &Value) -> ApiResult {
+    let url = params.get("url").and_then(Value::as_str).unwrap_or("");
+    let query = params.get("query").cloned().unwrap_or(Value::Null);
+    let method = query.get("method").and_then(Value::as_str).unwrap_or("");
+    let q_params = query.get("params").and_then(Value::as_array).cloned().unwrap_or_default();
+
+    let key = host_key(url).ok_or_else(|| ApiError::new(400, "url: host is missing"))?;
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+
+    match method {
+        "eth_chainId" => {
+            let n = BigInt::parse_bytes(net.chain_id.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+            Ok(json!(format!("0x{n:x}")))
+        }
+        "net_version" => Ok(json!(net.chain_id)),
+        "web3_clientVersion" => Ok(json!(super::info::web3_client_version())),
+        "web3_sha3" => {
+            let v = q_params.first().and_then(Value::as_str).and_then(|s| decode_hex_0x(s))
+                .ok_or_else(|| ApiError::new(400, "web3_sha3 expects one hex param"))?;
+            let h = purecrypto::hash::keccak256(&v);
+            Ok(json!(format!("0x{}", h.iter().map(|b| format!("{b:02x}")).collect::<String>())))
+        }
+        "eth_requestAccounts" => {
+            connect_request(env, &key, "eth_requestAccounts", "evm", &[])?;
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!(collect_evm_addresses(env, &conn)))
+        }
+        "eth_accounts" => {
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!(collect_evm_addresses(env, &conn)))
+        }
+        "wallet_requestPermissions" => {
+            let perms = extract_requested_perms(&q_params)?;
+            if !perms.is_empty() {
+                connect_request(env, &key, "wallet_requestPermissions", "evm", &perms)?;
+            }
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!(eth_accounts_permission(env, &key, &conn)))
+        }
+        "wallet_getPermissions" => {
+            let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+            Ok(json!(eth_accounts_permission(env, &key, &conn)))
+        }
+        other => Err(ApiError::new(
+            501,
+            format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
+        )),
+    }
+}
+
+/// Raise a `connect` approval request and block until the host resolves it. On
+/// approval the accounts are persisted by the Request:approve `connect` arm.
+fn connect_request(env: &Env, host: &str, method: &str, family: &str, perms: &[String]) -> Result<(), ApiError> {
+    let value = build_connect_value(env, host, method, family, perms);
+    let req = crate::models::request::Request {
+        kind: "connect".into(),
+        host: host.to_owned(),
+        value: Some(value),
+        ..Default::default()
+    };
+    super::request::run(env, req)?;
+    Ok(())
+}
+
+/// The `scheme://host` key for a request URL (Go: `url.URL{Scheme,Host}`).
+fn host_key(raw: &str) -> Option<String> {
+    let (scheme, rest) = raw.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    // Host is everything up to the first '/', '?' or '#'.
+    let host: String = rest.chars().take_while(|&c| c != '/' && c != '?' && c != '#').collect();
+    if host.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{host}"))
+}
+
+/// EVM (secp256k1) 0x-addresses among a host's connected accounts.
+fn collect_evm_addresses(env: &Env, conn: &[crate::models::connected_site::ConnectedSite]) -> Vec<String> {
+    let mut out = Vec::with_capacity(conn.len());
+    for c in conn {
+        let Ok(Some(a)) = crate::models::account::find(env, &c.account) else { continue };
+        if !a.curve.is_empty() && a.curve != "secp256k1" {
+            continue;
+        }
+        if a.address.is_empty() || a.address == "N/A" {
+            continue;
+        }
+        let lower = a.address.to_lowercase();
+        if !lower.starts_with("0x") {
+            continue;
+        }
+        out.push(a.address);
+    }
+    out
+}
+
+/// EIP-2255 permission wire shape for wallet_get/requestPermissions: a single
+/// `eth_accounts` entry whose caveat carries every authorised EVM address.
+fn eth_accounts_permission(env: &Env, host: &str, conn: &[crate::models::connected_site::ConnectedSite]) -> Vec<Value> {
+    let addrs = collect_evm_addresses(env, conn);
+    if addrs.is_empty() {
+        return Vec::new();
+    }
+    // Stable id derived from the host so the dApp recognises it across calls.
+    let id: String = purecrypto::hash::sha256(host.as_bytes()).iter().take(8).map(|b| format!("{b:02x}")).collect();
+    vec![json!({
+        "id": id,
+        "parentCapability": "eth_accounts",
+        "invoker": host,
+        "caveats": [{ "type": "restrictReturnedAccounts", "value": addrs }],
+    })]
+}
+
+/// The rich connect-approval Value (Go `buildConnectValue`): the method, family,
+/// curve-compatible available accounts, and already-connected account ids.
+fn build_connect_value(env: &Env, host: &str, method: &str, family: &str, perms: &[String]) -> Value {
+    let curve = match family {
+        "evm" | "bitcoin" => "secp256k1",
+        "solana" => "ed25519",
+        _ => "",
+    };
+    let available: Vec<Value> = if curve.is_empty() {
+        Vec::new()
+    } else {
+        crate::models::account::list(env)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|a| a.curve == curve)
+            .map(|a| serde_json::to_value(a).unwrap_or(Value::Null))
+            .collect()
+    };
+    let already: Vec<String> = crate::models::connected_site::for_host(env, host)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.account)
+        .collect();
+    let mut v = json!({ "method": method, "family": family });
+    if !available.is_empty() {
+        v["availableAccounts"] = json!(available);
+    }
+    if !already.is_empty() {
+        v["alreadyConnected"] = json!(already);
+    }
+    if !perms.is_empty() {
+        v["requestedPermissions"] = json!(perms);
+    }
+    v
+}
+
+fn extract_requested_perms(q_params: &[Value]) -> Result<Vec<String>, ApiError> {
+    let obj = q_params
+        .first()
+        .and_then(Value::as_object)
+        .ok_or_else(|| ApiError::new(400, "wallet_requestPermissions requires one object param"))?;
+    let mut perms = Vec::new();
+    for k in obj.keys() {
+        match k.as_str() {
+            "eth_accounts" => perms.push(k.clone()),
+            other => return Err(ApiError::new(400, format!("unsupported permission {other}"))),
+        }
+    }
+    Ok(perms)
+}
+
+fn decode_hex_0x(s: &str) -> Option<Vec<u8>> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
 
 /// The webview provider shim, with the config placeholder the Go side rewrites.
 const PROVIDER_JS: &str = include_str!("../web3/provider.js");

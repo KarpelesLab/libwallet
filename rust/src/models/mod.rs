@@ -4,6 +4,7 @@
 
 pub mod account;
 pub mod asset;
+pub mod connected_site;
 pub mod contact;
 pub mod crash;
 pub mod network;
