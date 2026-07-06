@@ -207,23 +207,73 @@ fn approve_chain_switch(env: &Env, req: &Request, params: &Value) -> Result<(), 
 /// EVM only — reuses transaction::sign_and_send. The host provides Keys (and,
 /// for now, the RPC endpoint) in the approve params.
 fn approve_transaction_sign(env: &Env, req: &Request, params: &Value) -> Result<(), ApiError> {
-    let tx = req.transaction.clone().ok_or_else(|| ApiError::new(400, "transaction_sign: missing Transaction"))?;
-    let mut sas_params = serde_json::json!({ "Transaction": tx });
-    if let Some(keys) = params.get("Keys") {
-        sas_params["Keys"] = keys.clone();
-    }
-    if let Some(rpc) = params.get("RPC") {
-        sas_params["RPC"] = rpc.clone();
-    }
-    let signed = super::transaction::sign_and_send(env, &sas_params)?;
+    let method = req.value.as_ref().and_then(|v| v.get("method")).and_then(Value::as_str).unwrap_or("eth_sendTransaction");
+    let (result, tx_record): (Value, Option<Value>) = match method {
+        "eth_sendTransaction" => {
+            let tx = req.transaction.clone().ok_or_else(|| ApiError::new(400, "transaction_sign: missing Transaction"))?;
+            let mut sas_params = json!({ "Transaction": tx });
+            if let Some(keys) = params.get("Keys") {
+                sas_params["Keys"] = keys.clone();
+            }
+            if let Some(rpc) = params.get("RPC") {
+                sas_params["RPC"] = rpc.clone();
+            }
+            let signed = super::transaction::sign_and_send(env, &sas_params)?;
+            (signed.get("hash").cloned().unwrap_or(Value::Null), Some(signed))
+        }
+        "solana_signTransaction" => (approve_solana_sign_tx(env, req, params, false)?, None),
+        "solana_signAndSendTransaction" => (approve_solana_sign_tx(env, req, params, true)?, None),
+        other => return Err(ApiError::new(501, format!("transaction_sign method {other} not yet ported"))),
+    };
 
     if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
-        r.result = signed.get("hash").cloned();
-        r.transaction = Some(signed);
+        r.result = Some(result);
+        if let Some(t) = tx_record {
+            r.transaction = Some(t);
+        }
         r.updated = crate::now_rfc3339();
         request::save(env, &r).map_err(ApiError::internal)?;
     }
     Ok(())
+}
+
+/// FROST-sign a dApp-provided Solana transaction (Go `approveSolanaSignTx`):
+/// extract the message, sign it, splice into the signature slot. When
+/// `broadcast`, also `sendTransaction` and return {signature}; otherwise return
+/// {transaction: base64(signed)}.
+fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: bool) -> Result<Value, ApiError> {
+    use base64::Engine;
+    let account_id = req.account.as_deref().ok_or_else(|| ApiError::new(400, "solana sign: missing account"))?;
+    let account = crate::models::account::find(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let raw_b64 = req.value.as_ref().and_then(|v| v.get("raw")).and_then(Value::as_str).unwrap_or("");
+    let raw = base64::engine::general_purpose::STANDARD.decode(raw_b64).map_err(|e| ApiError::new(400, format!("decode transaction: {e}")))?;
+
+    let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+    if unlock.is_empty() {
+        return Err(ApiError::new(400, "transaction_sign approval requires Keys"));
+    }
+
+    let message = crate::solana::tx_message(&raw).ok_or_else(|| ApiError::new(400, "solana tx: no message"))?.to_vec();
+    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &message).map_err(|e| ApiError::new(400, e.to_string()))?;
+    let sig64: [u8; 64] = sig.try_into().map_err(|_| ApiError::new(500, "unexpected signature length"))?;
+    let signed = crate::solana::splice_signature(&raw, &sig64).ok_or_else(|| ApiError::new(500, "failed to splice signature"))?;
+
+    if !broadcast {
+        return Ok(json!({ "transaction": base64::engine::general_purpose::STANDARD.encode(&signed) }));
+    }
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => {
+            let net = crate::models::network::fetch(env, "@").map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(400, "no current network"))?;
+            net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?
+        }
+    };
+    let signed_b64 = base64::engine::general_purpose::STANDARD.encode(&signed);
+    let res = crate::rpc::call(&rpc, "sendTransaction", json!([signed_b64, { "encoding": "base64" }])).map_err(ApiError::internal)?;
+    Ok(json!({ "signature": res.as_str().unwrap_or_default() }))
 }
 
 /// Sign the pending `message_sign` request with the host-supplied Keys and

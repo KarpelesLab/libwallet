@@ -1483,6 +1483,78 @@ fn web3_wallet_add_ethereum_chain() {
 }
 
 #[test]
+fn web3_solana_sign_transaction() {
+    use base64::Engine;
+    let h = new_env();
+    let site = "https://sol-dapp.example.com";
+
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"SOL","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let next_request_id = |erx: &std::sync::mpsc::Receiver<String>| -> String {
+        for _ in 0..50 {
+            if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+                let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+                if j["event"] == "request" {
+                    return j["data"]["request_id"].as_str().unwrap().to_owned();
+                }
+            }
+        }
+        panic!("no request event");
+    };
+
+    // Connect.
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
+    let cid = next_request_id(&erx);
+    request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
+
+    // A serialized tx: [compact-u16 sig count = 1][64-byte zero placeholder][message].
+    let mut raw = vec![1u8];
+    raw.extend_from_slice(&[0u8; 64]);
+    raw.extend_from_slice(b"a-solana-message-to-sign-0123456"); // 32-byte "message"
+    let tx_b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
+
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_signTransaction","params":[{{"transaction":"{tx_b64}"}}]}}}}}}"#));
+    let sid = next_request_id(&erx);
+    request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}}]}}}}"#,
+            wk[0], wk[1]
+        ),
+    );
+    let sresp = srx.recv_timeout(Duration::from_secs(30)).expect("solana_signTransaction resolved");
+    let j: serde_json::Value = serde_json::from_str(&sresp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    let signed_b64 = j["data"]["transaction"].as_str().unwrap();
+    let signed = base64::engine::general_purpose::STANDARD.decode(signed_b64).unwrap();
+    // The signature slot (bytes 1..65) is now populated (was all zeros).
+    assert_eq!(signed.len(), raw.len());
+    assert!(signed[1..65].iter().any(|&b| b != 0), "signature slot must be filled");
+    // The message tail is preserved.
+    assert_eq!(&signed[65..], b"a-solana-message-to-sign-0123456");
+
+    drop(unsafe { Box::from_raw(cud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

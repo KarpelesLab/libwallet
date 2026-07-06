@@ -40,6 +40,7 @@ outscript = "0.1.2"
 
 [dev-dependencies]
 tempfile = "3"
+base64 = "0.22"
 
 [profile.release]
 opt-level = 3

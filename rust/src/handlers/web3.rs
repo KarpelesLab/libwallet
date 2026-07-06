@@ -78,6 +78,7 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             Ok(Value::Null)
         }
         "solana_signMessage" => solana_sign_message(env, &key, &q_params),
+        "solana_signTransaction" | "solana_signAndSendTransaction" => solana_sign_tx(env, &key, method, &q_params),
         "wallet_switchEthereumChain" => wallet_switch_chain(env, &key, &q_params),
         "wallet_addEthereumChain" => wallet_add_chain(env, &key, &q_params),
         other => Err(ApiError::new(
@@ -269,6 +270,35 @@ fn solana_sign_message(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// `solana_signTransaction` / `solana_signAndSendTransaction` params
+/// [{transaction: base64}] — raise a `transaction_sign` approval; the approve
+/// arm FROST-signs the message, splices the signature, and (for the send form)
+/// broadcasts. Returns the approval Result.
+fn solana_sign_tx(env: &Env, host: &str, method: &str, q_params: &[Value]) -> ApiResult {
+    let obj = q_params.first().and_then(Value::as_object).ok_or_else(|| ApiError::new(400, format!("{method} param must be an object")))?;
+    let tx_b64 = obj.get("transaction").and_then(Value::as_str).filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, format!("{method}: transaction is required")))?;
+
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    if conn.is_empty() {
+        return Err(ApiError::new(400, "no account connected"));
+    }
+    let account = crate::models::account::find(env, &conn[0].account)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
+
+    let value = json!({ "method": method, "chain": "solana", "raw": tx_b64 });
+    let req = crate::models::request::Request {
+        kind: "transaction_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(value),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
 }
 
 /// Addresses of a host's connected accounts (any curve — used by solana_*).
