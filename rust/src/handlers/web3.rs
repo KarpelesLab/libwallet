@@ -130,11 +130,45 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         "solana_signTransaction" | "solana_signAndSendTransaction" => solana_sign_tx(env, &key, method, &q_params),
         "wallet_switchEthereumChain" => wallet_switch_chain(env, &key, &q_params),
         "wallet_addEthereumChain" => wallet_add_chain(env, &key, &q_params),
-        other => Err(ApiError::new(
+        "mpurse_getAddress" => mpurse_get_address(env, &key),
+        "mpurse_sendRawTransaction" => rpc_passthrough(&net, params, "sendrawtransaction", &q_params),
+        "mpurse_sendAsset" => Err(ApiError::new(
             501,
-            format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
+            "mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction",
         )),
+        "mpurse_signMessage" | "mpurse_signRawTransaction" => Err(ApiError::new(
+            501,
+            format!("Web3:request {method} needs Bitcoin message/tx signing (pending)"),
+        )),
+        // Open relay: forward any other JSON-RPC method to the active network
+        // (Go's default — many dApps depend on eth_call / eth_getLogs / etc.).
+        other => rpc_passthrough(&net, params, other, &q_params),
     }
+}
+
+/// `mpurse_getAddress` — connect a bitcoin-family account (prompting once) and
+/// return its address.
+fn mpurse_get_address(env: &Env, host: &str) -> ApiResult {
+    let mut conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    if conn.is_empty() {
+        connect_request(env, host, "mpurse_getAddress", "bitcoin", &[])?;
+        conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    }
+    let account = crate::models::account::find(env, &conn.first().ok_or_else(|| ApiError::new(400, "no account connected"))?.account)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
+    Ok(json!(account.address))
+}
+
+/// Forward a JSON-RPC call to the current network (the provider's open-relay /
+/// broadcast path). The RPC endpoint is the current network's resolved RPC, or
+/// a `RPC` param override (for tests / explicit routing).
+fn rpc_passthrough(net: &crate::models::network::Network, params: &Value, method: &str, rpc_params: &[Value]) -> ApiResult {
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
+    };
+    crate::rpc::call(&rpc, method, Value::Array(rpc_params.to_vec())).map_err(ApiError::internal)
 }
 
 /// `personal_sign` params [messageHex, signAddr?] — raise a `message_sign`

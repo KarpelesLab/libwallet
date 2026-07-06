@@ -1711,6 +1711,27 @@ fn web3_connection_crud() {
 }
 
 #[test]
+fn web3_request_rpc_passthrough() {
+    let h = new_env();
+    let site = "https://app.example.com";
+    // eth_getBalance is not a wallet method → forwarded to the node (open relay).
+    let node = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":"0xde0b6b3a7640000"}"#);
+    let resp = request(
+        h,
+        &format!(
+            r#"{{"path":"Web3:request","params":{{"url":"{site}","RPC":"{node}","query":{{"method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"]}}}}}}"#
+        ),
+    );
+    assert_eq!(resp["result"], "success", "{resp}");
+    assert_eq!(resp["data"], "0xde0b6b3a7640000");
+
+    // A wallet method is still handled locally (not forwarded).
+    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    assert_eq!(chain["data"], "0x1");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 
