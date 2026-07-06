@@ -60,6 +60,14 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             Ok(json!(eth_accounts_permission(env, &key, &conn)))
         }
         "personal_sign" => personal_sign(env, &key, &q_params),
+        "personal_ecRecover" => {
+            let msg = q_params.first().and_then(Value::as_str).and_then(decode_hex_0x)
+                .ok_or_else(|| ApiError::new(400, "personal_ecRecover: message must be 0x-hex"))?;
+            let sig = q_params.get(1).and_then(Value::as_str).and_then(decode_hex_0x)
+                .ok_or_else(|| ApiError::new(400, "personal_ecRecover: signature must be 0x-hex"))?;
+            let addr = crate::evm::personal_ec_recover(&msg, &sig).map_err(|e| ApiError::new(400, e.to_string()))?;
+            Ok(json!(addr))
+        }
         "eth_signTypedData_v4" | "eth_signTypedData_v3" | "eth_signTypedData" => sign_typed_data(env, &key, method, &q_params),
         "eth_sendTransaction" => eth_send_transaction(env, &key, &q_params),
         "solana_connect" | "solana_requestAccounts" => {

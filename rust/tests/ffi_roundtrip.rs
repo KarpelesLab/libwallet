@@ -1624,6 +1624,50 @@ fn web3_eth_sign_typed_data() {
 }
 
 #[test]
+fn web3_personal_ec_recover_round_trip() {
+    let h = new_env();
+    // EVM wallet + account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    // personal_sign "hello" (aGVsbG8=) via Account:signMessage.
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    let sig = signed["data"]["signature"].as_str().unwrap().to_string();
+
+    // personal_ecRecover [msg=0x68656c6c6f, sig] recovers the signer address.
+    let rec = request(
+        h,
+        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+    );
+    assert_eq!(rec["result"], "success", "{rec}");
+    assert_eq!(
+        rec["data"].as_str().unwrap().to_lowercase(),
+        address.to_lowercase(),
+        "recovered signer must equal the signing account"
+    );
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

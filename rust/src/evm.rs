@@ -148,6 +148,28 @@ pub fn recover_sender(raw: &[u8]) -> Result<String> {
     tx.sender_address().map_err(Error::Env)
 }
 
+/// Recover the EIP-55 signer address from an EIP-191 personal-sign `message`
+/// and its 65-byte `R || S || V` signature (`web3_provider` / `personal_ecRecover`).
+pub fn personal_ec_recover(message: &[u8], signature: &[u8]) -> Result<String> {
+    use purecrypto::bignum::BoxedUint;
+    use purecrypto::ec::boxed::BoxedEcdsaSignature;
+    use purecrypto::ec::CurveId;
+    if signature.len() != 65 {
+        return Err(Error::Env("personal_ecRecover: signature must be 65 bytes".into()));
+    }
+    let digest = personal_sign_digest(message);
+    let r = BoxedUint::from_be_bytes(&signature[0..32]);
+    let s = BoxedUint::from_be_bytes(&signature[32..64]);
+    // V is 27/28 (EIP-191) or, from some libraries, a raw 0/1 recovery id.
+    let recid = if signature[64] >= 27 { signature[64] - 27 } else { signature[64] };
+    let sig = BoxedEcdsaSignature::from_components(r, s);
+    let pk = sig
+        .recover_prehash(CurveId::Secp256k1, &digest, recid)
+        .map_err(|e| Error::Env(format!("personal_ecRecover: {e:?}")))?;
+    let addr = outscript::hash::ether_hash(&pk.to_sec1()); // strips the 0x04 prefix
+    Ok(outscript::address::eip55(&addr))
+}
+
 fn parse_dec(s: &str) -> Result<BigInt> {
     if s.is_empty() {
         return Ok(BigInt::from(0));
