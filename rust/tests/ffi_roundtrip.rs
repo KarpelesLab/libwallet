@@ -1429,6 +1429,60 @@ fn web3_wallet_switch_ethereum_chain() {
 }
 
 #[test]
+fn web3_wallet_add_ethereum_chain() {
+    let h = new_env();
+    let site = "https://app.example.com";
+    // A chain id that is NOT in the static registry (proves add persists it).
+    let chain_hex = "0x5ca1ab1e"; // 1554472222
+
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let next_request_id = |erx: &std::sync::mpsc::Receiver<String>| -> String {
+        for _ in 0..50 {
+            if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+                let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+                if j["event"] == "request" {
+                    return j["data"]["request_id"].as_str().unwrap().to_owned();
+                }
+            }
+        }
+        panic!("no request event");
+    };
+
+    // Before adding, switching to it is 4902 (unknown chain).
+    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
+    assert_eq!(bad["code"], 4902, "{bad}");
+
+    // Add the chain via add_network approval.
+    let add_body = format!(
+        r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_addEthereumChain","params":[{{"chainId":"{chain_hex}","chainName":"Cake Testnet","nativeCurrency":{{"symbol":"CAKE","decimals":18}},"rpcUrls":["https://rpc.cake.example"]}}]}}}}}}"#
+    );
+    let (arx, aud) = request_async(h, &add_body);
+    let aid = next_request_id(&erx);
+    let aa = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{aid}"}}}}"#));
+    assert_eq!(aa["result"], "success", "add approve: {aa}");
+    let aresp = arx.recv_timeout(Duration::from_secs(5)).expect("add resolved");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&aresp).unwrap()["result"], "success");
+
+    // Now switching to it is known → chain_switch (no 4902).
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
+    let sid = next_request_id(&erx);
+    request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{sid}"}}}}"#));
+    let sresp = srx.recv_timeout(Duration::from_secs(5)).expect("switch resolved");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&sresp).unwrap()["result"], "success");
+
+    // eth_chainId reflects the added+switched chain.
+    let cid = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    assert_eq!(cid["data"], chain_hex);
+
+    drop(unsafe { Box::from_raw(aud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

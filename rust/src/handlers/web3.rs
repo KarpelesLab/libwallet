@@ -79,6 +79,7 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         }
         "solana_signMessage" => solana_sign_message(env, &key, &q_params),
         "wallet_switchEthereumChain" => wallet_switch_chain(env, &key, &q_params),
+        "wallet_addEthereumChain" => wallet_add_chain(env, &key, &q_params),
         other => Err(ApiError::new(
             501,
             format!("Web3:request method {other} is not yet ported (signing/send methods pending)"),
@@ -131,6 +132,57 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
+}
+
+/// `wallet_addEthereumChain` params [AddEthereumChainParameter] — validate the
+/// proposed chain, no-op if already registered, else raise an `add_network`
+/// approval whose approve arm persists the Network row (Go path).
+fn wallet_add_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let p = q_params.first().and_then(Value::as_object).ok_or_else(|| ApiError::new(400, "wallet_addEthereumChain requires 1 parameter"))?;
+
+    let chain_id_hex = p.get("chainId").and_then(Value::as_str).unwrap_or("");
+    // EIP-3085: 0x-prefixed, unpadded, non-zero hex.
+    let chain_dec = chain_id_hex
+        .strip_prefix("0x")
+        .and_then(|h| BigInt::parse_bytes(h.as_bytes(), 16))
+        .filter(|n| format!("0x{n:x}") == chain_id_hex && n.sign() == num_bigint::Sign::Plus)
+        .ok_or_else(|| ApiError::new(-32602, "Expected 0x-prefixed, unpadded, non-zero hexadecimal string 'chainId'."))?
+        .to_string();
+    let name = p.get("chainName").and_then(Value::as_str).unwrap_or("");
+    if name.len() < 3 {
+        return Err(ApiError::new(-32602, "Expected chainName"));
+    }
+    let nc = p.get("nativeCurrency").and_then(Value::as_object);
+    let symbol = nc.and_then(|c| c.get("symbol")).and_then(Value::as_str).unwrap_or("");
+    if !(2..=6).contains(&symbol.len()) {
+        return Err(ApiError::new(-32602, "Expected 2-6 character string 'nativeCurrency.symbol'."));
+    }
+    let decimals = nc.and_then(|c| c.get("decimals")).and_then(Value::as_i64).unwrap_or(18);
+    let rpc = p.get("rpcUrls").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("auto");
+    let explorer = p.get("blockExplorerUrls").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("auto");
+    // Reject non-http(s) RPC endpoints (SSRF guard, minimal form of Go's check).
+    if rpc != "auto" && !rpc.starts_with("https://") && !rpc.starts_with("http://") {
+        return Err(ApiError::new(-32602, "Invalid rpcUrls entry: must be http(s)"));
+    }
+
+    let net_id = format!("evm.{chain_dec}");
+    if crate::models::network::by_id_opt(env, &net_id) {
+        return Ok(Value::Null); // already registered — no-op
+    }
+
+    let network = json!({
+        "Id": net_id, "Type": "evm", "ChainId": chain_dec, "Name": name,
+        "RPC": rpc, "CurrencySymbol": symbol, "CurrencyDecimals": decimals,
+        "BlockExplorer": explorer,
+    });
+    let req = crate::models::request::Request {
+        kind: "add_network".into(),
+        host: host.to_owned(),
+        value: Some(json!({ "method": "wallet_addEthereumChain", "network": network })),
+        ..Default::default()
+    };
+    super::request::run(env, req)?;
+    Ok(Value::Null)
 }
 
 /// `wallet_switchEthereumChain` params [{chainId:"0x…"}] (or a bare hex string) —

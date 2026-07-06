@@ -271,6 +271,29 @@ pub fn by_id_opt(env: &Env, id: &str) -> bool {
     matches!(by_id(env, id), Ok(Some(_)))
 }
 
+/// Insert or replace a network row (keyed on `Id`).
+pub fn save(env: &Env, n: &Network) -> Result<()> {
+    env.exec(r#"DELETE FROM "Network" WHERE "Id" = ?1"#, vec![SqlValue::Text(n.id.clone())])?;
+    env.exec(
+        &format!(r#"INSERT INTO "Network" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#),
+        vec![
+            SqlValue::Text(n.id.clone()),
+            SqlValue::Text(n.kind.clone()),
+            SqlValue::Text(n.chain_id.clone()),
+            SqlValue::Text(n.name.clone()),
+            SqlValue::Text(n.rpc.clone()),
+            SqlValue::Text(n.currency_symbol.clone()),
+            SqlValue::Int(n.currency_decimals),
+            SqlValue::Text(n.block_explorer.clone()),
+            SqlValue::Int(n.testnet as i64),
+            SqlValue::Int(n.priority),
+            SqlValue::Text(if n.created.is_empty() { crate::now_rfc3339() } else { n.created.clone() }),
+            SqlValue::Text(crate::now_rfc3339()),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn list(env: &Env) -> Result<Vec<Network>> {
     let sql = format!(r#"SELECT {COLS} FROM "Network" ORDER BY "Priority" DESC"#);
     let rows = env.query(&sql, Vec::new())?;

@@ -97,6 +97,12 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
                 return Err(e);
             }
         }
+        "add_network" => {
+            if let Err(e) = approve_add_network(env, &req) {
+                release(env, id);
+                return Err(e);
+            }
+        }
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
@@ -149,6 +155,29 @@ fn approve_connect(env: &Env, req: &Request, params: &Value) -> Result<(), ApiEr
         env.broadcast(&crate::response::event("js:accountsChanged", json!({ "accounts": addrs })));
     }
     Ok(())
+}
+
+/// Persist the approved `add_network` proposal (Go: web3 caller does net.Save
+/// after approval). The Network fields ride in the request Value.
+fn approve_add_network(env: &Env, req: &Request) -> Result<(), ApiError> {
+    let net_json = req
+        .value
+        .as_ref()
+        .and_then(|v| v.get("network"))
+        .ok_or_else(|| ApiError::new(400, "add_network: missing network in Value"))?;
+    let g = |k: &str| net_json.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let network = crate::models::network::Network {
+        id: g("Id"),
+        kind: g("Type"),
+        chain_id: g("ChainId"),
+        name: g("Name"),
+        rpc: g("RPC"),
+        currency_symbol: g("CurrencySymbol"),
+        currency_decimals: net_json.get("CurrencyDecimals").and_then(Value::as_i64).unwrap_or(18),
+        block_explorer: g("BlockExplorer"),
+        ..Default::default()
+    };
+    crate::models::network::save(env, &network).map_err(ApiError::internal)
 }
 
 /// Apply an approved `chain_switch`: set the current network to the target
