@@ -60,6 +60,7 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             Ok(json!(eth_accounts_permission(env, &key, &conn)))
         }
         "personal_sign" => personal_sign(env, &key, &q_params),
+        "eth_signTypedData_v4" | "eth_signTypedData_v3" | "eth_signTypedData" => sign_typed_data(env, &key, method, &q_params),
         "eth_sendTransaction" => eth_send_transaction(env, &key, &q_params),
         "solana_connect" | "solana_requestAccounts" => {
             connect_request(env, &key, method, "solana", &[])?;
@@ -307,6 +308,52 @@ fn connected_addresses(env: &Env, conn: &[crate::models::connected_site::Connect
         .filter_map(|c| crate::models::account::find(env, &c.account).ok().flatten())
         .map(|a| a.address)
         .collect()
+}
+
+/// `eth_signTypedData_v3/v4` params [address, typedData] — raise a `message_sign`
+/// approval carrying the typed-data JSON; the approve arm EIP-712 hashes + signs.
+fn sign_typed_data(env: &Env, host: &str, method: &str, q_params: &[Value]) -> ApiResult {
+    if q_params.len() < 2 {
+        return Err(ApiError::new(400, format!("{method} requires [address, typedData]")));
+    }
+    let want = q_params[0].as_str().unwrap_or("").to_lowercase();
+    // typedData is a JSON object or a JSON string; normalize to a string.
+    let typed_data_str = match &q_params[1] {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    // Validate it up front so a malformed payload fails before the prompt.
+    crate::eip712::parse(&typed_data_str).map_err(|e| ApiError::new(400, e))?;
+
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    if conn.is_empty() {
+        return Err(ApiError::new(400, "no addr available"));
+    }
+    let account = if want.is_empty() {
+        crate::models::account::find(env, &conn[0].account).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "connected account not found"))?
+    } else {
+        conn.iter()
+            .filter_map(|c| crate::models::account::find(env, &c.account).ok().flatten())
+            .find(|a| a.address.to_lowercase() == want)
+            .ok_or_else(|| ApiError::new(400, "requested address not connected"))?
+    };
+
+    let value = json!({
+        "method": method,
+        "chain": "evm",
+        "account": account.address,
+        "origin": host,
+        "typedData": typed_data_str,
+    });
+    let req = crate::models::request::Request {
+        kind: "message_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(value),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
 /// `eth_sendTransaction` params [txObject] — normalize the dApp's hex-quantity

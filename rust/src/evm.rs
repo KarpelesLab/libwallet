@@ -95,10 +95,38 @@ pub fn personal_sign(
     let mut full = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
     full.extend_from_slice(message);
     let digest = keccak256(&full);
+    sign_digest_rsv(env, &acct, &tweak, unlock, &digest)
+}
 
-    let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
+/// DKLs-sign a pre-computed 32-byte Ethereum digest for `account_id`, returning
+/// the 65-byte `R || S || V` (V ∈ {27, 28}) signature off-chain verifiers
+/// expect. Used by `personal_sign` and `eth_signTypedData` (the digest is the
+/// EIP-712 hash). `account_id` must be an ethereum account.
+pub fn sign_eth_digest(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    digest: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let acct = account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "ethereum" {
+        return Err(Error::Env("eth digest signing is EVM-only".into()));
+    }
+    let tweak = il_to_tweak(&acct.il)?;
+    sign_digest_rsv(env, &acct, &tweak, unlock, digest)
+}
+
+/// Shared tail: DKLs-sign `digest`, low-S normalize, and pack R || S || V.
+fn sign_digest_rsv(
+    env: &Env,
+    acct: &account::Account,
+    tweak: &[u8; 32],
+    unlock: &[(String, String)],
+    digest: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, tweak, digest)?;
     let (s, v) = normalize_low_s(s, v);
-
     let mut sig = Vec::with_capacity(65);
     sig.extend_from_slice(&pad32(&r));
     sig.extend_from_slice(&pad32(&s));

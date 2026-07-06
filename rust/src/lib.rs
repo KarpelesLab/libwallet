@@ -29,6 +29,8 @@ pub mod sign;
 pub mod hdderive;
 // EVM transaction building + threshold signing (wlttx EVM path).
 pub mod evm;
+// EIP-712 typed-data hashing (eth_signTypedData).
+pub mod eip712;
 // Solana transaction building (wlttx Solana path).
 pub mod solana;
 // Bitcoin transaction building + threshold signing (wlttx Bitcoin path).

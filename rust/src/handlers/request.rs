@@ -317,6 +317,14 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
                 .map_err(|e| ApiError::new(400, e.to_string()))?;
             json!({ "signature": bs58::encode(&sig).into_string(), "publicKey": account.address })
         }
+        "eth_signTypedData" | "eth_signTypedData_v3" | "eth_signTypedData_v4" => {
+            let td_str = value.get("typedData").and_then(Value::as_str).unwrap_or("");
+            let td = crate::eip712::parse(td_str).map_err(|e| ApiError::new(400, e))?;
+            let digest = td.hash().map_err(|e| ApiError::new(400, e))?;
+            let sig = crate::evm::sign_eth_digest(env, account_id, &unlock, &digest)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            Value::String(format!("0x{}", sig.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+        }
         other => return Err(ApiError::new(501, format!("message_sign method {other} not yet ported"))),
     };
 
