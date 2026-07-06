@@ -11,6 +11,46 @@ use crate::Env;
 
 use super::{ApiError, ApiResult};
 
+/// Object-scoped `Web3/Connection[/<id>]` routing (manage connected dApps).
+/// GET (no id) lists (optional Host filter); GET/<id> fetches; POST creates a
+/// {Host, Account} link; DELETE/<id> removes one.
+pub fn connection_route(env: &Env, verb: &str, id: Option<&str>, params: &Value) -> ApiResult {
+    match (verb, id) {
+        ("GET", Some(id)) => match crate::models::connected_site::fetch(env, id).map_err(ApiError::internal)? {
+            Some(c) => Ok(enrich_connection(env, &c)),
+            None => Err(ApiError::new(404, "connection not found")),
+        },
+        ("GET", None) => {
+            let host = params.get("Host").and_then(Value::as_str);
+            let list = crate::models::connected_site::list(env, host).map_err(ApiError::internal)?;
+            Ok(Value::Array(list.iter().map(|c| enrich_connection(env, c)).collect()))
+        }
+        ("POST", _) => {
+            let host = params.get("Host").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "host cannot be empty"))?;
+            let account = params.get("Account").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Account required"))?;
+            let acct = crate::models::account::find(env, account).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "account not found"))?;
+            crate::models::connected_site::connect(env, host, &acct.id).map_err(ApiError::internal)?;
+            let created = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?
+                .into_iter().find(|c| c.account == acct.id).ok_or_else(|| ApiError::new(500, "connection not saved"))?;
+            Ok(enrich_connection(env, &created))
+        }
+        ("DELETE", Some(id)) => {
+            crate::models::connected_site::delete(env, id).map_err(ApiError::internal)?;
+            Ok(json!({ "deleted": true }))
+        }
+        (other, _) => Err(ApiError::new(405, format!("unsupported verb {other} for Web3/Connection"))),
+    }
+}
+
+/// Serialize a connection with its joined AccountInfo (Go apiFetch/List).
+fn enrich_connection(env: &Env, c: &crate::models::connected_site::ConnectedSite) -> Value {
+    let mut v = serde_json::to_value(c).unwrap_or(Value::Null);
+    if let Ok(Some(acct)) = crate::models::account::fetch(env, &c.account) {
+        v["AccountInfo"] = serde_json::to_value(acct).unwrap_or(Value::Null);
+    }
+    v
+}
+
 /// `Web3:request` {url, query:{method, params}} — the EIP-1193 provider entry.
 /// Resolves the requesting site's `scheme://host` key, its connected accounts,
 /// and the current network, then dispatches the JSON-RPC method.

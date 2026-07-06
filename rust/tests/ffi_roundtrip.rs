@@ -1668,6 +1668,49 @@ fn web3_personal_ec_recover_round_trip() {
 }
 
 #[test]
+fn web3_connection_crud() {
+    let h = new_env();
+    let site = "https://managed.example.com";
+
+    // Wallet + ethereum account.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    // Create a connection directly (Web3/Connection POST).
+    let created = request(h, &format!(r#"{{"path":"Web3/Connection","verb":"POST","params":{{"Host":"{site}","Account":"{account_id}"}}}}"#));
+    assert_eq!(created["result"], "success", "{created}");
+    let cnx_id = created["data"]["Id"].as_str().unwrap().to_string();
+    assert!(cnx_id.starts_with("cnx-"));
+    assert_eq!(created["data"]["AccountInfo"]["Address"], address);
+
+    // List (filtered by Host).
+    let list = request(h, &format!(r#"{{"path":"Web3/Connection","verb":"GET","params":{{"Host":"{site}"}}}}"#));
+    assert_eq!(list["data"].as_array().unwrap().len(), 1);
+    assert_eq!(list["data"][0]["Host"], site);
+
+    // Fetch by id.
+    let got = request(h, &format!(r#"{{"path":"Web3/Connection/{cnx_id}","verb":"GET"}}"#));
+    assert_eq!(got["data"]["Account"], account_id);
+
+    // Delete, then the list is empty.
+    let del = request(h, &format!(r#"{{"path":"Web3/Connection/{cnx_id}","verb":"DELETE"}}"#));
+    assert_eq!(del["data"]["deleted"], true);
+    let list2 = request(h, &format!(r#"{{"path":"Web3/Connection","verb":"GET","params":{{"Host":"{site}"}}}}"#));
+    assert_eq!(list2["data"].as_array().unwrap().len(), 0);
+
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

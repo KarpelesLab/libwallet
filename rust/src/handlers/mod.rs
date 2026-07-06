@@ -79,6 +79,13 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         let (id, action) = rest.split_once(':').unwrap_or((rest, ""));
         return wallet_key::route(&handle.env, verb, id, action, params);
     }
+    // Object-scoped `Web3/Connection[/<id>]` (manage connected dApps).
+    if path == "Web3/Connection" {
+        return web3::connection_route(&handle.env, verb, None, params);
+    }
+    if let Some(id) = path.strip_prefix("Web3/Connection/") {
+        return web3::connection_route(&handle.env, verb, Some(id), params);
+    }
 
     match path {
         "Info:ping" => info::ping(),
