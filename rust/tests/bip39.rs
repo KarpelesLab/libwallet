@@ -1,6 +1,6 @@
 //! BIP-39 mnemonic decode + seed + master, against canonical test vectors.
 
-use libwallet::bip39::{master_from_seed, mnemonic_to_entropy, mnemonic_to_seed};
+use libwallet::bip39::{entropy_to_mnemonic, master_from_seed, mnemonic_to_entropy, mnemonic_to_seed};
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
@@ -14,6 +14,10 @@ fn trezor_vector_entropy_and_seed() {
     // The canonical all-"abandon" 12-word mnemonic (Trezor vector, entropy 0).
     let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
     assert_eq!(hex(&mnemonic_to_entropy(m).unwrap()), "00000000000000000000000000000000");
+    // entropy_to_mnemonic is the exact inverse (round-trips both ways).
+    assert_eq!(entropy_to_mnemonic(&[0u8; 16]).unwrap(), m);
+    let ent = unhex("f30f8c1da665478f49b001d94c5fc452");
+    assert_eq!(mnemonic_to_entropy(&entropy_to_mnemonic(&ent).unwrap()).unwrap(), ent);
 
     // Seed with passphrase "TREZOR".
     let seed = mnemonic_to_seed(m, "TREZOR");

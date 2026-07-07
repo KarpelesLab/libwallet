@@ -53,6 +53,38 @@ pub fn mnemonic_to_entropy(mnemonic: &str) -> Result<Vec<u8>> {
     Ok(entropy)
 }
 
+/// Re-encode entropy bytes into the canonical English BIP-39 mnemonic (inverse
+/// of [`mnemonic_to_entropy`]; go-bip39 `NewMnemonic`). Used to reconstruct the
+/// mnemonic string from a stored `MnemonicKeyShare`'s entropy so the seed can be
+/// re-derived. Entropy must be 16/20/24/28/32 bytes.
+pub fn entropy_to_mnemonic(entropy: &[u8]) -> Result<String> {
+    if ![16, 20, 24, 28, 32].contains(&entropy.len()) {
+        return Err(Error::Env(format!("entropy must be 16/20/.../32 bytes, got {}", entropy.len())));
+    }
+    let ent_bits = entropy.len() * 8;
+    let cs_len = ent_bits / 32;
+    let hash = sha256(entropy);
+    // entropy bits followed by the first cs_len checksum bits.
+    let mut bits: Vec<bool> = Vec::with_capacity(ent_bits + cs_len);
+    for i in 0..ent_bits {
+        bits.push((entropy[i / 8] >> (7 - (i % 8))) & 1 == 1);
+    }
+    for i in 0..cs_len {
+        bits.push((hash[i / 8] >> (7 - (i % 8))) & 1 == 1);
+    }
+    // Groups of 11 bits → word indices.
+    let list = english_words();
+    let mut words = Vec::with_capacity(bits.len() / 11);
+    for chunk in bits.chunks(11) {
+        let mut idx = 0usize;
+        for &b in chunk {
+            idx = (idx << 1) | (b as usize);
+        }
+        words.push(list[idx]);
+    }
+    Ok(words.join(" "))
+}
+
 /// The BIP-39 seed for a mnemonic + optional passphrase:
 /// `PBKDF2-HMAC-SHA512(mnemonic, "mnemonic"+passphrase, 2048, 64)` (go-bip39
 /// `NewSeed`). The mnemonic must already be the canonical space-joined form.

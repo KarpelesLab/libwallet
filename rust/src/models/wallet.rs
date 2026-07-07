@@ -541,6 +541,41 @@ fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottler
     }
 }
 
+/// Decrypt a mnemonic-keep wallet's `MnemonicKeyShare` and return its BIP-39
+/// seed (Go `decryptMnemonic` + `reconstructMnemonic` + `NewSeed`). The wallet
+/// must have exactly one key with `Schema == "mnemonic"`. `unlock` is the single
+/// (walletKeyId, password/store-key) pair. Read-only — used by probeActivity.
+pub fn decrypt_mnemonic_seed(env: &Env, wallet_id: &str, unlock: &[(String, String)]) -> Result<Vec<u8>> {
+    let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.keys.len() != 1 || wallet.keys[0].schema != "mnemonic" {
+        return Err(Error::Env("probeActivity requires a mnemonic-backed wallet".into()));
+    }
+    let (wk_id, secret) = unlock.first().ok_or_else(|| Error::Env("exactly one Key required".into()))?;
+    let wk = &wallet.keys[0];
+    let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
+    let uuid_bytes = xid.uuid().as_bytes().to_vec();
+    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid_bytes)?;
+    let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+
+    // MnemonicKeyShare: {curve, entropy, language, passphrase}. Go marshals the
+    // []byte entropy as a base64 (std) string.
+    #[derive(serde::Deserialize)]
+    struct MnemonicShare {
+        #[serde(default)]
+        entropy: String,
+        #[serde(default)]
+        passphrase: String,
+    }
+    let share: MnemonicShare = serde_json::from_slice(&json).map_err(|e| Error::Env(format!("decode mnemonic share: {e}")))?;
+    let entropy = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(&share.entropy).map_err(|e| Error::Env(format!("bad entropy base64: {e}")))?
+    };
+    let mnemonic = crate::bip39::entropy_to_mnemonic(&entropy)?;
+    let _ = wk_id; // the unlock id is validated by the successful decrypt above
+    Ok(crate::bip39::mnemonic_to_seed(&mnemonic, &share.passphrase).to_vec())
+}
+
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
 /// Password-protected shares. `unlock` pairs each contributing WalletKey id
 /// with its password; at least `threshold + 1` are required. The produced
