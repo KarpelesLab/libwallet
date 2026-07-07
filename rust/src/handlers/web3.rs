@@ -136,14 +136,43 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             501,
             "mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction",
         )),
-        "mpurse_signMessage" | "mpurse_signRawTransaction" => Err(ApiError::new(
+        "mpurse_signMessage" => mpurse_sign_message(env, &key, &net, &q_params),
+        "mpurse_signRawTransaction" => Err(ApiError::new(
             501,
-            format!("Web3:request {method} needs Bitcoin message/tx signing (pending)"),
+            "Web3:request mpurse_signRawTransaction needs Bitcoin raw-tx signing (pending)",
         )),
         // Open relay: forward any other JSON-RPC method to the active network
         // (Go's default — many dApps depend on eth_call / eth_getLogs / etc.).
         other => rpc_passthrough(&net, params, other, &q_params),
     }
+}
+
+/// `mpurse_signMessage` params [message] — raise a `message_sign` approval; the
+/// approve arm produces the 65-byte Bitcoin compact signature, base64-encoded.
+fn mpurse_sign_message(env: &Env, host: &str, net: &crate::models::network::Network, q_params: &[Value]) -> ApiResult {
+    use base64::Engine;
+    let msg = q_params.first().and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "mpurse_signMessage param must be a string"))?;
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    let account = crate::models::account::find(env, &conn.first().ok_or_else(|| ApiError::new(400, "no account connected; call mpurse_getAddress first"))?.account)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
+    let value = json!({
+        "method": "mpurse_signMessage",
+        "chain": "bitcoin",
+        "chainId": net.chain_id,
+        "account": account.address,
+        "origin": host,
+        "messageBytes": base64::engine::general_purpose::STANDARD.encode(msg.as_bytes()),
+    });
+    let req = crate::models::request::Request {
+        kind: "message_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(value),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
 /// `mpurse_getAddress` — connect a bitcoin-family account (prompting once) and

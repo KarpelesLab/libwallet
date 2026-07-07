@@ -1732,6 +1732,71 @@ fn web3_request_rpc_passthrough() {
 }
 
 #[test]
+fn web3_mpurse_get_address_and_sign_message() {
+    use base64::Engine;
+    let h = new_env();
+    let site = "https://mona.example.com";
+
+    // secp256k1 wallet + bitcoin account; current network = bitcoin.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"BTC","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    request(h, r#"{"path":"Network:setCurrent","params":{"Id":"bitcoin.bitcoin"}}"#);
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"bitcoin","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    // Connect directly, then mpurse_getAddress returns it without prompting.
+    request(h, &format!(r#"{{"path":"Web3/Connection","verb":"POST","params":{{"Host":"{site}","Account":"{account_id}"}}}}"#));
+    let addr = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_getAddress","params":[]}}}}}}"#));
+    assert_eq!(addr["data"], address, "{addr}");
+
+    // mpurse_signMessage → message_sign approval → 65-byte compact base64 sig.
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_signMessage","params":["hello monacoin"]}}}}}}"#));
+    let mut sid = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                sid = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let sid = sid.expect("message_sign request");
+    request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    let sresp = srx.recv_timeout(Duration::from_secs(30)).expect("mpurse_signMessage resolved");
+    let j: serde_json::Value = serde_json::from_str(&sresp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    let sig = base64::engine::general_purpose::STANDARD.decode(j["data"].as_str().unwrap()).unwrap();
+    assert_eq!(sig.len(), 65, "compact signature is 65 bytes");
+    // Header byte = 31 + recid for a compressed-address message signature.
+    assert!((31..=34).contains(&sig[0]), "header byte {} out of range", sig[0]);
+
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn event_bridge_delivers_wallet_created() {
     let h = new_env();
 

@@ -325,6 +325,12 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
                 .map_err(|e| ApiError::new(400, e.to_string()))?;
             Value::String(format!("0x{}", sig.iter().map(|b| format!("{b:02x}")).collect::<String>()))
         }
+        "mpurse_signMessage" => {
+            let chain_id = value.get("chainId").and_then(Value::as_str).unwrap_or("");
+            let sig = crate::bitcoin::sign_message(env, account_id, &unlock, chain_id, &message)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            Value::String(base64::engine::general_purpose::STANDARD.encode(&sig))
+        }
         other => return Err(ApiError::new(501, format!("message_sign method {other} not yet ported"))),
     };
 

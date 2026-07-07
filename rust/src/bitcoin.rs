@@ -367,6 +367,91 @@ pub struct Utxo {
     pub script_pubkey: Vec<u8>,
 }
 
+/// The known Bitcoin-family signed-message prefix `[len][magic]` for a chain,
+/// or None for an unrecognized chain (Go `BitcoinMessagePrefix` + allow-list).
+pub fn message_prefix(chain_id: &str) -> Option<Vec<u8>> {
+    let magic = match chain_id {
+        "bitcoin" | "bitcoin-cash" | "bitcoincash" => "Bitcoin Signed Message:\n",
+        "litecoin" => "Litecoin Signed Message:\n",
+        "dogecoin" => "Dogecoin Signed Message:\n",
+        "monacoin" => "Monacoin Signed Message:\n",
+        _ => return None,
+    };
+    let mut buf = Vec::with_capacity(1 + magic.len());
+    buf.push(magic.len() as u8);
+    buf.extend_from_slice(magic.as_bytes());
+    Some(buf)
+}
+
+/// Sign a Bitcoin-family message (Go `Account.SignBitcoinMessage`): the digest
+/// is `double_sha256(prefix || varint(len(message)) || message)`, DKLs-signed;
+/// the recovery id is brute-forced against the account's pubkey and the result
+/// packed as the 65-byte compact form `[31+recid][r][s]` (compressed-address
+/// header offset).
+pub fn sign_message(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    chain_id: &str,
+    message: &[u8],
+) -> Result<Vec<u8>> {
+    let prefix = message_prefix(chain_id)
+        .ok_or_else(|| Error::Env("unknown Bitcoin-family message prefix (chain not in allow-list)".into()))?;
+    let mut full = prefix;
+    append_varint(&mut full, message.len() as u64);
+    full.extend_from_slice(message);
+    let digest = outscript::hash::dsha256(&full);
+
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    let pub_bytes = {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&acct.pubkey).map_err(|e| Error::Env(format!("bad account pubkey: {e}")))?
+    };
+    let tweak = il_to_tweak(&acct.il)?;
+    let (r, s, _v) = crate::models::wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
+    let r32 = pad32(&r);
+    let s32 = pad32(&s);
+
+    // Brute-force the recovery id (the TSS→DER path drops it): pick the recid
+    // whose recovered pubkey matches the account's compressed key.
+    let recid = (0u8..4)
+        .find(|&rid| recover_compressed(&digest, &r32, &s32, rid).map(|c| c[..] == pub_bytes[..]).unwrap_or(false))
+        .ok_or_else(|| Error::Env("could not determine signature recovery code".into()))?;
+
+    let mut compact = Vec::with_capacity(65);
+    compact.push(31 + recid);
+    compact.extend_from_slice(&r32);
+    compact.extend_from_slice(&s32);
+    Ok(compact)
+}
+
+/// Recover the compressed signer pubkey from `(r, s, recid)` over `digest`.
+fn recover_compressed(digest: &[u8; 32], r32: &[u8; 32], s32: &[u8; 32], recid: u8) -> Option<[u8; 33]> {
+    use purecrypto::bignum::BoxedUint;
+    use purecrypto::ec::boxed::BoxedEcdsaSignature;
+    use purecrypto::ec::CurveId;
+    let sig = BoxedEcdsaSignature::from_components(BoxedUint::from_be_bytes(r32), BoxedUint::from_be_bytes(s32));
+    let pk = sig.recover_prehash(CurveId::Secp256k1, digest, recid).ok()?;
+    purecrypto::ec::secp256k1::AffinePoint::from_sec1(&pk.to_sec1()).ok().map(|p| p.to_sec1_compressed())
+}
+
+/// Append a Bitcoin-style variable-length integer.
+fn append_varint(buf: &mut Vec<u8>, n: u64) {
+    if n < 0xfd {
+        buf.push(n as u8);
+    } else if n <= 0xffff {
+        buf.push(0xfd);
+        buf.extend_from_slice(&(n as u16).to_le_bytes());
+    } else if n <= 0xffff_ffff {
+        buf.push(0xfe);
+        buf.extend_from_slice(&(n as u32).to_le_bytes());
+    } else {
+        buf.push(0xff);
+        buf.extend_from_slice(&n.to_le_bytes());
+    }
+}
+
 /// A signer that routes ECDSA signing to the wallet's DKLs shares under a fixed
 /// derivation tweak, verifying each signature under the derived public key.
 struct TssSigner<'a> {
