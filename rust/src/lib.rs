@@ -57,6 +57,8 @@ pub mod remotekey;
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).
 pub mod bip39;
+// Wallet:probeActivity core — seed → candidate addresses → RPC activity probe.
+pub mod probe;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).
