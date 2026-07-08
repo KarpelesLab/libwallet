@@ -2165,6 +2165,46 @@ fn promote_mnemonic_to_mpc_wallet_and_sign() {
 }
 
 #[test]
+fn transaction_backfill_solana_signatures() {
+    let h = new_env();
+    // ed25519 wallet + solana account, set as current; current network = solana.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"SOL","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+    request(h, &format!(r#"{{"path":"Account:setCurrent","params":{{"Id":"{account_id}"}}}}"#));
+    request(h, r#"{"path":"Network:setCurrent","params":{"Id":"solana.mainnet"}}"#);
+
+    // Sequence: getSignaturesForAddress → getTransaction(sig) → empty page.
+    let sigs = r#"{"jsonrpc":"2.0","id":1,"result":[{"signature":"sigAAA","blockTime":1610612736}]}"#.to_string();
+    let get_tx = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"result":{{"transaction":{{"message":{{"instructions":[{{"program":"system","parsed":{{"type":"transfer","info":{{"source":"{address}","destination":"DestSol1111111111111111111111111111111111","lamports":1000000000}}}}}}],"accountKeys":["{address}"]}}}},"meta":{{"preBalances":[2000000000],"postBalances":[1000000000]}},"blockTime":1610612736}}}}"#
+    );
+    let empty = r#"{"jsonrpc":"2.0","id":1,"result":[]}"#.to_string();
+    let node = mock_multi(vec![sigs, get_tx, empty]);
+
+    let bf = request(h, &format!(r#"{{"path":"Transaction:backfill","params":{{"RPC":"{node}"}}}}"#));
+    assert_eq!(bf["result"], "success", "{bf}");
+    assert_eq!(bf["data"]["provider"], "signatures");
+    assert_eq!(bf["data"]["count"], 1);
+
+    let list = request(h, r#"{"path":"Transaction","verb":"GET"}"#);
+    let txs = list["data"].as_array().unwrap();
+    assert_eq!(txs.len(), 1);
+    assert_eq!(txs[0]["hash"], "sigAAA");
+    assert_eq!(txs[0]["type"], "transfer");
+    assert_eq!(txs[0]["from"], address);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn transaction_backfill_evm_modchain() {
     let h = new_env();
     // Wallet + ethereum account, set as current.

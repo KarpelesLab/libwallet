@@ -118,15 +118,19 @@ pub fn backfill(env: &Env, params: &Value) -> ApiResult {
         .ok_or_else(|| ApiError::new(400, "no current network"))?;
 
     let provider = net.tx_history_provider();
-    if net.kind != "evm" || provider.is_empty() {
-        // Bitcoin/Solana providers not yet ported.
+    if !matches!(net.kind.as_str(), "evm" | "solana") || provider.is_empty() {
+        // Bitcoin provider not yet ported.
         return Ok(json!({ "started": false, "provider": provider, "reason": format!("no tx-history provider ported for {}", net.kind) }));
     }
     let rpc = match params.get("RPC").and_then(Value::as_str) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
     };
-    let count = crate::txhistory::backfill_evm_modchain(env, &account.address, &net, &rpc).map_err(ApiError::internal)?;
+    let count = match net.kind.as_str() {
+        "solana" => crate::txhistory::backfill_solana_signatures(env, &account.address, &net, &rpc),
+        _ => crate::txhistory::backfill_evm_modchain(env, &account.address, &net, &rpc),
+    }
+    .map_err(ApiError::internal)?;
     if count > 0 {
         env.broadcast(&crate::response::event("tx:history_updated", json!({ "account": account.id, "count": count })));
     }
