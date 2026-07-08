@@ -223,6 +223,7 @@ fn approve_transaction_sign(env: &Env, req: &Request, params: &Value) -> Result<
         }
         "solana_signTransaction" => (approve_solana_sign_tx(env, req, params, false)?, None),
         "solana_signAndSendTransaction" => (approve_solana_sign_tx(env, req, params, true)?, None),
+        "mpurse_signRawTransaction" => (approve_mpurse_sign_raw_tx(env, req, params)?, None),
         other => return Err(ApiError::new(501, format!("transaction_sign method {other} not yet ported"))),
     };
 
@@ -235,6 +236,41 @@ fn approve_transaction_sign(env: &Env, req: &Request, params: &Value) -> Result<
         request::save(env, &r).map_err(ApiError::internal)?;
     }
     Ok(())
+}
+
+/// Sign a dApp-provided raw Bitcoin transaction (Go `approveMpurseSignRawTx`):
+/// resolve the account + current network's RPC, then sign every input under the
+/// account's derived keys (bitcoin::sign_raw_tx). Returns the signed tx hex.
+fn approve_mpurse_sign_raw_tx(env: &Env, req: &Request, params: &Value) -> Result<Value, ApiError> {
+    let account_id = req.account.as_deref().ok_or_else(|| ApiError::new(400, "bitcoin sign: missing account"))?;
+    let raw_hex = req.value.as_ref().and_then(|v| v.get("raw")).and_then(Value::as_str).unwrap_or("");
+    let raw = decode_hex(raw_hex).ok_or_else(|| ApiError::new(400, "mpurse_signRawTransaction: bad tx hex"))?;
+
+    let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+    if unlock.is_empty() {
+        return Err(ApiError::new(400, "transaction_sign approval requires Keys"));
+    }
+    let net = crate::models::network::fetch(env, "@").map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(400, "no current network"))?;
+    if net.kind != "bitcoin" {
+        return Err(ApiError::new(400, "mpurse_signRawTransaction: current network is not bitcoin"));
+    }
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
+    };
+    let signed = crate::bitcoin::sign_raw_tx(env, account_id, &unlock, &rpc, &net.chain_id, &raw)
+        .map_err(|e| ApiError::new(400, e.to_string()))?;
+    Ok(Value::String(signed.iter().map(|b| format!("{b:02x}")).collect()))
+}
+
+/// Decode a plain (non-0x) or 0x-prefixed hex string.
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
 }
 
 /// FROST-sign a dApp-provided Solana transaction (Go `approveSolanaSignTx`):

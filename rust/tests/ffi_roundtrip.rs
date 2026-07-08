@@ -2165,6 +2165,77 @@ fn promote_mnemonic_to_mpc_wallet_and_sign() {
 }
 
 #[test]
+fn web3_mpurse_sign_raw_transaction() {
+    let h = new_env();
+    let site = "https://mona.example.com";
+
+    // secp256k1 wallet + bitcoin account; current network = bitcoin.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"BTC","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk: Vec<String> = (0..3).map(|i| w["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+    request(h, r#"{"path":"Network:setCurrent","params":{"Id":"bitcoin.bitcoin"}}"#);
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"bitcoin","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    request(h, &format!(r#"{{"path":"Web3/Connection","verb":"POST","params":{{"Host":"{site}","Account":"{account_id}"}}}}"#));
+
+    // A raw tx spending one P2WPKH input (txid 32×0x11, vout 0) owned by the
+    // account at m/0/0; the modchain mock supplies that UTXO.
+    let raw = "0200000001\
+        1111111111111111111111111111111111111111111111111111111111111111\
+        0000000000fdffffff\
+        0180f0fa020000000000\
+        00000000";
+    let node = mock_node(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"assets":[{"asset":"NATIVE","txo":[{"txo":"1111111111111111111111111111111111111111111111111111111111111111:0","amt":"1.0","path":"m/0/0","script":"p2wpkh","spent":null}]}]}}"#,
+    );
+
+    // mpurse_signRawTransaction → transaction_sign approval → signed hex.
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_signRawTransaction","params":["{raw}"]}}}}}}"#));
+    let mut sid = None;
+    for _ in 0..50 {
+        if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
+            let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
+            if j["event"] == "request" {
+                sid = j["data"]["request_id"].as_str().map(str::to_owned);
+                break;
+            }
+        }
+    }
+    let sid = sid.expect("transaction_sign request");
+    request(
+        h,
+        &format!(
+            r#"{{"path":"Request:approve","params":{{"Id":"{sid}","RPC":"{node}","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passwordone"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordtwo"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordthree"}}]}}}}"#,
+            wk[0], wk[1], wk[2]
+        ),
+    );
+    let sresp = srx.recv_timeout(Duration::from_secs(60)).expect("mpurse_signRawTransaction resolved");
+    let j: serde_json::Value = serde_json::from_str(&sresp).unwrap();
+    assert_eq!(j["result"], "success", "{j}");
+    let signed = j["data"].as_str().unwrap();
+    // A signed P2WPKH tx carries a witness, so it's longer than the raw tx and
+    // uses the segwit marker/flag (0001 after the 4-byte version).
+    assert!(signed.len() > raw.replace(['\n', ' '], "").len(), "witness must be added");
+    assert!(signed.starts_with("020000000001"), "segwit marker/flag: {signed}");
+
+    drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn transaction_backfill_solana_signatures() {
     let h = new_env();
     // ed25519 wallet + solana account, set as current; current network = solana.

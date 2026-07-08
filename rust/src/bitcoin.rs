@@ -699,6 +699,93 @@ pub fn build_and_sign_auto(
     Ok(tx.to_bytes())
 }
 
+/// Sign a caller-provided raw Bitcoin transaction (Go `SignRawBitcoinTx`, behind
+/// mpurse_signRawTransaction): parse it, fetch the account's UTXOs to resolve
+/// each input's derivation path + amount + script, sign every input under its
+/// own derived key, and return the signed raw bytes. Every input must be a UTXO
+/// owned by `account_id`.
+pub fn sign_raw_tx(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    rpc: &str,
+    chain_id: &str,
+    raw_tx: &[u8],
+) -> Result<Vec<u8>> {
+    use base64::Engine;
+    let mut btx = BtcTx::from_bytes(raw_tx).map_err(Error::Env)?;
+    if btx.inputs.is_empty() {
+        return Err(Error::Env("tx has no inputs".into()));
+    }
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "bitcoin" {
+        return Err(Error::Env("account is not bitcoin".into()));
+    }
+    let account_pub: [u8; 33] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&acct.pubkey).map_err(|e| Error::Env(format!("bad account pubkey: {e}")))?
+        .try_into().map_err(|_| Error::Env("account pubkey not 33 bytes".into()))?;
+    let account_cc: [u8; 32] = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(&acct.chaincode).map_err(|e| Error::Env(format!("bad chaincode: {e}")))?
+        .try_into().map_err(|_| Error::Env("chaincode not 32 bytes".into()))?;
+    let account_il = BigInt::parse_bytes(acct.il.as_str().unwrap_or("0").as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+    let wallet_id = acct.wallet.clone();
+
+    // UTXO set → txo ref → derivation/amount/script.
+    let xpub = build_xpub(&account_pub, &account_cc);
+    let utxos = list_utxos(rpc, &xpub)?;
+    let owned: std::collections::HashMap<String, &DiscoveredUtxo> = utxos.iter().map(|u| (u.txo.clone(), u)).collect();
+    let sighash: u32 = if chain_id == "bitcoin-cash" { 0x41 } else { 0 };
+
+    struct Plan {
+        child_pub: [u8; 33],
+        tweak: [u8; 32],
+        amount: u64,
+        scheme: String,
+    }
+    let mut plans = Vec::with_capacity(btx.inputs.len());
+    for inp in &btx.inputs {
+        let txid_hex: String = inp.txid.iter().map(|b| format!("{b:02x}")).collect();
+        let reference = format!("{txid_hex}:{}", inp.vout);
+        let u = owned.get(&reference).ok_or_else(|| Error::Env(format!("input {reference} is not owned by this account")))?;
+        let (child_pub, child_tweak) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[u.chain(), u.child_index()])
+            .map_err(|e| Error::Env(e.to_string()))?;
+        let scheme = if u.script.is_empty() { "p2wpkh".to_owned() } else { u.script.clone() };
+        plans.push(Plan { child_pub, tweak: combine_tweak(&account_il, &child_tweak), amount: u.amount_sats, scheme });
+    }
+
+    let signers: Vec<TssSigner> = plans
+        .iter()
+        .map(|p| {
+            let pubkey = SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("bad child pubkey: {e:?}")))?;
+            let wid = wallet_id.clone();
+            let tweak = p.tweak;
+            Ok(TssSigner {
+                pubkey,
+                sign_digest: Box::new(move |digest: &[u8; 32]| {
+                    let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest).map_err(|e| e.to_string())?;
+                    let (s, _) = normalize_low_s(s, v);
+                    Ok((r, s))
+                }),
+            })
+        })
+        .collect::<Result<_>>()?;
+
+    let signs: Vec<BtcTxSign> = plans
+        .iter()
+        .zip(&signers)
+        .map(|(p, signer)| {
+            let prev_script = outscript::script::Script::new(SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?)
+                .out(&p.scheme).map_err(Error::Env)?.bytes().to_vec();
+            let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
+            s.sighash = sighash;
+            Ok(s)
+        })
+        .collect::<Result<_>>()?;
+    btx.sign(&signs).map_err(Error::Env)?;
+    Ok(btx.to_bytes())
+}
+
 fn il_to_tweak(il: &serde_json::Value) -> Result<[u8; 32]> {
     let dec = il.as_str().ok_or_else(|| Error::Env("account has no IL tweak".into()))?;
     let n = BigInt::parse_bytes(dec.as_bytes(), 10).ok_or_else(|| Error::Env("bad IL".into()))?;

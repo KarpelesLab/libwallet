@@ -137,14 +137,31 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             "mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction",
         )),
         "mpurse_signMessage" => mpurse_sign_message(env, &key, &net, &q_params),
-        "mpurse_signRawTransaction" => Err(ApiError::new(
-            501,
-            "Web3:request mpurse_signRawTransaction needs Bitcoin raw-tx signing (pending)",
-        )),
+        "mpurse_signRawTransaction" => mpurse_sign_raw_tx(env, &key, &q_params),
         // Open relay: forward any other JSON-RPC method to the active network
         // (Go's default — many dApps depend on eth_call / eth_getLogs / etc.).
         other => rpc_passthrough(&net, params, other, &q_params),
     }
+}
+
+/// `mpurse_signRawTransaction` params [txHex] — raise a `transaction_sign`
+/// approval carrying the raw bitcoin tx; the approve arm signs every input under
+/// the account's derived keys and returns the signed tx hex.
+fn mpurse_sign_raw_tx(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    let tx_hex = q_params.first().and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "mpurse_signRawTransaction param must be a hex string"))?;
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    let account = crate::models::account::find(env, &conn.first().ok_or_else(|| ApiError::new(400, "no account connected; call mpurse_getAddress first"))?.account)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
+    let req = crate::models::request::Request {
+        kind: "transaction_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(json!({ "method": "mpurse_signRawTransaction", "chain": "bitcoin", "raw": tx_hex })),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
 }
 
 /// `mpurse_signMessage` params [message] — raise a `message_sign` approval; the
