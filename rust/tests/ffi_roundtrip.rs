@@ -1877,6 +1877,57 @@ fn spot_status_reports_client_state() {
 }
 
 #[test]
+fn device_transfer_over_live_spot() {
+    // Real device↔device wallet transfer over the live Spot relay. Gated behind
+    // SPOT_LIVE=1 since it needs relay connectivity.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let ha = new_env(); // source device
+    let hb = new_env(); // new device
+
+    // Source: create a wallet to transfer.
+    // ed25519 (FROST) shares are small (~KB); a secp256k1 DKLs23 wallet carries
+    // ~120 KB of Paillier material per share and its ~365 KB sealed payload
+    // exceeds the Spot relay's ~200 KB per-message cap (the Go design ships the
+    // whole wallet in one Query round-trip too, so that limit applies equally).
+    let w = request(
+        ha,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"Move","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+
+    // Source: start the export → pairing code.
+    let exp = request(ha, &format!(r#"{{"path":"Wallet:exportToDevice","params":{{"WalletId":"{wallet_id}"}}}}"#));
+    assert_eq!(exp["result"], "success", "{exp}");
+    let sid = exp["data"]["sid"].as_str().unwrap().to_string();
+    let pairing = exp["data"]["pairingCode"].as_str().unwrap().to_string();
+
+    // Source: confirm the transfer (buffered until the new device's query lands).
+    let cf = request(ha, &format!(r#"{{"path":"Wallet:exportToDeviceConfirm","params":{{"Sid":"{sid}","DeviceShares":[]}}}}"#));
+    assert_eq!(cf["result"], "success", "{cf}");
+
+    // New device: import via the pairing code (queries the source over Spot).
+    let (irx, iud) = request_async(hb, &format!(r#"{{"path":"Wallet:importFromDevice","params":{{"PairingCode":"{pairing}"}}}}"#));
+    let resp = irx.recv_timeout(Duration::from_secs(90)).expect("import resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "import failed: {j}");
+    let new_wallet = j["data"]["wallet_id"].as_str().unwrap().to_string();
+
+    // The new device now holds the same wallet (identical group pubkey).
+    let got = request(hb, &format!(r#"{{"path":"Wallet","verb":"GET","params":{{"Id":"{new_wallet}"}}}}"#));
+    assert_eq!(got["data"]["Pubkey"], pubkey, "transferred wallet must match");
+
+    drop(unsafe { Box::from_raw(iud as *mut Sender<String>) });
+    LibwalletDestroy(ha);
+    LibwalletDestroy(hb);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

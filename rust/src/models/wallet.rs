@@ -525,6 +525,25 @@ pub fn import_mnemonic(
     Ok(wallet)
 }
 
+/// Build the device-transfer payload for `wallet_id` (Go `buildTransferPayload`):
+/// `{v, wallet: <backup JSON>, device_shares}`. The wallet blob is the same
+/// backup shape `Wallet:restore` consumes, so the import side reuses restore.
+pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_json::Value) -> Result<Vec<u8>> {
+    let w = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    let entry = backup_entry(&w)?;
+    let data_b64 = entry.get("Data").and_then(|v| v.as_str()).ok_or_else(|| Error::Env("backup produced no data".into()))?;
+    let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(data_b64)
+        .map_err(|e| Error::Env(format!("decode backup: {e}")))?;
+    let wallet_json: serde_json::Value = serde_json::from_slice(&blob).map_err(|e| Error::Env(format!("parse backup: {e}")))?;
+    let payload = serde_json::json!({
+        "v": crate::transfer::PROTOCOL_VERSION,
+        "wallet": wallet_json,
+        "device_shares": device_shares,
+    });
+    serde_json::to_vec(&payload).map_err(|e| Error::Env(e.to_string()))
+}
+
 /// Serialize a wallet for `Wallet:backup` — includes the encrypted key `Data`
 /// (base64, as Go marshals `[]byte`), unlike the FFI response which skips it.
 /// Returns the `{Filename, Data}` backup entry (Go `doBackup`).

@@ -14,6 +14,7 @@ mod names;
 mod network;
 mod request;
 mod simulate;
+mod spot;
 mod nft;
 mod quote;
 mod storekey;
@@ -88,6 +89,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
                 match action {
                     "probeActivity" => return wallet::probe_activity(&handle.env, id, params),
                     "promoteMnemonic" => return wallet::promote_mnemonic(&handle.env, id, params),
+                    "exportToDevice" => return spot::export_to_device(&handle.env, id, params),
                     _ => {}
                 }
             }
@@ -183,14 +185,11 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
         "Web3:request" => web3::request(&handle.env, params),
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
-        "Spot:status" => {
-            let (online, target_id, total, online_n) = handle.env.spot_status().map_err(ApiError::internal)?;
-            Ok(serde_json::json!({
-                "online": online,
-                "target_id": target_id,
-                "connections": { "total": total, "online": online_n },
-            }))
-        }
+        "Spot:status" => spot::status(&handle.env),
+        "Wallet:exportToDevice" => spot::export_to_device(&handle.env, "", params),
+        "Wallet:exportToDeviceConfirm" => spot::export_confirm(&handle.env, params),
+        "Wallet:exportToDeviceCancel" => spot::export_cancel(&handle.env, params),
+        "Wallet:importFromDevice" => spot::import_from_device(&handle.env, params),
         "Request" => request::route(&handle.env, verb, params),
         "Request:test" => request::test(&handle.env),
         "Request:approve" => request::approve(&handle.env, params),

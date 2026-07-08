@@ -41,6 +41,20 @@ pub struct Env {
     /// The Spot network client (lazily started on first use), for cross-device
     /// ceremonies + `Spot:status`. Closed on Destroy.
     spot: Mutex<Option<std::sync::Arc<spotlib::Client>>>,
+    /// Active device-transfer export sessions keyed by sid (the source side of
+    /// Wallet:exportToDevice — the `transfer` Spot handler resolves them).
+    transfer_sessions: Mutex<std::collections::HashMap<String, Arc<TransferSession>>>,
+}
+
+/// One in-flight `Wallet:exportToDevice` session: the pairing token, the wallet
+/// being exported, and a channel the host's confirm/cancel delivers into (the
+/// `transfer` Spot handler blocks on it before sealing the payload).
+struct TransferSession {
+    token: Vec<u8>,
+    wallet_id: String,
+    confirm_tx: std::sync::mpsc::Sender<Option<serde_json::Value>>,
+    confirm_rx: Mutex<Option<std::sync::mpsc::Receiver<Option<serde_json::Value>>>>,
+    claimed: AtomicBool,
 }
 
 impl Env {
@@ -66,6 +80,7 @@ impl Env {
             wc: Mutex::new(None),
             request_waiters: Mutex::new(std::collections::HashMap::new()),
             spot: Mutex::new(None),
+            transfer_sessions: Mutex::new(std::collections::HashMap::new()),
         };
         env.init_config()?;
         Ok(env)
@@ -80,6 +95,7 @@ impl Env {
             wc: Mutex::new(None),
             request_waiters: Mutex::new(std::collections::HashMap::new()),
             spot: Mutex::new(None),
+            transfer_sessions: Mutex::new(std::collections::HashMap::new()),
         };
         env.init_config()?;
         Ok(env)
@@ -114,16 +130,21 @@ impl Env {
         self.request_waiters.lock().unwrap().remove(id);
     }
 
-    /// The Spot client, lazily started on first use (Go `spotlib.New(project=
-    /// libwallet)`). `build()` spawns the connection thread and returns
-    /// immediately; connectivity is polled via [`Self::spot_status`].
-    pub fn spot_client(&self) -> Result<Arc<spotlib::Client>> {
+    /// Start (or return) the Spot client, carrying the persistent `transfer`
+    /// handler bound to a `Weak<Env>` (Go `spotlib.New` + the InitEnv transfer
+    /// handler). `build()` spawns the connection thread and returns immediately.
+    pub fn spot_start(self: &Arc<Self>) -> Result<Arc<spotlib::Client>> {
         let mut guard = self.spot.lock().unwrap();
         if let Some(c) = guard.as_ref() {
             return Ok(c.clone());
         }
+        let weak: Weak<Env> = Arc::downgrade(self);
         let client = spotlib::Client::builder()
             .meta("project", "libwallet")
+            .handler("transfer", move |msg: &spotlib::Message| match weak.upgrade() {
+                Some(env) => env.handle_transfer_query(msg),
+                None => Err("env gone".into()),
+            })
             .build()
             .map_err(|e| Error::Env(format!("spot client: {e}")))?;
         let arc = Arc::new(client);
@@ -131,12 +152,9 @@ impl Env {
         Ok(arc)
     }
 
-    /// `(online, target_id, total_conns, online_conns)` for the Spot client,
-    /// starting it if needed (Go `Spot:status`).
-    pub fn spot_status(&self) -> Result<(bool, String, u32, u32)> {
-        let c = self.spot_client()?;
-        let (total, online) = c.connection_count();
-        Ok((online > 0, c.target_id(), total, online))
+    /// The Spot client if started (no auto-start; for read-only status).
+    pub fn spot_client_opt(&self) -> Option<Arc<spotlib::Client>> {
+        self.spot.lock().unwrap().clone()
     }
 
     /// Close the Spot client if running (called on Destroy).
@@ -144,6 +162,68 @@ impl Env {
         if let Some(c) = self.spot.lock().unwrap().take() {
             c.close();
         }
+    }
+
+    /// Register an export session (Wallet:exportToDevice). Returns nothing; the
+    /// `transfer` handler resolves it by sid when the peer queries.
+    pub fn transfer_register(&self, sid: &str, token: Vec<u8>, wallet_id: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s = Arc::new(TransferSession {
+            token,
+            wallet_id: wallet_id.to_owned(),
+            confirm_tx: tx,
+            confirm_rx: Mutex::new(Some(rx)),
+            claimed: AtomicBool::new(false),
+        });
+        self.transfer_sessions.lock().unwrap().insert(sid.to_owned(), s);
+    }
+
+    /// Deliver the host's confirm (`Some(device_shares)`) or cancel (`None`) to a
+    /// transfer session. Returns false if the session is unknown/gone.
+    pub fn transfer_resolve(&self, sid: &str, confirm: Option<serde_json::Value>) -> bool {
+        let s = self.transfer_sessions.lock().unwrap().get(sid).cloned();
+        match s {
+            Some(s) => s.confirm_tx.send(confirm).is_ok(),
+            None => false,
+        }
+    }
+
+    /// The `transfer` Spot handler: demux by sid, validate the token, emit the
+    /// pair-received event, block on the host's confirm/cancel, then seal and
+    /// return the wallet payload (Go `transferHandle`).
+    fn handle_transfer_query(&self, msg: &spotlib::Message) -> std::result::Result<Option<Vec<u8>>, String> {
+        let body: serde_json::Value = serde_json::from_slice(&msg.body).map_err(|_| "bad_request".to_string())?;
+        if body.get("v").and_then(|v| v.as_i64()) != Some(crate::transfer::PROTOCOL_VERSION) {
+            return Err("bad_request".into());
+        }
+        let sid = body.get("sid").and_then(|v| v.as_str()).unwrap_or("");
+        if sid.is_empty() {
+            return Err("session_not_found".into());
+        }
+        let session = self.transfer_sessions.lock().unwrap().get(sid).cloned().ok_or("session_not_found")?;
+        if session.claimed.swap(true, Ordering::SeqCst) {
+            return Err("session_not_found".into());
+        }
+        let token_b64 = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
+        let got = base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, token_b64).map_err(|_| "bad_request".to_string())?;
+        if got != session.token {
+            self.transfer_sessions.lock().unwrap().remove(sid);
+            return Err("token_invalid".into());
+        }
+        let peer = body.get("newSpotID").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or(&msg.sender);
+        self.broadcast(&crate::response::event(
+            "wallet:transfer:pair_received",
+            serde_json::json!({ "sid": sid, "wallet_id": session.wallet_id, "peer_spot_id": peer }),
+        ));
+
+        let rx = session.confirm_rx.lock().unwrap().take().ok_or("session_not_found")?;
+        let confirm = rx.recv_timeout(Duration::from_secs(90)).map_err(|_| "timeout".to_string());
+        self.transfer_sessions.lock().unwrap().remove(sid);
+        let shares = confirm?.ok_or("declined".to_string())?;
+
+        let payload = crate::models::wallet::build_transfer_payload(self, &session.wallet_id, &shares).map_err(|e| e.to_string())?;
+        let sealed = crate::transfer::seal(&session.token, sid, &payload).map_err(|e| e.to_string())?;
+        Ok(Some(sealed))
     }
 
     /// Start the WalletConnect relay connection (`WalletConnect:start`): install
