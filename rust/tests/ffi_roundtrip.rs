@@ -2146,8 +2146,33 @@ fn remotekey_wallet_create_over_live_backend() {
 
     // The wallet persists with a RemoteKey-typed share carrying the session.
     let got = request(h, &format!(r#"{{"path":"Wallet","verb":"GET","params":{{"Id":"{wallet_id}"}}}}"#));
-    let has_remote = got["data"]["Keys"].as_array().unwrap().iter().any(|k| k["Type"] == "RemoteKey");
-    assert!(has_remote, "wallet should carry a RemoteKey share: {got}");
+    let keys = got["data"]["Keys"].as_array().unwrap();
+    assert!(keys.iter().any(|k| k["Type"] == "RemoteKey"), "wallet should carry a RemoteKey share: {got}");
+
+    // The wallet is usable: sign with the two local Plain shares (2-of-3,
+    // threshold 1) — the wdrone-held RemoteKey share is a backup, not needed at
+    // sign time. This is the tested Go behavior (subSign opens local shares;
+    // the opener has no RemoteKey arm).
+    let plain_ids: Vec<String> = keys
+        .iter()
+        .filter(|k| k["Type"] == "Plain")
+        .map(|k| k["Id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(plain_ids.len(), 2, "expected 2 Plain shares: {got}");
+
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let (p0, p1) = (&plain_ids[0], &plain_ids[1]);
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Plain","Id":"{p0}","Key":""}},
+                {{"Type":"Plain","Id":"{p1}","Key":""}}]}}}}"#
+        ),
+    );
+    assert_eq!(signed["result"], "success", "Plain-share signMessage failed: {signed}");
+    assert!(signed["data"]["signature"].as_str().unwrap().len() > 80, "{signed}");
     LibwalletDestroy(h);
 }
 

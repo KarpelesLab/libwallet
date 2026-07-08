@@ -30,7 +30,7 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
         .unwrap_or_default();
     let unlock: Vec<(String, String)> = keys
         .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
 
@@ -104,7 +104,7 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
         .unwrap_or_default();
     let unlock: Vec<(String, String)> = keys
         .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
 
@@ -148,7 +148,7 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
     let keys: Vec<crate::sign::KeyDescription> =
         params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
     let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
 
     // Auto-input path: {To, Amount} with no explicit UTXOs — discover, select,
     // add change, and sign each input under its own HD key.
@@ -222,7 +222,7 @@ fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, 
     let keys: Vec<crate::sign::KeyDescription> =
         params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
     let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
     let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
         .map_err(ApiError::internal)?;
 

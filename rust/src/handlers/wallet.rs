@@ -20,7 +20,7 @@ pub fn probe_activity(env: &Env, id: &str, params: &Value) -> ApiResult {
     }
     let unlock: Vec<(String, String)> = keys
         .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
 
@@ -161,7 +161,7 @@ mod probe_tests {
 pub fn promote_mnemonic(env: &Env, id: &str, params: &Value) -> ApiResult {
     let unlock_from = |field: &str| -> Vec<(String, String)> {
         let ks: Vec<crate::sign::KeyDescription> = params.get(field).and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-        ks.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect()
+        ks.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect()
     };
     let old_unlock = unlock_from("Old");
     let new_keys: Vec<crate::sign::KeyDescription> = params

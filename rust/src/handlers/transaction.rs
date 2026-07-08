@@ -236,7 +236,7 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
         .unwrap_or_default();
     let unlock: Vec<(String, String)> = keys
         .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
     if unlock.is_empty() {

@@ -819,8 +819,14 @@ pub fn sign_frost_local(
         let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
         let uuid_bytes = xid.uuid().as_bytes().to_vec();
 
-        let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid_bytes)?;
-        let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+        // Plain shares are stored unencrypted (Go EmptyOpener) — open with no
+        // key; every other type resolves an unlock key from the material.
+        let json = if wk.kind == "Plain" {
+            keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
+        } else {
+            let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid_bytes)?;
+            keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?
+        };
         let key = Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
             .map_err(|e| Error::Env(format!("load share: {e:?}")))?;
 

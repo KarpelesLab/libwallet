@@ -154,7 +154,7 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     let keys: Vec<crate::sign::KeyDescription> =
         params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
     let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
 
     let res = if net.kind == "solana" {
         swap::execute_solana(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)

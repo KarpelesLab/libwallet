@@ -247,7 +247,7 @@ fn approve_mpurse_sign_raw_tx(env: &Env, req: &Request, params: &Value) -> Resul
     let raw = decode_hex(raw_hex).ok_or_else(|| ApiError::new(400, "mpurse_signRawTransaction: bad tx hex"))?;
 
     let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
     if unlock.is_empty() {
         return Err(ApiError::new(400, "transaction_sign approval requires Keys"));
     }
@@ -287,7 +287,7 @@ fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: b
     let raw = base64::engine::general_purpose::STANDARD.decode(raw_b64).map_err(|e| ApiError::new(400, format!("decode transaction: {e}")))?;
 
     let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect();
+    let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
     if unlock.is_empty() {
         return Err(ApiError::new(400, "transaction_sign approval requires Keys"));
     }
@@ -327,7 +327,7 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
         .unwrap_or_default();
     let unlock: Vec<(String, String)> = keys
         .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey"))
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
         .map(|k| (k.id.clone(), k.key.clone()))
         .collect();
     if unlock.is_empty() {
