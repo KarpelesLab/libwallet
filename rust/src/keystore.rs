@@ -120,6 +120,17 @@ pub fn seal(payload: &[u8], recipients: &[PublicKey]) -> Result<Vec<u8>, Keystor
     Ok(bottle.to_cbor()?)
 }
 
+/// Like [`seal`] but stamps the `ct="json"` content-type header, matching Go
+/// `cryptutil.MarshalJson(share)` → Bottle → Encrypt. The WalletSign backend's
+/// `loadShare` reads this header to know the sealed payload is a JSON-encoded
+/// TSS share (so a RemoteKey upload round-trips wdrone-side).
+pub fn seal_json(payload: &[u8], recipients: &[PublicKey]) -> Result<Vec<u8>, KeystoreError> {
+    let mut bottle =
+        Bottle::new(payload.to_vec()).with_header("ct", bottlers::HeaderValue::Text("json".into()));
+    bottle.encrypt(recipients)?;
+    Ok(bottle.to_cbor()?)
+}
+
 /// Wrap `payload` in an unencrypted CBOR bottle (the Plain scheme: the share is
 /// stored as-is, matching Go's Type=="Plain" path).
 pub fn wrap_plain(payload: &[u8]) -> Result<Vec<u8>, KeystoreError> {

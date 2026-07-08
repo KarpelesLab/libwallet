@@ -238,7 +238,24 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
                 (keystore::wrap_plain(json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?, String::new())
             }
             Recipient::Remote => {
-                return Err(Error::Env("RemoteKey shares need the backend (not yet ported)".into()))
+                // Seal the share to the wdrone fleet's decrypt keys and upload it
+                // to the WalletSign backend (Go `WalletKey.encrypt` RemoteKey arm).
+                // The local copy is kept in `data` too. Stage-1 RemoteKey is
+                // ed25519/FROST; secp256k1/DKLs would need the binary Save() form.
+                if curve_out != "ed25519" {
+                    return Err(Error::Env("RemoteKey shares are ed25519/FROST only".into()));
+                }
+                let base = crate::rest::DEFAULT_HOST;
+                let client_id = env
+                    .config_get("walletinfo:clientId")
+                    .ok()
+                    .flatten()
+                    .and_then(|b| String::from_utf8(b).ok())
+                    .filter(|s| !s.is_empty());
+                let recipients = crate::walletsign::fetch_decrypt_keys(base, client_id.as_deref())?;
+                let sealed = keystore::seal_json(json.as_bytes(), &recipients).map_err(|e| Error::Env(e.to_string()))?;
+                crate::walletsign::upload_generated_key(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed)?;
+                (sealed, kd.key.clone())
             }
         };
 

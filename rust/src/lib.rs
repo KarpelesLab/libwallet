@@ -59,6 +59,8 @@ pub mod spotbroker;
 pub mod transfer;
 // ClawdWallet:pair — agent pairing link verification over Spot.
 pub mod clawdpair;
+// WalletSign backend glue for RemoteKey shares (fetch fleet keys + upload).
+pub mod walletsign;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).

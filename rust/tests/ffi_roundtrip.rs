@@ -2111,6 +2111,47 @@ fn remotekey_endpoints_post_to_walletsign_backend() {
 }
 
 #[test]
+fn remotekey_wallet_create_over_live_backend() {
+    // Real end-to-end against the live WalletSign backend + wdrone fleet, using
+    // the documented test account (+14045551234 / code 000000, ClientId
+    // com.ellipx.walletapp — see wltwallet/testmain_test.go). Creates an
+    // ed25519 FROST wallet whose third share is a RemoteKey: the share is
+    // sealed to the fleet's decrypt keys and uploaded via
+    // Crypto/WalletSign:setGeneratedKey. Gated behind SPOT_LIVE=1.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let h = new_env();
+    let wi = request(h, r#"{"path":"Info:setWalletInfo","params":{"ClientId":"com.ellipx.walletapp","Name":"libwallet-tests"}}"#);
+    assert_eq!(wi["result"], "success", "{wi}");
+
+    let n = request(h, r#"{"path":"RemoteKey:new","params":{"number":"+14045551234"}}"#);
+    assert_eq!(n["result"], "success", "RemoteKey:new failed: {n}");
+    let session = n["data"]["session"].as_str().expect("session").to_string();
+
+    let v = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session}","code":"000000"}}}}"#));
+    assert_eq!(v["result"], "success", "RemoteKey:validate failed: {v}");
+    let rk = v["data"]["RemoteKey"].as_str().expect("RemoteKey").to_string();
+    assert!(rk.contains(':'), "RemoteKey should be crws:crwsv, got {rk}");
+
+    // Create an ed25519 wallet: 2 local Plain shares + 1 RemoteKey (uploaded).
+    let body = format!(
+        r#"{{"path":"Wallet","verb":"POST","params":{{"Name":"Remote","Curve":"ed25519","Keys":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk}"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "RemoteKey wallet create failed: {w}");
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    assert_eq!(w["data"]["Curve"], "ed25519");
+    assert!(w["data"]["Pubkey"].as_str().unwrap().len() > 10, "{w}");
+
+    // The wallet persists with a RemoteKey-typed share carrying the session.
+    let got = request(h, &format!(r#"{{"path":"Wallet","verb":"GET","params":{{"Id":"{wallet_id}"}}}}"#));
+    let has_remote = got["data"]["Keys"].as_array().unwrap().iter().any(|k| k["Type"] == "RemoteKey");
+    assert!(has_remote, "wallet should carry a RemoteKey share: {got}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

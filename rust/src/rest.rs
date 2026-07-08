@@ -147,10 +147,18 @@ pub const DEFAULT_HOST: &str = "https://www.atonline.com";
 /// GET `<base>/_special/rest/<path>` and return the envelope's `data` field.
 /// `base` is the scheme+host (no trailing slash); tests pass a mock server URL.
 pub fn do_get(base: &str, path: &str) -> Result<Value> {
+    do_get_with_client_id(base, path, None)
+}
+
+/// Like [`do_get`] but stamps the `Sec-ClientId` header (Go `withClientID`) —
+/// used by the WalletSign helpers (`Crypto/WalletSign:keys`).
+pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) -> Result<Value> {
     let url = format!("{base}/_special/rest/{path}");
-    let resp: Value = ureq::get(&url)
-        .set("Sec-Rest-Http", "false")
-        .timeout(Duration::from_secs(20))
+    let mut req = ureq::get(&url).set("Sec-Rest-Http", "false").timeout(Duration::from_secs(20));
+    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
+        req = req.set("Sec-ClientId", id);
+    }
+    let resp: Value = req
         .call()
         .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
         .into_json()
