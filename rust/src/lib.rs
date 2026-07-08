@@ -57,6 +57,8 @@ pub mod remotekey;
 pub mod spotbroker;
 // Device-to-device wallet transfer crypto + pairing URL.
 pub mod transfer;
+// ClawdWallet:pair — agent pairing link verification over Spot.
+pub mod clawdpair;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).

@@ -190,6 +190,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet:exportToDeviceConfirm" => spot::export_confirm(&handle.env, params),
         "Wallet:exportToDeviceCancel" => spot::export_cancel(&handle.env, params),
         "Wallet:importFromDevice" => spot::import_from_device(&handle.env, params),
+        "Wallet:buildNewAgentBody" => spot::build_new_agent_body(&handle.env, params),
+        "ClawdWallet:pair" => spot::clawd_pair(&handle.env, params),
         "Request" => request::route(&handle.env, verb, params),
         "Request:test" => request::test(&handle.env),
         "Request:approve" => request::approve(&handle.env, params),

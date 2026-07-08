@@ -1928,6 +1928,100 @@ fn device_transfer_over_live_spot() {
 }
 
 #[test]
+fn clawd_build_new_agent_body_fills_spot_id() {
+    // Purely local: echoes name/agent_spot_id/policy + this device's spot id.
+    let h = new_env();
+    let r = request(
+        h,
+        r#"{"path":"Wallet:buildNewAgentBody","params":{"name":"laptop","agent_spot_id":"k.agent123","policy":{"quorum":2}}}"#,
+    );
+    assert_eq!(r["result"], "success", "{r}");
+    assert_eq!(r["data"]["name"], "laptop");
+    assert_eq!(r["data"]["agent_spot_id"], "k.agent123");
+    assert_eq!(r["data"]["policy"]["quorum"], 2);
+    assert!(r["data"]["mobile_spot_id"].as_str().unwrap().starts_with("k."), "{r}");
+
+    // Missing policy is rejected (server requires it; shape is opaque here).
+    let bad = request(h, r#"{"path":"Wallet:buildNewAgentBody","params":{"name":"x","agent_spot_id":"k.a"}}"#);
+    assert_eq!(bad["result"], "error");
+    assert_eq!(bad["code"], 400);
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn clawd_pair_over_live_spot() {
+    // Real ClawdWallet:pair against a mock agent peer over the live Spot relay.
+    // Gated behind SPOT_LIVE=1 since it needs relay connectivity.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    use std::time::Duration;
+    // Mock agent: a spotlib client with a "pair" handler that validates the
+    // token and returns the contract success body echoing its own spot id.
+    let agent = std::sync::Arc::new(
+        spotlib::Client::builder()
+            .meta("project", "libwallet")
+            .handler("pair", |m: &spotlib::Message| {
+                let body: serde_json::Value = serde_json::from_slice(&m.body).map_err(|_| "bad_request".to_string())?;
+                if body.get("token").and_then(|v| v.as_str()) != Some("good-token") {
+                    return Ok(Some(br#"{"v":1,"error":"token_invalid"}"#.to_vec()));
+                }
+                Ok(None) // filled in below once we know the agent's own id
+            })
+            .build()
+            .unwrap(),
+    );
+    agent.wait_online(Duration::from_secs(30)).expect("agent online");
+    let agent_id = agent.target_id();
+    // Reinstall the handler now that we know the agent's own id, so it can echo
+    // it in the success body (the identity the pairing must match).
+    let aid = agent_id.clone();
+    agent.set_handler(
+        "pair",
+        Some(move |m: &spotlib::Message| {
+            let body: serde_json::Value = serde_json::from_slice(&m.body).map_err(|_| "bad_request".to_string())?;
+            if body.get("token").and_then(|v| v.as_str()) != Some("good-token") {
+                return Ok(Some(br#"{"v":1,"error":"token_invalid"}"#.to_vec()));
+            }
+            let resp = serde_json::json!({
+                "v": 1,
+                "agent_spot_id": aid,
+                "suggested_name": "clawd-agent",
+                "capabilities": { "sign": true },
+            });
+            Ok(Some(serde_json::to_vec(&resp).unwrap()))
+        }),
+    );
+
+    let h = new_env();
+    // Start this device's spot client and wait for it to reach the relay.
+    let st = request(h, r#"{"path":"Spot:status"}"#);
+    assert_eq!(st["result"], "success", "{st}");
+
+    let url = format!("tibane://pair?agent={agent_id}&token=good-token");
+    let (rx, ud) = request_async(h, &format!(r#"{{"path":"ClawdWallet:pair","params":{{"url":"{url}"}}}}"#));
+    let resp = rx.recv_timeout(Duration::from_secs(30)).expect("pair resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "pair failed: {j}");
+    assert_eq!(j["data"]["agent_spot_id"], agent_id);
+    assert_eq!(j["data"]["suggested_name"], "clawd-agent");
+    assert_eq!(j["data"]["capabilities"]["sign"], true);
+
+    // Wrong token → token_invalid wire code surfaced as an error.
+    let bad_url = format!("tibane://pair?agent={agent_id}&token=nope");
+    let (rx2, ud2) = request_async(h, &format!(r#"{{"path":"ClawdWallet:pair","params":{{"url":"{bad_url}"}}}}"#));
+    let resp2 = rx2.recv_timeout(Duration::from_secs(30)).expect("pair2 resolved");
+    let j2: serde_json::Value = serde_json::from_str(&resp2).unwrap();
+    assert_eq!(j2["result"], "error");
+    assert_eq!(j2["error"], "token_invalid", "{j2}");
+
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+    drop(unsafe { Box::from_raw(ud2 as *mut Sender<String>) });
+    LibwalletDestroy(h);
+    agent.close();
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

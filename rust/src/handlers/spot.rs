@@ -116,6 +116,54 @@ pub fn import_from_device(env: &Arc<Env>, params: &Value) -> ApiResult {
     Ok(json!({ "wallet_id": wallet_id, "device_shares": device_shares }))
 }
 
+/// `Wallet:buildNewAgentBody` {name, agent_spot_id, policy} — compose the body
+/// the host POSTs to `Crypto/WalletSign:newAgent`, filling in this device's
+/// Spot id. Purely local (Go `apiBuildNewAgentBody`).
+pub fn build_new_agent_body(env: &Arc<Env>, params: &Value) -> ApiResult {
+    let name = params.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "name is required"))?;
+    let agent_spot_id = params.get("agent_spot_id").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "agent_spot_id is required"))?;
+    // Policy shape is opaque to libwallet; require its presence and pass through.
+    let policy = params.get("policy").filter(|v| !v.is_null()).ok_or_else(|| ApiError::new(400, "policy is required"))?.clone();
+
+    let client = env.spot_start().map_err(ApiError::internal)?;
+    let mobile_spot_id = client.target_id();
+    if mobile_spot_id.is_empty() {
+        return Err(ApiError::new(503, "spot client is not online yet — retry shortly"));
+    }
+    Ok(json!({
+        "name": name,
+        "agent_spot_id": agent_spot_id,
+        "mobile_spot_id": mobile_spot_id,
+        "policy": policy,
+    }))
+}
+
+/// `ClawdWallet:pair` {url} — verify a `tibane://pair?agent&token` link against
+/// the agent over Spot (Go `apiClawdWalletPair`). One Query round-trip; the
+/// agent's response is dispatched to a verified identity or a typed error code.
+pub fn clawd_pair(env: &Arc<Env>, params: &Value) -> ApiResult {
+    let url = params.get("url").and_then(Value::as_str).unwrap_or("");
+    let (agent_spot_id, token) = crate::clawdpair::parse_clawd_pair_url(url).map_err(|c| ApiError::new(400, c))?;
+
+    let client = env.spot_start().map_err(|e| ApiError::new(400, format!("agent_unreachable: spot client unavailable: {e}")))?;
+    // No WaitOnline: the 15s query budget already fails fast if the relay is
+    // unreachable, and pairing UX is "tap link, see result".
+    let mobile_spot_id = client.target_id();
+
+    let body = serde_json::to_vec(&json!({
+        "v": crate::clawdpair::PAIR_PROTOCOL_VERSION,
+        "token": token,
+        "mobile_spot_id": mobile_spot_id,
+    }))
+    .unwrap();
+    let target = format!("{agent_spot_id}/pair");
+    let resp = client
+        .query(&target, &body, Duration::from_secs(15))
+        .map_err(|e| ApiError::new(400, format!("agent_unreachable: {e}")))?;
+
+    crate::clawdpair::dispatch_pair_response(&resp, &agent_spot_id).map_err(|c| ApiError::new(400, c))
+}
+
 /// Wait briefly for at least one online Spot connection (Go `waitOnlineSpot`).
 fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     for _ in 0..60 {

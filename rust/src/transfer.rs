@@ -110,7 +110,7 @@ fn url_escape(s: &str) -> String {
     out
 }
 
-fn url_unescape(s: &str) -> String {
+pub(crate) fn url_unescape(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
