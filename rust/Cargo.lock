@@ -638,6 +638,7 @@ dependencies = [
  "purecrypto",
  "serde",
  "serde_json",
+ "spotlib",
  "tempfile",
  "tsslib",
  "tungstenite",
@@ -1042,6 +1043,30 @@ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "spotlib"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "278777e318928049bbf3082f807b0e82db3dfe44a8e1f47fd78f52d734edc021"
+dependencies = [
+ "bottlers",
+ "ciborium",
+ "purecrypto",
+ "rsurl",
+ "serde_json",
+ "spotproto",
+]
+
+[[package]]
+name = "spotproto"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5acfa482a7e98129535dacf1258cdedd4bc0785de64c62889a432773640cf826"
+dependencies = [
+ "bottlers",
+ "ciborium",
 ]
 
 [[package]]

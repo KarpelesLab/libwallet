@@ -38,6 +38,9 @@ pub struct Env {
     /// registers a sender here and blocks on the receiver; `Request:approve`/
     /// `reject` looks it up and delivers the terminal status.
     request_waiters: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<String>>>,
+    /// The Spot network client (lazily started on first use), for cross-device
+    /// ceremonies + `Spot:status`. Closed on Destroy.
+    spot: Mutex<Option<std::sync::Arc<spotlib::Client>>>,
 }
 
 impl Env {
@@ -62,6 +65,7 @@ impl Env {
             event_sink: Mutex::new(None),
             wc: Mutex::new(None),
             request_waiters: Mutex::new(std::collections::HashMap::new()),
+            spot: Mutex::new(None),
         };
         env.init_config()?;
         Ok(env)
@@ -75,6 +79,7 @@ impl Env {
             event_sink: Mutex::new(None),
             wc: Mutex::new(None),
             request_waiters: Mutex::new(std::collections::HashMap::new()),
+            spot: Mutex::new(None),
         };
         env.init_config()?;
         Ok(env)
@@ -107,6 +112,38 @@ impl Env {
     /// Drop a request's waiter (on timeout cleanup).
     pub fn request_take(&self, id: &str) {
         self.request_waiters.lock().unwrap().remove(id);
+    }
+
+    /// The Spot client, lazily started on first use (Go `spotlib.New(project=
+    /// libwallet)`). `build()` spawns the connection thread and returns
+    /// immediately; connectivity is polled via [`Self::spot_status`].
+    pub fn spot_client(&self) -> Result<Arc<spotlib::Client>> {
+        let mut guard = self.spot.lock().unwrap();
+        if let Some(c) = guard.as_ref() {
+            return Ok(c.clone());
+        }
+        let client = spotlib::Client::builder()
+            .meta("project", "libwallet")
+            .build()
+            .map_err(|e| Error::Env(format!("spot client: {e}")))?;
+        let arc = Arc::new(client);
+        *guard = Some(arc.clone());
+        Ok(arc)
+    }
+
+    /// `(online, target_id, total_conns, online_conns)` for the Spot client,
+    /// starting it if needed (Go `Spot:status`).
+    pub fn spot_status(&self) -> Result<(bool, String, u32, u32)> {
+        let c = self.spot_client()?;
+        let (total, online) = c.connection_count();
+        Ok((online > 0, c.target_id(), total, online))
+    }
+
+    /// Close the Spot client if running (called on Destroy).
+    pub fn spot_close(&self) {
+        if let Some(c) = self.spot.lock().unwrap().take() {
+            c.close();
+        }
     }
 
     /// Start the WalletConnect relay connection (`WalletConnect:start`): install

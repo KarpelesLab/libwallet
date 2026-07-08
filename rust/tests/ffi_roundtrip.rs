@@ -1861,6 +1861,22 @@ fn lifecycle_update_echoes_status() {
 }
 
 #[test]
+fn spot_status_reports_client_state() {
+    let h = new_env();
+    // Spot:status starts the client lazily and reports its connection state.
+    let s = request(h, r#"{"path":"Spot:status"}"#);
+    assert_eq!(s["result"], "success", "{s}");
+    // target_id is derived from the (ephemeral) identity key immediately.
+    assert!(s["data"]["target_id"].as_str().unwrap().starts_with("k."), "{s}");
+    // The connections object is present (online value depends on network reach,
+    // so we only assert structure, not connectivity).
+    assert!(s["data"]["connections"]["total"].is_number());
+    assert!(s["data"]["connections"]["online"].is_number());
+    assert!(s["data"]["online"].is_boolean());
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

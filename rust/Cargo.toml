@@ -37,6 +37,7 @@ bs58 = "0.5"
 ureq = { version = "2", features = ["json"] }
 tungstenite = "0.20"
 outscript = "0.1.2"
+spotlib = "0.1.0"
 
 [dev-dependencies]
 tempfile = "3"
