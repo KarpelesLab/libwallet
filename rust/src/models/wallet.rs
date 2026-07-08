@@ -555,25 +555,30 @@ pub fn decrypt_mnemonic_seed(env: &Env, wallet_id: &str, unlock: &[(String, Stri
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
     let uuid_bytes = xid.uuid().as_bytes().to_vec();
     let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid_bytes)?;
-    let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+    let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+    let _ = wk_id; // the unlock id is validated by the successful decrypt above
+    Ok(mnemonic_share_seed(&payload)?.0)
+}
 
-    // MnemonicKeyShare: {curve, entropy, language, passphrase}. Go marshals the
-    // []byte entropy as a base64 (std) string.
+/// Parse a decrypted `MnemonicKeyShare` payload and return `(seed, curve)`.
+/// Go marshals the `[]byte` entropy as a base64 (std) string.
+fn mnemonic_share_seed(payload: &[u8]) -> Result<(Vec<u8>, String)> {
     #[derive(serde::Deserialize)]
     struct MnemonicShare {
+        #[serde(default)]
+        curve: String,
         #[serde(default)]
         entropy: String,
         #[serde(default)]
         passphrase: String,
     }
-    let share: MnemonicShare = serde_json::from_slice(&json).map_err(|e| Error::Env(format!("decode mnemonic share: {e}")))?;
+    let share: MnemonicShare = serde_json::from_slice(payload).map_err(|e| Error::Env(format!("decode mnemonic share: {e}")))?;
     let entropy = {
         use base64::Engine;
         base64::engine::general_purpose::STANDARD.decode(&share.entropy).map_err(|e| Error::Env(format!("bad entropy base64: {e}")))?
     };
     let mnemonic = crate::bip39::entropy_to_mnemonic(&entropy)?;
-    let _ = wk_id; // the unlock id is validated by the successful decrypt above
-    Ok(crate::bip39::mnemonic_to_seed(&mnemonic, &share.passphrase).to_vec())
+    Ok((crate::bip39::mnemonic_to_seed(&mnemonic, &share.passphrase).to_vec(), share.curve))
 }
 
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
@@ -644,7 +649,10 @@ pub fn dkls_sign_digest(
     digest: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, u8)> {
     let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
-    if wallet.protocol != "dkls23" {
+    // A mnemonic-keep secp wallet signs with the same key the TSS import
+    // produces — its master scalar imported into a 1-of-1 dkls Key at sign time.
+    let is_mnemonic = wallet.keys.iter().any(|k| k.schema == "mnemonic");
+    if wallet.protocol != "dkls23" && !(is_mnemonic && wallet.curve == "secp256k1") {
         return Err(Error::Env(format!("wallet protocol {} is not dkls23", wallet.protocol)));
     }
     let threshold = wallet.threshold.max(0) as usize;
@@ -659,11 +667,15 @@ pub fn dkls_sign_digest(
         let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
         let uuid = xid.uuid().as_bytes().to_vec();
         let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid)?;
-        let json = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
-        let key = tsslib::dklstss::Key::from_json(
-            std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?,
-        )
-        .map_err(|e| Error::Env(format!("load dkls share: {e:?}")))?;
+        let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+        let key = if wk.schema == "mnemonic" {
+            let (seed, curve) = mnemonic_share_seed(&payload)?;
+            let (master, _cc) = crate::bip39::master_from_seed(&seed, &curve)?;
+            crate::tss::dkls_import_key(&master, &uuid).map_err(|e| Error::Env(e.to_string()))?.1
+        } else {
+            tsslib::dklstss::Key::from_json(std::str::from_utf8(&payload).map_err(|e| Error::Env(e.to_string()))?)
+                .map_err(|e| Error::Env(format!("load dkls share: {e:?}")))?
+        };
         keys.push(key);
     }
 
