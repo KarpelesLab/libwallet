@@ -106,6 +106,63 @@ mod tests {
         b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
+    /// Two real spotlib clients on the live relay run a 2-party FROST keygen,
+    /// exchanging tsslib messages end-to-end over the Spot network (encrypted by
+    /// spotlib). Gated behind `SPOT_LIVE=1` since it needs relay connectivity.
+    #[test]
+    fn two_party_frost_keygen_over_live_spot() {
+        if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+            eprintln!("skipping live-spot test (set SPOT_LIVE=1 to run)");
+            return;
+        }
+        use std::time::{Duration, Instant};
+        let a = std::sync::Arc::new(spotlib::Client::builder().meta("project", "libwallet-test").build().unwrap());
+        let b = std::sync::Arc::new(spotlib::Client::builder().meta("project", "libwallet-test").build().unwrap());
+        // Wait for both clients online.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if a.connection_count().1 > 0 && b.connection_count().1 > 0 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "clients did not come online");
+            std::thread::sleep(Duration::from_millis(300));
+        }
+        let (a_target, b_target) = (a.target_id(), b.target_id());
+
+        let key_a = vec![1u8; 16];
+        let key_b = vec![2u8; 16];
+        let ids = PartyId::sort(
+            vec![PartyId::new(hex(&key_a), "", key_a.clone()), PartyId::new(hex(&key_b), "", key_b.clone())],
+            0,
+        );
+        let (party0, party1) = (ids[0].clone(), ids[1].clone());
+
+        // Each broker sends over its client to the peer's "tss" endpoint.
+        let (ca, cb) = (a.clone(), b.clone());
+        let broker0 = SpotBroker::new(party0.index, Box::new(move |bytes| {
+            let _ = ca.send_to_with_from(&format!("{b_target}/tss"), &bytes, "/tss", Duration::from_secs(20));
+        }));
+        let broker1 = SpotBroker::new(party1.index, Box::new(move |bytes| {
+            let _ = cb.send_to_with_from(&format!("{a_target}/tss"), &bytes, "/tss", Duration::from_secs(20));
+        }));
+
+        // Register spot handlers that feed inbound bytes into each broker.
+        let hb0 = broker0.clone();
+        a.set_handler("tss", Some(move |msg: &spotlib::Message| { let _ = hb0.deliver_inbound_bytes(&msg.body); Ok(None) }));
+        let hb1 = broker1.clone();
+        b.set_handler("tss", Some(move |msg: &spotlib::Message| { let _ = hb1.deliver_inbound_bytes(&msg.body); Ok(None) }));
+
+        let parties = ids.clone();
+        let (p0, p1) = (party0.clone(), party1.clone());
+        let (bb0, bb1): (Arc<dyn MessageBroker + Send + Sync>, Arc<dyn MessageBroker + Send + Sync>) = (broker0, broker1);
+        let pa = parties.clone();
+        let h0 = std::thread::spawn(move || Keygen::new(Parameters::new(pa.clone(), &p0, 1, bb0)).unwrap().wait());
+        let h1 = std::thread::spawn(move || Keygen::new(Parameters::new(parties.clone(), &p1, 1, bb1)).unwrap().wait());
+        let key0 = h0.join().unwrap().expect("party0 keygen");
+        let key1 = h1.join().unwrap().expect("party1 keygen");
+        assert_eq!(hex(&crate::tss::frost_group_pubkey(&key0)), hex(&crate::tss::frost_group_pubkey(&key1)));
+    }
+
     #[test]
     fn two_party_frost_keygen_over_serialized_loopback() {
         // Two parties, each on its own thread, exchanging tsslib messages ONLY as
