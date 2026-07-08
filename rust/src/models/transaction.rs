@@ -12,7 +12,7 @@ use crate::{Amount, Env, Result, SqlValue};
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Transaction" ("Id" text, "Type" text, "Asset" text, "From" text, "To" text, "Gas" integer, "GasPrice" text, "MaxFeePerGas" text, "MaxPriorityFeePerGas" text, "Fee" text, "Nonce" integer, "Format" text, "Raw" blob, "Hash" text, "URL" text, "Network" text, "Amount" text, "Value" text, "Data" text, "Created" text, PRIMARY KEY ("Id"));"#;
 const COLS: &str = r#""Id", "Type", "Asset", "From", "To", "Gas", "GasPrice", "MaxFeePerGas", "MaxPriorityFeePerGas", "Fee", "Nonce", "Format", "Raw", "Hash", "URL", "Network", "Amount", "Value", "Data", "Created""#;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Transaction {
     #[serde(rename = "id", default, skip_serializing_if = "String::is_empty")]
     pub id: String,

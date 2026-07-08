@@ -178,6 +178,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Transaction" => transaction::route(&handle.env, verb, params),
         "Transaction:validate" => transaction::validate(&handle.env, params),
         "Transaction:signAndSend" => transaction::sign_and_send(&handle.env, params),
+        "Transaction:backfill" => transaction::backfill(&handle.env, params),
         "Transaction:simulate" => simulate::simulate(&handle.env, params),
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
         "Web3:request" => web3::request(&handle.env, params),

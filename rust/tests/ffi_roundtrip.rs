@@ -2165,6 +2165,41 @@ fn promote_mnemonic_to_mpc_wallet_and_sign() {
 }
 
 #[test]
+fn transaction_backfill_evm_modchain() {
+    let h = new_env();
+    // Wallet + ethereum account, set as current.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"EVM","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    request(h, &format!(r#"{{"path":"Account:setCurrent","params":{{"Id":"{account_id}"}}}}"#));
+
+    // Mock modchain_historyByAddress: one page, one tx, no continuation.
+    let node = mock_node(
+        r#"{"jsonrpc":"2.0","id":1,"result":{"results":[{"blk":100,"tx":"0xABC123","data":{"from":"0xFrom0000000000000000000000000000000000aa","to":"0xTo00000000000000000000000000000000000bb","value":"0xde0b6b3a7640000","gas":"0x5208","gasPrice":"0x4a817c800","timestamp":"0x60000000"}}],"continueKey":""}}"#,
+    );
+    let bf = request(h, &format!(r#"{{"path":"Transaction:backfill","params":{{"RPC":"{node}"}}}}"#));
+    assert_eq!(bf["result"], "success", "{bf}");
+    assert_eq!(bf["data"]["provider"], "modchain");
+    assert_eq!(bf["data"]["count"], 1);
+
+    // The swept tx is persisted and fetchable.
+    let list = request(h, r#"{"path":"Transaction","verb":"GET"}"#);
+    let txs = list["data"].as_array().unwrap();
+    assert_eq!(txs.len(), 1);
+    assert_eq!(txs[0]["hash"], "0xabc123");
+    assert_eq!(txs[0]["from"], "0xfrom0000000000000000000000000000000000aa");
+    assert_eq!(txs[0]["type"], "transfer");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_import_private_key_via_ffi() {
     let h = new_env();
     // Import a raw 32-byte secp256k1 key as a 1-of-1 wallet.

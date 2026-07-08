@@ -59,6 +59,8 @@ pub mod curated;
 pub mod bip39;
 // Wallet:probeActivity core — seed → candidate addresses → RPC activity probe.
 pub mod probe;
+// Transaction:backfill — tx-history provider sweep (modchain / signatures).
+pub mod txhistory;
 // Name resolution — ENS/SNS (wltnames).
 pub mod names;
 // Curated contract labels (wltcontract).

@@ -359,6 +359,17 @@ pub fn now_rfc3339() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
+/// A Unix timestamp (seconds) as RFC3339 text, or "" for a zero/invalid time.
+pub fn unix_to_rfc3339(secs: i64) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
+    match DateTime::<Utc>::from_timestamp(secs, 0) {
+        Some(dt) => dt.to_rfc3339_opts(SecondsFormat::Nanos, true),
+        None => String::new(),
+    }
+}
+
 fn now_text() -> String {
     now_rfc3339()
 }

@@ -100,6 +100,39 @@ pub fn validate(_env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "valid": true, "type": typ }))
 }
 
+/// `Transaction:backfill` — sweep the current account+network's tx-history
+/// provider and upsert the results (Go `apiTransactionBackfill`). EVM only for
+/// now (modchain_historyByAddress); runs synchronously on the worker thread and
+/// emits `tx:history_updated`. Returns `{started, provider, count}`. `RPC` in
+/// params overrides the network's resolved RPC (tests / explicit routing).
+pub fn backfill(env: &Env, params: &Value) -> ApiResult {
+    let account_id = env
+        .get_current("account")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current account"))?;
+    let account = crate::models::account::fetch(env, &account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "current account not found"))?;
+    let net = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+
+    let provider = net.tx_history_provider();
+    if net.kind != "evm" || provider.is_empty() {
+        // Bitcoin/Solana providers not yet ported.
+        return Ok(json!({ "started": false, "provider": provider, "reason": format!("no tx-history provider ported for {}", net.kind) }));
+    }
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
+    };
+    let count = crate::txhistory::backfill_evm_modchain(env, &account.address, &net, &rpc).map_err(ApiError::internal)?;
+    if count > 0 {
+        env.broadcast(&crate::response::event("tx:history_updated", json!({ "account": account.id, "count": count })));
+    }
+    Ok(json!({ "started": true, "provider": provider, "count": count }))
+}
+
 /// `Transaction:signAndSend` — build, sign, broadcast, and persist a
 /// transaction (Go `Transaction.SignAndSend`). This ports the EVM path: resolve
 /// the `From` account + network, RPC-backfill nonce/gas/fee where absent, sign
