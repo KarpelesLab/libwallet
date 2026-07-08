@@ -53,6 +53,8 @@ pub mod wcmanager;
 pub mod erc20;
 // Cross-device (RemoteKey) spot message routing (wltwallet broker).
 pub mod remotekey;
+// Cross-device tsslib broker over a serialized transport (ceremony transport).
+pub mod spotbroker;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).
