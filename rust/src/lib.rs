@@ -55,6 +55,8 @@ pub mod erc20;
 pub mod remotekey;
 // Cross-device tsslib broker over a serialized transport (ceremony transport).
 pub mod spotbroker;
+// Device-to-device wallet transfer crypto + pairing URL.
+pub mod transfer;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).
