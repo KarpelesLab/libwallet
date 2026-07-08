@@ -235,6 +235,24 @@ pub fn dkls_sign_local_tweaked(
 
 /// The wallet's group public key as the 33-byte SEC1-compressed secp256k1
 /// encoding (Wallet.Pubkey for secp256k1 wallets).
+/// Reshare a source DKLs key into a fresh `new_party_keys`-of-`new_threshold`
+/// committee (synchronous, no broker — `dklstss::reshare`). The group public key
+/// is preserved. Used by Wallet:promoteMnemonic (1-of-1 imported key → n-of-m).
+/// Returns each new party paired with its share.
+pub fn dkls_reshare(
+    source: tsslib::dklstss::Key,
+    new_party_keys: Vec<Vec<u8>>,
+    new_threshold: usize,
+) -> Result<Vec<(PartyId, tsslib::dklstss::Key)>, TssError> {
+    let ids: Vec<PartyId> =
+        new_party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect();
+    let sorted = PartyId::sort(ids, 0);
+    let mut rng = purecrypto::rng::OsRng;
+    let new_keys = tsslib::dklstss::reshare(&[source], &[0], &sorted, new_threshold, &mut rng)
+        .map_err(|e| TssError(format!("dkls reshare: {e:?}")))?;
+    Ok(sorted.into_iter().zip(new_keys).collect())
+}
+
 pub fn dkls_group_pubkey(key: &tsslib::dklstss::Key) -> Result<[u8; 33], TssError> {
     key.ecdsa_pub
         .to_affine()

@@ -351,6 +351,102 @@ pub fn import_scalar(
     Ok(wallet)
 }
 
+/// One chain to migrate in `promote_mnemonic`: a derivation path + optional
+/// name (secp256k1 only for now — the DKLs reshare is synchronous/local).
+pub struct ChainMigration {
+    pub network: String,
+    pub path: String,
+    pub name: String,
+    pub curve: String,
+}
+
+/// `Wallet:promoteMnemonic` — migrate a mnemonic-keep wallet into fresh N-of-M
+/// MPC (DKLs23) wallets, one per chain (Go `PromoteMnemonic`). Decrypt the
+/// mnemonic once, then for each secp256k1 chain: derive the privkey at its path,
+/// import it as a 1-of-1 DKLs key, and reshare it into the `new_keys` committee
+/// (synchronous — no broker). The source wallet is left untouched. ed25519
+/// chains (FROST reshare over a broker) are deferred.
+pub fn promote_mnemonic(
+    env: &Env,
+    wallet_id: &str,
+    old_unlock: &[(String, String)],
+    chains: &[ChainMigration],
+    new_keys: &[KeyDescription],
+    threshold: i64,
+) -> Result<Vec<Wallet>> {
+    if chains.is_empty() {
+        return Err(Error::Env("promoteMnemonic: at least one chain required".into()));
+    }
+    if new_keys.len() < 2 {
+        return Err(Error::Env("promoteMnemonic: New must contain at least 2 KeyDescriptions".into()));
+    }
+    if threshold < 1 || threshold as usize >= new_keys.len() {
+        return Err(Error::Env(format!("promoteMnemonic: Threshold must be 1 ≤ T < {}", new_keys.len())));
+    }
+    let seed = decrypt_mnemonic_seed(env, wallet_id, old_unlock)?;
+
+    let mut results = Vec::with_capacity(chains.len());
+    for chain in chains {
+        let curve = if chain.curve.is_empty() { "secp256k1" } else { chain.curve.as_str() };
+        if curve != "secp256k1" {
+            return Err(Error::Env(format!("promoteMnemonic: curve {curve} not yet supported (secp256k1 only)")));
+        }
+        let (privkey, cc) = crate::hdderive::derive_secp_privkey_and_chaincode(&seed, &chain.path)
+            .map_err(|e| Error::Env(e.to_string()))?;
+        // Import the derived key as a 1-of-1 DKLs source, then reshare.
+        let src_uuid = Xuid::new("wkey");
+        let (_pid, src_key) = crate::tss::dkls_import_key(&privkey, src_uuid.uuid().as_bytes())
+            .map_err(|e| Error::Env(e.to_string()))?;
+
+        let new_wk_ids: Vec<Xuid> = (0..new_keys.len()).map(|_| Xuid::new("wkey")).collect();
+        let party_keys: Vec<Vec<u8>> = new_wk_ids.iter().map(|id| id.uuid().as_bytes().to_vec()).collect();
+        let reshared = crate::tss::dkls_reshare(src_key, party_keys, threshold as usize)
+            .map_err(|e| Error::Env(e.to_string()))?;
+        let pubkey = b64url(&crate::tss::dkls_group_pubkey(&reshared[0].1).map_err(|e| Error::Env(e.to_string()))?);
+
+        let new_wallet_id = Xuid::new("wlt").to_string();
+        let name = if chain.name.trim().is_empty() { format!("{} / {}", "Seed", chain.network) } else { chain.name.clone() };
+        let mut keys = Vec::with_capacity(new_keys.len());
+        for (wk_id, key_desc) in new_wk_ids.iter().zip(new_keys) {
+            let uuid = wk_id.uuid();
+            let uuid_bytes = uuid.as_bytes();
+            let key = reshared
+                .iter()
+                .find(|(pid, _)| pid.key == uuid_bytes)
+                .map(|(_, k)| k)
+                .ok_or_else(|| Error::Env("reshare produced no share for a new key".into()))?;
+            let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+            let (data, key_field) = seal_share(share_json.as_bytes(), key_desc, uuid_bytes)?;
+            keys.push(WalletKey {
+                id: wk_id.to_string(),
+                wallet: new_wallet_id.clone(),
+                kind: key_desc.kind.clone(),
+                schema: "dkls23".into(),
+                key: key_field,
+                data,
+                generation: 1,
+            });
+        }
+        let now = crate::now_rfc3339();
+        let wallet = Wallet {
+            id: new_wallet_id,
+            name,
+            curve: "secp256k1".into(),
+            protocol: "dkls23".into(),
+            threshold,
+            generation: 0,
+            pubkey,
+            chaincode: b64url(&cc),
+            created: now.clone(),
+            modified: now,
+            keys,
+        };
+        persist(env, &wallet)?;
+        results.push(wallet);
+    }
+    Ok(results)
+}
+
 /// Seal a share payload to a KeyDescription recipient, returning `(sealed data,
 /// Key field)`. Encrypt → bottle + PKIX pubkey; Plain → unencrypted bottle;
 /// Remote → error (needs the backend).

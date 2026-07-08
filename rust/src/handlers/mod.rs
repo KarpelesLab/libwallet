@@ -83,9 +83,13 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
     // wallet by id in the path). Must be checked before the `Wallet/Key/` and
     // bare `Wallet` arms.
     if let Some(rest) = path.strip_prefix("Wallet/") {
-        if let Some((id, "probeActivity")) = rest.split_once(':') {
+        if let Some((id, action)) = rest.split_once(':') {
             if !id.contains('/') {
-                return wallet::probe_activity(&handle.env, id, params);
+                match action {
+                    "probeActivity" => return wallet::probe_activity(&handle.env, id, params),
+                    "promoteMnemonic" => return wallet::promote_mnemonic(&handle.env, id, params),
+                    _ => {}
+                }
             }
         }
     }

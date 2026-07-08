@@ -2110,6 +2110,61 @@ fn mnemonic_import_account_sign_ecrecover_roundtrip() {
 }
 
 #[test]
+fn promote_mnemonic_to_mpc_wallet_and_sign() {
+    let h = new_env();
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    // Source mnemonic-keep wallet.
+    let src = request(
+        h,
+        &format!(r#"{{"path":"Wallet:importMnemonic","params":{{"Name":"Seed","Curve":"secp256k1","Mnemonic":"{m}","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#),
+    );
+    let src_id = src["data"]["Id"].as_str().unwrap().to_string();
+    let src_wk = src["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+
+    // Promote the ethereum chain into a fresh 2-of-3 (threshold 1) MPC wallet.
+    let promoted = request(
+        h,
+        &format!(
+            r#"{{"path":"Wallet/{src_id}:promoteMnemonic","verb":"POST","params":{{
+                "Old":[{{"Type":"Password","Id":"{src_wk}","Key":"password1"}}],
+                "Chains":[{{"network":"ethereum","derivationPath":"m/44'/60'/0'/0/0","curve":"secp256k1"}}],
+                "New":[{{"Type":"Password","Key":"passworda"}},{{"Type":"Password","Key":"passwordb"}},{{"Type":"Password","Key":"passwordc"}}],
+                "Threshold":1}}}}"#
+        ),
+    );
+    assert_eq!(promoted["result"], "success", "promote failed: {promoted}");
+    let nw = &promoted["data"][0];
+    assert_eq!(nw["Protocol"], "dkls23");
+    assert_eq!(nw["Threshold"], 1);
+    let new_wallet = nw["Id"].as_str().unwrap().to_string();
+    let nwk: Vec<String> = (0..3).map(|i| nw["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+
+    // The promoted MPC wallet is a real 2-of-3 DKLs wallet: derive an account
+    // and sign a tx that ecrecovers to it (needs all shares for DKLs sign).
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{new_wallet}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passworda"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordb"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordc"}}]}}}}"#,
+            nwk[0], nwk[1], nwk[2]
+        ),
+    );
+    assert_eq!(signed["result"], "success", "sign failed: {signed}");
+    let sig = signed["data"]["signature"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+    let rec = request(
+        h,
+        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+    );
+    assert_eq!(rec["data"].as_str().unwrap().to_lowercase(), address.to_lowercase(), "{rec}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_import_private_key_via_ffi() {
     let h = new_env();
     // Import a raw 32-byte secp256k1 key as a 1-of-1 wallet.

@@ -154,6 +154,42 @@ mod probe_tests {
     }
 }
 
+/// `Wallet:promoteMnemonic` {Old, Chains, New, Threshold} — migrate a
+/// mnemonic-keep wallet into fresh N-of-M MPC wallets, one per chain (Go
+/// `apiWalletPromoteMnemonic`). secp256k1 chains only (synchronous DKLs reshare);
+/// the source wallet is left intact. `Id` is the source wallet id.
+pub fn promote_mnemonic(env: &Env, id: &str, params: &Value) -> ApiResult {
+    let unlock_from = |field: &str| -> Vec<(String, String)> {
+        let ks: Vec<crate::sign::KeyDescription> = params.get(field).and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+        ks.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey")).map(|k| (k.id.clone(), k.key.clone())).collect()
+    };
+    let old_unlock = unlock_from("Old");
+    let new_keys: Vec<crate::sign::KeyDescription> = params
+        .get("New")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .ok_or_else(|| ApiError::new(400, "New key descriptors required"))?;
+    let threshold = params.get("Threshold").and_then(Value::as_i64).unwrap_or(1);
+
+    let chains: Vec<crate::models::wallet::ChainMigration> = params
+        .get("Chains")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .map(|c| crate::models::wallet::ChainMigration {
+                    network: c.get("network").and_then(Value::as_str).unwrap_or("").to_owned(),
+                    path: c.get("derivationPath").and_then(Value::as_str).unwrap_or("").to_owned(),
+                    name: c.get("name").and_then(Value::as_str).unwrap_or("").to_owned(),
+                    curve: c.get("curve").and_then(Value::as_str).unwrap_or("").to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let wallets = crate::models::wallet::promote_mnemonic(env, id, &old_unlock, &chains, &new_keys, threshold)
+        .map_err(|e| ApiError::new(400, e.to_string()))?;
+    Ok(serde_json::to_value(wallets).unwrap())
+}
+
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {

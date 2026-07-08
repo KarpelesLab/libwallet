@@ -129,6 +129,20 @@ pub fn derive_pubkey_for_path(seed: &[u8], curve: &str, path: &str) -> Result<Ve
     }
 }
 
+/// The secp256k1 private key AND chain code at `path` from a BIP39 `seed`
+/// (BIP32). Used by Wallet:promoteMnemonic, whose migrated wallet needs the
+/// derived node's chain code so its accounts derive correctly.
+pub fn derive_secp_privkey_and_chaincode(seed: &[u8], path: &str) -> Result<([u8; 32], [u8; 32]), DeriveError> {
+    let steps = parse_bip32_path(path)?;
+    let (mut key, mut cc) = hmac_master(b"Bitcoin seed", seed);
+    for idx in steps {
+        let (k, c) = ckd_priv(&key, &cc, idx)?;
+        key = k;
+        cc = c;
+    }
+    Ok((key, cc))
+}
+
 /// The wallet-level master public key for a BIP39 `seed` (Go
 /// `masterPubFromShare`): the compressed secp256k1 pubkey of the BIP32 master,
 /// or the raw ed25519 pubkey of the SLIP-0010 master (treated as an ed25519
