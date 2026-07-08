@@ -129,6 +129,23 @@ pub fn derive_pubkey_for_path(seed: &[u8], curve: &str, path: &str) -> Result<Ve
     }
 }
 
+/// The wallet-level master public key for a BIP39 `seed` (Go
+/// `masterPubFromShare`): the compressed secp256k1 pubkey of the BIP32 master,
+/// or the raw ed25519 pubkey of the SLIP-0010 master (treated as an ed25519
+/// seed, matching Go `ed25519.NewKeyFromSeed`). This is what an imported
+/// wallet's `Pubkey` field holds and what accounts derive from.
+pub fn master_pubkey(seed: &[u8], curve: &str) -> Result<Vec<u8>, DeriveError> {
+    match curve {
+        "secp256k1" => Ok(derive_pubkey_for_path(seed, "secp256k1", "")?.to_vec()),
+        "ed25519" | "" => {
+            let (master, _cc) = hmac_master(b"ed25519 seed", seed);
+            let sk = purecrypto::ec::Ed25519PrivateKey::from_bytes(master);
+            Ok(sk.public_key().to_bytes().to_vec())
+        }
+        other => Err(DeriveError(format!("unsupported curve {other:?}"))),
+    }
+}
+
 /// HMAC-SHA512(`key`, seed) split into a 32-byte master key + 32-byte chain code.
 fn hmac_master(key: &[u8], seed: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut mac = HmacSha512::new(key);

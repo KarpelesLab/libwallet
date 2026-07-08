@@ -581,6 +581,32 @@ fn mnemonic_share_seed(payload: &[u8]) -> Result<(Vec<u8>, String)> {
     Ok((crate::bip39::mnemonic_to_seed(&mnemonic, &share.passphrase).to_vec(), share.curve))
 }
 
+/// Direct Ed25519 signing for a mnemonic-keep ed25519 wallet: decrypt the
+/// share → seed → SLIP-0010 master → sign `msg` with the master key. Self-
+/// verifies against the wallet's stored group pubkey.
+fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8]) -> Result<Vec<u8>> {
+    let (wk_id, secret) = unlock.first().ok_or_else(|| Error::Env("exactly one Key required".into()))?;
+    let wk = wallet.keys.iter().find(|k| &k.id == wk_id).unwrap_or(&wallet.keys[0]);
+    let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
+    let uuid = xid.uuid().as_bytes().to_vec();
+    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid)?;
+    let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
+    let (seed, curve) = mnemonic_share_seed(&payload)?;
+    let (master, _cc) = crate::bip39::master_from_seed(&seed, &curve)?;
+
+    let sk = purecrypto::ec::Ed25519PrivateKey::from_bytes(master);
+    let sig = sk.sign(msg).to_bytes().to_vec();
+    // Defense in depth: the signature must verify under the stored group pubkey.
+    if let Ok(pk) = b64url_decode(&wallet.pubkey) {
+        if let (Ok(pk32), Ok(sig64)) = (<[u8; 32]>::try_from(pk), <[u8; 64]>::try_from(sig.clone())) {
+            if !ed25519_verify(&pk32, msg, &sig64) {
+                return Err(Error::Env("mnemonic ed25519 signature failed verification".into()));
+            }
+        }
+    }
+    Ok(sig)
+}
+
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
 /// Password-protected shares. `unlock` pairs each contributing WalletKey id
 /// with its password; at least `threshold + 1` are required. The produced
@@ -594,6 +620,12 @@ pub fn sign_frost_local(
     msg: &[u8],
 ) -> Result<Vec<u8>> {
     let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    // A mnemonic-keep ed25519 wallet signs directly with its master Ed25519 key
+    // (its Solana account uses path "m", so no tweak) — a 1-of-1 FROST sign over
+    // the LocalHub would deadlock, so bypass it.
+    if wallet.curve == "ed25519" && wallet.keys.iter().any(|k| k.schema == "mnemonic") {
+        return sign_ed25519_mnemonic(&wallet, unlock, msg);
+    }
     if wallet.protocol != "frost" {
         return Err(Error::Env(format!("wallet protocol {} is not frost", wallet.protocol)));
     }
