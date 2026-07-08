@@ -2050,8 +2050,10 @@ fn wallet_import_mnemonic_via_ffi() {
     );
     let w = request(h, &body);
     assert_eq!(w["result"], "success", "{w}");
-    assert_eq!(w["data"]["Protocol"], "dkls23");
+    // Mnemonic-keep wallet (byte-compatible with Go): stores the MnemonicKeyShare.
+    assert_eq!(w["data"]["Protocol"], "mnemonic");
     assert_eq!(w["data"]["Threshold"], 0);
+    assert_eq!(w["data"]["Keys"][0]["Schema"], "mnemonic");
     let pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
     // The wallet chaincode is the derived BIP-32 master chain code.
     let cc = w["data"]["Chaincode"].as_str().unwrap();
@@ -2069,6 +2071,41 @@ fn wallet_import_mnemonic_via_ffi() {
     // A bad-checksum mnemonic errors.
     let bad = r#"{"path":"Wallet:importMnemonic","params":{"Curve":"secp256k1","Mnemonic":"abandon abandon abandon","Keys":[{"Type":"Password","Key":"password1"}]}}"#;
     assert_eq!(request(h, bad)["result"], "error");
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn mnemonic_import_account_sign_ecrecover_roundtrip() {
+    let h = new_env();
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    // Import as a mnemonic-keep wallet.
+    let w = request(
+        h,
+        &format!(r#"{{"path":"Wallet:importMnemonic","params":{{"Name":"M","Curve":"secp256k1","Mnemonic":"{m}","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#),
+    );
+    assert_eq!(w["data"]["Protocol"], "mnemonic", "{w}");
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let wk = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+
+    // Derive an ethereum account and sign a message with the mnemonic key.
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let address = a["data"]["Address"].as_str().unwrap().to_string();
+
+    let signed = request(
+        h,
+        &format!(r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[{{"Type":"Password","Id":"{wk}","Key":"password1"}}]}}}}"#),
+    );
+    assert_eq!(signed["result"], "success", "sign failed: {signed}");
+    let sig = signed["data"]["signature"].as_str().unwrap().to_string();
+
+    // personal_ecRecover of the signature returns exactly the account address —
+    // proving import(mnemonic) → account → sign works end to end.
+    let rec = request(
+        h,
+        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+    );
+    assert_eq!(rec["data"].as_str().unwrap().to_lowercase(), address.to_lowercase(), "{rec}");
     LibwalletDestroy(h);
 }
 

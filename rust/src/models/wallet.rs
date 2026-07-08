@@ -324,21 +324,7 @@ pub fn import_scalar(
     let now = crate::now_rfc3339();
 
     // Seal the single share to its recipient (same schemes as create).
-    let (data, key_field) = match key_desc.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
-        Recipient::Encrypt(pk) => {
-            let sealed = keystore::seal(share_json.as_bytes(), &[pk.clone()])
-                .map_err(|e| Error::Env(e.to_string()))?;
-            let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
-            (sealed, pkix)
-        }
-        Recipient::Plain => (
-            keystore::wrap_plain(share_json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?,
-            String::new(),
-        ),
-        Recipient::Remote => {
-            return Err(Error::Env("RemoteKey shares need the backend (not yet ported)".into()))
-        }
-    };
+    let (data, key_field) = seal_share(share_json.as_bytes(), key_desc, uuid_bytes)?;
 
     let wallet = Wallet {
         id: wallet_id.clone(),
@@ -365,10 +351,28 @@ pub fn import_scalar(
     Ok(wallet)
 }
 
-/// Import a BIP-39 mnemonic as a 1-of-1 wallet (Go `Wallet:importMnemonic`):
-/// validate the mnemonic, derive the seed and the BIP-32/SLIP-0010 master, and
-/// import the master scalar with the derived chain code (so HD accounts derive
-/// correctly).
+/// Seal a share payload to a KeyDescription recipient, returning `(sealed data,
+/// Key field)`. Encrypt → bottle + PKIX pubkey; Plain → unencrypted bottle;
+/// Remote → error (needs the backend).
+fn seal_share(payload: &[u8], key_desc: &KeyDescription, uuid: &[u8]) -> Result<(Vec<u8>, String)> {
+    match key_desc.resolve(uuid).map_err(|e| Error::Env(e.to_string()))? {
+        Recipient::Encrypt(pk) => {
+            let sealed = keystore::seal(payload, &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+            let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
+            Ok((sealed, pkix))
+        }
+        Recipient::Plain => Ok((keystore::wrap_plain(payload).map_err(|e| Error::Env(e.to_string()))?, String::new())),
+        Recipient::Remote => Err(Error::Env("RemoteKey shares need the backend (not yet ported)".into())),
+    }
+}
+
+/// Import a BIP-39 mnemonic as a mnemonic-keep 1-of-1 wallet (Go
+/// `Wallet:importMnemonic` / `buildImportedWallet`): validate the mnemonic, seal
+/// the `MnemonicKeyShare` (entropy/passphrase/curve) as the WalletKey Data with
+/// Schema "mnemonic", and store the wallet whose Pubkey/Chaincode are the
+/// BIP-32/SLIP-0010 master (so accounts derive as they do for TSS wallets, and
+/// the wallet is byte-compatible with Go). Signing decrypts the mnemonic and
+/// re-derives the key at sign time (see dkls_sign_digest / sign_frost_local).
 pub fn import_mnemonic(
     env: &Env,
     name: &str,
@@ -378,10 +382,51 @@ pub fn import_mnemonic(
     key_desc: &KeyDescription,
 ) -> Result<Wallet> {
     let mnemonic = mnemonic.split_whitespace().collect::<Vec<_>>().join(" ");
-    crate::bip39::mnemonic_to_entropy(&mnemonic)?; // checksum validation
+    let entropy = crate::bip39::mnemonic_to_entropy(&mnemonic)?; // checksum validation
+    let curve_out = if curve.is_empty() { "ed25519" } else { curve };
     let seed = crate::bip39::mnemonic_to_seed(&mnemonic, passphrase);
-    let (master, cc) = crate::bip39::master_from_seed(&seed, curve)?;
-    import_scalar(env, name, curve, &master, &cc, key_desc)
+    let (_master, cc) = crate::bip39::master_from_seed(&seed, curve_out)?;
+    let pubkey = crate::hdderive::master_pubkey(&seed, curve_out).map_err(|e| Error::Env(e.to_string()))?;
+
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_id = Xuid::new("wkey");
+    let uuid = wk_id.uuid();
+    let uuid_bytes = uuid.as_bytes();
+
+    // MnemonicKeyShare (Go format: entropy is a base64-std []byte string).
+    let share_json = serde_json::json!({
+        "curve": curve_out,
+        "entropy": base64::engine::general_purpose::STANDARD.encode(&entropy),
+        "language": "english",
+        "passphrase": passphrase,
+    })
+    .to_string();
+    let (data, key_field) = seal_share(share_json.as_bytes(), key_desc, uuid_bytes)?;
+
+    let now = crate::now_rfc3339();
+    let wallet = Wallet {
+        id: wallet_id.clone(),
+        name: name.to_owned(),
+        curve: curve_out.into(),
+        protocol: "mnemonic".into(),
+        threshold: 0,
+        generation: 0,
+        pubkey: b64url(&pubkey),
+        chaincode: b64url(&cc),
+        created: now.clone(),
+        modified: now,
+        keys: vec![WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet_id,
+            kind: key_desc.kind.clone(),
+            schema: "mnemonic".into(),
+            key: key_field,
+            data,
+            generation: 1,
+        }],
+    };
+    persist(env, &wallet)?;
+    Ok(wallet)
 }
 
 /// Serialize a wallet for `Wallet:backup` — includes the encrypted key `Data`
