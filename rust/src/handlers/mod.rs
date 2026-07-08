@@ -17,6 +17,7 @@ mod simulate;
 mod spot;
 mod nft;
 mod quote;
+mod remotekey;
 mod storekey;
 mod swap;
 mod token;
@@ -192,6 +193,9 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet:importFromDevice" => spot::import_from_device(&handle.env, params),
         "Wallet:buildNewAgentBody" => spot::build_new_agent_body(&handle.env, params),
         "ClawdWallet:pair" => spot::clawd_pair(&handle.env, params),
+        "RemoteKey:new" => remotekey::new(&handle.env, params),
+        "RemoteKey:reshare" => remotekey::reshare(&handle.env, params),
+        "RemoteKey:validate" => remotekey::validate(&handle.env, params),
         "Request" => request::route(&handle.env, verb, params),
         "Request:test" => request::test(&handle.env),
         "Request:approve" => request::approve(&handle.env, params),

@@ -2022,6 +2022,95 @@ fn clawd_pair_over_live_spot() {
 }
 
 #[test]
+fn remotekey_endpoints_post_to_walletsign_backend() {
+    use std::io::{Read, Write};
+    use std::sync::mpsc;
+
+    // Capturing mock: records the raw HTTP request (so we can assert the
+    // Sec-ClientId header + JSON body) and returns a canned KLB envelope.
+    fn mock_capture(body: &'static str) -> (String, mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                // Accumulate until we've read the headers + the full body (a
+                // single read() can catch only the first TCP segment under load).
+                s.set_read_timeout(Some(Duration::from_millis(500))).ok();
+                let mut acc: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match s.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            acc.extend_from_slice(&chunk[..n]);
+                            // Stop once headers are complete and the declared
+                            // Content-Length body has fully arrived.
+                            let text = String::from_utf8_lossy(&acc);
+                            if let Some(hdr_end) = text.find("\r\n\r\n") {
+                                let clen = text
+                                    .lines()
+                                    .find_map(|l| l.strip_prefix("Content-Length:").or_else(|| l.strip_prefix("content-length:")))
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                                    .unwrap_or(0);
+                                if acc.len() >= hdr_end + 4 + clen {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let _ = tx.send(String::from_utf8_lossy(&acc).into_owned());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        // No trailing slash — matches the real DEFAULT_HOST shape.
+        (format!("http://{addr}"), rx)
+    }
+
+    let h = new_env();
+    // Register the host wallet identity → Sec-ClientId on subsequent calls.
+    let wi = request(h, r#"{"path":"Info:setWalletInfo","params":{"ClientId":"app-xyz","Name":"Test"}}"#);
+    assert_eq!(wi["result"], "success", "{wi}");
+
+    // RemoteKey:new → POST Crypto/WalletSign:new {number}, passthrough res.data.
+    let (base, rx) = mock_capture(r#"{"result":"success","data":{"session":"sess-1","format":"all-digits","length":6}}"#);
+    let r = request(h, &format!(r#"{{"path":"RemoteKey:new","params":{{"email":"a@b.co","Backend":"{base}"}}}}"#));
+    assert_eq!(r["result"], "success", "{r}");
+    assert_eq!(r["data"]["session"], "sess-1");
+    assert_eq!(r["data"]["length"], 6);
+    let req = rx.recv_timeout(Duration::from_secs(5)).expect("mock saw request");
+    assert!(req.starts_with("POST /_special/rest/Crypto/WalletSign:new"), "{req}");
+    assert!(req.contains("Sec-ClientId: app-xyz"), "missing client id header: {req}");
+    assert!(req.contains(r#""number":"a@b.co""#), "body: {req}");
+
+    // RemoteKey:reshare → fixed threshold/count, key passed through.
+    let (base2, rx2) = mock_capture(r#"{"result":"success","data":{"session":"sess-2","format":"all-digits","length":6}}"#);
+    let rr = request(h, &format!(r#"{{"path":"RemoteKey:reshare","params":{{"key":"crws-1:crwsv-2","Backend":"{base2}"}}}}"#));
+    assert_eq!(rr["result"], "success", "{rr}");
+    let req2 = rx2.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(req2.contains(r#""key":"crws-1:crwsv-2""#) && req2.contains(r#""threshold":1"#) && req2.contains(r#""count":3"#), "{req2}");
+
+    // RemoteKey:validate → verify session+code, returns {RemoteKey}.
+    let (base3, _rx3) = mock_capture(r#"{"result":"success","data":{"RemoteKey":"crws-9:crwsv-9"}}"#);
+    let rv = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"s","code":"123456","Backend":"{base3}"}}}}"#));
+    assert_eq!(rv["result"], "success", "{rv}");
+    assert_eq!(rv["data"]["RemoteKey"], "crws-9:crwsv-9");
+
+    // Missing required params are rejected before any network call.
+    let bad = request(h, r#"{"path":"RemoteKey:new","params":{}}"#);
+    assert_eq!(bad["result"], "error");
+    assert_eq!(bad["code"], 400);
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

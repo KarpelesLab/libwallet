@@ -158,6 +158,28 @@ pub fn do_get(base: &str, path: &str) -> Result<Value> {
     unwrap_envelope(path, resp)
 }
 
+/// POST `<base>/_special/rest/<path>` with a JSON body and return the
+/// envelope's `data`. Mirrors the Go `rest.Do(ctx, path, "POST", param)` used by
+/// the RemoteKey / WalletSign helpers. `client_id`, when set, is stamped as the
+/// `Sec-ClientId` header (Go `withClientID`). Auth beyond that header is the
+/// backend's concern — these endpoints gate 2FA on ClientID + rate limits.
+pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
+    let url = format!("{base}/_special/rest/{path}");
+    let mut req = ureq::post(&url)
+        .set("Sec-Rest-Http", "false")
+        .set("Content-Type", "application/json")
+        .timeout(Duration::from_secs(20));
+    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
+        req = req.set("Sec-ClientId", id);
+    }
+    let resp: Value = req
+        .send_json(params.clone())
+        .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
+        .into_json()
+        .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
+    unwrap_envelope(path, resp)
+}
+
 /// Unwrap a KLB envelope `{result, data}` — returns `data` on success, else an
 /// error carrying the envelope's message.
 fn unwrap_envelope(path: &str, resp: Value) -> Result<Value> {
