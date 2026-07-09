@@ -278,6 +278,81 @@ pub fn frost_import_key(priv_be: &[u8], party_key: &[u8]) -> Result<(PartyId, Ke
     Ok((party, key))
 }
 
+// ── Legacy eddsatss (GG18-style Ed25519) — for opening + signing Go wallets
+//    created before FROST. Unblocked by tsslib 0.2.4 (public subset_for_parties
+//    + Key::public_key). Broker-based like FROST, driven over the LocalHub. ──
+
+/// Generate a threshold legacy-EdDSA (eddsatss) key locally over the in-process
+/// hub. Party keys are the WalletKey UUIDs, as in [`frost_keygen_with_parties`].
+pub fn eddsa_keygen_local(
+    party_keys: Vec<Vec<u8>>,
+    threshold: usize,
+) -> Result<Vec<(PartyId, tsslib::eddsatss::Key)>, TssError> {
+    let n = party_keys.len();
+    if n == 0 || threshold >= n {
+        return Err(TssError(format!("invalid n={n}, threshold={threshold}")));
+    }
+    let ids: Vec<PartyId> = party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect();
+    let parties = PartyId::sort(ids, 0);
+    let hubs = LocalHub::wired(n);
+    let keygens: Vec<tsslib::eddsatss::KeygenParty> = (0..n)
+        .map(|i| {
+            let broker: Arc<dyn MessageBroker + Send + Sync> = hubs[i].clone();
+            let params = Parameters::new(parties.clone(), &parties[i], threshold, broker);
+            tsslib::eddsatss::KeygenParty::new(params).map_err(|e| TssError(format!("eddsa keygen start: {e:?}")))
+        })
+        .collect::<Result<_, _>>()?;
+    keygens
+        .iter()
+        .enumerate()
+        .map(|(i, k)| k.wait().map(|key| (parties[i].clone(), key)).map_err(|e| TssError(format!("eddsa keygen: {e:?}"))))
+        .collect()
+}
+
+/// The 32-byte compressed Ed25519 group public key of a legacy eddsatss share
+/// (Go `EDDSAPub.ToEd25519PubKey().Serialize()`). Any share carries it.
+pub fn eddsa_group_pubkey(key: &tsslib::eddsatss::Key) -> Result<[u8; 32], TssError> {
+    key.public_key().map_err(|e| TssError(format!("eddsa pubkey: {e:?}")))
+}
+
+/// Threshold-sign `msg` with a committee of legacy eddsatss shares (each a full
+/// keygen share; `SigningParty::new` narrows to the committee internally). The
+/// committee must be ≥ threshold+1. Returns the 64-byte Ed25519 signature after
+/// checking the signers agree.
+pub fn eddsa_sign_local(
+    committee: &[(PartyId, tsslib::eddsatss::Key)],
+    threshold: usize,
+    msg: &[u8],
+) -> Result<Vec<u8>, TssError> {
+    if committee.len() < threshold + 1 {
+        return Err(TssError(format!("committee size {} < threshold+1 ({})", committee.len(), threshold + 1)));
+    }
+    let ids: Vec<PartyId> = committee.iter().map(|(p, _)| p.clone()).collect();
+    let sorted = PartyId::sort(ids, 0);
+    let hubs = LocalHub::wired(sorted.len());
+    let signings: Vec<tsslib::eddsatss::SigningParty> = (0..sorted.len())
+        .map(|i| {
+            let key = committee
+                .iter()
+                .find(|(p, _)| p.cmp_key(&sorted[i]) == std::cmp::Ordering::Equal)
+                .map(|(_, k)| k.clone())
+                .ok_or_else(|| TssError("committee key missing".into()))?;
+            let broker: Arc<dyn MessageBroker + Send + Sync> = hubs[i].clone();
+            let params = Parameters::new(sorted.clone(), &sorted[i], threshold, broker);
+            tsslib::eddsatss::SigningParty::new(params, key, msg).map_err(|e| TssError(format!("eddsa signing start: {e:?}")))
+        })
+        .collect::<Result<_, _>>()?;
+    let sigs: Vec<tsslib::eddsatss::SignatureData> =
+        signings.iter().map(|s| s.wait().map_err(|e| TssError(format!("eddsa signing: {e:?}")))).collect::<Result<_, _>>()?;
+    let first = &sigs[0];
+    for s in &sigs[1..] {
+        if s.signature != first.signature {
+            return Err(TssError("eddsa signers disagreed on the signature".into()));
+        }
+    }
+    Ok(first.signature.clone())
+}
+
 /// Import a raw secp256k1 secret scalar (32-byte big-endian) as a 1-of-1 DKLs
 /// key — the `Wallet:importPrivateKey` migration path for secp256k1.
 pub fn dkls_import_key(
@@ -348,4 +423,40 @@ pub fn frost_sign_local(
         }
     }
     Ok(first.signature.clone())
+}
+
+#[cfg(test)]
+mod legacy_tests {
+    use super::*;
+
+    /// Legacy eddsatss (GG18-style Ed25519) keygen → 2-of-3 threshold sign →
+    /// external Ed25519 verify. Proves tsslib 0.2.4 unblocked the legacy path
+    /// (public subset_for_parties + Key::public_key), so Rust can open + sign
+    /// Go-created pre-FROST ed25519 wallets.
+    #[test]
+    fn eddsa_keygen_sign_verifies() {
+        // Three party keys (16-byte UUIDs, as real WalletKeys use).
+        let party_keys: Vec<Vec<u8>> = (1u8..=3).map(|i| vec![i; 16]).collect();
+        let shares = eddsa_keygen_local(party_keys, 1).expect("keygen");
+        assert_eq!(shares.len(), 3);
+
+        // All shares agree on one group pubkey.
+        let pk = eddsa_group_pubkey(&shares[0].1).expect("pubkey");
+        for (_, k) in &shares[1..] {
+            assert_eq!(eddsa_group_pubkey(k).unwrap(), pk, "shares must share the group key");
+        }
+
+        // Sign with a 2-of-3 subset and verify under the group key.
+        let msg = b"legacy eddsa message";
+        let committee: Vec<_> = shares[..2].to_vec();
+        let sig = eddsa_sign_local(&committee, 1, msg).expect("sign");
+        assert_eq!(sig.len(), 64);
+        let sig64: [u8; 64] = sig.try_into().unwrap();
+        assert!(ed25519_verify(&pk, msg, &sig64), "legacy eddsa sig must verify under the group key");
+
+        // A different 2-subset produces a valid (possibly different) signature too.
+        let committee2 = vec![shares[0].clone(), shares[2].clone()];
+        let sig2 = eddsa_sign_local(&committee2, 1, msg).expect("sign2");
+        assert!(ed25519_verify(&pk, msg, &sig2.try_into().unwrap()), "second subset must also verify");
+    }
 }

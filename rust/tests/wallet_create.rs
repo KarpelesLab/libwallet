@@ -147,3 +147,37 @@ fn create_secp256k1_dkls_wallet_persists() {
     assert_eq!(got.protocol, "dkls23");
     assert_eq!(got.keys.len(), 3);
 }
+
+#[test]
+fn create_and_sign_legacy_eddsa_wallet() {
+    // Legacy eddsatss (pre-FROST ed25519) round-trip: create a 2-of-3 legacy
+    // wallet, then sign via the standard sign path (which dispatches to the
+    // eddsa_legacy branch on Protocol="eddsa"). Proves Rust can open + sign
+    // Go-created legacy ed25519 wallets (unblocked by tsslib 0.2.4).
+    let env = env();
+    let kds = [pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create_eddsa_legacy(&env, "Legacy", 1, &kds).unwrap();
+    assert_eq!(w.protocol, "eddsa");
+    assert_eq!(w.curve, "ed25519");
+    assert!(w.keys.iter().all(|k| k.schema.is_empty()), "legacy shares carry Schema=\"\"");
+
+    // Sign with a 2-of-3 subset — self-verifies against the group pubkey inside.
+    let unlock = vec![(w.keys[0].id.clone(), "passwordone".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
+    let sig = wallet::sign_frost_local(&env, &w.id, &unlock, b"legacy message").unwrap();
+    assert_eq!(sig.len(), 64);
+
+    // External verify under the stored group pubkey.
+    use base64::Engine;
+    let pk: [u8; 32] = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&w.pubkey).unwrap().try_into().unwrap();
+    let sig64: [u8; 64] = sig.try_into().unwrap();
+    assert!(libwallet::tss::ed25519_verify(&pk, b"legacy message", &sig64), "legacy eddsa sig must verify");
+
+    // A different subset also signs + verifies.
+    let unlock2 = vec![(w.keys[1].id.clone(), "passwordtwo".to_string()), (w.keys[2].id.clone(), "passwordthree".to_string())];
+    let s2 = wallet::sign_frost_local(&env, &w.id, &unlock2, b"legacy message").unwrap();
+    assert!(libwallet::tss::ed25519_verify(&pk, b"legacy message", &s2.try_into().unwrap()));
+
+    // Wrong password fails.
+    let bad = vec![(w.keys[0].id.clone(), "nope".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
+    assert!(wallet::sign_frost_local(&env, &w.id, &bad, b"legacy message").is_err());
+}

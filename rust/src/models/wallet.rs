@@ -257,6 +257,49 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     Ok(wallet)
 }
 
+/// Create a legacy eddsatss (GG18-style Ed25519) wallet — the pre-FROST ed25519
+/// scheme. Go retired legacy keygen (only FROST is minted now), so this exists
+/// to build legacy wallets for migration/round-trip testing and to mirror the
+/// on-disk shape (Protocol="eddsa", Schema="") that Rust must open + sign.
+pub fn create_eddsa_legacy(env: &Env, name: &str, threshold: usize, key_descs: &[KeyDescription]) -> Result<Wallet> {
+    let n = key_descs.len();
+    if n < 2 || threshold >= n {
+        return Err(Error::Env(format!("invalid n={n}, threshold={threshold}")));
+    }
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_ids: Vec<Xuid> = (0..n).map(|_| Xuid::new("wkey")).collect();
+    let party_keys: Vec<Vec<u8>> = wk_ids.iter().map(|x| x.uuid().as_bytes().to_vec()).collect();
+    let shares = crate::tss::eddsa_keygen_local(party_keys, threshold).map_err(|e| Error::Env(e.to_string()))?;
+    let pubkey = b64url(&crate::tss::eddsa_group_pubkey(&shares[0].1).map_err(|e| Error::Env(e.to_string()))?);
+
+    let now = crate::now_rfc3339();
+    let mut wkeys = Vec::with_capacity(n);
+    for (i, kd) in key_descs.iter().enumerate() {
+        let uuid = wk_ids[i].uuid();
+        let uuid_bytes = uuid.as_bytes();
+        let key = shares.iter().find(|(pid, _)| pid.key == uuid_bytes.as_slice()).map(|(_, k)| k).ok_or_else(|| Error::Env("share/party mismatch".into()))?;
+        let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        // Legacy shares carry Schema="" (Go marshals the eddsatss Key directly).
+        let (data, key_field) = seal_share(share_json.as_bytes(), kd, uuid_bytes)?;
+        wkeys.push(WalletKey { id: wk_ids[i].to_string(), wallet: wallet_id.clone(), kind: kd.kind.clone(), schema: String::new(), key: key_field, data, generation: 1 });
+    }
+    let wallet = Wallet {
+        id: wallet_id,
+        name: name.to_owned(),
+        curve: "ed25519".into(),
+        protocol: "eddsa".into(),
+        threshold: threshold as i64,
+        generation: 0,
+        pubkey,
+        chaincode: String::new(),
+        created: now.clone(),
+        modified: now,
+        keys: wkeys,
+    };
+    persist(env, &wallet)?;
+    Ok(wallet)
+}
+
 /// Import a raw 32-byte private-key scalar as a 1-of-1 wallet with a fresh random
 /// chain code (Go `Wallet:importPrivateKey`).
 pub fn import_private_key(
@@ -1039,6 +1082,61 @@ fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8
     Ok(sig)
 }
 
+/// The effective TSS protocol (Go `resolveProtocol`): empty falls back to the
+/// curve's legacy value so pre-modern rows still route correctly.
+fn resolve_protocol(w: &Wallet) -> &'static str {
+    match w.protocol.as_str() {
+        "frost" => "frost",
+        "dkls23" => "dkls23",
+        "eddsa" => "eddsa",
+        "gg18" => "gg18",
+        "" => match w.curve.as_str() {
+            "ed25519" => "eddsa",
+            "secp256k1" => "gg18",
+            _ => "",
+        },
+        _ => "",
+    }
+}
+
+/// Open one committee share to its decrypted JSON (Plain → EmptyOpener; else
+/// resolve an unlock key from `password`). Shared by the FROST + legacy paths.
+fn open_committee_share(wk: &WalletKey, uuid_bytes: &[u8], password: &str) -> Result<Vec<u8>> {
+    if wk.kind == "Plain" {
+        keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))
+    } else {
+        let unlock_key = resolve_unlock_key(&wk.kind, password, uuid_bytes)?;
+        keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))
+    }
+}
+
+/// Sign with a legacy eddsatss (GG18-style Ed25519) wallet — the path for
+/// opening + using ed25519 wallets created before FROST (Go `subSign`'s
+/// ProtocolLegacyEdDSA branch). Unblocked by tsslib 0.2.4.
+fn sign_eddsa_legacy(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8]) -> Result<Vec<u8>> {
+    let threshold = wallet.threshold.max(0) as usize;
+    let mut committee: Vec<(PartyId, tsslib::eddsatss::Key)> = Vec::with_capacity(unlock.len());
+    for (wk_id, password) in unlock {
+        let wk = wallet.keys.iter().find(|k| &k.id == wk_id).ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
+        let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
+        let uuid_bytes = xid.uuid().as_bytes().to_vec();
+        let json = open_committee_share(wk, &uuid_bytes, password)?;
+        let key = tsslib::eddsatss::Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
+            .map_err(|e| Error::Env(format!("load eddsa share: {e:?}")))?;
+        committee.push((PartyId::new(hex_bytes(&uuid_bytes), "", uuid_bytes.clone()), key));
+    }
+    let sig = crate::tss::eddsa_sign_local(&committee, threshold, msg).map_err(|e| Error::Env(e.to_string()))?;
+    // Defense in depth: verify under the stored group pubkey.
+    if let Ok(pk) = b64url_decode(&wallet.pubkey) {
+        if let (Ok(pk32), Ok(sig64)) = (<[u8; 32]>::try_from(pk), <[u8; 64]>::try_from(sig.clone())) {
+            if !ed25519_verify(&pk32, msg, &sig64) {
+                return Err(Error::Env("legacy eddsa signature failed verification".into()));
+            }
+        }
+    }
+    Ok(sig)
+}
+
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
 /// Password-protected shares. `unlock` pairs each contributing WalletKey id
 /// with its password; at least `threshold + 1` are required. The produced
@@ -1058,7 +1156,14 @@ pub fn sign_frost_local(
     if wallet.curve == "ed25519" && wallet.keys.iter().any(|k| k.schema == "mnemonic") {
         return sign_ed25519_mnemonic(&wallet, unlock, msg);
     }
-    if wallet.protocol != "frost" {
+    // Legacy eddsatss wallets (Protocol="eddsa", or empty on an ed25519 wallet —
+    // Go resolveProtocol) sign through the GG18-style path, unblocked by tsslib
+    // 0.2.4. Modern wallets are Protocol="frost".
+    let resolved = resolve_protocol(&wallet);
+    if resolved == "eddsa" {
+        return sign_eddsa_legacy(&wallet, unlock, msg);
+    }
+    if resolved != "frost" {
         return Err(Error::Env(format!("wallet protocol {} is not frost", wallet.protocol)));
     }
     let threshold = wallet.threshold.max(0) as usize;
