@@ -196,6 +196,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet:reshare" => spot::wallet_reshare(&handle.env, "", params),
         "Wallet:promote" => spot::wallet_promote(&handle.env, "", params),
         "Wallet:initiateKeygen" => spot::initiate_keygen(&handle.env, params),
+        "Wallet:joinSign" => spot::join_sign(&handle.env, params),
         "Wallet:buildNewAgentBody" => spot::build_new_agent_body(&handle.env, params),
         "ClawdWallet:pair" => spot::clawd_pair(&handle.env, params),
         "RemoteKey:new" => remotekey::new(&handle.env, params),

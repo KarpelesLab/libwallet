@@ -250,6 +250,42 @@ pub fn initiate_keygen(env: &Arc<Env>, params: &Value) -> ApiResult {
     Ok(json!({ "wlt_id": wlt_id, "solana_address": solana_address, "pubkey": pubkey }))
 }
 
+/// `Wallet:joinSign` {wlt_id, remote_key, peers, curve, digest} — the mobile
+/// joins an agent-led FROST signing ceremony (Go `apiJoinSign`). Returns the
+/// base64 64-byte signature.
+pub fn join_sign(env: &Arc<Env>, params: &Value) -> ApiResult {
+    use base64::Engine;
+    let wlt_id = params.get("wlt_id").and_then(Value::as_str).unwrap_or("");
+    let remote_key = params.get("remote_key").and_then(Value::as_str).unwrap_or("");
+    let curve = params.get("curve").and_then(Value::as_str).unwrap_or("");
+    let digest_s = params.get("digest").and_then(Value::as_str).unwrap_or("");
+    if wlt_id.is_empty() {
+        return Err(ApiError::new(400, "wlt_id is required"));
+    }
+    let digest = base64::engine::general_purpose::STANDARD
+        .decode(digest_s)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(digest_s))
+        .map_err(|_| ApiError::new(400, "invalid base64 digest"))?;
+    let peers: Vec<crate::reshare::JoinPeer> = params
+        .get("peers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|p| crate::reshare::JoinPeer {
+                    spot_id: p.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+                    moniker: p.get("moniker").and_then(Value::as_str).unwrap_or("").to_string(),
+                    key: p.get("key").and_then(Value::as_str).unwrap_or("").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if peers.is_empty() {
+        return Err(ApiError::new(400, "peers is required"));
+    }
+    let sig = crate::reshare::join_sign(env, wlt_id, remote_key, &peers, curve, &digest).map_err(|e| ApiError::new(500, e.to_string()))?;
+    Ok(json!({ "signature": base64::engine::general_purpose::STANDARD.encode(sig) }))
+}
+
 /// Wait briefly for at least one online Spot connection (Go `waitOnlineSpot`).
 fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     for _ in 0..60 {

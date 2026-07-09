@@ -2335,6 +2335,22 @@ fn promote_imported_wallet_to_mpc_in_place() {
 }
 
 #[test]
+fn clawd_keygen_and_sign_endpoints_are_wired() {
+    // The ClawdWallet Stage-1 multi-device endpoints exist and validate input
+    // (the full ceremony needs a live agent + phplatform session). They must
+    // reject bad input with 400, not 404.
+    let h = new_env();
+    let ik = request(h, r#"{"path":"Wallet:initiateKeygen","params":{"remote_key":"crws-a:crwsv-b"}}"#);
+    assert_eq!(ik["result"], "error");
+    assert_eq!(ik["code"], 400, "initiateKeygen should validate (not 404): {ik}");
+
+    let js = request(h, r#"{"path":"Wallet:joinSign","params":{"peers":[{"id":"k.a","moniker":"m","key":"AAA"}]}}"#);
+    assert_eq!(js["result"], "error");
+    assert_eq!(js["code"], 400, "joinSign should validate (not 404): {js}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

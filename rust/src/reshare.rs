@@ -697,6 +697,99 @@ pub fn initiate_keygen(
     Ok((wallet_id, solana_addr, pubkey))
 }
 
+/// `Wallet:joinSign` — the mobile joins a FROST signing ceremony led by the
+/// agent (Go `apiJoinSign`, joiner-only). Decrypts the wallet's local FROST
+/// share, arms handlers for the committee peers, runs its signing party over the
+/// shared hub, and returns the 64-byte Ed25519 signature. ed25519 only.
+///
+/// Note: the standard ClawdWallet mobile share is Type=RemoteKey (sealed to the
+/// wdrone), which cannot be opened on-device — decrypt errors, matching Go's
+/// opener (which has no RemoteKey arm). A locally-held FROST share (Plain /
+/// Password / StoreKey) signs normally.
+pub fn join_sign(
+    env: &Arc<Env>,
+    wallet_id: &str,
+    remote_key: &str,
+    peers: &[JoinPeer],
+    curve: &str,
+    digest: &[u8],
+) -> Result<Vec<u8>> {
+    if remote_key.is_empty() {
+        return Err(Error::Env("remote_key is required".into()));
+    }
+    if digest.len() != 32 {
+        return Err(Error::Env(format!("joinSign: digest must be 32 bytes, got {}", digest.len())));
+    }
+    let curve = if curve.is_empty() { "ed25519" } else { curve };
+    if curve != "ed25519" {
+        return Err(Error::Env(format!("joinSign: curve {curve:?} not supported in Stage 1 (ed25519 only)")));
+    }
+    let wallet = crate::models::wallet::fetch(env, wallet_id)?.ok_or_else(|| Error::Env("joinSign: wallet not found".into()))?;
+    if wallet.curve != "ed25519" {
+        return Err(Error::Env(format!("joinSign: wallet curve is {:?}, expected ed25519", wallet.curve)));
+    }
+
+    // Locate the local signing share: the RemoteKey-typed key matching the
+    // session (else the first RemoteKey), same as Go.
+    let local_key = wallet
+        .keys
+        .iter()
+        .find(|k| k.kind == "RemoteKey" && k.key == remote_key)
+        .or_else(|| wallet.keys.iter().find(|k| k.kind == "RemoteKey"))
+        .ok_or_else(|| Error::Env("joinSign: no RemoteKey share on wallet".into()))?;
+    if local_key.kind == "RemoteKey" {
+        // Matches Go: the mobile's own share is wdrone-sealed and cannot be
+        // opened locally (the opener has no RemoteKey arm).
+        return Err(Error::Env("joinSign: RemoteKey share cannot be opened on-device".into()));
+    }
+    let share_json = open_local_share(local_key, "")?;
+    let key = FrostKey::from_json(&share_json).map_err(|e| Error::Env(format!("joinSign: load frost share: {e:?}")))?;
+
+    let client = env.spot_start().map_err(|e| Error::Env(e.to_string()))?;
+    for _ in 0..60 {
+        if client.connection_count().1 > 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let me_spot = client.target_id();
+    let self_spot_id = me_spot.clone();
+    let (sorted, by_moniker, me_idx) = build_party_ids(peers, &me_spot, "")?;
+    let sid = sid_from_remote_key(remote_key).to_string();
+    let me = sorted[me_idx].clone();
+
+    let hub = Hub::new();
+    let me_broker = hub.add_local(&me);
+    // Joiner mode: arm handlers for the peers (the agent leads, so no init send).
+    for (i, id) in sorted.iter().enumerate() {
+        if i == me_idx {
+            continue;
+        }
+        let p = by_moniker.get(&id.moniker).ok_or_else(|| Error::Env(format!("joinSign: peer {} missing", id.moniker)))?;
+        let rp = Arc::new(WdronePeer {
+            hub: Arc::downgrade(&hub),
+            party_id: id.clone(),
+            client: client.clone(),
+            sid: sid.clone(),
+            self_spot_id: self_spot_id.clone(),
+            peer: Mutex::new(p.spot_id.clone()),
+        });
+        hub.add_remote(rp.clone());
+        rp.arm_handler();
+    }
+
+    let params = Parameters::new(sorted.clone(), &me, wallet.threshold.max(0) as usize, me_broker as Arc<dyn MessageBroker + Send + Sync>);
+    let sig = key
+        .new_signing(digest.to_vec(), params)
+        .map_err(|e| Error::Env(format!("joinSign: start signing: {e:?}")))?
+        .wait()
+        .map_err(|e| Error::Env(format!("joinSign: signing failed: {e:?}")))?;
+    if sig.signature.len() != 64 {
+        return Err(Error::Env(format!("joinSign: expected 64-byte signature, got {}", sig.signature.len())));
+    }
+    Ok(sig.signature)
+}
+
 #[cfg(test)]
 mod keygen_tests {
     use super::*;
