@@ -32,7 +32,7 @@ ethrpc-rs = "0.3.0"
 base64 = "0.22"
 bottlers = "0"
 purecrypto = "0"
-tsslib = "0.2"
+tsslib = "0.2.4"
 bs58 = "0.5"
 ureq = { version = "2", features = ["json"] }
 tungstenite = "0.20"
