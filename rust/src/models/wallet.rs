@@ -673,11 +673,6 @@ pub(crate) fn seal_share_full(
         }
         Recipient::Plain => Ok((keystore::wrap_plain(share).map_err(|e| Error::Env(e.to_string()))?, String::new())),
         Recipient::Remote => {
-            // Stage-1 RemoteKey is ed25519/FROST; secp256k1/DKLs would need the
-            // binary Save() share form.
-            if curve_out != "ed25519" {
-                return Err(Error::Env("RemoteKey shares are ed25519/FROST only".into()));
-            }
             let base = crate::rest::DEFAULT_HOST;
             let client_id = env
                 .config_get("walletinfo:clientId")
@@ -686,7 +681,19 @@ pub(crate) fn seal_share_full(
                 .and_then(|b| String::from_utf8(b).ok())
                 .filter(|s| !s.is_empty());
             let recipients = crate::walletsign::fetch_decrypt_keys(base, client_id.as_deref())?;
-            let sealed = keystore::seal_json(share, &recipients).map_err(|e| Error::Env(e.to_string()))?;
+            // Match Go `WalletKey.encrypt` RemoteKey wire per curve. FROST seals
+            // the frost-key JSON directly; DKLs seals `json.Marshal(saveBytes)`
+            // — i.e. the Save-JSON base64-std-encoded as a JSON string — since Go
+            // uploads the raw `[]byte` Save() form (cryptutil.MarshalJson turns a
+            // []byte into a base64 string), and the wdrone's loadShare reads it
+            // back into []byte → dklstss.Load.
+            let payload: Vec<u8> = if curve_out == "secp256k1" {
+                use base64::engine::general_purpose::STANDARD;
+                serde_json::to_vec(&STANDARD.encode(share)).map_err(|e| Error::Env(e.to_string()))?
+            } else {
+                share.to_vec()
+            };
+            let sealed = keystore::seal_json(&payload, &recipients).map_err(|e| Error::Env(e.to_string()))?;
             crate::walletsign::upload_generated_key(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed)?;
             Ok((sealed, kd.key.clone()))
         }
@@ -728,11 +735,51 @@ pub fn persist_reshared_frost(
             generation: wallet.generation + 1,
         });
     }
+    replace_wallet_keys(env, wallet, &wkeys)
+}
 
-    // Replace the WalletKey rows + bump the wallet generation atomically enough
-    // for the single-threaded DB actor: delete old keys, insert new, update row.
+/// DKLs (secp256k1) twin of [`persist_reshared_frost`]: seal each new dkls23
+/// share, verify it still derives the 33-byte compressed group pubkey, and
+/// replace the wallet's WalletKey rows.
+pub fn persist_reshared_dkls(
+    env: &Env,
+    wallet: &Wallet,
+    new_keys: &[KeyDescription],
+    new_wk_ids: &[Xuid],
+    new_parties: &[PartyId],
+    new_shares: &std::collections::HashMap<String, tsslib::dklstss::Key>,
+) -> Result<()> {
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    for (i, kd) in new_keys.iter().enumerate() {
+        let party = &new_parties[i];
+        let share = new_shares
+            .get(&party.id)
+            .ok_or_else(|| Error::Env(format!("reshare: missing new share for party {}", party.id)))?;
+        let gpk = crate::tss::dkls_group_pubkey(share).map_err(|e| Error::Env(e.to_string()))?;
+        if b64url(&gpk) != wallet.pubkey {
+            return Err(Error::Env("reshare produced a share with a different group pubkey".into()));
+        }
+        let json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        let uuid = new_wk_ids[i].uuid();
+        let (data, key_field) = seal_share_full(env, &wallet.curve, "dkls23", kd, uuid.as_bytes(), json.as_bytes())?;
+        wkeys.push(WalletKey {
+            id: new_wk_ids[i].to_string(),
+            wallet: wallet.id.clone(),
+            kind: kd.kind.clone(),
+            schema: "dkls23".into(),
+            key: key_field,
+            data,
+            generation: wallet.generation + 1,
+        });
+    }
+    replace_wallet_keys(env, wallet, &wkeys)
+}
+
+/// Replace a wallet's WalletKey rows with `wkeys` and bump its generation
+/// (single-threaded DB actor makes the delete+insert+update sequence safe).
+fn replace_wallet_keys(env: &Env, wallet: &Wallet, wkeys: &[WalletKey]) -> Result<()> {
     env.exec(r#"DELETE FROM "WalletKey" WHERE "Wallet" = ?1"#, vec![SqlValue::Text(wallet.id.clone())])?;
-    for k in &wkeys {
+    for k in wkeys {
         env.exec(
             &format!(r#"INSERT INTO "WalletKey" ({WALLETKEY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"#),
             vec![
@@ -768,7 +815,7 @@ fn shares_json<K>(
         .collect()
 }
 
-fn b64url_decode(s: &str) -> Result<Vec<u8>> {
+pub(crate) fn b64url_decode(s: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(s)
         .map_err(|e| Error::Env(format!("bad base64url: {e}")))

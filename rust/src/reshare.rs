@@ -274,54 +274,55 @@ fn peers_json(sorted: &[PartyId]) -> Value {
     Value::Array(sorted.iter().map(|p| serde_json::to_value(p).unwrap_or(Value::Null)).collect())
 }
 
-/// FROST reshare of an ed25519 wallet whose committee includes a RemoteKey held
-/// by the wdrone fleet (Go `Wallet.ReshareFrost`). Rotates the shares to
-/// `new_keys`, preserving the group pubkey. Returns the rebuilt WalletKey rows.
-pub fn reshare_frost(
+/// The transport + committee scaffolding shared by every reshare protocol: the
+/// resolved old/new committees, the wired [`Hub`], and the started wdrone peers.
+struct Ceremony {
+    old_sorted: Vec<PartyId>,
+    new_sorted: Vec<PartyId>,
+    new_parties: Vec<PartyId>,
+    new_wk_ids: Vec<xuid::Xuid>,
+    hub: Arc<Hub>,
+    /// Kept alive for the duration of the ceremony (their handlers feed the hub).
+    _remotes: Vec<Arc<WdronePeer>>,
+}
+
+/// Resolve the committees, wire the hub (local new + local non-RemoteKey old),
+/// and run the `walletsign/<remotekey>/init` handshake for each old RemoteKey
+/// (Go `startReshareRemotes`). Protocol-agnostic — the caller then spawns the
+/// FROST/DKLs resharing parties over `hub`.
+fn setup_ceremony(
     env: &Arc<Env>,
-    wallet_id: &str,
+    wallet: &crate::models::wallet::Wallet,
     old_keys: &[KeyDescription],
     new_keys: &[KeyDescription],
-) -> Result<()> {
-    let wallet = crate::models::wallet::fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
-    if wallet.curve != "ed25519" || wallet.protocol != "frost" {
-        return Err(Error::Env("reshare_frost requires an ed25519/FROST wallet".into()));
-    }
-    let threshold = wallet.threshold.max(0) as usize;
-    if new_keys.is_empty() || threshold >= new_keys.len() {
-        return Err(Error::Env("invalid new committee size/threshold".into()));
-    }
-
-    // Resolve old parties against the wallet's stored WalletKeys.
+    threshold: usize,
+    curve: &str,
+    protocol: &str,
+) -> Result<Ceremony> {
     let mut old_parties: Vec<PartyId> = Vec::with_capacity(old_keys.len());
     for kd in old_keys {
         let wk = wallet.keys.iter().find(|k| k.id == kd.id).ok_or_else(|| Error::Env(format!("old key {} not on wallet", kd.id)))?;
         old_parties.push(party_for(&wk.id)?);
-        let _ = wk;
     }
     let old_sorted = PartyId::sort(old_parties.clone(), 0);
 
-    // Allocate new WalletKey rows + their parties.
     let new_wk_ids: Vec<xuid::Xuid> = (0..new_keys.len()).map(|_| xuid::Xuid::new("wkey")).collect();
     let new_parties: Vec<PartyId> = new_wk_ids.iter().map(|x| party_for(&x.to_string())).collect::<Result<_>>()?;
     let new_sorted = PartyId::sort(new_parties.clone(), 0);
 
     let hub = Hub::new();
-    // Local brokers: every new party + every non-RemoteKey old party.
     for p in &new_sorted {
         hub.add_local(p);
     }
     for (kd, party) in old_keys.iter().zip(old_parties.iter()) {
         let wk = wallet.keys.iter().find(|k| k.id == kd.id).unwrap();
         if wk.kind != "RemoteKey" {
-            // find the sorted PartyId for this id
             if let Some(sp) = old_sorted.iter().find(|s| s.id == party.id) {
                 hub.add_local(sp);
             }
         }
     }
 
-    // Remote wdrone peers: one per old RemoteKey share.
     let base = crate::rest::DEFAULT_HOST;
     let client_id = env
         .config_get("walletinfo:clientId")
@@ -330,7 +331,6 @@ pub fn reshare_frost(
         .and_then(|b| String::from_utf8(b).ok())
         .filter(|s| !s.is_empty());
     let client = env.spot_start().map_err(|e| Error::Env(e.to_string()))?;
-    // Wait for the spot client to reach the relay before the init handshake.
     for _ in 0..60 {
         if client.connection_count().1 > 0 {
             break;
@@ -365,77 +365,139 @@ pub fn reshare_frost(
             "new_partycount": new_keys.len(),
             "old_threshold": threshold,
             "new_threshold": threshold,
-            "curve": "ed25519",
-            "protocol": "frost",
+            "curve": curve,
+            "protocol": protocol,
         });
         rp.start(base, client_id.as_deref(), &info)?;
         remotes.push(rp);
     }
 
-    // Spawn resharing parties: new committee (input None) + local old committee
-    // (input = decrypted old FROST share). Each runs on its own thread.
-    let mut handles: Vec<std::thread::JoinHandle<std::result::Result<Option<FrostKey>, String>>> = Vec::new();
+    Ok(Ceremony { old_sorted, new_sorted, new_parties, new_wk_ids, hub, _remotes: remotes })
+}
 
-    for (idx, p) in new_sorted.iter().enumerate() {
-        let broker = hub.local.lock().unwrap().get(&p.id).cloned().unwrap();
-        let params = ReSharingParameters::new(
-            old_sorted.clone(),
-            new_sorted.clone(),
-            threshold,
-            threshold,
-            p.clone(),
-            broker as Arc<dyn MessageBroker + Send + Sync>,
-        );
-        let _ = idx;
+/// FROST reshare of an ed25519 wallet whose committee includes a RemoteKey held
+/// by the wdrone fleet (Go `Wallet.ReshareFrost`). Rotates the shares to
+/// `new_keys`, preserving the group pubkey.
+pub fn reshare_frost(
+    env: &Arc<Env>,
+    wallet_id: &str,
+    old_keys: &[KeyDescription],
+    new_keys: &[KeyDescription],
+) -> Result<()> {
+    let wallet = crate::models::wallet::fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.curve != "ed25519" || wallet.protocol != "frost" {
+        return Err(Error::Env("reshare_frost requires an ed25519/FROST wallet".into()));
+    }
+    let threshold = wallet.threshold.max(0) as usize;
+    if new_keys.is_empty() || threshold >= new_keys.len() {
+        return Err(Error::Env("invalid new committee size/threshold".into()));
+    }
+
+    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "ed25519", "frost")?;
+
+    // Spawn resharing parties: new committee (input None) + local old committee
+    // (input = decrypted old share). Each runs on its own thread.
+    let mut handles: Vec<std::thread::JoinHandle<std::result::Result<Option<FrostKey>, String>>> = Vec::new();
+    for p in &cx.new_sorted {
+        let broker = cx.hub.local.lock().unwrap().get(&p.id).cloned().unwrap();
+        let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, p.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
         handles.push(std::thread::spawn(move || {
             Resharing::new(params, None).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
         }));
     }
-
-    // Local old parties contribute their decrypted share (RemoteKey olds run
-    // remotely on the wdrone, so they are skipped here).
-    let mut local_old: Vec<(PartyId, FrostKey)> = Vec::new();
     for kd in old_keys {
         let wk = wallet.keys.iter().find(|k| k.id == kd.id).unwrap();
         if wk.kind == "RemoteKey" {
             continue;
         }
-        let sp = old_sorted.iter().find(|s| s.id == wk.id).unwrap().clone();
-        let share_json = open_local_share(wk, &kd.key)?;
-        let key = FrostKey::from_json(&share_json).map_err(|e| Error::Env(format!("load old frost share: {e:?}")))?;
-        local_old.push((sp, key));
-    }
-    for (sp, key) in local_old {
-        let broker = hub.local.lock().unwrap().get(&sp.id).cloned().unwrap();
-        let params = ReSharingParameters::new(
-            old_sorted.clone(),
-            new_sorted.clone(),
-            threshold,
-            threshold,
-            sp.clone(),
-            broker as Arc<dyn MessageBroker + Send + Sync>,
-        );
+        let sp = cx.old_sorted.iter().find(|s| s.id == wk.id).unwrap().clone();
+        let key = FrostKey::from_json(&open_local_share(wk, &kd.key)?).map_err(|e| Error::Env(format!("load old frost share: {e:?}")))?;
+        let broker = cx.hub.local.lock().unwrap().get(&sp.id).cloned().unwrap();
+        let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, sp.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
         handles.push(std::thread::spawn(move || {
             Resharing::new(params, Some(key)).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
         }));
     }
 
-    // Collect: the new-committee parties (spawned first, one per new key) return
-    // Some(key); order matches new_sorted.
     let mut new_shares: HashMap<String, FrostKey> = HashMap::new();
     for (i, h) in handles.into_iter().enumerate() {
-        let res = h.join().map_err(|_| Error::Env("reshare party thread panicked".into()))?;
-        let key = res.map_err(|e| Error::Env(format!("reshare failed: {e}")))?;
-        if i < new_sorted.len() {
+        let key = h.join().map_err(|_| Error::Env("reshare party thread panicked".into()))?.map_err(|e| Error::Env(format!("reshare failed: {e}")))?;
+        if i < cx.new_sorted.len() {
             if let Some(k) = key {
-                new_shares.insert(new_sorted[i].id.clone(), k);
+                new_shares.insert(cx.new_sorted[i].id.clone(), k);
             }
         }
     }
+    crate::models::wallet::persist_reshared_frost(env, &wallet, new_keys, &cx.new_wk_ids, &cx.new_parties, &new_shares)?;
+    Ok(())
+}
 
-    // Rebuild + persist the WalletKey rows in the new-keys order (each new party
-    // id maps back to its new WalletKey via new_wk_ids / new_parties).
-    crate::models::wallet::persist_reshared_frost(env, &wallet, new_keys, &new_wk_ids, &new_parties, &new_shares)?;
+/// DKLs23 reshare of a secp256k1 wallet whose committee includes a RemoteKey
+/// (Go `Wallet.ReshareDkls`). dkls23 requires exactly T+1 old signers, and every
+/// party binds to the wallet's existing group pubkey (`old_ecdsa_pub`).
+pub fn reshare_dkls(
+    env: &Arc<Env>,
+    wallet_id: &str,
+    old_keys: &[KeyDescription],
+    new_keys: &[KeyDescription],
+) -> Result<()> {
+    use tsslib::dklstss::{Key as DklsKey, ResharingParty};
+
+    let wallet = crate::models::wallet::fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.curve != "secp256k1" || wallet.protocol != "dkls23" {
+        return Err(Error::Env("reshare_dkls requires a secp256k1/DKLs23 wallet".into()));
+    }
+    let threshold = wallet.threshold.max(0) as usize;
+    if new_keys.is_empty() || threshold >= new_keys.len() {
+        return Err(Error::Env("invalid new committee size/threshold".into()));
+    }
+    if old_keys.len() != threshold + 1 {
+        return Err(Error::Env(format!("dkls23 reshare needs exactly T+1={} old signers, got {}", threshold + 1, old_keys.len())));
+    }
+
+    // The wallet's compressed group pubkey → the ProjectivePoint every party
+    // binds to (Go `oldECDSAPub`).
+    let pk = crate::models::wallet::b64url_decode(&wallet.pubkey)?;
+    let old_ecdsa_pub = purecrypto::ec::secp256k1::AffinePoint::from_sec1(&pk)
+        .map_err(|e| Error::Env(format!("bad wallet pubkey: {e:?}")))?
+        .to_projective();
+
+    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "secp256k1", "dkls23")?;
+
+    let mut handles: Vec<std::thread::JoinHandle<std::result::Result<Option<DklsKey>, String>>> = Vec::new();
+    for p in &cx.new_sorted {
+        let broker = cx.hub.local.lock().unwrap().get(&p.id).cloned().unwrap();
+        let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, p.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
+        let pub_pt = old_ecdsa_pub.clone();
+        handles.push(std::thread::spawn(move || {
+            ResharingParty::new(params, pub_pt, None).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
+        }));
+    }
+    for kd in old_keys {
+        let wk = wallet.keys.iter().find(|k| k.id == kd.id).unwrap();
+        if wk.kind == "RemoteKey" {
+            continue;
+        }
+        let sp = cx.old_sorted.iter().find(|s| s.id == wk.id).unwrap().clone();
+        let key = DklsKey::from_json(&open_local_share(wk, &kd.key)?).map_err(|e| Error::Env(format!("load old dkls share: {e:?}")))?;
+        let broker = cx.hub.local.lock().unwrap().get(&sp.id).cloned().unwrap();
+        let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, sp.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
+        let pub_pt = old_ecdsa_pub.clone();
+        handles.push(std::thread::spawn(move || {
+            ResharingParty::new(params, pub_pt, Some(key)).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
+        }));
+    }
+
+    let mut new_shares: HashMap<String, DklsKey> = HashMap::new();
+    for (i, h) in handles.into_iter().enumerate() {
+        let key = h.join().map_err(|_| Error::Env("reshare party thread panicked".into()))?.map_err(|e| Error::Env(format!("reshare failed: {e}")))?;
+        if i < cx.new_sorted.len() {
+            if let Some(k) = key {
+                new_shares.insert(cx.new_sorted[i].id.clone(), k);
+            }
+        }
+    }
+    crate::models::wallet::persist_reshared_dkls(env, &wallet, new_keys, &cx.new_wk_ids, &cx.new_parties, &new_shares)?;
     Ok(())
 }
 

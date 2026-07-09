@@ -2235,6 +2235,55 @@ fn remotekey_reshare_over_live_wdrone() {
 }
 
 #[test]
+fn remotekey_reshare_dkls_over_live_wdrone() {
+    // Same interactive wdrone ceremony as the FROST test, but for a secp256k1
+    // DKLs23 wallet (Go Wallet.ReshareDkls). Gated behind SPOT_LIVE=1.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let h = new_env();
+    let wi = request(h, r#"{"path":"Info:setWalletInfo","params":{"ClientId":"com.ellipx.walletapp","Name":"libwallet-tests"}}"#);
+    assert_eq!(wi["result"], "success", "{wi}");
+
+    let n = request(h, r#"{"path":"RemoteKey:new","params":{"number":"+14045551234"}}"#);
+    let session = n["data"]["session"].as_str().expect("session").to_string();
+    let v = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session}","code":"000000"}}}}"#));
+    let rk1 = v["data"]["RemoteKey"].as_str().expect("RemoteKey").to_string();
+
+    // secp256k1 [Plain,Plain,RemoteKey] wallet (uploads the DKLs share).
+    let body = format!(
+        r#"{{"path":"Wallet","verb":"POST","params":{{"Name":"ReshareDkls","Curve":"secp256k1","Keys":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk1}"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "dkls create failed: {w}");
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let orig_pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+    let keys = w["data"]["Keys"].as_array().unwrap();
+    let plain0 = keys.iter().find(|k| k["Type"] == "Plain").unwrap()["Id"].as_str().unwrap().to_string();
+    let rk_wk = keys.iter().find(|k| k["Type"] == "RemoteKey").unwrap()["Id"].as_str().unwrap().to_string();
+
+    let rn = request(h, &format!(r#"{{"path":"RemoteKey:reshare","params":{{"key":"{rk1}"}}}}"#));
+    assert_eq!(rn["result"], "success", "RemoteKey:reshare failed: {rn}");
+    let session2 = rn["data"]["session"].as_str().expect("session2").to_string();
+    let v2 = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session2}","code":"000000"}}}}"#));
+    let rk2 = v2["data"]["RemoteKey"].as_str().expect("rk2").to_string();
+
+    // DKLs requires exactly T+1=2 old signers: 1 Plain + the RemoteKey.
+    let reshare_body = format!(
+        r#"{{"path":"Wallet/{wallet_id}:reshare","params":{{"Old":[{{"Id":"{plain0}"}},{{"Type":"RemoteKey","Id":"{rk_wk}","Key":"{rk2}"}}],"New":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk2}"}}]}}}}"#
+    );
+    let (rx, ud) = request_async(h, &reshare_body);
+    let resp = rx.recv_timeout(Duration::from_secs(180)).expect("reshare resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "dkls reshare failed: {j}");
+    assert_eq!(j["data"]["Pubkey"], orig_pubkey, "reshare must preserve the group pubkey");
+    assert_eq!(j["data"]["Keys"].as_array().unwrap().len(), 3, "{j}");
+
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

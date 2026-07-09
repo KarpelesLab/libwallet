@@ -186,7 +186,14 @@ pub fn wallet_reshare(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
     if old.is_empty() || new.is_empty() {
         return Err(ApiError::new(400, "Old and New key lists are required"));
     }
-    crate::reshare::reshare_frost(env, wallet_id, &old, &new).map_err(|e| ApiError::new(500, e.to_string()))?;
+    // Dispatch on the wallet's curve: ed25519→FROST, secp256k1→DKLs23.
+    let w0 = crate::models::wallet::fetch(env, wallet_id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "wallet not found"))?;
+    let res = match w0.curve.as_str() {
+        "ed25519" => crate::reshare::reshare_frost(env, wallet_id, &old, &new),
+        "secp256k1" => crate::reshare::reshare_dkls(env, wallet_id, &old, &new),
+        other => return Err(ApiError::new(400, format!("reshare unsupported for curve {other}"))),
+    };
+    res.map_err(|e| ApiError::new(500, e.to_string()))?;
     let w = crate::models::wallet::fetch(env, wallet_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "wallet not found"))?;
