@@ -2284,6 +2284,57 @@ fn remotekey_reshare_dkls_over_live_wdrone() {
 }
 
 #[test]
+fn promote_imported_wallet_to_mpc_in_place() {
+    // Wallet:promote — convert a 1-of-1 mnemonic-keep wallet into an in-place
+    // N-of-T DKLs committee, preserving the master pubkey. Fully local (Password
+    // shares), so no backend needed.
+    let h = new_env();
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let src = request(
+        h,
+        &format!(r#"{{"path":"Wallet:importMnemonic","params":{{"Name":"Seed","Curve":"secp256k1","Mnemonic":"{m}","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#),
+    );
+    assert_eq!(src["result"], "success", "{src}");
+    let src_id = src["data"]["Id"].as_str().unwrap().to_string();
+    let src_wk = src["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let master_pubkey = src["data"]["Pubkey"].as_str().unwrap().to_string();
+
+    // Promote in place → 2-of-3 (threshold 1). Master pubkey must be preserved.
+    let promoted = request(
+        h,
+        &format!(
+            r#"{{"path":"Wallet/{src_id}:promote","verb":"POST","params":{{
+                "Old":[{{"Type":"Password","Id":"{src_wk}","Key":"password1"}}],
+                "New":[{{"Type":"Password","Key":"passworda"}},{{"Type":"Password","Key":"passwordb"}},{{"Type":"Password","Key":"passwordc"}}],
+                "Threshold":1}}}}"#
+        ),
+    );
+    assert_eq!(promoted["result"], "success", "promote failed: {promoted}");
+    assert_eq!(promoted["data"]["Id"], src_id, "promote is in place (same wallet id)");
+    assert_eq!(promoted["data"]["Protocol"], "dkls23");
+    assert_eq!(promoted["data"]["Threshold"], 1);
+    assert_eq!(promoted["data"]["Pubkey"], master_pubkey, "promote must preserve the master pubkey");
+    let nwk: Vec<String> = (0..3).map(|i| promoted["data"]["Keys"][i]["Id"].as_str().unwrap().to_string()).collect();
+
+    // The promoted wallet is a real 2-of-3 DKLs wallet: sign a message with all
+    // three shares and check the signature comes back.
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{src_id}","Type":"ethereum","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let signed = request(
+        h,
+        &format!(
+            r#"{{"path":"Account:signMessage","params":{{"Id":"{account_id}","Message":"aGVsbG8=","Keys":[
+                {{"Type":"Password","Id":"{}","Key":"passworda"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordb"}},
+                {{"Type":"Password","Id":"{}","Key":"passwordc"}}]}}}}"#,
+            nwk[0], nwk[1], nwk[2]
+        ),
+    );
+    assert_eq!(signed["result"], "success", "post-promote sign failed: {signed}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

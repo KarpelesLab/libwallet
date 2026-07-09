@@ -434,6 +434,100 @@ pub fn promote_mnemonic(
     Ok(results)
 }
 
+/// `Wallet:promote` — convert a 1-of-1 imported wallet (mnemonic-keep, or a
+/// raw-import stored as a 1-of-1 DKLs share) into a real N-of-T secp256k1
+/// DKLs23 committee (Go `Wallet.Promote`). The imported key lives only on this
+/// device, so the reshare runs entirely locally; new RemoteKey shares upload to
+/// the wdrone. Master pubkey + chaincode are preserved. secp256k1 only (ed25519
+/// FROST import needs clamped-scalar extraction — deferred, as in promoteMnemonic).
+pub fn promote(
+    env: &Env,
+    wallet_id: &str,
+    old_unlock: &[(String, String)],
+    new_keys: &[KeyDescription],
+    threshold: i64,
+) -> Result<Wallet> {
+    let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.keys.len() != 1 {
+        return Err(Error::Env(format!("Promote requires a 1-of-1 imported wallet (got {} keys)", wallet.keys.len())));
+    }
+    if new_keys.len() < 2 {
+        return Err(Error::Env("Promote: New must contain at least 2 KeyDescriptions".into()));
+    }
+    if threshold < 1 || threshold as usize >= new_keys.len() {
+        return Err(Error::Env(format!("Promote: Threshold must be 1 ≤ T < {}", new_keys.len())));
+    }
+    if wallet.curve != "secp256k1" {
+        return Err(Error::Env("Promote: secp256k1 only (ed25519 deferred)".into()));
+    }
+    let imported = &wallet.keys[0];
+
+    // Recover the source 1-of-1 DKLs key from the imported share.
+    let src_uuid = Xuid::new("wkey");
+    let src_key: tsslib::dklstss::Key = match imported.schema.as_str() {
+        "mnemonic" => {
+            let seed = decrypt_mnemonic_seed(env, wallet_id, old_unlock)?;
+            let master = crate::hdderive::derive_privkey_from_seed(&seed, "secp256k1", "m").map_err(|e| Error::Env(e.to_string()))?;
+            crate::tss::dkls_import_key(&master, src_uuid.uuid().as_bytes()).map_err(|e| Error::Env(e.to_string()))?.1
+        }
+        "dkls23" => {
+            // A raw private-key import already stored as a 1-of-1 DKLs share.
+            let (_, secret) = old_unlock.first().cloned().unwrap_or_default();
+            let xid: Xuid = imported.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
+            let uuid = xid.uuid().as_bytes().to_vec();
+            let json = if imported.kind == "Plain" {
+                keystore::open(&imported.data, []).map_err(|e| Error::Env(e.to_string()))?
+            } else {
+                let k = resolve_unlock_key(&imported.kind, &secret, &uuid)?;
+                keystore::open(&imported.data, [k]).map_err(|e| Error::Env(e.to_string()))?
+            };
+            tsslib::dklstss::Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
+                .map_err(|e| Error::Env(format!("load imported dkls share: {e:?}")))?
+        }
+        other => return Err(Error::Env(format!("Promote requires an imported wallet (schema mnemonic/dkls23; got {other:?})"))),
+    };
+
+    // Reshare 1-of-1 → the new committee (synchronous, all-local).
+    let new_wk_ids: Vec<Xuid> = (0..new_keys.len()).map(|_| Xuid::new("wkey")).collect();
+    let party_keys: Vec<Vec<u8>> = new_wk_ids.iter().map(|id| id.uuid().as_bytes().to_vec()).collect();
+    let reshared = crate::tss::dkls_reshare(src_key, party_keys, threshold as usize).map_err(|e| Error::Env(e.to_string()))?;
+    let new_pubkey = b64url(&crate::tss::dkls_group_pubkey(&reshared[0].1).map_err(|e| Error::Env(e.to_string()))?);
+    if new_pubkey != wallet.pubkey {
+        return Err(Error::Env("promote produced a share with a different group pubkey".into()));
+    }
+
+    // Seal each new share per its KeyDescription (RemoteKey uploads to the wdrone).
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    for (wk_id, kd) in new_wk_ids.iter().zip(new_keys) {
+        let uuid = wk_id.uuid();
+        let uuid_bytes = uuid.as_bytes();
+        let key = reshared
+            .iter()
+            .find(|(pid, _)| pid.key == uuid_bytes)
+            .map(|(_, k)| k)
+            .ok_or_else(|| Error::Env("reshare produced no share for a new key".into()))?;
+        let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        let (data, key_field) = seal_share_full(env, "secp256k1", "dkls23", kd, uuid_bytes, share_json.as_bytes())?;
+        wkeys.push(WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet.id.clone(),
+            kind: kd.kind.clone(),
+            schema: "dkls23".into(),
+            key: key_field,
+            data,
+            generation: wallet.generation + 1,
+        });
+    }
+
+    // Swap the committee in place; advance protocol + threshold, keep pubkey/cc.
+    replace_wallet_keys(env, &wallet, &wkeys)?;
+    env.exec(
+        r#"UPDATE "Wallet" SET "Protocol" = ?1, "Threshold" = ?2 WHERE "Id" = ?3"#,
+        vec![SqlValue::Text("dkls23".into()), SqlValue::Int(threshold), SqlValue::Text(wallet.id.clone())],
+    )?;
+    fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet vanished after promote".into()))
+}
+
 /// Seal a share payload to a KeyDescription recipient, returning `(sealed data,
 /// Key field)`. Encrypt → bottle + PKIX pubkey; Plain → unencrypted bottle;
 /// Remote → error (needs the backend).

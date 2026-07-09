@@ -200,6 +200,26 @@ pub fn wallet_reshare(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(w).unwrap())
 }
 
+/// `Wallet:promote` {Old, New, Threshold} — convert a 1-of-1 imported wallet
+/// into an N-of-T secp256k1 DKLs committee (Go `apiWalletPromote`). Local
+/// reshare; new RemoteKey shares upload to the wdrone.
+pub fn wallet_promote(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
+    let wallet_id = params.get("WalletId").or_else(|| params.get("Id")).and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(id);
+    if wallet_id.is_empty() {
+        return Err(ApiError::new(400, "wallet id required"));
+    }
+    // `Old` carries the import's unlock material (Password/StoreKey/Plain).
+    let old: Vec<crate::sign::KeyDescription> = params.get("Old").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let new: Vec<crate::sign::KeyDescription> = params.get("New").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    if new.is_empty() {
+        return Err(ApiError::new(400, "New key list is required"));
+    }
+    let threshold = params.get("Threshold").and_then(Value::as_i64).unwrap_or(1);
+    let unlock: Vec<(String, String)> = old.iter().map(|k| (k.id.clone(), k.key.clone())).collect();
+    let w = crate::models::wallet::promote(env, wallet_id, &unlock, &new, threshold).map_err(|e| ApiError::new(500, e.to_string()))?;
+    Ok(serde_json::to_value(w).unwrap())
+}
+
 /// Wait briefly for at least one online Spot connection (Go `waitOnlineSpot`).
 fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     for _ in 0..60 {
