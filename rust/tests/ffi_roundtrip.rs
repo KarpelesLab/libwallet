@@ -2177,6 +2177,64 @@ fn remotekey_wallet_create_over_live_backend() {
 }
 
 #[test]
+fn remotekey_reshare_over_live_wdrone() {
+    // Full interactive wdrone ceremony against the live WalletSign fleet, mirroring
+    // Go TestRemoteWallet: create an ed25519 wallet with a RemoteKey share, then
+    // reshare a committee that includes the RemoteKey so the wdrone co-participates
+    // over the walletsign Spot transport. Gated behind SPOT_LIVE=1.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let h = new_env();
+    let wi = request(h, r#"{"path":"Info:setWalletInfo","params":{"ClientId":"com.ellipx.walletapp","Name":"libwallet-tests"}}"#);
+    assert_eq!(wi["result"], "success", "{wi}");
+
+    // 2FA → first RemoteKey.
+    let n = request(h, r#"{"path":"RemoteKey:new","params":{"number":"+14045551234"}}"#);
+    let session = n["data"]["session"].as_str().expect("session").to_string();
+    let v = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session}","code":"000000"}}}}"#));
+    let rk1 = v["data"]["RemoteKey"].as_str().expect("RemoteKey").to_string();
+
+    // Create the ed25519 [Plain,Plain,RemoteKey] wallet.
+    let body = format!(
+        r#"{{"path":"Wallet","verb":"POST","params":{{"Name":"Reshare","Curve":"ed25519","Keys":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk1}"}}]}}}}"#
+    );
+    let w = request(h, &body);
+    assert_eq!(w["result"], "success", "create failed: {w}");
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let orig_pubkey = w["data"]["Pubkey"].as_str().unwrap().to_string();
+    let keys = w["data"]["Keys"].as_array().unwrap();
+    let plain0 = keys.iter().find(|k| k["Type"] == "Plain").unwrap()["Id"].as_str().unwrap().to_string();
+    let rk_wk = keys.iter().find(|k| k["Type"] == "RemoteKey").unwrap()["Id"].as_str().unwrap().to_string();
+
+    // Reshare the session (fresh 2FA) → rk2, used for both old + new RemoteKey.
+    let rn = request(h, &format!(r#"{{"path":"RemoteKey:reshare","params":{{"key":"{rk1}"}}}}"#));
+    assert_eq!(rn["result"], "success", "RemoteKey:reshare failed: {rn}");
+    let session2 = rn["data"]["session"].as_str().expect("session2").to_string();
+    let v2 = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session2}","code":"000000"}}}}"#));
+    let rk2 = v2["data"]["RemoteKey"].as_str().expect("rk2").to_string();
+
+    // Reshare: old committee = 1 Plain + the RemoteKey (T+1=2, forces the wdrone);
+    // new committee = 2 Plain + 1 RemoteKey. Long timeout — spot init + TSS rounds.
+    let reshare_body = format!(
+        r#"{{"path":"Wallet/{wallet_id}:reshare","params":{{"Old":[{{"Id":"{plain0}"}},{{"Type":"RemoteKey","Id":"{rk_wk}","Key":"{rk2}"}}],"New":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk2}"}}]}}}}"#
+    );
+    let (rx, ud) = request_async(h, &reshare_body);
+    let resp = rx.recv_timeout(Duration::from_secs(180)).expect("reshare resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    assert_eq!(j["result"], "success", "reshare failed: {j}");
+
+    // The reshare preserves the group pubkey and rebuilds the committee.
+    assert_eq!(j["data"]["Pubkey"], orig_pubkey, "reshare must preserve the group pubkey");
+    let new_keys = j["data"]["Keys"].as_array().unwrap();
+    assert_eq!(new_keys.len(), 3, "{j}");
+    assert!(new_keys.iter().any(|k| k["Type"] == "RemoteKey"), "{j}");
+
+    drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn unknown_endpoint_is_404() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Nope:nope"}"#);

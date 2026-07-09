@@ -91,6 +91,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
                     "probeActivity" => return wallet::probe_activity(&handle.env, id, params),
                     "promoteMnemonic" => return wallet::promote_mnemonic(&handle.env, id, params),
                     "exportToDevice" => return spot::export_to_device(&handle.env, id, params),
+                    "reshare" => return spot::wallet_reshare(&handle.env, id, params),
                     _ => {}
                 }
             }
@@ -191,6 +192,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet:exportToDeviceConfirm" => spot::export_confirm(&handle.env, params),
         "Wallet:exportToDeviceCancel" => spot::export_cancel(&handle.env, params),
         "Wallet:importFromDevice" => spot::import_from_device(&handle.env, params),
+        "Wallet:reshare" => spot::wallet_reshare(&handle.env, "", params),
         "Wallet:buildNewAgentBody" => spot::build_new_agent_body(&handle.env, params),
         "ClawdWallet:pair" => spot::clawd_pair(&handle.env, params),
         "RemoteKey:new" => remotekey::new(&handle.env, params),

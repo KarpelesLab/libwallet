@@ -41,6 +41,33 @@ pub fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<Pub
     Ok(keys)
 }
 
+/// Fetch the wdrone fleet's Spot ids (Go `selectPeer`'s discovery half): GET
+/// `Crypto/WalletSign:keys` → for each signed IDCard, `k.<b64url(sha256(self))>`
+/// (the same derivation spotlib uses for a client's own target id).
+pub fn fetch_peer_spot_ids(base: &str, client_id: Option<&str>) -> Result<Vec<String>> {
+    let data = crate::rest::do_get_with_client_id(base, "Crypto/WalletSign:keys", client_id)?;
+    let ids = data.as_array().ok_or_else(|| Error::Env("WalletSign:keys did not return a list".into()))?;
+    let mut out = Vec::new();
+    for id in ids {
+        let s = match id.as_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        let bin = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s)
+            .map_err(|e| Error::Env(format!("bad idcard base64: {e}")))?;
+        let card = bottlers::idcard::IDCard::from_signed(&bin)
+            .or_else(|_| bottlers::idcard::IDCard::from_cbor(&bin))
+            .map_err(|e| Error::Env(format!("parse idcard: {e}")))?;
+        let h = bottlers::hash::sha256(&card.self_key);
+        out.push(format!("k.{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(h)));
+    }
+    if out.is_empty() {
+        return Err(Error::Env("no wdrone peers available".into()));
+    }
+    Ok(out)
+}
+
 /// Upload a sealed RemoteKey share to the backend (Go `encrypt`'s
 /// `Crypto/WalletSign:setGeneratedKey` POST). `data_cbor` is the CBOR bottle
 /// (sealed to the fleet keys); `curve`/`protocol` are the on-wire vocabulary

@@ -61,6 +61,8 @@ pub mod transfer;
 pub mod clawdpair;
 // WalletSign backend glue for RemoteKey shares (fetch fleet keys + upload).
 pub mod walletsign;
+// Interactive RemoteKey reshare over the live wdrone fleet (tssHub + spotPeer).
+pub mod reshare;
 // Curated token registry (wlttoken/curated) for Token:listCurated.
 pub mod curated;
 // BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).

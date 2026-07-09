@@ -164,6 +164,35 @@ pub fn clawd_pair(env: &Arc<Env>, params: &Value) -> ApiResult {
     crate::clawdpair::dispatch_pair_response(&resp, &agent_spot_id).map_err(|c| ApiError::new(400, c))
 }
 
+/// `Wallet:reshare` {Old, New} — rotate a wallet's TSS shares to a new
+/// committee. When the old committee includes a RemoteKey, the wdrone fleet
+/// co-reshares over the live walletsign transport (Go `apiWalletReshare` →
+/// `Wallet.ReshareFrost`). ed25519/FROST only for now. Returns the updated
+/// wallet.
+pub fn wallet_reshare(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
+    let wallet_id = params
+        .get("WalletId")
+        .or_else(|| params.get("Id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(id);
+    if wallet_id.is_empty() {
+        return Err(ApiError::new(400, "wallet id required"));
+    }
+    let old: Vec<crate::sign::KeyDescription> =
+        params.get("Old").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let new: Vec<crate::sign::KeyDescription> =
+        params.get("New").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    if old.is_empty() || new.is_empty() {
+        return Err(ApiError::new(400, "Old and New key lists are required"));
+    }
+    crate::reshare::reshare_frost(env, wallet_id, &old, &new).map_err(|e| ApiError::new(500, e.to_string()))?;
+    let w = crate::models::wallet::fetch(env, wallet_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "wallet not found"))?;
+    Ok(serde_json::to_value(w).unwrap())
+}
+
 /// Wait briefly for at least one online Spot connection (Go `waitOnlineSpot`).
 fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     for _ in 0..60 {

@@ -227,37 +227,7 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
             .map(|(_, j)| j.clone())
             .ok_or_else(|| Error::Env("share/party mismatch".into()))?;
 
-        let (data, key_field) = match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
-            Recipient::Encrypt(pk) => {
-                let sealed =
-                    keystore::seal(json.as_bytes(), &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
-                let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
-                (sealed, pkix)
-            }
-            Recipient::Plain => {
-                (keystore::wrap_plain(json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?, String::new())
-            }
-            Recipient::Remote => {
-                // Seal the share to the wdrone fleet's decrypt keys and upload it
-                // to the WalletSign backend (Go `WalletKey.encrypt` RemoteKey arm).
-                // The local copy is kept in `data` too. Stage-1 RemoteKey is
-                // ed25519/FROST; secp256k1/DKLs would need the binary Save() form.
-                if curve_out != "ed25519" {
-                    return Err(Error::Env("RemoteKey shares are ed25519/FROST only".into()));
-                }
-                let base = crate::rest::DEFAULT_HOST;
-                let client_id = env
-                    .config_get("walletinfo:clientId")
-                    .ok()
-                    .flatten()
-                    .and_then(|b| String::from_utf8(b).ok())
-                    .filter(|s| !s.is_empty());
-                let recipients = crate::walletsign::fetch_decrypt_keys(base, client_id.as_deref())?;
-                let sealed = keystore::seal_json(json.as_bytes(), &recipients).map_err(|e| Error::Env(e.to_string()))?;
-                crate::walletsign::upload_generated_key(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed)?;
-                (sealed, kd.key.clone())
-            }
-        };
+        let (data, key_field) = seal_share_full(env, curve_out, protocol, kd, uuid_bytes, json.as_bytes())?;
 
         wkeys.push(WalletKey {
             id: wk_ids[i].to_string(),
@@ -684,6 +654,109 @@ fn b64url(b: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
+/// Seal a share for one KeyDescription → `(WalletKey.data, WalletKey.key)`.
+/// Encrypt/Plain are local; Remote seals to the wdrone fleet keys and uploads to
+/// the WalletSign backend (Go `WalletKey.encrypt`). Shared by create + reshare.
+pub(crate) fn seal_share_full(
+    env: &Env,
+    curve_out: &str,
+    protocol: &str,
+    kd: &KeyDescription,
+    uuid_bytes: &[u8],
+    share: &[u8],
+) -> Result<(Vec<u8>, String)> {
+    match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
+        Recipient::Encrypt(pk) => {
+            let sealed = keystore::seal(share, &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+            let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
+            Ok((sealed, pkix))
+        }
+        Recipient::Plain => Ok((keystore::wrap_plain(share).map_err(|e| Error::Env(e.to_string()))?, String::new())),
+        Recipient::Remote => {
+            // Stage-1 RemoteKey is ed25519/FROST; secp256k1/DKLs would need the
+            // binary Save() share form.
+            if curve_out != "ed25519" {
+                return Err(Error::Env("RemoteKey shares are ed25519/FROST only".into()));
+            }
+            let base = crate::rest::DEFAULT_HOST;
+            let client_id = env
+                .config_get("walletinfo:clientId")
+                .ok()
+                .flatten()
+                .and_then(|b| String::from_utf8(b).ok())
+                .filter(|s| !s.is_empty());
+            let recipients = crate::walletsign::fetch_decrypt_keys(base, client_id.as_deref())?;
+            let sealed = keystore::seal_json(share, &recipients).map_err(|e| Error::Env(e.to_string()))?;
+            crate::walletsign::upload_generated_key(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed)?;
+            Ok((sealed, kd.key.clone()))
+        }
+    }
+}
+
+/// Persist a FROST reshare's new committee: seal each new share per its
+/// KeyDescription, replace the wallet's WalletKey rows, bump generation, and
+/// keep the group pubkey (which reshare preserves). Verifies each new share
+/// still derives the stored pubkey before writing.
+pub fn persist_reshared_frost(
+    env: &Env,
+    wallet: &Wallet,
+    new_keys: &[KeyDescription],
+    new_wk_ids: &[Xuid],
+    new_parties: &[PartyId],
+    new_shares: &std::collections::HashMap<String, Key>,
+) -> Result<()> {
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    for (i, kd) in new_keys.iter().enumerate() {
+        let party = &new_parties[i];
+        let share = new_shares
+            .get(&party.id)
+            .ok_or_else(|| Error::Env(format!("reshare: missing new share for party {}", party.id)))?;
+        // Defense in depth: the reshared share must still produce the group key.
+        if b64url(&frost_group_pubkey(share)) != wallet.pubkey {
+            return Err(Error::Env("reshare produced a share with a different group pubkey".into()));
+        }
+        let json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        let uuid = new_wk_ids[i].uuid();
+        let (data, key_field) = seal_share_full(env, &wallet.curve, "frost", kd, uuid.as_bytes(), json.as_bytes())?;
+        wkeys.push(WalletKey {
+            id: new_wk_ids[i].to_string(),
+            wallet: wallet.id.clone(),
+            kind: kd.kind.clone(),
+            schema: "frost".into(),
+            key: key_field,
+            data,
+            generation: wallet.generation + 1,
+        });
+    }
+
+    // Replace the WalletKey rows + bump the wallet generation atomically enough
+    // for the single-threaded DB actor: delete old keys, insert new, update row.
+    env.exec(r#"DELETE FROM "WalletKey" WHERE "Wallet" = ?1"#, vec![SqlValue::Text(wallet.id.clone())])?;
+    for k in &wkeys {
+        env.exec(
+            &format!(r#"INSERT INTO "WalletKey" ({WALLETKEY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"#),
+            vec![
+                SqlValue::Text(k.id.clone()),
+                SqlValue::Text(k.wallet.clone()),
+                SqlValue::Text(k.kind.clone()),
+                SqlValue::Text(k.schema.clone()),
+                SqlValue::Text(k.key.clone()),
+                SqlValue::Blob(k.data.clone()),
+                SqlValue::Int(k.generation as i64),
+            ],
+        )?;
+    }
+    env.exec(
+        r#"UPDATE "Wallet" SET "Gen" = ?1, "Modified" = ?2 WHERE "Id" = ?3"#,
+        vec![
+            SqlValue::Int((wallet.generation + 1) as i64),
+            SqlValue::Text(crate::now_rfc3339()),
+            SqlValue::Text(wallet.id.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Turn a keygen result into `(party_key_bytes, share_json)` pairs, so the
 /// encrypt/persist loop is shared across protocols.
 fn shares_json<K>(
@@ -706,7 +779,7 @@ fn b64url_decode(s: &str) -> Result<Vec<u8>> {
 /// host-supplied 64-byte store key through `storeKeyToEd25519` (PBKDF2 with the
 /// store key's own halves), matching Go `walletkey.go`. (RemoteKey unlock happens
 /// on the backend and is not handled here.)
-fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottlers::PrivateKey> {
+pub fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottlers::PrivateKey> {
     match kind {
         "Password" => {
             crate::keystore::password_to_ed25519(material, uuid).map_err(|e| Error::Env(e.to_string()))
