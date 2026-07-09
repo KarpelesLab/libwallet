@@ -181,3 +181,41 @@ fn create_and_sign_legacy_eddsa_wallet() {
     let bad = vec![(w.keys[0].id.clone(), "nope".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
     assert!(wallet::sign_frost_local(&env, &w.id, &bad, b"legacy message").is_err());
 }
+
+// Heavy: GG18 keygen needs a real ≥2048-bit Paillier modulus (safe_prime_bits
+// 1024), which takes minutes even in release. Ignored by default; run with
+// `cargo test --release -- --ignored create_and_sign_legacy_ecdsa_wallet`.
+#[test]
+#[ignore = "GG18 Paillier keygen is minutes-slow; run in release with --ignored"]
+fn create_and_sign_legacy_ecdsa_wallet() {
+    // Legacy ecdsatss (pre-DKLs GG18 secp256k1) round-trip with an HD-derived
+    // EVM account (the IL/KDD tweak path, unblocked by tsslib 0.2.5). Create a
+    // 2-of-3 legacy wallet, derive an ethereum account, sign, and ecrecover to
+    // that account's address.
+    use libwallet::models::account;
+    use libwallet::evm;
+    let env = env();
+    account::init(&env).unwrap();
+
+    let kds = [pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create_ecdsa_legacy(&env, "Legacy secp", 1, 1024, &kds).unwrap();
+    assert_eq!(w.protocol, "gg18");
+    assert_eq!(w.curve, "secp256k1");
+
+    // Derive an ethereum account (m/44'/60'/0'/0 with an IL tweak).
+    let acct = account::create(&env, &w.id, "eth", "ethereum", 0).unwrap();
+    assert!(acct.address.starts_with("0x"));
+
+    // Sign with a 2-of-3 subset; the sig must ecrecover to the derived address.
+    let msg = b"legacy gg18 message";
+    let unlock = vec![(w.keys[0].id.clone(), "passwordone".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
+    let sig = evm::personal_sign(&env, &acct.id, &unlock, msg).unwrap();
+    assert_eq!(sig.len(), 65);
+    let recovered = evm::personal_ec_recover(msg, &sig).unwrap();
+    assert_eq!(recovered.to_lowercase(), acct.address.to_lowercase(), "legacy gg18 sig must recover to the derived account");
+
+    // A different subset also signs + recovers to the same address.
+    let unlock2 = vec![(w.keys[1].id.clone(), "passwordtwo".to_string()), (w.keys[2].id.clone(), "passwordthree".to_string())];
+    let sig2 = evm::personal_sign(&env, &acct.id, &unlock2, msg).unwrap();
+    assert_eq!(evm::personal_ec_recover(msg, &sig2).unwrap().to_lowercase(), acct.address.to_lowercase());
+}

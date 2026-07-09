@@ -353,6 +353,88 @@ pub fn eddsa_sign_local(
     Ok(first.signature.clone())
 }
 
+// ── Legacy ecdsatss (GG18 secp256k1) — for opening + signing Go wallets created
+//    before DKLs23. Unblocked by tsslib 0.2.5 (SigningParty::new_with_kdd — the
+//    IL/tweak variant Go uses for HD-derived accounts). Broker-based. ──
+
+/// Generate a threshold legacy-ECDSA (GG18) key over the in-process hub. Each
+/// party needs its own Paillier `LocalPreParams`; `safe_prime_bits` trades
+/// generation time for security (Go uses 1024; tests use small values — legacy
+/// keygen is retired in Go, so this only builds test fixtures).
+pub fn ecdsa_keygen_local(
+    party_keys: Vec<Vec<u8>>,
+    threshold: usize,
+    safe_prime_bits: usize,
+) -> Result<Vec<(PartyId, tsslib::ecdsatss::Key)>, TssError> {
+    let n = party_keys.len();
+    if n == 0 || threshold >= n {
+        return Err(TssError(format!("invalid n={n}, threshold={threshold}")));
+    }
+    let ids: Vec<PartyId> = party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect();
+    let parties = PartyId::sort(ids, 0);
+    let hubs = LocalHub::wired(n);
+    let mut rng = purecrypto::rng::OsRng;
+    let keygens: Vec<tsslib::ecdsatss::KeygenParty> = (0..n)
+        .map(|i| {
+            let pre = tsslib::ecdsatss::LocalPreParams::generate(safe_prime_bits, &mut rng);
+            let broker: Arc<dyn MessageBroker + Send + Sync> = hubs[i].clone();
+            let params = Parameters::new(parties.clone(), &parties[i], threshold, broker);
+            tsslib::ecdsatss::KeygenParty::new(params, pre).map_err(|e| TssError(format!("ecdsa keygen start: {e:?}")))
+        })
+        .collect::<Result<_, _>>()?;
+    keygens
+        .iter()
+        .enumerate()
+        .map(|(i, k)| k.wait().map(|key| (parties[i].clone(), key)).map_err(|e| TssError(format!("ecdsa keygen: {e:?}"))))
+        .collect()
+}
+
+/// The 33-byte SEC1-compressed secp256k1 group public key of a legacy ecdsatss
+/// share (Go `ECDSAPub`).
+pub fn ecdsa_group_pubkey(key: &tsslib::ecdsatss::Key) -> Result<[u8; 33], TssError> {
+    key.public_key().map_err(|e| TssError(format!("ecdsa pubkey: {e:?}")))
+}
+
+/// Threshold-sign a 32-byte `hash` with a committee of legacy ecdsatss shares,
+/// applying the BIP32 key-derivation `tweak` (IL) via `new_with_kdd` so the
+/// signature verifies under the child key `group + tweak·G` — matching Go's
+/// `NewSigningWithKDD`. Returns `(r, s, v)` (32-byte big-endian scalars + parity).
+pub fn ecdsa_sign_local_tweaked(
+    committee: &[(PartyId, tsslib::ecdsatss::Key)],
+    threshold: usize,
+    tweak: &[u8; 32],
+    hash: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8), TssError> {
+    if committee.len() < threshold + 1 {
+        return Err(TssError(format!("committee size {} < threshold+1 ({})", committee.len(), threshold + 1)));
+    }
+    let ids: Vec<PartyId> = committee.iter().map(|(p, _)| p.clone()).collect();
+    let sorted = PartyId::sort(ids, 0);
+    let hubs = LocalHub::wired(sorted.len());
+    let signings: Vec<tsslib::ecdsatss::SigningParty> = (0..sorted.len())
+        .map(|i| {
+            let key = committee
+                .iter()
+                .find(|(p, _)| p.cmp_key(&sorted[i]) == std::cmp::Ordering::Equal)
+                .map(|(_, k)| k.clone())
+                .ok_or_else(|| TssError("committee key missing".into()))?;
+            let broker: Arc<dyn MessageBroker + Send + Sync> = hubs[i].clone();
+            let params = Parameters::new(sorted.clone(), &sorted[i], threshold, broker);
+            tsslib::ecdsatss::SigningParty::new_with_kdd(params, key, hash, Some(tweak.as_slice()))
+                .map_err(|e| TssError(format!("ecdsa signing start: {e:?}")))
+        })
+        .collect::<Result<_, _>>()?;
+    let sigs: Vec<tsslib::ecdsatss::SignatureData> =
+        signings.iter().map(|s| s.wait().map_err(|e| TssError(format!("ecdsa signing: {e:?}")))).collect::<Result<_, _>>()?;
+    let first = &sigs[0];
+    for s in &sigs[1..] {
+        if s.r != first.r || s.s != first.s {
+            return Err(TssError("ecdsa signers disagreed on the signature".into()));
+        }
+    }
+    Ok((first.r.clone(), first.s.clone(), first.recovery))
+}
+
 /// Import a raw secp256k1 secret scalar (32-byte big-endian) as a 1-of-1 DKLs
 /// key — the `Wallet:importPrivateKey` migration path for secp256k1.
 pub fn dkls_import_key(

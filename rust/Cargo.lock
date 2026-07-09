@@ -1209,9 +1209,9 @@ dependencies = [
 
 [[package]]
 name = "tsslib"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e62183dc1329874d6ea7612323f56d078a0c441cfcbac562360f214678cb602"
+checksum = "1a58bcc0298ef75fa0eb6601b7233a1cc96dfbe94bc1159dc4d675cba03280c8"
 dependencies = [
  "base64",
  "hex",

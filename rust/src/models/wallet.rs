@@ -300,6 +300,50 @@ pub fn create_eddsa_legacy(env: &Env, name: &str, threshold: usize, key_descs: &
     Ok(wallet)
 }
 
+/// Create a legacy ecdsatss (GG18 secp256k1) wallet — the pre-DKLs secp256k1
+/// scheme. Like [`create_eddsa_legacy`], exists to build legacy fixtures + mirror
+/// the on-disk shape (Protocol="gg18", Schema="") Rust must open + sign.
+/// `safe_prime_bits` sets the Paillier size (small = fast test fixtures).
+pub fn create_ecdsa_legacy(env: &Env, name: &str, threshold: usize, safe_prime_bits: usize, key_descs: &[KeyDescription]) -> Result<Wallet> {
+    let n = key_descs.len();
+    if n < 2 || threshold >= n {
+        return Err(Error::Env(format!("invalid n={n}, threshold={threshold}")));
+    }
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_ids: Vec<Xuid> = (0..n).map(|_| Xuid::new("wkey")).collect();
+    let party_keys: Vec<Vec<u8>> = wk_ids.iter().map(|x| x.uuid().as_bytes().to_vec()).collect();
+    let shares = crate::tss::ecdsa_keygen_local(party_keys, threshold, safe_prime_bits).map_err(|e| Error::Env(e.to_string()))?;
+    let pubkey = b64url(&crate::tss::ecdsa_group_pubkey(&shares[0].1).map_err(|e| Error::Env(e.to_string()))?);
+    let mut cc = Uuid::new_v4().into_bytes().to_vec();
+    cc.extend_from_slice(&Uuid::new_v4().into_bytes());
+
+    let now = crate::now_rfc3339();
+    let mut wkeys = Vec::with_capacity(n);
+    for (i, kd) in key_descs.iter().enumerate() {
+        let uuid = wk_ids[i].uuid();
+        let uuid_bytes = uuid.as_bytes();
+        let key = shares.iter().find(|(pid, _)| pid.key == uuid_bytes.as_slice()).map(|(_, k)| k).ok_or_else(|| Error::Env("share/party mismatch".into()))?;
+        let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        let (data, key_field) = seal_share(share_json.as_bytes(), kd, uuid_bytes)?;
+        wkeys.push(WalletKey { id: wk_ids[i].to_string(), wallet: wallet_id.clone(), kind: kd.kind.clone(), schema: String::new(), key: key_field, data, generation: 1 });
+    }
+    let wallet = Wallet {
+        id: wallet_id,
+        name: name.to_owned(),
+        curve: "secp256k1".into(),
+        protocol: "gg18".into(),
+        threshold: threshold as i64,
+        generation: 0,
+        pubkey,
+        chaincode: b64url(&cc),
+        created: now.clone(),
+        modified: now,
+        keys: wkeys,
+    };
+    persist(env, &wallet)?;
+    Ok(wallet)
+}
+
 /// Import a raw 32-byte private-key scalar as a 1-of-1 wallet with a fresh random
 /// chain code (Go `Wallet:importPrivateKey`).
 pub fn import_private_key(
@@ -1137,6 +1181,30 @@ fn sign_eddsa_legacy(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8]) -
     Ok(sig)
 }
 
+/// Sign a 32-byte `digest` with a legacy ecdsatss (GG18 secp256k1) wallet,
+/// applying the account's HD `tweak` (IL). Threshold scheme — only threshold+1
+/// shares are needed (unlike DKLs, which needs all). Returns `(r, s, v)`.
+/// Unblocked by tsslib 0.2.5's `new_with_kdd`.
+fn sign_ecdsa_legacy(
+    wallet: &Wallet,
+    unlock: &[(String, String)],
+    tweak: &[u8; 32],
+    digest: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8)> {
+    let threshold = wallet.threshold.max(0) as usize;
+    let mut committee: Vec<(PartyId, tsslib::ecdsatss::Key)> = Vec::with_capacity(unlock.len());
+    for (wk_id, password) in unlock {
+        let wk = wallet.keys.iter().find(|k| &k.id == wk_id).ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
+        let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
+        let uuid_bytes = xid.uuid().as_bytes().to_vec();
+        let json = open_committee_share(wk, &uuid_bytes, password)?;
+        let key = tsslib::ecdsatss::Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
+            .map_err(|e| Error::Env(format!("load ecdsa share: {e:?}")))?;
+        committee.push((PartyId::new(hex_bytes(&uuid_bytes), "", uuid_bytes.clone()), key));
+    }
+    crate::tss::ecdsa_sign_local_tweaked(&committee, threshold, tweak, digest).map_err(|e| Error::Env(e.to_string()))
+}
+
 /// Sign `msg` with an all-local FROST wallet by unlocking a committee of its
 /// Password-protected shares. `unlock` pairs each contributing WalletKey id
 /// with its password; at least `threshold + 1` are required. The produced
@@ -1224,6 +1292,12 @@ pub fn dkls_sign_digest(
     digest: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, u8)> {
     let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    // Legacy ecdsatss wallets (Protocol="gg18", or empty on a secp256k1 wallet)
+    // sign through the GG18 path with the account's IL tweak (tsslib 0.2.5's
+    // new_with_kdd). Modern secp wallets are Protocol="dkls23".
+    if resolve_protocol(&wallet) == "gg18" {
+        return sign_ecdsa_legacy(&wallet, unlock, tweak, digest);
+    }
     // A mnemonic-keep secp wallet signs with the same key the TSS import
     // produces — its master scalar imported into a 1-of-1 dkls Key at sign time.
     let is_mnemonic = wallet.keys.iter().any(|k| k.schema == "mnemonic");
