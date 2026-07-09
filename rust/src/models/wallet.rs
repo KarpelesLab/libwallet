@@ -528,6 +528,47 @@ pub fn promote(
     fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet vanished after promote".into()))
 }
 
+/// Persist the mobile's wallet after a `Wallet:initiateKeygen` ceremony: a
+/// single RemoteKey-typed FROST share (uploaded to the wdrone), pubkey = the
+/// group key, no chaincode (Solana uses path "m"). Returns the wallet id.
+pub fn persist_agent_keygen(
+    env: &Env,
+    name: &str,
+    pubkey_b64url: &str,
+    remote_key: &str,
+    share: &Key,
+) -> Result<String> {
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_id = Xuid::new("wkey");
+    let share_json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+    let kd = KeyDescription { kind: "RemoteKey".into(), key: remote_key.to_string(), id: String::new() };
+    let (data, key_field) = seal_share_full(env, "ed25519", "frost", &kd, wk_id.uuid().as_bytes(), share_json.as_bytes())?;
+    let now = crate::now_rfc3339();
+    let wallet = Wallet {
+        id: wallet_id.clone(),
+        name: name.to_owned(),
+        curve: "ed25519".into(),
+        protocol: "frost".into(),
+        threshold: 1,
+        generation: 1,
+        pubkey: pubkey_b64url.to_owned(),
+        chaincode: String::new(),
+        created: now.clone(),
+        modified: now,
+        keys: vec![WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet_id.clone(),
+            kind: "RemoteKey".into(),
+            schema: "frost".into(),
+            key: key_field,
+            data,
+            generation: 1,
+        }],
+    };
+    persist(env, &wallet)?;
+    Ok(wallet_id)
+}
+
 /// Seal a share payload to a KeyDescription recipient, returning `(sealed data,
 /// Key field)`. Encrypt → bottle + PKIX pubkey; Plain → unencrypted bottle;
 /// Remote → error (needs the backend).

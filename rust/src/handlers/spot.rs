@@ -220,6 +220,36 @@ pub fn wallet_promote(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(w).unwrap())
 }
 
+/// `Wallet:initiateKeygen` {remote_key, peers, name, curve, me_moniker} — the
+/// leader-side ClawdWallet Stage-1 keygen (Go `apiInitiateKeygen`). Builds the
+/// committee, sends the InitPayload to each peer, runs the mobile's FROST keygen
+/// party, and uploads its share to the wdrone. ed25519 only.
+pub fn initiate_keygen(env: &Arc<Env>, params: &Value) -> ApiResult {
+    let remote_key = params.get("remote_key").and_then(Value::as_str).unwrap_or("");
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    let curve = params.get("curve").and_then(Value::as_str).unwrap_or("");
+    let me_moniker = params.get("me_moniker").and_then(Value::as_str).unwrap_or("");
+    let peers: Vec<crate::reshare::JoinPeer> = params
+        .get("peers")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .map(|p| crate::reshare::JoinPeer {
+                    spot_id: p.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
+                    moniker: p.get("moniker").and_then(Value::as_str).unwrap_or("").to_string(),
+                    key: p.get("key").and_then(Value::as_str).unwrap_or("").to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if peers.is_empty() {
+        return Err(ApiError::new(400, "peers is required"));
+    }
+    let (wlt_id, solana_address, pubkey) =
+        crate::reshare::initiate_keygen(env, remote_key, &peers, name, curve, me_moniker).map_err(|e| ApiError::new(500, e.to_string()))?;
+    Ok(json!({ "wlt_id": wlt_id, "solana_address": solana_address, "pubkey": pubkey }))
+}
+
 /// Wait briefly for at least one online Spot connection (Go `waitOnlineSpot`).
 fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     for _ in 0..60 {
