@@ -1,8 +1,11 @@
-//! Token object endpoints — Fetch/List. Creation discovers metadata via RPC
-//! and is deferred (POST 501).
+//! Token object endpoints — full CRUD parity with the Go `wlttoken` object
+//! (Fetch/List, Create, ApiUpdate, ApiDelete) plus `discoverToken` metadata
+//! read. Create normalizes/validates in the model, reusing the same address
+//! normalization and metadata sanitisation `discoverToken` feeds.
 
 use serde_json::Value;
 
+use crate::models::token::Token;
 use crate::Env;
 
 use super::{ApiError, ApiResult};
@@ -19,8 +22,49 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             )
             .unwrap()),
         },
-        "POST" => Err(ApiError::new(501, "token creation (metadata discovery) not yet ported")),
+        "POST" => {
+            let t: Token = token_from_params(params);
+            let created = crate::models::token::create(env, t)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            Ok(serde_json::to_value(created).unwrap())
+        }
+        "PATCH" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let t = crate::models::token::update(env, id, params)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
+            Ok(serde_json::to_value(t).unwrap())
+        }
+        "DELETE" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            crate::models::token::delete(env, id).map_err(ApiError::internal)?;
+            Ok(serde_json::json!({ "deleted": true }))
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Token"))),
+    }
+}
+
+/// Build a `Token` from the request params (PascalCase keys, matching the Go
+/// wire form). `validate()` normalizes the address and fills the type default.
+fn token_from_params(params: &Value) -> Token {
+    let s = |k: &str| params.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    Token {
+        id: String::new(),
+        name: s("Name"),
+        symbol: s("Symbol"),
+        address: s("Address"),
+        decimals: params.get("Decimals").and_then(Value::as_i64).unwrap_or(0),
+        kind: s("Type"),
+        network: s("Network"),
+        logo: s("Logo"),
+        memo: s("Memo"),
+        created: String::new(),
+        updated: String::new(),
     }
 }
 
@@ -35,11 +79,10 @@ pub fn list_curated(_env: &Env, params: &Value) -> ApiResult {
     Ok(Value::Array(crate::curated::for_chain(network)))
 }
 
-/// The largest sane token decimals — an attacker-controlled on-chain value that
-/// feeds amount scaling, so it is bounded (Go `maxTokenDecimals`).
-const MAX_TOKEN_DECIMALS: i64 = 36;
-const MAX_TOKEN_NAME_LEN: usize = 128;
-const MAX_TOKEN_SYMBOL_LEN: usize = 32;
+use crate::models::token::{
+    sanitize_token_text as sanitize_text, MAX_TOKEN_DECIMALS, MAX_TOKEN_NAME_LEN,
+    MAX_TOKEN_SYMBOL_LEN,
+};
 
 // ERC-20 metadata selectors (keccak256(sig)[:4]).
 const SEL_NAME: &str = "0x06fdde03";
@@ -191,35 +234,6 @@ fn decode_hex_bytes(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
-}
-
-/// Drop control / replacement / bidi-invisible characters, cap the kept runes
-/// at `max`, then trim surrounding whitespace (Go `sanitizeTokenText`).
-fn sanitize_text(s: &str, max: usize) -> String {
-    let mut out = String::new();
-    let mut kept = 0usize;
-    for c in s.chars() {
-        if c == '\u{FFFD}' || c.is_control() || is_bidi_or_invisible(c) {
-            continue;
-        }
-        out.push(c);
-        kept += 1;
-        if kept >= max {
-            break;
-        }
-    }
-    out.trim().to_owned()
-}
-
-/// Bidi formatting controls / zero-width / BOM commonly abused to spoof token
-/// names (Go `isBidiOrInvisible`).
-fn is_bidi_or_invisible(c: char) -> bool {
-    matches!(c,
-        '\u{202A}'..='\u{202E}'   // LRE RLE PDF LRO RLO
-        | '\u{2066}'..='\u{2069}' // LRI RLI FSI PDI
-        | '\u{200B}'..='\u{200F}' // ZWSP ZWNJ ZWJ LRM RLM
-        | '\u{FEFF}'              // BOM / ZWNBSP
-    )
 }
 
 #[cfg(test)]

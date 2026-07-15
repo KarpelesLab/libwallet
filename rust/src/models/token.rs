@@ -4,7 +4,20 @@
 //! Token creation discovers on-chain metadata (RPC) and is deferred (POST 501).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use xuid::Xuid;
+
 use crate::{Env, Result, SqlValue};
+
+/// Bounds applied to untrusted token metadata (on-chain symbol / name /
+/// decimals, plus operator-supplied overrides). Symbols/names originate from
+/// contract calls or RPC metadata an attacker controls, so they are sanitised
+/// and capped to defeat display-spoofing; decimals are bounded because they
+/// feed amount scaling. Matches Go `maxTokenSymbolLen` / `maxTokenNameLen` /
+/// `maxTokenDecimals`.
+pub const MAX_TOKEN_SYMBOL_LEN: usize = 32;
+pub const MAX_TOKEN_NAME_LEN: usize = 128;
+pub const MAX_TOKEN_DECIMALS: i64 = 36;
 
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Token" ("Id" text, "Name" text, "Symbol" text, "Address" text, "Decimals" integer, "Type" text, "Network" text, "Logo" text, "Memo" text, "Created" text, "Updated" text, PRIMARY KEY ("Id"));"#;
 const COLS: &str = r#""Id", "Name", "Symbol", "Address", "Decimals", "Type", "Network", "Logo", "Memo", "Created", "Updated""#;
@@ -66,4 +79,191 @@ fn row_to_token(row: &[SqlValue]) -> Token {
         created: text(9),
         updated: text(10),
     }
+}
+
+/// Validate + normalize a token (port of Go `token.validate`): the network must
+/// exist and support tokens, the address is normalized per chain (EVM checksum
+/// case / Solana base58 round-trip), the type defaults to the chain canonical
+/// ("erc20" / "spl-token"), display metadata is sanitised and decimals bounded.
+pub fn validate(env: &Env, t: &mut Token) -> Result<()> {
+    if t.network.is_empty() {
+        return Err(crate::Error::Env("Network is required".into()));
+    }
+    if t.address.is_empty() {
+        return Err(crate::Error::Env("Address is required".into()));
+    }
+    let net = crate::models::network::fetch(env, &t.network)?
+        .ok_or_else(|| crate::Error::Env(format!("invalid network: {}", t.network)))?;
+    match net.kind.as_str() {
+        "evm" => {
+            t.address = normalize_evm_address(&t.address)?;
+            if t.kind.is_empty() {
+                t.kind = "erc20".to_owned();
+            }
+        }
+        "solana" => {
+            t.address = normalize_solana_address(&t.address)?;
+            if t.kind.is_empty() {
+                t.kind = "spl-token".to_owned();
+            }
+        }
+        other => {
+            return Err(crate::Error::Env(format!(
+                "tokens are not supported on {other} networks"
+            )))
+        }
+    }
+    // Sanitise display metadata — Symbol/Name may originate from untrusted
+    // on-chain sources and are otherwise persisted verbatim.
+    t.symbol = sanitize_token_text(&t.symbol, MAX_TOKEN_SYMBOL_LEN);
+    t.name = sanitize_token_text(&t.name, MAX_TOKEN_NAME_LEN);
+    if t.decimals < 0 || t.decimals > MAX_TOKEN_DECIMALS {
+        return Err(crate::Error::Env(format!(
+            "Decimals must be between 0 and {MAX_TOKEN_DECIMALS}"
+        )));
+    }
+    Ok(())
+}
+
+/// Create a token (port of Go `apiCreateToken`): validate/normalize, assign a
+/// random `tok` id, persist, and return the created row.
+pub fn create(env: &Env, mut t: Token) -> Result<Token> {
+    validate(env, &mut t)?;
+    t.id = Xuid::new_random("tok").to_string();
+    save(env, &mut t)?;
+    Ok(t)
+}
+
+/// Apply the mutable fields Go `token.ApiUpdate` allows (Name, Symbol,
+/// Decimals, Logo, Memo, Type) from `params` and persist. Name/Symbol are
+/// sanitised; Decimals is bounds-checked. A no-op update returns the row
+/// unchanged.
+pub fn update(env: &Env, id: &str, params: &Value) -> Result<Token> {
+    let mut t = fetch(env, id)?
+        .ok_or_else(|| crate::Error::Env(format!("token not found: {id}")))?;
+    let mut updated = false;
+    if let Some(v) = params.get("Name").and_then(Value::as_str) {
+        t.name = sanitize_token_text(v, MAX_TOKEN_NAME_LEN);
+        updated = true;
+    }
+    if let Some(v) = params.get("Symbol").and_then(Value::as_str) {
+        t.symbol = sanitize_token_text(v, MAX_TOKEN_SYMBOL_LEN);
+        updated = true;
+    }
+    if let Some(v) = params.get("Decimals").and_then(Value::as_i64) {
+        if v < 0 || v > MAX_TOKEN_DECIMALS {
+            return Err(crate::Error::Env(format!(
+                "Decimals must be between 0 and {MAX_TOKEN_DECIMALS}"
+            )));
+        }
+        t.decimals = v;
+        updated = true;
+    }
+    if let Some(v) = params.get("Logo").and_then(Value::as_str) {
+        t.logo = v.to_owned();
+        updated = true;
+    }
+    if let Some(v) = params.get("Memo").and_then(Value::as_str) {
+        t.memo = v.to_owned();
+        updated = true;
+    }
+    if let Some(v) = params.get("Type").and_then(Value::as_str) {
+        t.kind = v.to_owned();
+        updated = true;
+    }
+    if !updated {
+        return Ok(t);
+    }
+    save(env, &mut t)?;
+    Ok(t)
+}
+
+/// Delete a token by id (port of Go `token.ApiDelete` — ForceDelete by Id).
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    env.exec(r#"DELETE FROM "Token" WHERE "Id" = ?1"#, vec![SqlValue::Text(id.to_owned())])?;
+    Ok(())
+}
+
+/// Insert or replace a token row (Go `token.save` via psql.Replace). Sets
+/// Created (first save) / Updated timestamps on `t`.
+fn save(env: &Env, t: &mut Token) -> Result<()> {
+    let now = crate::now_rfc3339();
+    if t.created.is_empty() {
+        t.created = now.clone();
+    }
+    t.updated = now;
+    env.exec(r#"DELETE FROM "Token" WHERE "Id" = ?1"#, vec![SqlValue::Text(t.id.clone())])?;
+    env.exec(
+        &format!(r#"INSERT INTO "Token" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"#),
+        vec![
+            SqlValue::Text(t.id.clone()),
+            SqlValue::Text(t.name.clone()),
+            SqlValue::Text(t.symbol.clone()),
+            SqlValue::Text(t.address.clone()),
+            SqlValue::Int(t.decimals),
+            SqlValue::Text(t.kind.clone()),
+            SqlValue::Text(t.network.clone()),
+            SqlValue::Text(t.logo.clone()),
+            SqlValue::Text(t.memo.clone()),
+            SqlValue::Text(t.created.clone()),
+            SqlValue::Text(t.updated.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Normalize an EVM token address to its EIP-55 checksummed form (Go uses
+/// `outscript.ParseEvmAddress(..).Address()`).
+fn normalize_evm_address(addr: &str) -> Result<String> {
+    let hex = addr.strip_prefix("0x").or_else(|| addr.strip_prefix("0X")).unwrap_or(addr);
+    if hex.len() != 40 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(crate::Error::Env(format!("invalid EVM address: {addr}")));
+    }
+    let bytes: Vec<u8> = (0..40)
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect();
+    Ok(outscript::address::eip55(&bytes))
+}
+
+/// Normalize a Solana token mint address via a base58 round-trip, verifying it
+/// decodes to exactly 32 bytes (Go `base58.Bitcoin.Decode` + length check).
+fn normalize_solana_address(addr: &str) -> Result<String> {
+    let decoded = bs58::decode(addr)
+        .into_vec()
+        .map_err(|e| crate::Error::Env(format!("invalid Solana address: {e}")))?;
+    if decoded.len() != 32 {
+        return Err(crate::Error::Env("invalid Solana address: must be 32 bytes".into()));
+    }
+    Ok(bs58::encode(&decoded).into_string())
+}
+
+/// Strip control / replacement / bidi-invisible characters, cap the kept runes
+/// at `max`, then trim surrounding whitespace (Go `sanitizeTokenText`).
+pub fn sanitize_token_text(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    let mut kept = 0usize;
+    for c in s.chars() {
+        if c == '\u{FFFD}' || c.is_control() || is_bidi_or_invisible(c) {
+            continue;
+        }
+        out.push(c);
+        kept += 1;
+        if kept >= max {
+            break;
+        }
+    }
+    out.trim().to_owned()
+}
+
+/// Bidi formatting controls / zero-width / BOM commonly abused to spoof token
+/// names (Go `isBidiOrInvisible`).
+fn is_bidi_or_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{202A}'..='\u{202E}'   // LRE RLE PDF LRO RLO
+        | '\u{2066}'..='\u{2069}' // LRI RLI FSI PDI
+        | '\u{200B}'..='\u{200F}' // ZWSP ZWNJ ZWJ LRM RLM
+        | '\u{061C}'              // Arabic letter mark
+        | '\u{FEFF}'              // BOM / ZWNBSP
+    )
 }

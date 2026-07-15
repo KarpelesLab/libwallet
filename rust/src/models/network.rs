@@ -7,8 +7,11 @@
 //! from the ethrpc-rs chain registry. Network creation runs check() + RPC and
 //! is deferred (POST returns 501); default-network seeding likewise.
 
+use std::net::IpAddr;
+
 use ethrpc_rs::chains;
 use serde_json::{json, Map, Value};
+use xuid::Xuid;
 
 use crate::{Env, Result, SqlValue};
 
@@ -215,6 +218,105 @@ impl Network {
         })
     }
 
+    /// Validate the network and fill anything missing (port of Go
+    /// `Network.check`). Rejects a caller-supplied RPC that points at an
+    /// internal address / downgrades the scheme (SSRF guard) before it is ever
+    /// persisted, then fills chain-derived defaults. Unknown EVM chain ids are
+    /// accepted (create succeeds) but leave no defaults filled — matching Go's
+    /// "ignore fetch failed but do not input anything either".
+    pub fn check(&mut self) -> Result<()> {
+        validate_network_rpc(&self.rpc)?;
+        match self.kind.as_str() {
+            "evm" => {} // fall through to the chain-registry fill below
+            "bitcoin" => {
+                let (name, sym) = match self.chain_id.as_str() {
+                    "bitcoin" => ("Bitcoin", "BTC"),
+                    "bitcoin-cash" => ("Bitcoin Cash", "BCH"),
+                    "litecoin" => ("Litecoin", "LTC"),
+                    "dogecoin" => ("Dogecoin", "DOGE"),
+                    "monacoin" => ("Monacoin", "MONA"),
+                    "namecoin" => ("Namecoin", "NMC"),
+                    "electraproto" => ("Electra Protocol", "XEP"),
+                    other => {
+                        return Err(crate::Error::Env(format!(
+                            "invalid network type {}/{other}",
+                            self.kind
+                        )))
+                    }
+                };
+                if self.name.is_empty() {
+                    self.name = name.to_owned();
+                }
+                if self.currency_symbol.is_empty() {
+                    self.currency_symbol = sym.to_owned();
+                }
+                return Ok(());
+            }
+            "solana" => {
+                match self.chain_id.as_str() {
+                    "mainnet" => {
+                        if self.name.is_empty() {
+                            self.name = "Solana".to_owned();
+                        }
+                        if self.currency_symbol.is_empty() {
+                            self.currency_symbol = "SOL".to_owned();
+                        }
+                    }
+                    "devnet" => {
+                        if self.name.is_empty() {
+                            self.name = "Solana Devnet".to_owned();
+                        }
+                        if self.currency_symbol.is_empty() {
+                            self.currency_symbol = "SOL".to_owned();
+                        }
+                        self.testnet = true;
+                    }
+                    other => {
+                        return Err(crate::Error::Env(format!(
+                            "invalid network type {}/{other}",
+                            self.kind
+                        )))
+                    }
+                }
+                if self.currency_decimals == 0 {
+                    self.currency_decimals = 9;
+                }
+                if self.rpc.is_empty() {
+                    self.rpc = "auto".to_owned();
+                }
+                if self.block_explorer.is_empty() {
+                    self.block_explorer = "auto".to_owned();
+                }
+                return Ok(());
+            }
+            other => return Err(crate::Error::Env(format!("invalid network type {other}"))),
+        }
+        // EVM: fill from the chain registry when the chain is known; an unknown
+        // id leaves the network as-is (Go ignores the GetChainInfo error).
+        let info = match self.chain_info() {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+        if parse_chain_id(&self.chain_id) == Some(137) && self.currency_symbol == "MATIC" {
+            self.currency_symbol = "POL".to_owned();
+        }
+        if self.name.is_empty() {
+            self.name = info.name.clone();
+        }
+        if self.rpc.is_empty() {
+            self.rpc = "auto".to_owned();
+        }
+        if self.currency_symbol.is_empty() {
+            if let Some(nc) = info.native_currency.as_ref() {
+                self.currency_symbol = nc.symbol.clone();
+            }
+        }
+        if self.block_explorer.is_empty() {
+            self.block_explorer = "auto".to_owned();
+        }
+        Ok(())
+    }
+
     /// The Network JSON object, matching Go's custom MarshalJSON.
     pub fn to_json(&self) -> Value {
         let mut m = Map::new();
@@ -271,13 +373,21 @@ pub fn by_id_opt(env: &Env, id: &str) -> bool {
     matches!(by_id(env, id), Ok(Some(_)))
 }
 
-/// Insert or replace a network row (keyed on `Id`).
+/// The deterministic network id derived from `type`+`chainId` (Go
+/// `NetworkIdForTypeAndChainId` = `xuid.FromKeyPrefix(type+"."+chainId, "net")`).
+pub fn network_id_for(kind: &str, chain_id: &str) -> String {
+    Xuid::from_key_prefix(format!("{kind}.{chain_id}"), "net").to_string()
+}
+
+/// Insert or replace a network row (keyed on `Id`). An empty `Id` is computed
+/// from `type`+`chainId` first, matching Go `Network.Save`.
 pub fn save(env: &Env, n: &Network) -> Result<()> {
-    env.exec(r#"DELETE FROM "Network" WHERE "Id" = ?1"#, vec![SqlValue::Text(n.id.clone())])?;
+    let id = if n.id.is_empty() { network_id_for(&n.kind, &n.chain_id) } else { n.id.clone() };
+    env.exec(r#"DELETE FROM "Network" WHERE "Id" = ?1"#, vec![SqlValue::Text(id.clone())])?;
     env.exec(
         &format!(r#"INSERT INTO "Network" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#),
         vec![
-            SqlValue::Text(n.id.clone()),
+            SqlValue::Text(id),
             SqlValue::Text(n.kind.clone()),
             SqlValue::Text(n.chain_id.clone()),
             SqlValue::Text(n.name.clone()),
@@ -298,6 +408,200 @@ pub fn list(env: &Env) -> Result<Vec<Network>> {
     let sql = format!(r#"SELECT {COLS} FROM "Network" ORDER BY "Priority" DESC"#);
     let rows = env.query(&sql, Vec::new())?;
     Ok(rows.iter().map(|r| row_to_network(r)).collect())
+}
+
+/// Create a network (port of Go `apiCreateNetwork`): the id is (re)computed
+/// from type+chainId, `check()` validates and fills defaults, then the row is
+/// persisted. No live RPC probe — Go's create path only validates the URL shape
+/// and fills chain-registry defaults, it never dials the node.
+pub fn create(env: &Env, mut n: Network) -> Result<Network> {
+    // Go sets Id=nil so it is recomputed from type.chainId in Save.
+    n.id = String::new();
+    n.check()?;
+    n.id = network_id_for(&n.kind, &n.chain_id);
+    let now = crate::now_rfc3339();
+    if n.created.is_empty() {
+        n.created = now.clone();
+    }
+    n.updated = now;
+    save(env, &n)?;
+    Ok(n)
+}
+
+/// Apply the mutable fields Go `Network.ApiUpdate` allows (Name, RPC,
+/// CurrencySymbol, TestNet, Priority) from `params` to the stored row, re-run
+/// `check()` (so an invalid/internal RPC fails the update rather than being
+/// persisted), and save. Returns the updated network. A no-op update (no known
+/// fields present) returns the row unchanged.
+pub fn update(env: &Env, id: &str, params: &Value) -> Result<Network> {
+    let mut n = by_id(env, id)?
+        .ok_or_else(|| crate::Error::Env(format!("network not found: {id}")))?;
+    let mut updated = false;
+    if let Some(v) = params.get("Name").and_then(Value::as_str) {
+        n.name = v.to_owned();
+        updated = true;
+    }
+    if let Some(v) = params.get("RPC").and_then(Value::as_str) {
+        n.rpc = v.to_owned();
+        updated = true;
+    }
+    if let Some(v) = params.get("CurrencySymbol").and_then(Value::as_str) {
+        n.currency_symbol = v.to_owned();
+        updated = true;
+    }
+    if let Some(v) = params.get("TestNet").and_then(Value::as_bool) {
+        n.testnet = v;
+        updated = true;
+    }
+    if let Some(v) = params.get("Priority").and_then(Value::as_i64) {
+        n.priority = v;
+        updated = true;
+    }
+    if !updated {
+        return Ok(n);
+    }
+    n.check()?;
+    n.updated = crate::now_rfc3339();
+    save(env, &n)?;
+    Ok(n)
+}
+
+/// Delete a network by id (port of Go `Network.ApiDelete` — ForceDelete by Id).
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    env.exec(r#"DELETE FROM "Network" WHERE "Id" = ?1"#, vec![SqlValue::Text(id.to_owned())])?;
+    Ok(())
+}
+
+// --- URL guard (port of wltnet/urlguard.go) -------------------------------
+//
+// A Network.RPC is used verbatim both for read-only queries AND for
+// broadcasting signed transactions, so an unvalidated value lets a malicious
+// dApp repoint a plausibly-named chain at an attacker endpoint (credential
+// relay, tx censorship, balance spoofing) or at an internal service the host
+// can reach but the attacker cannot (SSRF / port fingerprinting).
+
+/// Validate a `Network.RPC` value: the sentinels "" and "auto" mean "pick
+/// automatically from the chain registry" and are always allowed; a concrete
+/// URL must pass [`validate_rpc_url`]. Port of Go `validateNetworkRPC`.
+pub fn validate_network_rpc(rpc: &str) -> Result<()> {
+    let rpc = rpc.trim();
+    if rpc.is_empty() || rpc == "auto" {
+        return Ok(());
+    }
+    validate_rpc_url(rpc)
+}
+
+/// Validate a concrete RPC URL before it is used for queries or signed-tx
+/// broadcast (port of Go `validateRPCURL`). http is allowed only for an
+/// explicit localhost / loopback endpoint; any public host must use https and
+/// must not resolve to an internal / mDNS address.
+pub fn validate_rpc_url(raw: &str) -> Result<()> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(crate::Error::Env("empty RPC URL".into()));
+    }
+    let (scheme, host) =
+        parse_scheme_host(raw).ok_or_else(|| crate::Error::Env(format!("invalid RPC URL: {raw}")))?;
+    if scheme != "http" && scheme != "https" {
+        return Err(crate::Error::Env(format!(
+            "RPC URL scheme {scheme:?} not allowed (want https)"
+        )));
+    }
+    if host.is_empty() {
+        return Err(crate::Error::Env("RPC URL has no host".into()));
+    }
+    let lhost = host.trim_end_matches('.').to_ascii_lowercase();
+
+    // Development escape hatch: explicit localhost name or loopback literal IP.
+    if is_localhost_name(&lhost) {
+        return Ok(());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_loopback() {
+            return Ok(());
+        }
+    }
+    if scheme != "https" {
+        return Err(crate::Error::Env(
+            "RPC URL must use https (http is allowed only for localhost)".into(),
+        ));
+    }
+    if lhost.ends_with(".local") {
+        return Err(crate::Error::Env(format!(
+            "RPC URL host {host:?} (.local mDNS) not allowed"
+        )));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_internal_ip(&ip) {
+            return Err(crate::Error::Env(format!(
+                "RPC URL points at internal address {ip}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Extract the (lowercased scheme, host-without-port) from a URL. A minimal
+/// parser — enough to gate the URL shape without pulling in the `url` crate.
+fn parse_scheme_host(raw: &str) -> Option<(String, String)> {
+    let (scheme, rest) = raw.split_once("://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..end];
+    // Strip any userinfo (`user:pass@`).
+    let authority = authority.rsplit_once('@').map(|(_, h)| h).unwrap_or(authority);
+    let host = if let Some(after) = authority.strip_prefix('[') {
+        // Bracketed IPv6 literal: take up to the closing ']'.
+        let close = after.find(']')?;
+        after[..close].to_owned()
+    } else {
+        // Strip a trailing `:port`.
+        authority.split(':').next().unwrap_or(authority).to_owned()
+    };
+    Some((scheme.to_ascii_lowercase(), host))
+}
+
+/// Whether `host` is the explicit localhost dev endpoint ("localhost" or a
+/// "*.localhost" subname). Go `isLocalhostName`.
+fn is_localhost_name(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    h == "localhost" || h.ends_with(".localhost")
+}
+
+/// Whether `ip` is in a range that must never be a caller-supplied RPC target
+/// (Go `isInternalIP`): loopback, private, link-local, ULA, multicast,
+/// unspecified, carrier-grade NAT (100.64/10) or 0.0.0.0/8.
+fn is_internal_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            if v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+            {
+                return true;
+            }
+            let o = v4.octets();
+            // 100.64.0.0/10 carrier-grade NAT
+            if o[0] == 100 && (o[1] & 0xc0) == 64 {
+                return true;
+            }
+            // 0.0.0.0/8 "this host on this network"
+            o[0] == 0
+        }
+        IpAddr::V6(v6) => {
+            if v6.is_loopback() || v6.is_multicast() || v6.is_unspecified() {
+                return true;
+            }
+            let seg = v6.segments();
+            // link-local unicast fe80::/10
+            if (seg[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            // unique-local fc00::/7
+            (seg[0] & 0xfe00) == 0xfc00
+        }
+    }
 }
 
 fn ephemeral(kind: &str, chain_id: &str) -> Network {
