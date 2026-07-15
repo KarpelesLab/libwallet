@@ -99,6 +99,29 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
             let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
             Ok(json!(eth_accounts_permission(env, &key, &conn)))
         }
+        // EIP-2255: params = [{ <permName>: {} }]. The only permission libwallet
+        // grants is `eth_accounts`; revoking it disconnects the dApp by removing
+        // every ConnectedSite row for this origin (same semantics as
+        // solana_disconnect). Unknown permissions are ignored for forward-compat
+        // (matches MetaMask). Returns null on success per the EIP.
+        //
+        // Must be handled explicitly: without this arm the method falls through
+        // to the chain-RPC relay below, which returns a non-JSON error AND — the
+        // privacy bug — leaves the site connected, so eth_accounts keeps
+        // returning the user's address after they believe they revoked access.
+        "wallet_revokePermissions" => {
+            let pmap = q_params
+                .first()
+                .and_then(Value::as_object)
+                .ok_or_else(|| ApiError::new(400, "wallet_revokePermissions requires one object param"))?;
+            if pmap.contains_key("eth_accounts") {
+                let conn = crate::models::connected_site::for_host(env, &key).map_err(ApiError::internal)?;
+                for c in &conn {
+                    crate::models::connected_site::delete(env, &c.id).map_err(ApiError::internal)?;
+                }
+            }
+            Ok(Value::Null)
+        }
         "personal_sign" => personal_sign(env, &key, &q_params),
         "personal_ecRecover" => {
             let msg = q_params.first().and_then(Value::as_str).and_then(decode_hex_0x)
@@ -678,6 +701,86 @@ fn decode_hex_0x(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::SqlValue;
+
+    /// Env with a current EVM network and one connected secp256k1 account for
+    /// `host`, returning (env, host, address).
+    fn connected_env() -> (Env, String, String) {
+        let env = Env::init_memory().unwrap();
+        crate::models::network::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        crate::models::connected_site::init(&env).unwrap();
+
+        env.exec(
+            r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
+            vec![
+                SqlValue::Text("evm.1".into()), SqlValue::Text("evm".into()), SqlValue::Text("1".into()),
+                SqlValue::Text("Ethereum".into()), SqlValue::Text("https://rpc.invalid".into()),
+                SqlValue::Text("ETH".into()), SqlValue::Int(18), SqlValue::Text("".into()),
+                SqlValue::Int(0), SqlValue::Int(0), SqlValue::Text(crate::now_rfc3339()), SqlValue::Text(crate::now_rfc3339()),
+            ],
+        ).unwrap();
+        env.set_current("network", "evm.1").unwrap();
+
+        let addr = "0x1111111111111111111111111111111111111111";
+        env.exec(
+            r#"INSERT INTO "Account" ("Id","Wallet","Name","Index","Type","Curve","Path","Address","URI","Pubkey","Chaincode","IL","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#,
+            vec![
+                SqlValue::Text("acct-1".into()), SqlValue::Text("wlt-1".into()), SqlValue::Text("A".into()),
+                SqlValue::Int(0), SqlValue::Text("ethereum".into()), SqlValue::Text("secp256k1".into()),
+                SqlValue::Text("m".into()), SqlValue::Text(addr.into()), SqlValue::Text("".into()),
+                SqlValue::Text("".into()), SqlValue::Text("".into()), SqlValue::Text("".into()),
+                SqlValue::Text(crate::now_rfc3339()), SqlValue::Text(crate::now_rfc3339()),
+            ],
+        ).unwrap();
+
+        let host = "https://dapp.example".to_string();
+        crate::models::connected_site::connect(&env, &host, "acct-1").unwrap();
+        (env, host, addr.to_string())
+    }
+
+    fn eth_accounts(env: &Env, host: &str) -> Vec<String> {
+        let out = request(env, &json!({ "url": host, "query": { "method": "eth_accounts", "params": [] } })).unwrap();
+        out.as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn revoke_permissions_disconnects_and_stops_leaking_address() {
+        let (env, host, addr) = connected_env();
+        // Connected: eth_accounts returns the address (no prompt — expected).
+        assert_eq!(eth_accounts(&env, &host), vec![addr]);
+
+        // Revoke eth_accounts for this origin.
+        let res = request(&env, &json!({
+            "url": host,
+            "query": { "method": "wallet_revokePermissions", "params": [{ "eth_accounts": {} }] },
+        })).unwrap();
+        assert!(res.is_null(), "revoke returns null per EIP-2255");
+
+        // The address must no longer be exposed to this origin.
+        assert!(eth_accounts(&env, &host).is_empty(), "revoked origin still leaks address");
+    }
+
+    #[test]
+    fn eth_accounts_is_scoped_to_the_connected_origin() {
+        let (env, _host, _addr) = connected_env();
+        // A different origin that never connected must get nothing.
+        assert!(eth_accounts(&env, "https://evil.example").is_empty());
+    }
+
+    #[test]
+    fn revoke_requires_an_object_param() {
+        let (env, host, _addr) = connected_env();
+        let err = request(&env, &json!({
+            "url": host, "query": { "method": "wallet_revokePermissions", "params": [] },
+        })).unwrap_err();
+        assert_eq!(err.code, 400);
+    }
 }
 
 /// The webview provider shim, with the config placeholder the Go side rewrites.

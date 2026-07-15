@@ -17,6 +17,22 @@
 (function () {
   'use strict';
 
+  // Origin gating (EIP-1193/6963 privacy). Integrators are told to inject
+  // main-frame-only, but a webview configured to inject into all frames must
+  // not expose the wallet to a cross-origin sub-frame (e.g. an embedded ad or
+  // tracker) — that frame could otherwise enumerate the connected account and
+  // silently link the user's on-chain identity across sites. Install only in
+  // the top document or a sub-frame that is same-origin with it; bail out of a
+  // cross-origin sub-frame (reading top.location.origin throws for one).
+  try {
+    if (window.top !== window.self &&
+        window.top.location.origin !== window.location.origin) {
+      return;
+    }
+  } catch (_) {
+    return; // cross-origin parent — access denied, so do not inject
+  }
+
   var CONFIG = __LIBWALLET_CONFIG__;
 
   var bridgeChannel = window[CONFIG.bridge];
