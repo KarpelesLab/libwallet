@@ -69,44 +69,100 @@ impl ApiError {
 
 pub type ApiResult = Result<Value, ApiError>;
 
-/// Route a request to its handler. `_verb`/`_params`/`_handle` are threaded
-/// through for handlers that need them; Phase 0 only wires the Info endpoints.
-pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResult {
-    // Object-scoped `Wallet/Key/<id>[:action]` paths (the Dart client addresses
-    // wallet keys by id in the path, not via a params field).
-    if path == "Wallet/Key" {
-        return wallet_key::list(&handle.env);
-    }
-    if let Some(rest) = path.strip_prefix("Wallet/Key/") {
-        let (id, action) = rest.split_once(':').unwrap_or((rest, ""));
-        return wallet_key::route(&handle.env, verb, id, action, params);
-    }
-    // Object-scoped `Wallet/<id>:probeActivity` (the Dart client addresses the
-    // wallet by id in the path). Must be checked before the `Wallet/Key/` and
-    // bare `Wallet` arms.
-    if let Some(rest) = path.strip_prefix("Wallet/") {
-        if let Some((id, action)) = rest.split_once(':') {
-            if !id.contains('/') {
-                match action {
-                    "probeActivity" => return wallet::probe_activity(&handle.env, id, params),
-                    "promoteMnemonic" => return wallet::promote_mnemonic(&handle.env, id, params),
-                    "exportToDevice" => return spot::export_to_device(&handle.env, id, params),
-                    "reshare" => return spot::wallet_reshare(&handle.env, id, params),
-                    "promote" => return spot::wallet_promote(&handle.env, id, params),
-                    _ => {}
-                }
-            }
+/// Object names whose registered path is itself two segments (`A/B`); their id,
+/// when present, is the *third* segment (`A/B/<id>`). Every other object is a
+/// single segment with the id in the second (`A/<id>`).
+const COMPOUND_OBJECTS: [&str; 2] = ["Wallet/Key", "Web3/Connection"];
+
+/// Split a request path into `(object, id, action)`.
+///
+/// The Go apirouter/pobj layer addressed objects positionally: `Account/<id>`,
+/// `Account/<id>:setCurrent`, `Wallet/Key/<id>:recrypt`, `Web3/Connection/<id>`.
+/// The Rust handlers instead read the object id from `params["Id"]`, so we parse
+/// the id out of the path here (see [`route`], which injects it into params).
+/// `action` is `""` for the bare object form.
+fn parse_path(path: &str) -> (&str, Option<&str>, &str) {
+    let (left, action) = path.split_once(':').unwrap_or((path, ""));
+    for obj in COMPOUND_OBJECTS {
+        if left == obj {
+            return (obj, None, action);
+        }
+        if let Some(rest) = left.strip_prefix(obj).and_then(|r| r.strip_prefix('/')) {
+            return (obj, Some(rest), action);
         }
     }
-    // Object-scoped `Web3/Connection[/<id>]` (manage connected dApps).
-    if path == "Web3/Connection" {
-        return web3::connection_route(&handle.env, verb, None, params);
+    match left.split_once('/') {
+        Some((obj, id)) => (obj, Some(id), action),
+        None => (left, None, action),
     }
-    if let Some(id) = path.strip_prefix("Web3/Connection/") {
-        return web3::connection_route(&handle.env, verb, Some(id), params);
+}
+
+/// Return `params` with `Id` set to the path-derived object id. An explicit
+/// `params["Id"]` (should never coexist with a path id) is left untouched.
+fn with_path_id(params: &Value, id: &str) -> Value {
+    match params {
+        Value::Object(m) => {
+            let mut m = m.clone();
+            m.entry("Id".to_string()).or_insert_with(|| Value::String(id.to_string()));
+            Value::Object(m)
+        }
+        Value::Null => serde_json::json!({ "Id": id }),
+        other => other.clone(),
+    }
+}
+
+/// Route a request to its handler. Object-scoped paths (`Object/<id>[:action]`,
+/// the wire form the Dart client and the Go pobj router use) are parsed into
+/// `(object, id, action)`; the id is injected into `params` so the flat match
+/// below — keyed on the canonical `Object[:action]` — reaches the same handlers
+/// whether the caller addressed the object by path or by an `Id` param.
+pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResult {
+    let env = &handle.env;
+    let (object, id, action) = parse_path(path);
+
+    // Expose the path id to handlers that read `params["Id"]`.
+    let injected;
+    let params: &Value = match id {
+        Some(id) => {
+            injected = with_path_id(params, id);
+            &injected
+        }
+        None => params,
+    };
+
+    // Compound-name objects and the wallet actions that take the id positionally
+    // are dispatched before the flat match (which is keyed on a rebuilt
+    // `Object[:action]` string and cannot express the `A/B` object names).
+    match object {
+        "Wallet/Key" => {
+            return match (id, action) {
+                (None, "") => wallet_key::list(env),
+                (id, action) => wallet_key::route(env, verb, id.unwrap_or(""), action, params),
+            };
+        }
+        "Web3/Connection" => return web3::connection_route(env, verb, id, params),
+        "Wallet" if id.is_some() => {
+            let wid = id.unwrap();
+            match action {
+                "probeActivity" => return wallet::probe_activity(env, wid, params),
+                "promoteMnemonic" => return wallet::promote_mnemonic(env, wid, params),
+                "exportToDevice" => return spot::export_to_device(env, wid, params),
+                "reshare" => return spot::wallet_reshare(env, wid, params),
+                "promote" => return spot::wallet_promote(env, wid, params),
+                _ => {}
+            }
+        }
+        _ => {}
     }
 
-    match path {
+    // Canonical `Object` / `Object:action` key for the flat match.
+    let canon: std::borrow::Cow<str> = if action.is_empty() {
+        std::borrow::Cow::Borrowed(object)
+    } else {
+        std::borrow::Cow::Owned(format!("{object}:{action}"))
+    };
+
+    match canon.as_ref() {
         "Info:ping" => info::ping(),
         "Info:version" => info::version(),
         "Info:paths" => info::paths(&handle.env),

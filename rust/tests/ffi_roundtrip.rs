@@ -147,6 +147,13 @@ fn contact_create_then_list() {
     // Fetch by Id
     let fetched = request(h, &format!(r#"{{"path":"Contact","verb":"GET","params":{{"Id":"{id}"}}}}"#));
     assert_eq!(fetched["data"]["Name"], "Bob");
+
+    // Fetch object-scoped by path (`Contact/<id>`) — the wire form the Dart
+    // client sends. Must resolve to the same record, not 404.
+    let by_path = request(h, &format!(r#"{{"path":"Contact/{id}","verb":"GET"}}"#));
+    assert_eq!(by_path["result"], "success", "object-scoped path routed: {by_path}");
+    assert_eq!(by_path["data"]["Id"], id);
+    assert_eq!(by_path["data"]["Name"], "Bob");
     LibwalletDestroy(h);
 }
 
