@@ -223,6 +223,36 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             ));
             Ok(serde_json::to_value(w).unwrap())
         }
+        // PATCH Wallet/<id> — ApiUpdate: only Name is mutable (bumps Modified).
+        // Returns the updated object.
+        "PATCH" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let name = params.get("Name").and_then(Value::as_str);
+            match crate::models::wallet::update(env, id, name).map_err(ApiError::internal)? {
+                Some(w) => Ok(serde_json::to_value(w).unwrap()),
+                None => Err(ApiError::new(404, "wallet not found")),
+            }
+        }
+        // DELETE Wallet/<id> — ApiDelete: emits wallet:deleted, then removes the
+        // wallet and its keys. Returns the deleted object.
+        "DELETE" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let w = crate::models::wallet::fetch(env, id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "wallet not found"))?;
+            env.broadcast(&crate::response::event(
+                "wallet:deleted",
+                serde_json::json!({ "id": w.id }),
+            ));
+            crate::models::wallet::delete(env, id).map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(w).unwrap())
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Wallet"))),
     }
 }

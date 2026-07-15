@@ -29,6 +29,38 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             let created = crate::models::contact::create(env, c).map_err(ApiError::internal)?;
             Ok(serde_json::to_value(created).unwrap())
         }
+        // PATCH Contact/<id> — ApiUpdate: mutate Name/Memo/Address(+Type). Only
+        // supplied fields change; returns the updated object (Go apirouter
+        // returns the object after ApiUpdate).
+        "PATCH" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let name = params.get("Name").and_then(Value::as_str);
+            let memo = params.get("Memo").and_then(Value::as_str);
+            let address = params.get("Address").and_then(Value::as_str);
+            let kind = params.get("Type").and_then(Value::as_str);
+            match crate::models::contact::update(env, id, name, memo, address, kind)
+                .map_err(|e| ApiError::new(400, e.to_string()))?
+            {
+                Some(c) => Ok(serde_json::to_value(c).unwrap()),
+                None => Err(ApiError::new(404, "contact not found")),
+            }
+        }
+        // DELETE Contact/<id> — ApiDelete: returns the deleted object (Go
+        // apirouter returns the fetched object after ApiDelete).
+        "DELETE" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let c = crate::models::contact::fetch(env, id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "contact not found"))?;
+            crate::models::contact::delete(env, id).map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(c).unwrap())
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Contact"))),
     }
 }

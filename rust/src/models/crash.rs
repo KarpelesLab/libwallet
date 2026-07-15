@@ -58,6 +58,15 @@ pub fn log(env: &Env, where_: &str, message: &str, stack: &str) -> Result<String
     Ok(id)
 }
 
+/// Delete a crash record by id (Go `Crash.ApiDelete`).
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    env.exec(
+        r#"DELETE FROM "Crash" WHERE "Id" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    )
+    .map(|_| ())
+}
+
 fn row_to_crash(row: &[SqlValue]) -> Crash {
     let text = |i: usize| row.get(i).and_then(|v| v.as_text()).unwrap_or("").to_owned();
     Crash { id: text(0), where_: text(1), message: text(2), stack: text(3), created: text(4) }

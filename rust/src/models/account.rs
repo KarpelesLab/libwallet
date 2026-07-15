@@ -236,6 +236,47 @@ pub fn create_view(env: &Env, name: &str, typ: &str, address: &str) -> Result<Ac
     Ok(account)
 }
 
+/// Update mutable account fields (Go `Account.ApiUpdate`): only `Name` is
+/// mutable. Returns the updated account, or `None` when the id is unknown. With
+/// no `Name` supplied the row is left untouched (Go returns without saving).
+pub fn update(env: &Env, id: &str, name: Option<&str>) -> Result<Option<Account>> {
+    let mut a = match fetch(env, id)? {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+    let Some(n) = name else {
+        return Ok(Some(a));
+    };
+    a.name = n.to_owned();
+    a.updated = crate::now_rfc3339();
+    env.exec(
+        r#"UPDATE "Account" SET "Name"=?1, "Updated"=?2 WHERE "Id"=?3"#,
+        vec![
+            SqlValue::Text(a.name.clone()),
+            SqlValue::Text(a.updated.clone()),
+            SqlValue::Text(a.id.clone()),
+        ],
+    )?;
+    Ok(Some(a))
+}
+
+/// Delete an account and cascade-delete its Web3 connections (Go
+/// `Account.accountDelete`). The ConnectedSite cleanup is best-effort — a
+/// failure there (e.g. the table doesn't exist in a minimal env) is ignored so
+/// the account still gets removed, matching Go which logs but does not block.
+/// Transactions are intentionally left intact: tx history outlives the account.
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    let _ = env.exec(
+        r#"DELETE FROM "ConnectedSite" WHERE "Account" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    );
+    env.exec(
+        r#"DELETE FROM "Account" WHERE "Id" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    )
+    .map(|_| ())
+}
+
 impl Account {
     /// The BIP-32 extended public key (`xpub…`) for this account, built from its
     /// compressed pubkey + chain code (Go `Account.Xpub`). Secp256k1-family

@@ -696,6 +696,36 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 .map_err(ApiError::internal)?;
             Ok(serde_json::to_value(a).unwrap())
         }
+        // PATCH Account/<id> — ApiUpdate: only Name is mutable. Returns the
+        // updated object.
+        "PATCH" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let name = params.get("Name").and_then(Value::as_str);
+            match crate::models::account::update(env, id, name).map_err(ApiError::internal)? {
+                Some(a) => Ok(serde_json::to_value(a).unwrap()),
+                None => Err(ApiError::new(404, "account not found")),
+            }
+        }
+        // DELETE Account/<id> — ApiDelete: cascade-drops the account's Web3
+        // connections, notifies listeners, and returns the deleted object.
+        "DELETE" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let a = crate::models::account::fetch(env, id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "account not found"))?;
+            crate::models::account::delete(env, id).map_err(ApiError::internal)?;
+            env.broadcast(&crate::response::event(
+                "account:delete",
+                serde_json::json!({ "id": a.id }),
+            ));
+            Ok(serde_json::to_value(a).unwrap())
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Account"))),
     }
 }

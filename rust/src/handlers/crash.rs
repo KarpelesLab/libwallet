@@ -18,6 +18,19 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 Ok(serde_json::to_value(list).unwrap())
             }
         },
+        // DELETE Crash/<id> — ApiDelete: returns the deleted object (no update
+        // verb; Go registers ApiDelete only). Crashes have no ApiUpdate.
+        "DELETE" => {
+            let id = params
+                .get("Id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ApiError::new(400, "Id required"))?;
+            let c = crate::models::crash::fetch(env, id)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(404, "crash not found"))?;
+            crate::models::crash::delete(env, id).map_err(ApiError::internal)?;
+            Ok(serde_json::to_value(c).unwrap())
+        }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Crash"))),
     }
 }

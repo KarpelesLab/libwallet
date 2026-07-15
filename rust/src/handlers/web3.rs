@@ -132,6 +132,13 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         "wallet_addEthereumChain" => wallet_add_chain(env, &key, &q_params),
         "mpurse_getAddress" => mpurse_get_address(env, &key),
         "mpurse_sendRawTransaction" => rpc_passthrough(&net, params, "sendrawtransaction", &q_params),
+        // mpurse_sendAsset builds+signs+broadcasts a Counterparty asset
+        // transfer. Counterparty tx construction depends on the external
+        // Counterparty server API, which is out of scope for this wallet — the
+        // Go handler (wltbase/web3.go) deliberately returns this same error, so
+        // this is intentional back-compat parity, NOT a porting gap. dApps
+        // should build the tx via counterparty and then call
+        // mpurse_signRawTransaction + mpurse_sendRawTransaction.
         "mpurse_sendAsset" => Err(ApiError::new(
             501,
             "mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction",

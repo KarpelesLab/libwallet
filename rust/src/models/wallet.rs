@@ -839,6 +839,42 @@ pub fn restore_entry(env: &Env, data_b64url: &str) -> Result<String> {
     Ok(id)
 }
 
+/// Update mutable wallet fields (Go `Wallet.ApiUpdate`): only `Name` is
+/// mutable. Returns the updated wallet (keys loaded), or `None` when the id is
+/// unknown. With no `Name` supplied the row is left untouched (Go returns
+/// without saving). `Modified` is bumped on a real update, as Go does.
+pub fn update(env: &Env, id: &str, name: Option<&str>) -> Result<Option<Wallet>> {
+    if fetch(env, id)?.is_none() {
+        return Ok(None);
+    }
+    if let Some(n) = name {
+        env.exec(
+            r#"UPDATE "Wallet" SET "Name"=?1, "Modified"=?2 WHERE "Id"=?3"#,
+            vec![
+                SqlValue::Text(n.to_owned()),
+                SqlValue::Text(crate::now_rfc3339()),
+                SqlValue::Text(id.to_owned()),
+            ],
+        )?;
+    }
+    fetch(env, id)
+}
+
+/// Delete a wallet and its WalletKey rows (Go `Wallet.ApiDelete`). The keys are
+/// removed first so no orphan shares survive the wallet. The caller (handler)
+/// emits the `wallet:deleted` event, mirroring Go.
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    env.exec(
+        r#"DELETE FROM "WalletKey" WHERE "Wallet" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    )?;
+    env.exec(
+        r#"DELETE FROM "Wallet" WHERE "Id" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    )
+    .map(|_| ())
+}
+
 fn persist(env: &Env, w: &Wallet) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "Wallet" ({WALLET_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#),

@@ -86,6 +86,70 @@ pub fn create(env: &Env, mut c: Contact) -> Result<Contact> {
     Ok(c)
 }
 
+/// Update mutable fields (Go `contact.ApiUpdate`): `Name`, `Memo`, and
+/// `Address` (with an optional `Type`). Returns the updated contact, or `None`
+/// when the id is unknown. When no updatable field is supplied the row is left
+/// untouched and the current contact is returned (matching Go, which returns
+/// without saving). Address normalization via outscript is deferred here, same
+/// as [`create`] — only the type is validated.
+pub fn update(
+    env: &Env,
+    id: &str,
+    name: Option<&str>,
+    memo: Option<&str>,
+    address: Option<&str>,
+    kind: Option<&str>,
+) -> Result<Option<Contact>> {
+    let mut c = match fetch(env, id)? {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let mut updated = false;
+    if let Some(n) = name {
+        c.name = n.to_owned();
+        updated = true;
+    }
+    if let Some(m) = memo {
+        c.memo = m.to_owned();
+        updated = true;
+    }
+    if let Some(a) = address {
+        if let Some(k) = kind {
+            c.kind = k.to_owned();
+        }
+        c.address = a.to_owned();
+        validate_type(&c.kind)?;
+        updated = true;
+    }
+    if !updated {
+        return Ok(Some(c));
+    }
+    c.updated = crate::now_rfc3339();
+    let flags_json = serde_json::to_string(&c.flags).unwrap_or_else(|_| "[]".into());
+    env.exec(
+        r#"UPDATE "Contact" SET "Name"=?1, "Address"=?2, "Type"=?3, "Flags"=?4, "Memo"=?5, "Updated"=?6 WHERE "Id"=?7"#,
+        vec![
+            SqlValue::Text(c.name.clone()),
+            SqlValue::Text(c.address.clone()),
+            SqlValue::Text(c.kind.clone()),
+            SqlValue::Text(flags_json),
+            SqlValue::Text(c.memo.clone()),
+            SqlValue::Text(c.updated.clone()),
+            SqlValue::Text(c.id.clone()),
+        ],
+    )?;
+    Ok(Some(c))
+}
+
+/// Delete a contact by id (Go `contact.ApiDelete`).
+pub fn delete(env: &Env, id: &str) -> Result<()> {
+    env.exec(
+        r#"DELETE FROM "Contact" WHERE "Id" = ?1"#,
+        vec![SqlValue::Text(id.to_owned())],
+    )
+    .map(|_| ())
+}
+
 fn validate_type(kind: &str) -> Result<()> {
     match kind {
         "ethereum" | "bitcoin" | "solana" => Ok(()),
