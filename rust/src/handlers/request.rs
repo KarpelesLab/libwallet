@@ -103,6 +103,10 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
                 return Err(e);
             }
         }
+        // wallet_watchAsset — approval is a pure acknowledgement (Go
+        // `requestDoApprove` watch_asset arm); the dApp is told the asset was
+        // added to the watch list. No side effect beyond resolving the request.
+        "watch_asset" => {}
         other => {
             release(env, id);
             return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
