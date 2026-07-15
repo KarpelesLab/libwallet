@@ -109,7 +109,7 @@ pub fn approve(env: &Env, params: &Value) -> ApiResult {
         "watch_asset" => {}
         other => {
             release(env, id);
-            return Err(ApiError::new(501, format!("approval of request type {other} not yet ported")));
+            return Err(ApiError::new(400, format!("unknown request type {other}")));
         }
     }
     respond(env, id, "accepted")?;
@@ -228,7 +228,7 @@ fn approve_transaction_sign(env: &Env, req: &Request, params: &Value) -> Result<
         "solana_signTransaction" => (approve_solana_sign_tx(env, req, params, false)?, None),
         "solana_signAndSendTransaction" => (approve_solana_sign_tx(env, req, params, true)?, None),
         "mpurse_signRawTransaction" => (approve_mpurse_sign_raw_tx(env, req, params)?, None),
-        other => return Err(ApiError::new(501, format!("transaction_sign method {other} not yet ported"))),
+        other => return Err(ApiError::new(400, format!("unknown transaction_sign method {other}"))),
     };
 
     if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
@@ -371,7 +371,7 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
                 .map_err(|e| ApiError::new(400, e.to_string()))?;
             Value::String(base64::engine::general_purpose::STANDARD.encode(&sig))
         }
-        other => return Err(ApiError::new(501, format!("message_sign method {other} not yet ported"))),
+        other => return Err(ApiError::new(400, format!("unknown message_sign method {other}"))),
     };
 
     // Persist the result into the request row so `run` returns it.
