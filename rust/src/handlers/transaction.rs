@@ -38,7 +38,31 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 Ok(serde_json::to_value(list).unwrap())
             }
         },
-        "POST" => Err(ApiError::new(501, "transaction build/sign not yet ported")),
+        // POST on the bare Transaction collection is the pobj `Create` action.
+        // The Go registration (wlttx/api.go) wires only Fetch/List/Clear — no
+        // Create — so apirouter returns 405 Method Not Allowed here. Building a
+        // transaction goes through the `Transaction:signAndSend` static method
+        // (and `Transaction:validate`), not a POST create. Matching Go exactly.
+        "POST" => Err(ApiError::new(405, "Transaction has no create action; use Transaction:signAndSend")),
+        // DELETE with an Id deletes one row and returns it (Go loads the object
+        // via Fetch, then calls ApiDelete, and responds with the object). DELETE
+        // without an Id is the collection Clear (Go apiClearTransaction), honouring
+        // the optional From/Network filters; it responds with null.
+        "DELETE" => match params.get("Id").and_then(Value::as_str) {
+            Some(id) => {
+                let t = crate::models::transaction::fetch(env, id)
+                    .map_err(ApiError::internal)?
+                    .ok_or_else(|| ApiError::new(404, "transaction not found"))?;
+                crate::models::transaction::delete_one(env, id).map_err(ApiError::internal)?;
+                Ok(serde_json::to_value(t).unwrap())
+            }
+            None => {
+                let from = params.get("From").and_then(Value::as_str).filter(|s| !s.is_empty());
+                let network = params.get("Network").and_then(Value::as_str).filter(|s| !s.is_empty());
+                crate::models::transaction::clear(env, from, network).map_err(ApiError::internal)?;
+                Ok(Value::Null)
+            }
+        },
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Transaction"))),
     }
 }
@@ -161,16 +185,25 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     let net = crate::models::network::fetch(env, net_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(400, "network not found"))?;
-    if net.kind != "evm" {
-        return Err(ApiError::new(
-            501,
-            format!("Transaction:signAndSend for {} is not yet ported — use Account:signAndSendTransaction", net.kind),
-        ));
-    }
     let rpc = match params.get("RPC").and_then(Value::as_str) {
         Some(u) if !u.is_empty() => u.to_string(),
         _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
     };
+
+    // Chain dispatch (Go `SignAndSend` branches on n.Type). EVM falls through to
+    // the inline path below; Solana/Bitcoin build+sign+broadcast in their own
+    // helpers by reusing the same crate modules Account:signAndSendTransaction uses.
+    match net.kind.as_str() {
+        "evm" => {}
+        "solana" => return sign_and_send_solana(env, tx, params, &account, &net, &rpc),
+        "bitcoin" => return sign_and_send_bitcoin(env, tx, params, &account, &net, &rpc),
+        other => {
+            return Err(ApiError::new(
+                501,
+                format!("Transaction:signAndSend for {other} is not ported — use Account:signAndSendTransaction"),
+            ))
+        }
+    }
     let chain_id: u64 = net.chain_id.parse().map_err(|_| ApiError::new(400, "non-numeric EVM chain id"))?;
 
     // Value (wei) = tx.value else tx.amount significand; erc20/data carries 0.
@@ -288,6 +321,241 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     record.raw = format!("0x{raw_hex}"); // return 0x-hex raw to the host
     Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// Solana `Transaction:signAndSend` (Go `signAndSendSolana`, native path):
+/// fetch a recent blockhash, build the SystemProgram transfer message, FROST-sign
+/// it with the account's shares, assemble + base58-encode, broadcast via
+/// `sendTransaction`, persist, and return the Transaction row. The SPL-token path
+/// (compute-budget sizing, ATA derivation, Token-2022 transfer-fee math) is a
+/// documented 501 for now — native SOL transfers are covered.
+fn sign_and_send_solana(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    net: &crate::models::network::Network,
+    rpc: &str,
+) -> ApiResult {
+    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
+    let asset = tx.get("asset").and_then(Value::as_str).unwrap_or("");
+    // SPL routing is not ported: reject the token sub-case explicitly rather than
+    // silently building a native SOL transfer with the token amount in lamports.
+    if typ == "solana_spl_transfer" || !is_native_asset(asset) {
+        return Err(ApiError::new(
+            501,
+            "Transaction:signAndSend for Solana SPL tokens is not ported (native SOL only) — use Account:signAndSendTransaction",
+        ));
+    }
+
+    let to_b58 = tx
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "to is required"))?;
+    let lamports_bi = amount_significand(tx.get("amount"))
+        .ok_or_else(|| ApiError::new(400, "amount is required"))?;
+    let lamports = bigint_to_u64(&lamports_bi)
+        .ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 lamports"))?;
+
+    // Recent blockhash (finalized, matching Go's commitment).
+    let bh = crate::rpc::call(rpc, "getLatestBlockhash", json!([{ "commitment": "finalized" }]))
+        .map_err(ApiError::internal)?;
+    let bh_b58 = bh
+        .get("value")
+        .and_then(|v| v.get("blockhash"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(502, "no blockhash in getLatestBlockhash response"))?;
+    let blockhash = b58_32(bh_b58)?;
+    let from = crate::solana::pubkey_from_b64url(&account.pubkey)
+        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+    let to = b58_32(to_b58)?;
+
+    let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
+    let unlock = unlock_from_params(params)?;
+    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+        .map_err(ApiError::internal)?;
+    let raw = crate::solana::assemble_tx(&msg, &sig);
+    let tx_b58 = bs58::encode(&raw).into_string();
+    let hash = crate::rpc::call(rpc, "sendTransaction", json!([tx_b58, { "encoding": "base58" }]))
+        .map_err(ApiError::internal)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::new(502, "sendTransaction did not return a signature"))?;
+
+    // Solana fee is the 5000-lamport base signature fee (no priority) at 9 decimals.
+    let record = crate::models::transaction::Transaction {
+        id: xuid::Xuid::new("tx").to_string(),
+        kind: typ.to_string(),
+        asset: asset.to_string(),
+        from: account.address.clone(),
+        to: to_b58.to_string(),
+        gas: 0,
+        gas_price: String::new(),
+        max_fee_per_gas: String::new(),
+        max_priority_fee_per_gas: String::new(),
+        fee: Some(crate::Amount::new_raw(BigInt::from(5000), 9)),
+        nonce: 0,
+        format: String::new(),
+        raw: base64::engine::general_purpose::STANDARD.encode(&raw),
+        hash: hash.clone(),
+        url: tx_url(net, &hash),
+        network: net.id.clone(),
+        amount: tx_amount_field(tx.get("amount")),
+        value: None,
+        data: String::new(),
+        created: crate::now_rfc3339(),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
+    };
+    crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// Bitcoin `Transaction:signAndSend` (Go `buildBitcoinTx` + `broadcastBitcoinTx`,
+/// native transfer): auto-discover + select UTXOs for the account xpub, build and
+/// DKLs-sign each input, broadcast via `sendrawtransaction`, persist, and return
+/// the Transaction row. Reuses `crate::bitcoin::build_and_sign_auto` (the same
+/// builder `Account:signAndSendTransaction` uses). Fee rate comes from
+/// `bitcoinFeeRate` when pinned, else `estimatesmartfee` against a target derived
+/// from `priorityLevel`.
+fn sign_and_send_bitcoin(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    net: &crate::models::network::Network,
+    rpc: &str,
+) -> ApiResult {
+    let to = tx
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "recipient (to) is required for bitcoin_transfer"))?;
+    let sats_bi = amount_significand(tx.get("amount"))
+        .ok_or_else(|| ApiError::new(400, "amount is required"))?;
+    let sats = bigint_to_u64(&sats_bi)
+        .ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 satoshis"))?;
+    let fee_rate = bitcoin_fee_rate(rpc, tx);
+
+    let unlock = unlock_from_params(params)?;
+    let raw = crate::bitcoin::build_and_sign_auto(
+        env, &account.id, &unlock, rpc, &net.chain_id, to, sats, fee_rate,
+    )
+    .map_err(|e| ApiError::new(400, e.to_string()))?;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let hash = crate::rpc::call(rpc, "sendrawtransaction", json!([hex]))
+        .map_err(ApiError::internal)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::new(502, "sendrawtransaction did not return a txid"))?;
+
+    let record = crate::models::transaction::Transaction {
+        id: xuid::Xuid::new("tx").to_string(),
+        kind: tx.get("type").and_then(Value::as_str).unwrap_or("bitcoin_transfer").to_string(),
+        asset: tx.get("asset").and_then(Value::as_str).unwrap_or("").to_string(),
+        from: account.address.clone(),
+        to: to.to_string(),
+        gas: 0,
+        gas_price: String::new(),
+        max_fee_per_gas: String::new(),
+        max_priority_fee_per_gas: String::new(),
+        // buildBitcoinTx computes the exact fee from coin selection; the auto
+        // builder doesn't surface it, so leave it unset rather than guess.
+        fee: None,
+        nonce: 0,
+        format: String::new(),
+        raw: base64::engine::general_purpose::STANDARD.encode(&raw),
+        hash: hash.clone(),
+        url: tx_url(net, &hash),
+        network: net.id.clone(),
+        amount: tx_amount_field(tx.get("amount")),
+        value: None,
+        data: String::new(),
+        created: crate::now_rfc3339(),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
+    };
+    crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// The unlock credentials (id, key) from the request `Keys` descriptors, keeping
+/// the Password/StoreKey/Plain kinds the signers understand. Errors when none
+/// are usable — every sign path needs at least one.
+fn unlock_from_params(params: &Value) -> Result<Vec<(String, String)>, ApiError> {
+    let keys: Vec<KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    let unlock: Vec<(String, String)> = keys
+        .iter()
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
+        .map(|k| (k.id.clone(), k.key.clone()))
+        .collect();
+    if unlock.is_empty() {
+        return Err(ApiError::new(400, "Keys are required to sign"));
+    }
+    Ok(unlock)
+}
+
+/// The persisted `amount` field: the caller's Amount object verbatim when it
+/// deserializes ({v,e,f}), else the significand at 0 decimals (matching the EVM
+/// path's fallback for a bare decimal string).
+fn tx_amount_field(v: Option<&Value>) -> Option<crate::Amount> {
+    let v = v?;
+    if let Ok(a) = serde_json::from_value::<crate::Amount>(v.clone()) {
+        return Some(a);
+    }
+    amount_significand(Some(v)).map(|b| crate::Amount::new_raw(b, 0))
+}
+
+/// Whether an asset id names the chain's native coin (empty / "NATIVE" /
+/// "<type>.<chainId>.NATIVE"), mirroring Go `isNativeAsset`.
+fn is_native_asset(asset: &str) -> bool {
+    asset.is_empty() || asset == "NATIVE" || asset.ends_with(".NATIVE")
+}
+
+/// The bitcoin fee rate in sat/vB: the pinned `bitcoinFeeRate` when > 0, else an
+/// `estimatesmartfee` lookup against a `priorityLevel`-derived confirmation
+/// target, falling back to 10 sat/vB when the node can't estimate.
+fn bitcoin_fee_rate(rpc: &str, tx: &Value) -> u64 {
+    if let Some(r) = tx.get("bitcoinFeeRate").and_then(Value::as_u64) {
+        if r > 0 {
+            return r;
+        }
+    }
+    let target = match tx.get("priorityLevel").and_then(Value::as_str).unwrap_or("") {
+        "high" => 1,
+        "medium" => 3,
+        _ => 6,
+    };
+    if let Ok(v) = crate::rpc::call(rpc, "estimatesmartfee", json!([target])) {
+        // estimatesmartfee returns feerate in BTC/kvB; sat/vB = feerate * 1e8 / 1000.
+        if let Some(fr) = v.get("feerate").and_then(Value::as_f64) {
+            let sat_vb = (fr * 100_000.0).ceil() as u64;
+            if sat_vb > 0 {
+                return sat_vb;
+            }
+        }
+    }
+    10
+}
+
+/// Parse a `BigInt` into `u64`, `None` when negative or out of range.
+fn bigint_to_u64(b: &BigInt) -> Option<u64> {
+    b.to_string().parse::<u64>().ok()
+}
+
+/// Decode a base58 string into a 32-byte array (Solana pubkey / blockhash).
+fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
+    bs58::decode(s)
+        .into_vec()
+        .ok()
+        .and_then(|v| <[u8; 32]>::try_from(v).ok())
+        .ok_or_else(|| ApiError::new(400, format!("bad base58 32-byte value: {s}")))
 }
 
 /// The block-explorer URL for a tx hash (Go `Network.TransactionUrl`): append

@@ -165,6 +165,37 @@ pub fn persist(env: &Env, tx: &Transaction) -> Result<()> {
     Ok(())
 }
 
+/// Delete a single transaction by id (Go `Transaction.ApiDelete` →
+/// `psql.ForceDelete[Transaction]{"Id": id}`). No error when the row is
+/// already absent — the caller fetches first and 404s on a miss.
+pub fn delete_one(env: &Env, id: &str) -> Result<()> {
+    env.exec(r#"DELETE FROM "Transaction" WHERE "Id" = ?1"#, vec![SqlValue::Text(id.to_owned())])?;
+    Ok(())
+}
+
+/// Clear the transaction collection (Go `apiClearTransaction`). Honours the
+/// optional `From` (account) and `Network` filters exactly like Go's
+/// `psql.ForceDelete` where-clause; with neither, deletes every row.
+pub fn clear(env: &Env, from: Option<&str>, network: Option<&str>) -> Result<()> {
+    let mut sql = String::from(r#"DELETE FROM "Transaction""#);
+    let mut conds: Vec<String> = Vec::new();
+    let mut args: Vec<SqlValue> = Vec::new();
+    if let Some(f) = from {
+        conds.push(format!(r#""From" = ?{}"#, args.len() + 1));
+        args.push(SqlValue::Text(f.to_owned()));
+    }
+    if let Some(n) = network {
+        conds.push(format!(r#""Network" = ?{}"#, args.len() + 1));
+        args.push(SqlValue::Text(n.to_owned()));
+    }
+    if !conds.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conds.join(" AND "));
+    }
+    env.exec(&sql, args)?;
+    Ok(())
+}
+
 fn amount_at(row: &[SqlValue], i: usize) -> Option<Amount> {
     row.get(i)
         .and_then(|v| v.as_text())
