@@ -9,12 +9,29 @@ class Web3Api {
   /// Send a Web3 JSON-RPC request. Most consumers won't call this directly
   /// — the typical use is to wire a webview's JS channel to route
   /// messages from [injectionScript] into this method.
+  ///
+  /// [origin] MUST be the authoritative security origin (`scheme://host`) of
+  /// the frame that produced the message, read from the webview's per-frame
+  /// message API — **not** the top-level page URL:
+  ///
+  /// - iOS/macOS (`WKScriptMessageHandler`):
+  ///   `message.frameInfo.securityOrigin` → `"$protocol://$host[:$port]"`.
+  /// - Android (`WebViewCompat.addWebMessageListener`):
+  ///   the `sourceOrigin` argument of `onPostMessage`.
+  ///
+  /// This origin keys the per-site permission store: it decides which
+  /// accounts the caller may see and sign with. Passing the top-level URL
+  /// would let a cross-origin iframe (an embedded ad or tracker) inherit the
+  /// top page's connection and enumerate the user's address. If your webview
+  /// only injects into the main frame, that origin equals the page origin;
+  /// this API still requires you to pass it explicitly so sub-frame injection
+  /// can never be wired incorrectly by omission.
   Future<dynamic> request({
-    required String url,
+    required String origin,
     required Map<String, dynamic> query,
   }) async {
     return await _conn.request('Web3:request', 'POST', {
-      'url': url,
+      'origin': origin,
       'query': query,
     });
   }
@@ -40,8 +57,9 @@ class Web3Api {
   ///
   /// 1. **Outbound**: a JS message channel named by [bridge] (e.g.
   ///    `libwalletBridge`). The host reads each `postMessage(json)`, calls
-  ///    [request] with the decoded payload, and on completion runs
-  ///    `webview.runJavaScript('__libwalletResolve($id,
+  ///    [request] with the decoded payload **plus the message's frame
+  ///    `origin`** (from the per-frame message API — see [request]), and on
+  ///    completion runs `webview.runJavaScript('__libwalletResolve($id,
   ///    ${jsonEncode(jsonEncode(response))})')`.
   /// 2. **Inbound**: whenever `client.jsEvents` fires (accountsChanged /
   ///    chainChanged / …), the host runs

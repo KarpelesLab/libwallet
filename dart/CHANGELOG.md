@@ -1,3 +1,24 @@
+## Unreleased
+
+- **BREAKING: `Web3Api.request` renames `url` → `origin`.** The parameter
+  is now the authoritative `scheme://host` of the *requesting frame*, not
+  the top-level page URL, and it is required with no fallback so it can't
+  be wired incorrectly by omission. It keys the per-site permission store
+  (which accounts a caller may see/sign with), so passing the top URL for
+  a sub-frame message would let a cross-origin iframe (an embedded ad or
+  tracker) enumerate the user's address. Read it from the webview's
+  per-frame message API (iOS `WKScriptMessage.frameInfo.securityOrigin`,
+  Android `WebMessageListener` `sourceOrigin`); with main-frame-only
+  injection it equals the page origin. `Web3:request` on the native side
+  likewise requires `origin` instead of `url`. See
+  `doc/webview_integration.md` → "Frame origin". Motivated by the privacy
+  analysis in arXiv 2607.06141.
+- **Injected provider refuses cross-origin sub-frames.** `provider.js` no
+  longer installs `window.ethereum`/`window.solana`/`window.mpurse` in a
+  sub-frame whose origin differs from the top document, so an embedded
+  ad/tracker iframe cannot enumerate the connected account even if the
+  host injects into all frames.
+
 ## 0.4.69
 
 - **Broadcast OKX swaps through OKX's own API instead of our RPC.**

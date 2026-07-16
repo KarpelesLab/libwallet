@@ -1113,17 +1113,17 @@ fn web3_request_read_methods_and_connect_flow() {
     let site = "https://app.example.com";
 
     // Read-only methods (default network = ephemeral EVM chain 1).
-    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}/x","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}/x","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
     assert_eq!(chain["data"], "0x1", "{chain}");
-    let netv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"net_version","params":[]}}}}}}"#));
+    let netv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"net_version","params":[]}}}}}}"#));
     assert_eq!(netv["data"], "1");
-    let cv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"web3_clientVersion","params":[]}}}}}}"#));
+    let cv = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"web3_clientVersion","params":[]}}}}}}"#));
     assert!(cv["data"].as_str().unwrap().starts_with("libwallet/"));
     // keccak256("") = c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
-    let sha3 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"web3_sha3","params":["0x"]}}}}}}"#));
+    let sha3 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"web3_sha3","params":["0x"]}}}}}}"#));
     assert_eq!(sha3["data"], "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
     // No connections yet.
-    let acc0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
+    let acc0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
     assert_eq!(acc0["data"], serde_json::json!([]));
 
     // Set up an EVM account to connect.
@@ -1144,7 +1144,7 @@ fn web3_request_read_methods_and_connect_flow() {
     let eud = Box::into_raw(Box::new(etx)) as usize;
     LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
 
-    let (rrx, rud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let (rrx, rud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
 
     let mut req_id = None;
     for _ in 0..50 {
@@ -1169,7 +1169,7 @@ fn web3_request_read_methods_and_connect_flow() {
     assert_eq!(j["data"][0], address);
 
     // And eth_accounts reflects the persisted connection.
-    let acc1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
+    let acc1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_accounts","params":[]}}}}}}"#));
     assert_eq!(acc1["data"][0], address);
 
     drop(unsafe { Box::from_raw(rud as *mut Sender<String>) });
@@ -1213,13 +1213,13 @@ fn web3_personal_sign_via_message_approval() {
     };
 
     // 1. Connect the account to the site.
-    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
     let cid = next_request_id(&erx);
     let ca = request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
     assert_eq!(ca["result"], "success", "{ca}");
 
     // 2. personal_sign "hello" (0x68656c6c6f) → message_sign approval.
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"personal_sign","params":["0x68656c6c6f"]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"personal_sign","params":["0x68656c6c6f"]}}}}}}"#));
     let sid = next_request_id(&erx);
     let sa = request(
         h,
@@ -1283,7 +1283,7 @@ fn web3_eth_send_transaction_via_approval() {
     };
 
     // Connect the account.
-    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
     let cid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
 
@@ -1294,7 +1294,7 @@ fn web3_eth_send_transaction_via_approval() {
     );
     let (srx, sud) = request_async(
         h,
-        &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_sendTransaction","params":[{tx}]}}}}}}"#),
+        &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_sendTransaction","params":[{tx}]}}}}}}"#),
     );
     let sid = next_request_id(&erx);
     // The approval carries the normalized transaction (hex quantities decoded).
@@ -1356,7 +1356,7 @@ fn web3_solana_connect_and_sign_message() {
     };
 
     // solana_connect → connect approval → {publicKey:[address]}.
-    let (crx, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
+    let (crx, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
     let cid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
     let cresp = crx.recv_timeout(Duration::from_secs(5)).expect("solana_connect resolved");
@@ -1364,7 +1364,7 @@ fn web3_solana_connect_and_sign_message() {
     assert_eq!(cj["data"]["publicKey"][0], address, "{cj}");
 
     // solana_signMessage {message: base64("hello")} → message_sign → FROST sign.
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_signMessage","params":[{{"message":"aGVsbG8="}}]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"solana_signMessage","params":[{{"message":"aGVsbG8="}}]}}}}}}"#));
     let sid = next_request_id(&erx);
     request(
         h,
@@ -1394,11 +1394,11 @@ fn web3_wallet_switch_ethereum_chain() {
     let site = "https://app.example.com";
 
     // Starts on ephemeral EVM chain 1.
-    let c0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    let c0 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
     assert_eq!(c0["data"], "0x1");
 
     // Unknown chain → 4902 synchronously (no approval raised).
-    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0xdeadbeef"}}]}}}}}}"#));
+    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0xdeadbeef"}}]}}}}}}"#));
     assert_eq!(bad["result"], "error", "{bad}");
     assert_eq!(bad["code"], 4902);
 
@@ -1407,7 +1407,7 @@ fn web3_wallet_switch_ethereum_chain() {
     let eud = Box::into_raw(Box::new(etx)) as usize;
     LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
 
-    let (rx, ud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0x89"}}]}}}}}}"#));
+    let (rx, ud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"0x89"}}]}}}}}}"#));
     let mut req_id = None;
     for _ in 0..50 {
         if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
@@ -1427,7 +1427,7 @@ fn web3_wallet_switch_ethereum_chain() {
     assert_eq!(j["result"], "success", "{j}");
 
     // eth_chainId now reflects the switch.
-    let c1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    let c1 = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
     assert_eq!(c1["data"], "0x89");
 
     drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
@@ -1458,12 +1458,12 @@ fn web3_wallet_add_ethereum_chain() {
     };
 
     // Before adding, switching to it is 4902 (unknown chain).
-    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
+    let bad = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
     assert_eq!(bad["code"], 4902, "{bad}");
 
     // Add the chain via add_network approval.
     let add_body = format!(
-        r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_addEthereumChain","params":[{{"chainId":"{chain_hex}","chainName":"Cake Testnet","nativeCurrency":{{"symbol":"CAKE","decimals":18}},"rpcUrls":["https://rpc.cake.example"]}}]}}}}}}"#
+        r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"wallet_addEthereumChain","params":[{{"chainId":"{chain_hex}","chainName":"Cake Testnet","nativeCurrency":{{"symbol":"CAKE","decimals":18}},"rpcUrls":["https://rpc.cake.example"]}}]}}}}}}"#
     );
     let (arx, aud) = request_async(h, &add_body);
     let aid = next_request_id(&erx);
@@ -1473,14 +1473,14 @@ fn web3_wallet_add_ethereum_chain() {
     assert_eq!(serde_json::from_str::<serde_json::Value>(&aresp).unwrap()["result"], "success");
 
     // Now switching to it is known → chain_switch (no 4902).
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"wallet_switchEthereumChain","params":[{{"chainId":"{chain_hex}"}}]}}}}}}"#));
     let sid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{sid}"}}}}"#));
     let sresp = srx.recv_timeout(Duration::from_secs(5)).expect("switch resolved");
     assert_eq!(serde_json::from_str::<serde_json::Value>(&sresp).unwrap()["result"], "success");
 
     // eth_chainId reflects the added+switched chain.
-    let cid = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    let cid = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
     assert_eq!(cid["data"], chain_hex);
 
     drop(unsafe { Box::from_raw(aud as *mut Sender<String>) });
@@ -1523,7 +1523,7 @@ fn web3_solana_sign_transaction() {
     };
 
     // Connect.
-    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"solana_connect","params":[]}}}}}}"#));
     let cid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
 
@@ -1533,7 +1533,7 @@ fn web3_solana_sign_transaction() {
     raw.extend_from_slice(b"a-solana-message-to-sign-0123456"); // 32-byte "message"
     let tx_b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
 
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"solana_signTransaction","params":[{{"transaction":"{tx_b64}"}}]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"solana_signTransaction","params":[{{"transaction":"{tx_b64}"}}]}}}}}}"#));
     let sid = next_request_id(&erx);
     request(
         h,
@@ -1595,7 +1595,7 @@ fn web3_eth_sign_typed_data() {
     };
 
     // Connect.
-    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
+    let (_c, cud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_requestAccounts","params":[]}}}}}}"#));
     let cid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
 
@@ -1603,7 +1603,7 @@ fn web3_eth_sign_typed_data() {
     let typed = r#"{"types":{"EIP712Domain":[{"name":"name","type":"string"},{"name":"version","type":"string"},{"name":"chainId","type":"uint256"},{"name":"verifyingContract","type":"address"}],"Person":[{"name":"name","type":"string"},{"name":"wallet","type":"address"}],"Mail":[{"name":"from","type":"Person"},{"name":"to","type":"Person"},{"name":"contents","type":"string"}]},"primaryType":"Mail","domain":{"name":"Ether Mail","version":"1","chainId":1,"verifyingContract":"0xCcCCccccCCCCcCCCCCCcCcCccCcCCCcCcccccccC"},"message":{"from":{"name":"Cow","wallet":"0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826"},"to":{"name":"Bob","wallet":"0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB"},"contents":"Hello, Bob!"}}"#;
     let (srx, sud) = request_async(
         h,
-        &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_signTypedData_v4","params":["{address}",{typed}]}}}}}}"#),
+        &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_signTypedData_v4","params":["{address}",{typed}]}}}}}}"#),
     );
     let sid = next_request_id(&erx);
     request(
@@ -1663,7 +1663,7 @@ fn web3_personal_ec_recover_round_trip() {
     // personal_ecRecover [msg=0x68656c6c6f, sig] recovers the signer address.
     let rec = request(
         h,
-        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+        &format!(r#"{{"path":"Web3:request","params":{{"origin":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
     );
     assert_eq!(rec["result"], "success", "{rec}");
     assert_eq!(
@@ -1726,14 +1726,14 @@ fn web3_request_rpc_passthrough() {
     let resp = request(
         h,
         &format!(
-            r#"{{"path":"Web3:request","params":{{"url":"{site}","RPC":"{node}","query":{{"method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"]}}}}}}"#
+            r#"{{"path":"Web3:request","params":{{"origin":"{site}","RPC":"{node}","query":{{"method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"]}}}}}}"#
         ),
     );
     assert_eq!(resp["result"], "success", "{resp}");
     assert_eq!(resp["data"], "0xde0b6b3a7640000");
 
     // A wallet method is still handled locally (not forwarded).
-    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
+    let chain = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"eth_chainId","params":[]}}}}}}"#));
     assert_eq!(chain["data"], "0x1");
     LibwalletDestroy(h);
 }
@@ -1761,14 +1761,14 @@ fn web3_mpurse_get_address_and_sign_message() {
 
     // Connect directly, then mpurse_getAddress returns it without prompting.
     request(h, &format!(r#"{{"path":"Web3/Connection","verb":"POST","params":{{"Host":"{site}","Account":"{account_id}"}}}}"#));
-    let addr = request(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_getAddress","params":[]}}}}}}"#));
+    let addr = request(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"mpurse_getAddress","params":[]}}}}}}"#));
     assert_eq!(addr["data"], address, "{addr}");
 
     // mpurse_signMessage → message_sign approval → 65-byte compact base64 sig.
     let (etx, erx) = channel::<String>();
     let eud = Box::into_raw(Box::new(etx)) as usize;
     LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_signMessage","params":["hello monacoin"]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"mpurse_signMessage","params":["hello monacoin"]}}}}}}"#));
     let mut sid = None;
     for _ in 0..50 {
         if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {
@@ -2600,7 +2600,7 @@ fn mnemonic_import_account_sign_ecrecover_roundtrip() {
     // proving import(mnemonic) → account → sign works end to end.
     let rec = request(
         h,
-        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+        &format!(r#"{{"path":"Web3:request","params":{{"origin":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
     );
     assert_eq!(rec["data"].as_str().unwrap().to_lowercase(), address.to_lowercase(), "{rec}");
     LibwalletDestroy(h);
@@ -2655,7 +2655,7 @@ fn promote_mnemonic_to_mpc_wallet_and_sign() {
     let address = a["data"]["Address"].as_str().unwrap().to_string();
     let rec = request(
         h,
-        &format!(r#"{{"path":"Web3:request","params":{{"url":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
+        &format!(r#"{{"path":"Web3:request","params":{{"origin":"https://x.example.com","query":{{"method":"personal_ecRecover","params":["0x68656c6c6f","{sig}"]}}}}}}"#),
     );
     assert_eq!(rec["data"].as_str().unwrap().to_lowercase(), address.to_lowercase(), "{rec}");
     LibwalletDestroy(h);
@@ -2696,7 +2696,7 @@ fn web3_mpurse_sign_raw_transaction() {
     let (etx, erx) = channel::<String>();
     let eud = Box::into_raw(Box::new(etx)) as usize;
     LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
-    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"url":"{site}","query":{{"method":"mpurse_signRawTransaction","params":["{raw}"]}}}}}}"#));
+    let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"mpurse_signRawTransaction","params":["{raw}"]}}}}}}"#));
     let mut sid = None;
     for _ in 0..50 {
         if let Ok(ev) = erx.recv_timeout(Duration::from_millis(200)) {

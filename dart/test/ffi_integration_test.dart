@@ -712,7 +712,7 @@ void main() {
           .timeout(const Duration(seconds: 5));
 
       final callFuture = client.web3.request(
-        url: 'https://example.org',
+        origin: 'https://example.org',
         query: {'method': 'mpurse_getAddress', 'params': []},
       );
 
@@ -728,7 +728,7 @@ void main() {
         () async {
       try {
         await client.web3.request(
-          url: 'https://no-connection.example',
+          origin: 'https://no-connection.example',
           query: {'method': 'mpurse_signRawTransaction', 'params': ['0100']},
         );
         fail('should have thrown');
@@ -740,7 +740,7 @@ void main() {
     test('mpurse_sendAsset still returns "not implemented"', () async {
       try {
         await client.web3.request(
-          url: 'https://example.org',
+          origin: 'https://example.org',
           query: {'method': 'mpurse_sendAsset', 'params': []},
         );
         fail('should have thrown');
@@ -776,7 +776,7 @@ void main() {
           .firstWhere((r) => r is ConnectRequest && r.host == origin)
           .timeout(const Duration(seconds: 5));
       final getAddressFuture = client.web3.request(
-        url: origin,
+        origin: origin,
         query: {'method': 'mpurse_getAddress', 'params': []},
       );
       final connectReq = await connectFuture;
@@ -791,7 +791,7 @@ void main() {
               r is MessageSignRequest && r.method == 'mpurse_signMessage')
           .timeout(const Duration(seconds: 5));
       final signCallFuture = client.web3.request(
-        url: origin,
+        origin: origin,
         query: {
           'method': 'mpurse_signMessage',
           'params': ['hello from mpurse'],

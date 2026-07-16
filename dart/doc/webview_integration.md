@@ -34,7 +34,7 @@ is invisible, etc.), so treat them as non-optional.
        ▼              ▲                   ▼                  ▲
 ┌─────────────────────┴─────────────────────────────────────────┐
 │                       Host app (Dart)                         │
-│  JavaScriptChannel  ────►  client.web3.request(url, query)    │
+│  JavaScriptChannel  ────►  client.web3.request(origin, query) │
 │  runJavaScript      ◄────  client.jsEvents                    │
 │  approval sheet     ◄────  client.pendingRequests             │
 └───────────────────────────────────────────────────────────────┘
@@ -86,7 +86,10 @@ webview.addJavaScriptChannel(
     final id = req['id'];
     try {
       final result = await client.web3.request(
-        url: currentPageUrl,
+        // REQUIRED and security-critical — the origin of the *frame* that
+        // sent this message, from the per-frame message API, NOT the
+        // top-level page URL. See "Frame origin" below.
+        origin: msg.frameOrigin, // however your WebView exposes it
         query: {
           'method': req['method'],
           'params': req['params'],
@@ -118,6 +121,44 @@ Important:
   Promise on the dApp side is still waiting. Dropping it means a stuck
   dApp.
 - **`id` is an integer** from the JS side. Don't quote it.
+
+### Frame origin (required, security-critical)
+
+`client.web3.request` takes a required **`origin`** — the `scheme://host`
+of the *frame* that produced the message. This origin is the permission
+key: it decides which accounts the caller may see (`eth_accounts`) and
+sign with. Get it wrong and a cross-origin iframe (an embedded ad or
+tracker) can inherit the top page's connection and enumerate the user's
+address. There is deliberately **no default** — you must pass it, so this
+can't be wired incorrectly by omission.
+
+Where to read it from:
+
+- **Main-frame-only injection (the default, recommended).** libwallet's
+  injected provider refuses to install in a cross-origin sub-frame, so
+  the only frames that can reach your bridge are the top frame and
+  same-origin sub-frames — all sharing the top page's origin. Passing the
+  current page's origin is correct here:
+
+  ```dart
+  origin: Uri.parse(await webview.currentUrl() ?? pageUrl).origin,
+  ```
+
+- **If you inject into sub-frames** (you turned off main-frame-only): you
+  MUST read the per-frame origin from the webview's message API and pass
+  that — never the top URL:
+  - iOS/macOS `WKScriptMessageHandler`:
+    `message.frameInfo.securityOrigin` → `"$protocol://$host[:$port]"`.
+  - Android `WebViewCompat.addWebMessageListener`: the `sourceOrigin`
+    argument of `onPostMessage`.
+  - `flutter_inappwebview`: the `origin` on the message handler callback.
+
+  Plain `webview_flutter` `JavaScriptChannel` does not expose a per-frame
+  origin — if you need sub-frame injection, use one of the APIs above.
+
+libwallet reduces whatever you pass to `scheme://host` (path/query
+dropped), so passing a full frame URL is fine; what matters is that its
+origin is the *real requesting frame's* origin.
 
 ## Step 3 — inbound: libwallet events → WebView
 
@@ -412,9 +453,13 @@ after bundle load still works because EIP-6963 is event-driven.
   wrapper handles quoting, but if you build the JS string manually,
   backtick-escape user-provided strings. Use `jsonEncode` for
   everything going into a `runJavaScript` call.
-- **Multiple frames / iframes.** The injection only covers the main
-  frame by default. Inject into sub-frames only if you trust them;
-  most dApps don't need it.
+- **Multiple frames / iframes.** Inject into the main frame only (the
+  default); most dApps don't need sub-frame injection. The provider also
+  refuses to install itself in a cross-origin sub-frame as a safety net.
+  If you do inject into sub-frames, you MUST pass each message's true
+  per-frame `origin` to `web3.request` — see "Frame origin" under Step 2.
+  Passing the top-level URL there would let an embedded iframe enumerate
+  the connected account.
 - **The Solana provider exposes only legacy window.solana.** A full
   Wallet Standard implementation is announced via
   `wallet-standard:register-wallet`, but the feature set is minimal
@@ -483,7 +528,11 @@ class _WebWalletWebViewState extends State<WebWalletWebView> {
     String payload;
     try {
       final result = await widget.client.web3.request(
-        url: await _webview.currentUrl() ?? widget.url,
+        // Main-frame-only injection (this example injects on onPageFinished,
+        // which is the main frame), so the frame origin is the page origin.
+        // For sub-frame injection, use the per-frame origin API — see the
+        // "Frame origin" section above.
+        origin: Uri.parse(await _webview.currentUrl() ?? widget.url).origin,
         query: {'method': req['method'], 'params': req['params']},
       );
       payload = jsonEncode({'result': result});

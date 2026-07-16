@@ -158,7 +158,7 @@ fn chain_switch_approve_switches_current_network() {
     // Default current network is Ethereum mainnet (chain 1). Switch to Polygon
     // (0x89 = 137), which is in the static chain registry so the request is
     // raised rather than rejected with 4902.
-    let body = r#"{"path":"Web3:request","params":{"url":"https://dapp.example","query":{"method":"wallet_switchEthereumChain","params":[{"chainId":"0x89"}]}}}"#;
+    let body = r#"{"path":"Web3:request","params":{"origin":"https://dapp.example","query":{"method":"wallet_switchEthereumChain","params":[{"chainId":"0x89"}]}}}"#;
     let (rx, ud) = dispatch(h, body);
     let id = wait_for_request_id(&erx);
 
@@ -209,7 +209,7 @@ fn connect_approve_links_site_and_returns_account() {
     let address = a["data"]["Address"].as_str().unwrap().to_string();
 
     // Blocking solana_connect raises a `connect` request.
-    let body = r#"{"path":"Web3:request","params":{"url":"https://dapp.example","query":{"method":"solana_connect","params":[]}}}"#;
+    let body = r#"{"path":"Web3:request","params":{"origin":"https://dapp.example","query":{"method":"solana_connect","params":[]}}}"#;
     let (rx, ud) = dispatch(h, body);
     let id = wait_for_request_id(&erx);
 

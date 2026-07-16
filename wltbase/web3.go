@@ -43,8 +43,15 @@ type eip2255perm struct {
 }
 
 func web3Req(ctx context.Context, in struct {
-	URL   string `json:"url"`
-	Query struct {
+	// Origin is the authoritative scheme://host of the *requesting frame*. It
+	// keys the per-origin permission store (which accounts this caller may
+	// see), so it MUST come from the webview's per-frame message API
+	// (iOS WKScriptMessage.frameInfo.securityOrigin, Android WebMessageListener
+	// sourceOrigin) — never the top-level page URL. Required: a caller that
+	// omits it (e.g. one still sending the old `url` field) is rejected rather
+	// than silently defaulting to a wrong origin.
+	Origin string `json:"origin"`
+	Query  struct {
 		Method string `json:"method"`
 		Params []any  `json:"params"`
 	} `json:"query"`
@@ -54,13 +61,13 @@ func web3Req(ctx context.Context, in struct {
 		return nil, errors.New("failed to get env")
 	}
 
-	// parse host from url
-	u, err := url.Parse(in.URL)
+	// parse host from the requesting frame's origin
+	u, err := url.Parse(in.Origin)
 	if err != nil {
 		return nil, err
 	}
 	if u.Host == "" {
-		return nil, errors.New("url: host is missing")
+		return nil, errors.New("origin is required: the authoritative scheme://host of the requesting frame, from the webview's per-frame message API (WKFrameInfo.securityOrigin / WebMessageListener sourceOrigin) — never the top-level page URL")
 	}
 	// key is only scheme and host (Host includes the port in url if any was specified)
 	key := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()

@@ -51,16 +51,26 @@ fn enrich_connection(env: &Env, c: &crate::models::connected_site::ConnectedSite
     v
 }
 
-/// `Web3:request` {url, query:{method, params}} — the EIP-1193 provider entry.
-/// Resolves the requesting site's `scheme://host` key, its connected accounts,
-/// and the current network, then dispatches the JSON-RPC method.
+/// `Web3:request` {origin, query:{method, params}} — the EIP-1193 provider
+/// entry. `origin` is the authoritative `scheme://host` of the *requesting
+/// frame*; it keys the per-origin permission store (which accounts this caller
+/// may see), so it MUST come from the webview's per-frame message API, never the
+/// top-level page URL (see the host contract in `doc/webview_integration.md`).
+/// Resolves the origin's connected accounts and the current network, then
+/// dispatches the JSON-RPC method.
 pub fn request(env: &Env, params: &Value) -> ApiResult {
-    let url = params.get("url").and_then(Value::as_str).unwrap_or("");
+    let origin = params.get("origin").and_then(Value::as_str).unwrap_or("");
     let query = params.get("query").cloned().unwrap_or(Value::Null);
     let method = query.get("method").and_then(Value::as_str).unwrap_or("");
     let q_params = query.get("params").and_then(Value::as_array).cloned().unwrap_or_default();
 
-    let key = host_key(url).ok_or_else(|| ApiError::new(400, "url: host is missing"))?;
+    // The origin is required and authoritative: it decides which accounts are
+    // exposed. A caller that omits it (e.g. one still sending the old `url`
+    // field) is rejected rather than silently defaulting to a wrong origin.
+    let key = host_key(origin).ok_or_else(|| ApiError::new(
+        400,
+        "origin is required: the authoritative scheme://host of the requesting frame, from the webview's per-frame message API (iOS WKScriptMessage.frameInfo.securityOrigin, Android WebMessageListener sourceOrigin) — never the top-level page URL",
+    ))?;
     let net = crate::models::network::fetch(env, "@")
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(400, "no current network"))?;
@@ -593,7 +603,10 @@ fn connect_request(env: &Env, host: &str, method: &str, family: &str, perms: &[S
     Ok(())
 }
 
-/// The `scheme://host` key for a request URL (Go: `url.URL{Scheme,Host}`).
+/// The `scheme://host` permission key for a frame origin (Go:
+/// `url.URL{Scheme,Host}`). Accepts a bare origin (`https://dapp.example`) or a
+/// full frame URL and reduces either to its origin; the path/query/fragment are
+/// dropped. Returns None when no host is present.
 fn host_key(raw: &str) -> Option<String> {
     let (scheme, rest) = raw.split_once("://")?;
     if scheme.is_empty() || rest.is_empty() {
@@ -745,7 +758,7 @@ mod tests {
     }
 
     fn eth_accounts(env: &Env, host: &str) -> Vec<String> {
-        let out = request(env, &json!({ "url": host, "query": { "method": "eth_accounts", "params": [] } })).unwrap();
+        let out = request(env, &json!({ "origin": host, "query": { "method": "eth_accounts", "params": [] } })).unwrap();
         out.as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect()
     }
 
@@ -757,7 +770,7 @@ mod tests {
 
         // Revoke eth_accounts for this origin.
         let res = request(&env, &json!({
-            "url": host,
+            "origin": host,
             "query": { "method": "wallet_revokePermissions", "params": [{ "eth_accounts": {} }] },
         })).unwrap();
         assert!(res.is_null(), "revoke returns null per EIP-2255");
@@ -774,10 +787,23 @@ mod tests {
     }
 
     #[test]
+    fn origin_is_required() {
+        let (env, _host, _addr) = connected_env();
+        // No `origin` (e.g. a caller still sending the old `url` field) must be
+        // rejected, never defaulted to an empty/other origin.
+        let err = request(&env, &json!({
+            "url": "https://dapp.example",
+            "query": { "method": "eth_accounts", "params": [] },
+        })).unwrap_err();
+        assert_eq!(err.code, 400);
+        assert!(err.message.contains("origin is required"), "message: {}", err.message);
+    }
+
+    #[test]
     fn revoke_requires_an_object_param() {
         let (env, host, _addr) = connected_env();
         let err = request(&env, &json!({
-            "url": host, "query": { "method": "wallet_revokePermissions", "params": [] },
+            "origin": host, "query": { "method": "wallet_revokePermissions", "params": [] },
         })).unwrap_err();
         assert_eq!(err.code, 400);
     }
