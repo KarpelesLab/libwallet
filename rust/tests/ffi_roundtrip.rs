@@ -2481,6 +2481,14 @@ fn wallet_multi_create_via_ffi() {
     assert_eq!(r["data"]["ed25519"]["Protocol"], "frost");
     assert_eq!(r["data"]["secp256k1"]["Pubkey"].as_str().unwrap().len(), 44);
     assert_eq!(r["data"]["ed25519"]["Pubkey"].as_str().unwrap().len(), 43);
+    // The paired wallets MUST share a byte-identical Created timestamp (Go
+    // apiMultiCreateWallet stamps both from one `now`). A host relies on equal
+    // creation time to recognise the ed25519+secp256k1 pair — the two keygens
+    // run seconds apart, so a per-wallet timestamp would diverge and break it.
+    let secp_created = r["data"]["secp256k1"]["Created"].as_str().unwrap();
+    let ed_created = r["data"]["ed25519"]["Created"].as_str().unwrap();
+    assert!(!secp_created.is_empty(), "Created is populated");
+    assert_eq!(secp_created, ed_created, "paired wallets must share one Created timestamp");
     // Both are persisted.
     let listed = request(h, r#"{"path":"Wallet","verb":"GET"}"#);
     assert_eq!(listed["data"].as_array().unwrap().len(), 2);

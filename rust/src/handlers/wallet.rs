@@ -266,8 +266,12 @@ pub fn multi_create(env: &Env, params: &Value) -> ApiResult {
         .get("Keys")
         .and_then(|k| serde_json::from_value(k.clone()).ok())
         .unwrap_or_default();
-    let secp = crate::models::wallet::create(env, &name, "secp256k1", &keys).map_err(ApiError::internal)?;
-    let ed = crate::models::wallet::create(env, &name, "ed25519", &keys).map_err(ApiError::internal)?;
+    // Capture one timestamp and give it to both wallets so their `Created`
+    // fields are byte-identical — some hosts pair the ed25519 + secp256k1
+    // wallets by equal creation time (matches Go apiMultiCreateWallet).
+    let now = crate::now_rfc3339();
+    let secp = crate::models::wallet::create_at(env, &name, "secp256k1", &keys, &now).map_err(ApiError::internal)?;
+    let ed = crate::models::wallet::create_at(env, &name, "ed25519", &keys, &now).map_err(ApiError::internal)?;
     for w in [&secp, &ed] {
         env.broadcast(&crate::response::event(
             "wallet:created",

@@ -176,7 +176,17 @@ pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescr
 /// Create an all-local ed25519/FROST wallet: keygen (party-keyed by each
 /// WalletKey UUID), derive the group pubkey, encrypt each share per its
 /// KeyDescription, and persist. Port of Wallet:create's initializeFrostWallet.
+/// Create a wallet, stamping `Created`/`Modified` with the current time.
 pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) -> Result<Wallet> {
+    create_at(env, name, curve, key_descs, &crate::now_rfc3339())
+}
+
+/// Like [`create`] but uses the supplied `created` timestamp. `Wallet:multiCreate`
+/// captures one `now` and passes it to both the secp256k1 and ed25519 wallets so
+/// they share a byte-identical `Created` — some hosts use equal creation
+/// timestamps to recognise a paired multi-create. Mirrors Go apiMultiCreateWallet,
+/// which computes `now := time.Now()` once and assigns it to both.
+pub fn create_at(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription], created: &str) -> Result<Wallet> {
     if key_descs.len() < 3 {
         return Err(Error::Env(format!("need at least 3 keys, got {}", key_descs.len())));
     }
@@ -215,7 +225,7 @@ pub fn create(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) 
     let mut cc = Uuid::new_v4().into_bytes().to_vec();
     cc.extend_from_slice(&Uuid::new_v4().into_bytes());
     let chaincode = b64url(&cc);
-    let now = crate::now_rfc3339();
+    let now = created.to_owned();
 
     let mut wkeys: Vec<WalletKey> = Vec::with_capacity(n);
     for (i, kd) in key_descs.iter().enumerate() {
