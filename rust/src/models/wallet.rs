@@ -203,16 +203,18 @@ pub fn create_at(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription
 
     // Keygen per curve: FROST (ed25519) or DKLs23 (secp256k1). Both yield, for
     // each party key, that share's Go-compatible JSON, plus the group pubkey.
+    // An unspecified curve defaults to secp256k1 (matches Go apiCreateWallet,
+    // which only branches to the ed25519 path on an explicit "ed25519").
     let (pubkey, protocol, curve_out, shares): (String, &str, &str, Vec<(Vec<u8>, String)>) =
         match curve {
-            "" | "ed25519" => {
+            "ed25519" => {
                 let ks = frost_keygen_with_parties(party_keys, threshold)
                     .map_err(|e| Error::Env(format!("frost keygen: {e}")))?;
                 let pk = b64url(&frost_group_pubkey(&ks[0].1));
                 let shares = shares_json(ks, |k| k.to_json().map_err(|e| format!("{e:?}")))?;
                 (pk, "frost", "ed25519", shares)
             }
-            "secp256k1" => {
+            "" | "secp256k1" => {
                 let ks = crate::tss::dkls_keygen_local(party_keys, threshold)
                     .map_err(|e| Error::Env(format!("dkls keygen: {e}")))?;
                 let pk = b64url(&crate::tss::dkls_group_pubkey(&ks[0].1).map_err(|e| Error::Env(e.to_string()))?);
