@@ -1,10 +1,9 @@
 //! Swap endpoints (wltswap). `Swap:quote` returns an OKX DEX quote for a token
-//! pair. The OKX proxy is authenticated, so the caller supplies the platform
-//! API credential (KeyId + Secret); Backend overrides the REST host for tests.
+//! pair. OKX proxy calls authenticate with the app clientId (Sec-ClientId, from
+//! Info:setWalletInfo); Backend overrides the REST host for tests.
 
 use serde_json::Value;
 
-use crate::rest::ApiKey;
 use crate::swap::{self, TokenRef};
 use crate::Env;
 
@@ -13,6 +12,17 @@ use super::{ApiError, ApiResult};
 fn token_ref(v: Option<&Value>) -> Result<TokenRef, ApiError> {
     let v = v.ok_or_else(|| ApiError::new(400, "token reference required"))?;
     serde_json::from_value(v.clone()).map_err(|e| ApiError::new(400, format!("bad token ref: {e}")))
+}
+
+/// The app's clientId, registered via `Info:setWalletInfo` and sent as the
+/// `Sec-ClientId` header — the only auth the OKX proxy needs (no request
+/// signature, no per-call credential).
+fn client_id(env: &Env) -> Option<String> {
+    env.config_get("walletinfo:clientId")
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn quote(env: &Env, params: &Value) -> ApiResult {
@@ -30,19 +40,10 @@ pub fn quote(env: &Env, params: &Value) -> ApiResult {
         .ok_or_else(|| ApiError::new(400, "AmountIn required"))?;
     let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
 
-    // Platform credential for the authenticated OKX proxy.
-    let key_id = params
-        .get("KeyId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "KeyId required (platform API key)"))?;
-    let secret = params
-        .get("Secret")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "Secret required (platform API secret)"))?;
-    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let cid = client_id(env);
     let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
 
-    let q = swap::get_quote(&key, base, &net.kind, &net.chain_id, token_in, token_out, amount_in, slippage)
+    let q = swap::get_quote(cid.as_deref(), base, &net.kind, &net.chain_id, token_in, token_out, amount_in, slippage)
         .map_err(ApiError::internal)?;
     Ok(serde_json::to_value(q).unwrap())
 }
@@ -146,9 +147,7 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
     let rpc = params.get("RPC").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "RPC required"))?;
 
-    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
-    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
-    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let cid = client_id(env);
     let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
 
     let keys: Vec<crate::sign::KeyDescription> =
@@ -166,9 +165,9 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
         .unwrap_or_else(swap::new_quote_id);
 
     let res = if net.kind == "solana" {
-        swap::execute_solana(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
+        swap::execute_solana(env, account_id, &unlock, cid.as_deref(), base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
     } else {
-        swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
+        swap::execute_evm(env, account_id, &unlock, cid.as_deref(), base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
     };
     res.map_err(ApiError::internal)
 }
@@ -211,12 +210,10 @@ pub fn max_spendable(env: &Env, params: &Value) -> ApiResult {
         }));
     }
 
-    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
-    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
-    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let cid = client_id(env);
     let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
 
-    let q = swap::get_quote(&key, base, &net.kind, &net.chain_id, token_in, token_out, &max.to_string(), slippage)
+    let q = swap::get_quote(cid.as_deref(), base, &net.kind, &net.chain_id, token_in, token_out, &max.to_string(), slippage)
         .map_err(ApiError::internal)?;
     Ok(serde_json::to_value(q).unwrap())
 }
@@ -239,13 +236,11 @@ pub fn quotes(env: &Env, params: &Value) -> ApiResult {
     let token_out = token_ref(params.get("TokenOut"))?;
     let amount_in = params.get("AmountIn").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "AmountIn required"))?;
     let slippage = params.get("SlippageBps").and_then(Value::as_u64).unwrap_or(0) as u16;
-    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
-    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
-    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let cid = client_id(env);
     let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
 
     // A quote failure becomes an attempt-level error, not an endpoint failure.
-    let attempt = match swap::get_quote(&key, base, &net.kind, &net.chain_id, token_in, token_out, amount_in, slippage) {
+    let attempt = match swap::get_quote(cid.as_deref(), base, &net.kind, &net.chain_id, token_in, token_out, amount_in, slippage) {
         Ok(q) => serde_json::json!({ "provider": provider, "providerLabel": "OKX", "quote": q }),
         Err(e) => serde_json::json!({
             "provider": provider,
@@ -315,12 +310,10 @@ pub fn order_status(env: &Env, params: &Value) -> ApiResult {
     let chain_index = swap::okx_chain_index(&net.kind, &net.chain_id)
         .map_err(|e| ApiError::new(400, e.to_string()))?;
 
-    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
-    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
-    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let cid = client_id(env);
     let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
 
-    let entry = swap::okx_fetch_order_status(&key, base, &chain_index, &account.address, order_id)
+    let entry = swap::okx_fetch_order_status(cid.as_deref(), base, &chain_index, &account.address, order_id)
         .map_err(|e| ApiError::new(502, format!("okx: orderStatus: {e}")))?;
     let status = swap::okx_tx_status_label(entry.as_ref());
     let mut res = swap::SwapOrderStatus {

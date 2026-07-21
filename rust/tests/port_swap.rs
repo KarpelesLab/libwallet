@@ -6,7 +6,6 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use libwallet::rest::ApiKey;
 use libwallet::swap::{self, OkxOrderStatusEntry, SwapOrderStatus};
 use num_bigint::BigInt;
 
@@ -128,10 +127,9 @@ fn okx_tx_status_label_maps_numeric_codes() {
 
 #[test]
 fn okx_fetch_order_status_parses_paginated_envelope() {
-    let key = ApiKey::from_seed("kid", [4u8; 32]);
     // Orders nested under the paginated envelope: data[0].orders[].
     let base = mock_klb(r#"[{"cursor":"c1","orders":[{"orderId":"o1","txStatus":"2","txHash":"5xHash","failReason":""}]}]"#);
-    let e = swap::okx_fetch_order_status(&key, &base, "501", "SoLaNaAddr", "o1").unwrap().unwrap();
+    let e = swap::okx_fetch_order_status(None, &base, "501", "SoLaNaAddr", "o1").unwrap().unwrap();
     assert_eq!(e.order_id, "o1");
     assert_eq!(e.tx_status, "2");
     assert_eq!(e.tx_hash, "5xHash");
@@ -139,15 +137,15 @@ fn okx_fetch_order_status_parses_paginated_envelope() {
 
     // A failed order surfaces its reason.
     let base = mock_klb(r#"[{"cursor":"","orders":[{"orderId":"o2","txStatus":"3","failReason":"custom program error: 0xb"}]}]"#);
-    let e = swap::okx_fetch_order_status(&key, &base, "501", "addr", "o2").unwrap().unwrap();
+    let e = swap::okx_fetch_order_status(None, &base, "501", "addr", "o2").unwrap().unwrap();
     assert_eq!(swap::okx_tx_status_label(Some(&e)), "failed");
     assert_eq!(e.fail_reason, "custom program error: 0xb");
 
     // Order not yet visible to OKX -> Ok(None) -> pending.
     let base = mock_klb("[]");
-    assert!(swap::okx_fetch_order_status(&key, &base, "501", "addr", "unknown").unwrap().is_none());
+    assert!(swap::okx_fetch_order_status(None, &base, "501", "addr", "unknown").unwrap().is_none());
     let base = mock_klb(r#"[{"cursor":"","orders":[]}]"#);
-    assert!(swap::okx_fetch_order_status(&key, &base, "501", "addr", "unknown").unwrap().is_none());
+    assert!(swap::okx_fetch_order_status(None, &base, "501", "addr", "unknown").unwrap().is_none());
 }
 
 #[test]

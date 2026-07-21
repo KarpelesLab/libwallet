@@ -7,7 +7,6 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-use libwallet::rest::ApiKey;
 use libwallet::swap::{self, TokenRef};
 
 /// Multi-response mock serving `responses` in order (one request each).
@@ -74,13 +73,11 @@ fn execute_solana_splices_and_broadcasts() {
         r#"{"result":"success","data":[{"orders":[{"orderId":"ord-sol","txStatus":"2"}]}]}"#.to_string(),
     ]);
     let node = "http://unused.invalid"; // rpc is no longer used for Solana broadcast
-
-    let key = ApiKey::from_seed("kid", [4u8; 32]);
     let token_in = TokenRef { address: "NATIVE".into(), symbol: "SOL".into(), decimals: 9 };
     let token_out = TokenRef { address: "EPjF...".into(), symbol: "USDC".into(), decimals: 6 };
 
     let res = swap::execute_solana(
-        &env, &acct.id, &unlock, &key, &okx, node, "mainnet", &token_in, &token_out, "1000000000", 50, false, "q_test",
+        &env, &acct.id, &unlock, None, &okx, node, "mainnet", &token_in, &token_out, "1000000000", 50, false, "q_test",
     )
     .unwrap();
     assert_eq!(res["orderId"], "ord-sol");
@@ -131,13 +128,11 @@ fn execute_evm_signs_and_broadcasts() {
     ]);
     // Node is used only for the nonce now (broadcast goes through OKX).
     let node = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string()]);
-
-    let key = ApiKey::from_seed("kid", [4u8; 32]);
     let token_in = TokenRef { address: "0xIN".into(), symbol: "IN".into(), decimals: 18 };
     let token_out = TokenRef { address: "0xOUT".into(), symbol: "OUT".into(), decimals: 6 };
 
     let res = swap::execute_evm(
-        &env, &a.id, &unlock, &key, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50, true, "q_test",
+        &env, &a.id, &unlock, None, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50, true, "q_test",
     )
     .unwrap();
     // Hash comes from the OKX orderStatus (the confirmed on-chain tx), not our node.
@@ -293,9 +288,8 @@ fn get_quote_builds_from_okx_entry() {
     let base = mock(
         r#"{"fromTokenAmount":"1000000","toTokenAmount":"2000000","priceImpactPercent":"0.25","estimateGasFee":"21000"}"#,
     );
-    let key = ApiKey::from_seed("test", [3u8; 32]);
     let q = swap::get_quote(
-        &key,
+        None,
         &base,
         "evm",
         "1",
@@ -321,9 +315,8 @@ fn get_quote_builds_from_okx_entry() {
 fn get_quote_no_route_errors() {
     // toTokenAmount 0 -> no liquidity.
     let base = mock(r#"{"fromTokenAmount":"1000000","toTokenAmount":"0"}"#);
-    let key = ApiKey::from_seed("test", [3u8; 32]);
     let err = swap::get_quote(
-        &key,
+        None,
         &base,
         "evm",
         "1",

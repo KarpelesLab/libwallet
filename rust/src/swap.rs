@@ -1,15 +1,14 @@
-//! Token-swap quotes via OKX DEX (port of `wltswap` — the quote path). Quotes
-//! come from the platform's `Crypto/Okx:quote` proxy, an authenticated REST
-//! endpoint ([`crate::rest::ApiKey`]). Only the quote flow is ported here;
-//! execution (`Crypto/Okx:swap` + on-chain broadcast) and ERC-20 approval need
-//! the live proxy + credentials and land with the execute pass.
+//! Token swaps via the OKX DEX (port of `wltswap`): quote, execute (fetch the
+//! swap tx, sign locally, broadcast through OKX's `broadcastTransaction`, and
+//! confirm via orderStatus), and ERC-20 approval. All OKX calls go through the
+//! platform's `Crypto/Okx:*` proxy, authenticated by the app's clientId in the
+//! `Sec-ClientId` header (no request signature) — see [`crate::rest`].
 
 use base64::Engine as _;
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::rest::ApiKey;
 use crate::{Amount, Env, Error, Result};
 
 /// Default platform fee (bps), matching Go `DefaultFeeBps`.
@@ -245,7 +244,7 @@ pub fn execute_evm(
     env: &Env,
     account_id: &str,
     unlock: &[(String, String)],
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     rpc: &str,
     chain_id: &str,
@@ -272,7 +271,7 @@ pub fn execute_evm(
         "userWalletAddress": acct.address,
         "slippagePercent": okx_slippage_percent(slippage_bps),
     });
-    let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
+    let data = crate::rest::do_get_params(base, "Crypto/Okx:swap", &params, client_id)?;
     let entry = match &data {
         Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
         _ => data.clone(),
@@ -322,10 +321,10 @@ pub fn execute_evm(
 
     // 4. Broadcast through OKX (MEV per pref) and confirm settlement. We do NOT
     // retry EVM here — re-signing burns the nonce; the host can re-quote.
-    let bres = okx_broadcast_swap_tx(key, base, &chain_index, &acct.address, quote_id, &format!("0x{raw_hex}"), mev)?;
+    let bres = okx_broadcast_swap_tx(client_id, base, &chain_index, &acct.address, quote_id, &format!("0x{raw_hex}"), mev)?;
     let mut hash = local_hash;
     if !bres.order_id.is_empty() {
-        let (tx_hash, failed, reason) = okx_await_order(key, base, &chain_index, &acct.address, &bres.order_id);
+        let (tx_hash, failed, reason) = okx_await_order(client_id, base, &chain_index, &acct.address, &bres.order_id);
         if failed {
             return Err(Error::Env(format!("okx evm swap did not land (orderId {}): {reason}", bres.order_id)));
         }
@@ -388,7 +387,7 @@ pub fn execute_solana(
     env: &Env,
     account_id: &str,
     unlock: &[(String, String)],
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     _rpc: &str,
     chain_id: &str,
@@ -419,7 +418,7 @@ pub fn execute_solana(
     let mut last_err: Option<Error> = None;
     for attempt in 1..=OKX_SOLANA_BROADCAST_ATTEMPTS {
         // Re-fetch the swap tx each attempt so a retry gets a fresh blockhash.
-        let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
+        let data = crate::rest::do_get_params(base, "Crypto/Okx:swap", &params, client_id)?;
         let entry = match &data {
             Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
             _ => data.clone(),
@@ -450,7 +449,7 @@ pub fn execute_solana(
         // Broadcast through OKX as base58 (NOT base64 — OKX base58-decodes it).
         // MEV is Solana-ignored, so pass false.
         let signed_b58 = bs58::encode(&signed).into_string();
-        let bres = match okx_broadcast_swap_tx(key, base, &chain_index, &acct.address, quote_id, &signed_b58, false) {
+        let bres = match okx_broadcast_swap_tx(client_id, base, &chain_index, &acct.address, quote_id, &signed_b58, false) {
             Ok(b) => b,
             Err(e) => {
                 let es = e.to_string();
@@ -467,7 +466,7 @@ pub fn execute_solana(
         let signature = bs58::encode(&sig64).into_string();
         let mut hash = signature.clone();
         if !bres.order_id.is_empty() {
-            let (tx_hash, failed, reason) = okx_await_order(key, base, &chain_index, &acct.address, &bres.order_id);
+            let (tx_hash, failed, reason) = okx_await_order(client_id, base, &chain_index, &acct.address, &bres.order_id);
             if failed {
                 let msg = format!("okx solana swap did not land (orderId {}): {reason}", bres.order_id);
                 if attempt < OKX_SOLANA_BROADCAST_ATTEMPTS && is_retryable_solana_broadcast(&reason) {
@@ -544,11 +543,11 @@ fn native_decimals(kind: &str) -> i64 {
 }
 
 /// Fetch a swap quote from the OKX proxy (Go `okxQuote`). `base` is the REST
-/// backend, `key` the platform API credential. Returns a [`Quote`] with the
+/// backend; auth is the app clientId (Sec-ClientId). Returns a [`Quote`] with the
 /// out amount, slippage-adjusted minimum, price impact, and network fee.
 #[allow(clippy::too_many_arguments)]
 pub fn get_quote(
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     kind: &str,
     chain_id: &str,
@@ -570,7 +569,7 @@ pub fn get_quote(
         "toTokenAddress": to_addr,
         "amount": amount_in,
     });
-    let data = key.apply_get(base, "Crypto/Okx:quote", &params)?;
+    let data = crate::rest::do_get_params(base, "Crypto/Okx:quote", &params, client_id)?;
     // The proxy returns the OKX entry (or a `[{}]`/`[entry]` array form).
     let entry_val = match &data {
         Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
@@ -778,14 +777,14 @@ pub fn okx_tx_status_label(entry: Option<&OkxOrderStatusEntry>) -> &'static str 
 /// `Ok(None)` when the order isn't visible to OKX yet (just-accepted / unknown
 /// id); surfaces transport / decode errors for callers that want them.
 pub fn okx_fetch_order_status(
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     chain_index: &str,
     address: &str,
     order_id: &str,
 ) -> Result<Option<OkxOrderStatusEntry>> {
     let params = json!({ "chainIndex": chain_index, "address": address, "orderId": order_id });
-    let data = key.apply_get(base, "Crypto/Okx:orderStatus", &params)?;
+    let data = crate::rest::do_get_params(base, "Crypto/Okx:orderStatus", &params, client_id)?;
     let entry_val = match &data {
         Value::Array(a) => match a.first() {
             Some(v) => v.clone(),
@@ -823,7 +822,7 @@ pub struct OkxBroadcastResult {
 /// base64 silently fails to land. `mev` is honored EVM-side only. The returned
 /// `order_id` means "accepted", not "landed" — confirm via [`okx_await_order`].
 pub fn okx_broadcast_swap_tx(
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     chain_index: &str,
     address: &str,
@@ -840,7 +839,7 @@ pub fn okx_broadcast_swap_tx(
     if mev {
         body["enableMevProtection"] = Value::Bool(true);
     }
-    let data = key.apply_post(base, "Crypto/Okx:broadcastTransaction", &body)?;
+    let data = crate::rest::do_post(base, "Crypto/Okx:broadcastTransaction", &body, client_id)?;
     let entry = match &data {
         Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
         other => other.clone(),
@@ -862,7 +861,7 @@ const OKX_CONFIRM_INTERVAL: std::time::Duration = std::time::Duration::from_secs
 /// timeout-while-pending returns `("", false, "")` so the caller proceeds
 /// optimistically — the tx may still be in flight.
 pub fn okx_await_order(
-    key: &ApiKey,
+    client_id: Option<&str>,
     base: &str,
     chain_index: &str,
     address: &str,
@@ -870,7 +869,7 @@ pub fn okx_await_order(
 ) -> (String, bool, String) {
     let deadline = std::time::Instant::now() + OKX_CONFIRM_TIMEOUT;
     loop {
-        let entry = okx_fetch_order_status(key, base, chain_index, address, order_id)
+        let entry = okx_fetch_order_status(client_id, base, chain_index, address, order_id)
             .ok()
             .flatten();
         match okx_tx_status_label(entry.as_ref()) {
