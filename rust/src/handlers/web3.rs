@@ -213,7 +213,7 @@ fn mpurse_sign_message(env: &Env, host: &str, net: &crate::models::network::Netw
     let account = crate::models::account::find(env, &conn.first().ok_or_else(|| ApiError::new(400, "no account connected; call mpurse_getAddress first"))?.account)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
-    let value = json!({
+    let mut value = json!({
         "method": "mpurse_signMessage",
         "chain": "bitcoin",
         "chainId": net.chain_id,
@@ -221,6 +221,9 @@ fn mpurse_sign_message(env: &Env, host: &str, net: &crate::models::network::Netw
         "origin": host,
         "messageBytes": base64::engine::general_purpose::STANDARD.encode(msg.as_bytes()),
     });
+    if let Some(t) = message_text(msg.as_bytes()) {
+        value["messageText"] = Value::String(t);
+    }
     let req = crate::models::request::Request {
         kind: "message_sign".into(),
         host: host.to_owned(),
@@ -286,13 +289,16 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
 
     use base64::Engine;
-    let value = json!({
+    let mut value = json!({
         "method": "personal_sign",
         "chain": "evm",
         "account": account.address,
         "origin": host,
         "messageBytes": base64::engine::general_purpose::STANDARD.encode(&message),
     });
+    if let Some(t) = message_text(&message) {
+        value["messageText"] = Value::String(t);
+    }
     let req = crate::models::request::Request {
         kind: "message_sign".into(),
         host: host.to_owned(),
@@ -405,6 +411,7 @@ fn parse_chain_id_any(s: &str) -> Option<String> {
 /// `message_sign` approval (solana family); the approve arm FROST-signs and the
 /// Result carries {signature, publicKey}.
 fn solana_sign_message(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
+    use base64::Engine as _;
     let obj = q_params.first().and_then(Value::as_object).ok_or_else(|| ApiError::new(400, "solana_signMessage param must be an object"))?;
     let msg_b64 = obj.get("message").and_then(Value::as_str).filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::new(400, "solana_signMessage: message is required"))?;
@@ -423,13 +430,21 @@ fn solana_sign_message(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
             .ok_or_else(|| ApiError::new(400, "requested pubkey not connected"))?
     };
 
-    let value = json!({
+    let mut value = json!({
         "method": "solana_signMessage",
         "chain": "solana",
         "account": account.address,
         "origin": host,
         "messageBytes": msg_b64, // already base64 from the dApp
     });
+    // The dApp sends base64; decode to recover the printable text (if any).
+    if let Some(t) = base64::engine::general_purpose::STANDARD
+        .decode(msg_b64)
+        .ok()
+        .and_then(|raw| message_text(&raw))
+    {
+        value["messageText"] = Value::String(t);
+    }
     let req = crate::models::request::Request {
         kind: "message_sign".into(),
         host: host.to_owned(),
@@ -708,6 +723,25 @@ fn extract_requested_perms(q_params: &[Value]) -> Result<Vec<String>, ApiError> 
     Ok(perms)
 }
 
+/// Go `utf8Text`: the message rendered as text when it is printable UTF-8
+/// (newline/CR/tab allowed; other control chars and 0x7f rejected), else None.
+/// Populates the `messageText` field the host shows on the sign sheet.
+fn message_text(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let s = std::str::from_utf8(bytes).ok()?;
+    for c in s.chars() {
+        if c == '\n' || c == '\r' || c == '\t' {
+            continue;
+        }
+        if (c as u32) < 0x20 || c as u32 == 0x7f {
+            return None;
+        }
+    }
+    Some(s.to_owned())
+}
+
 fn decode_hex_0x(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     if s.len() % 2 != 0 {
@@ -726,6 +760,7 @@ mod tests {
     fn connected_env() -> (Env, String, String) {
         let env = Env::init_memory().unwrap();
         crate::models::network::init(&env).unwrap();
+        env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         crate::models::account::init(&env).unwrap();
         crate::models::connected_site::init(&env).unwrap();
 

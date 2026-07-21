@@ -96,6 +96,17 @@ pub fn respond_error(env: &Env, params: &Value) -> ApiResult {
         .and_then(Value::as_i64).unwrap_or(0);
     let code = params.get("Code").and_then(Value::as_i64).unwrap_or(0);
     let message = params.get("Message").and_then(Value::as_str).unwrap_or("");
+    // Validate the topic against the session store first — this works even when
+    // WalletConnect hasn't been started (no live relay), matching Go's
+    // RespondSessionError, which yields "unknown topic" for an unknown/inactive
+    // session regardless of connection state. Without this, an unknown topic on
+    // a not-started client would surface "walletconnect not started" instead.
+    if crate::models::wc_session::fetch_by_topic(env, topic)
+        .map_err(ApiError::internal)?
+        .is_none()
+    {
+        return Err(ApiError::new(400, "unknown topic"));
+    }
     let mgr = manager(env)?;
     mgr.lock().unwrap().respond_error(env, topic, id, code, message).map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "responded": true }))
