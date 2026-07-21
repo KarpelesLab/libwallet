@@ -435,13 +435,25 @@ pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "token": token, "owner": account.address, "balance": bal.to_string() }))
 }
 
-/// `Account:createView` {Name?, Type, Address} — a watch-only account from a
-/// bare address (Go accountCreateView, address path).
+/// `Account:createView` {Name?, Type, Address|Xpub} — a watch-only account from
+/// a bare address or a BIP-32 extended public key (Go `accountCreateView`).
+/// Exactly one of `Address` or `Xpub` must be given; `Xpub` is bitcoin-only and
+/// yields an account whose pubkey + chaincode drive HD gap-limit scans.
 pub fn create_view(env: &Env, params: &Value) -> ApiResult {
     let typ = params.get("Type").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Type required"))?;
-    let address = params.get("Address").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Address required"))?;
     let name = params.get("Name").and_then(Value::as_str).unwrap_or("");
-    let a = crate::models::account::create_view(env, name, typ, address).map_err(ApiError::internal)?;
+    let address = params.get("Address").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let xpub = params.get("Xpub").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let a = match (address, xpub) {
+        (Some(_), Some(_)) | (None, None) => {
+            return Err(ApiError::new(400, "exactly one of address or xpub is required"))
+        }
+        (Some(addr), None) => {
+            crate::models::account::create_view(env, name, typ, addr).map_err(ApiError::internal)?
+        }
+        (None, Some(xp)) => crate::models::account::create_view_xpub(env, name, typ, xp)
+            .map_err(ApiError::internal)?,
+    };
     Ok(serde_json::to_value(a).unwrap())
 }
 

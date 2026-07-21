@@ -28,6 +28,40 @@ pub fn build_xpub(pubkey_compressed: &[u8; 33], chaincode: &[u8; 32]) -> String 
     bs58::encode(&data).into_string()
 }
 
+/// Decode a BIP-32 extended **public** key (`xpub…`) into its compressed
+/// secp256k1 pubkey + 32-byte chain code — the inverse of [`build_xpub`], and
+/// the Rust equivalent of Go `ecckd.FromString` restricted to public keys.
+/// Rejects a malformed base58check payload, a bad checksum, a non-public
+/// version, or a private (`xprv…`) key.
+pub fn parse_xpub(xpub: &str) -> Result<([u8; 33], [u8; 32])> {
+    let data = bs58::decode(xpub)
+        .into_vec()
+        .map_err(|e| Error::Env(format!("parse xpub: {e}")))?;
+    if data.len() != 82 {
+        return Err(Error::Env(format!("parse xpub: expected 82 bytes, got {}", data.len())));
+    }
+    // base58check trailer: first 4 bytes of double-SHA256 over the first 78.
+    let (payload, checksum) = data.split_at(78);
+    let h1 = purecrypto::hash::sha256(payload);
+    let h2 = purecrypto::hash::sha256(&h1);
+    if h2[..4] != *checksum {
+        return Err(Error::Env("parse xpub: bad checksum".into()));
+    }
+    // BitcoinMainnetPublic version (0x0488B21E). Private keys carry the pubkey
+    // slot as 0x00‖<32-byte scalar>; reject them (Go disallows xpriv here).
+    if payload[..4] != [0x04, 0x88, 0xb2, 0x1e] {
+        return Err(Error::Env("parse xpub: not a bitcoin mainnet public key".into()));
+    }
+    let mut chaincode = [0u8; 32];
+    chaincode.copy_from_slice(&payload[13..45]);
+    let mut pubkey = [0u8; 33];
+    pubkey.copy_from_slice(&payload[45..78]);
+    if !matches!(pubkey[0], 0x02 | 0x03) {
+        return Err(Error::Env("parse xpub: not a compressed public key (expected xpub, not xprv)".into()));
+    }
+    Ok((pubkey, chaincode))
+}
+
 /// Parse a modchain `balance` value (outscript BtcAmount JSON) into satoshi.
 /// Mirrors Go `BtcAmount.UnmarshalText`: a JSON number/string, where a value
 /// without a decimal point is whole BTC (×1e8), a decimal value is scaled to

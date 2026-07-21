@@ -54,9 +54,27 @@ pub fn init(env: &Env) -> Result<()> {
 }
 
 pub fn fetch(env: &Env, id: &str) -> Result<Option<Account>> {
+    // "@" resolves to the current account (Go `apiFetchAccount` / `CurrentAccount`).
+    if id == "@" {
+        return current(env);
+    }
     let sql = format!(r#"SELECT {COLS} FROM "Account" WHERE "Id" = ?1"#);
     let rows = env.query(&sql, vec![SqlValue::Text(id.to_owned())])?;
     Ok(rows.first().map(|r| row_to_account(r)))
+}
+
+/// The current account (Go `wltacct.CurrentAccount`): the account selected via
+/// `set_current("account", …)`, or — when that is unset or points at a missing
+/// row — the first account on record. Returns `None` only when there are no
+/// accounts at all.
+pub fn current(env: &Env) -> Result<Option<Account>> {
+    if let Some(cur) = env.get_current("account")? {
+        if let Some(a) = fetch(env, &cur)? {
+            return Ok(Some(a));
+        }
+    }
+    // Fall back to the first account (Go `FirstAccount`).
+    Ok(list(env)?.into_iter().next())
 }
 
 pub fn list(env: &Env) -> Result<Vec<Account>> {
@@ -134,8 +152,14 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
                 let cc = b64url_decode(&wallet.chaincode)?;
                 let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, &[44, 0, 0, index as u32])
                     .map_err(|e| Error::Env(e.to_string()))?;
+                // Display address for the current network (Go
+                // `UpdateAddressForNetwork`): on a bitcoin-family network it is
+                // the first receive address (m/0/0) in that chain's format
+                // (e.g. monacoin → "mona1…" P2WPKH). Off a bitcoin network we
+                // keep the mainnet-BTC P2PKH fallback.
                 let h160 = outscript::hash::hash160(&child);
-                let addr = outscript::address::encode_base58_addr(0x00, &h160); // BTC mainnet P2PKH
+                let addr = bitcoin_current_address(env, &child, &cc)
+                    .unwrap_or_else(|| outscript::address::encode_base58_addr(0x00, &h160));
                 let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
                 ("secp256k1".into(), format!("m/44/0/0/{index}"), b64url(&child), addr.clone(), format!("bitcoin:{addr}"), Value::String(il))
             }
@@ -234,6 +258,78 @@ pub fn create_view(env: &Env, name: &str, typ: &str, address: &str) -> Result<Ac
     )?;
     env.set_current("account", &account.id)?;
     Ok(account)
+}
+
+/// Create a view-only account from a BIP-32 extended public key (Go
+/// `CreateViewAccount`, xpub path). Bitcoin-family only: the xpub's pubkey +
+/// chaincode are decoded so HD gap-limit scans work. Stores them base64url
+/// (matching Go's `ecckd.FromString` → RawURLEncoding), sets the display
+/// address for the current network, and marks the account current.
+pub fn create_view_xpub(env: &Env, name: &str, typ: &str, xpub: &str) -> Result<Account> {
+    if typ != "bitcoin" {
+        return Err(Error::Env(
+            "xpub view accounts are only supported for bitcoin-family networks".into(),
+        ));
+    }
+    let (pubkey, chaincode) = crate::bitcoin::parse_xpub(xpub)?;
+    let name = if name.is_empty() { "View Account".to_owned() } else { name.to_owned() };
+    let now = crate::now_rfc3339();
+    // Display address for the current network (empty when no bitcoin-family
+    // network is selected; refreshed by callers that know the network).
+    let address = bitcoin_current_address(env, &pubkey, &chaincode).unwrap_or_default();
+    let uri = if address.is_empty() { String::new() } else { format!("bitcoin:{address}") };
+    let account = Account {
+        id: Xuid::new("acct").to_string(),
+        wallet: String::new(), // view-only: no signing wallet
+        name,
+        index: 0,
+        kind: typ.to_owned(),
+        curve: "secp256k1".to_owned(),
+        path: String::new(),
+        address,
+        uri,
+        pubkey: b64url(&pubkey),
+        chaincode: b64url(&chaincode),
+        il: Value::Null,
+        created: now.clone(),
+        updated: now,
+    };
+    env.exec(
+        &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),
+        vec![
+            SqlValue::Text(account.id.clone()),
+            SqlValue::Text(account.wallet.clone()),
+            SqlValue::Text(account.name.clone()),
+            SqlValue::Int(account.index),
+            SqlValue::Text(account.kind.clone()),
+            SqlValue::Text(account.curve.clone()),
+            SqlValue::Text(account.path.clone()),
+            SqlValue::Text(account.address.clone()),
+            SqlValue::Text(account.uri.clone()),
+            SqlValue::Text(account.pubkey.clone()),
+            SqlValue::Text(account.chaincode.clone()),
+            SqlValue::Text("null".into()),
+            SqlValue::Text(account.created.clone()),
+            SqlValue::Text(account.updated.clone()),
+        ],
+    )?;
+    env.set_current("account", &account.id)?;
+    Ok(account)
+}
+
+/// The bitcoin display address (first receive address, `m/0/0`) for the current
+/// network, when it is a bitcoin-family network — the derivation Go
+/// `UpdateAddressForNetwork` performs for the bitcoin branch. `pubkey` is the
+/// account's compressed key and `chaincode` its 32-byte chain code. `None` when
+/// no bitcoin network is selected or derivation fails, so callers keep their
+/// own default.
+fn bitcoin_current_address(env: &Env, pubkey: &[u8], chaincode: &[u8]) -> Option<String> {
+    let net = crate::models::network::fetch(env, "@").ok().flatten()?;
+    if net.kind != "bitcoin" {
+        return None;
+    }
+    let child = crate::hdderive::derive_pub(pubkey, chaincode, &[0, 0]).ok()?;
+    crate::bitcoin::hd_address(&child, &net.chain_id).ok()
 }
 
 /// Update mutable account fields (Go `Account.ApiUpdate`): only `Name` is
