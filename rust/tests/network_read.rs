@@ -4,6 +4,7 @@ use libwallet::{Env, SqlValue};
 fn env() -> Env {
     let env = Env::init_memory().unwrap();
     network::init(&env).unwrap();
+    env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
     env
 }
 

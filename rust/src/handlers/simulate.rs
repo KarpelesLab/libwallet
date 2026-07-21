@@ -610,6 +610,7 @@ mod tests {
     fn simulate_solana_reports_logs_and_units() {
         let env = Env::init_memory().unwrap();
         crate::models::network::init(&env).unwrap();
+        env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         let rpc = mock_rpc(r#"{"value":{"err":null,"logs":["Program log: ok"],"unitsConsumed":1234}}"#);
         env.exec(
             r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
@@ -673,6 +674,7 @@ mod tests {
     fn simulate_bitcoin_decodes_raw_tx() {
         let env = Env::init_memory().unwrap();
         crate::models::network::init(&env).unwrap();
+        env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         insert_network(&env, "bitcoin", "bitcoin");
 
         // version | 1 input (txid=32×0x11, vout 0, empty scriptsig, seq) |
@@ -706,6 +708,7 @@ mod tests {
     fn simulate_solana_without_raw_errors() {
         let env = Env::init_memory().unwrap();
         crate::models::network::init(&env).unwrap();
+        env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         env.exec(
             r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
             vec![
