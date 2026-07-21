@@ -83,8 +83,17 @@ pub fn reject_session(env: &Env, params: &Value) -> ApiResult {
 /// `WalletConnect:respondError` {Topic, Id, Code?, Message?} — publish a JSON-RPC
 /// error for a session request.
 pub fn respond_error(env: &Env, params: &Value) -> ApiResult {
-    let topic = params.get("Topic").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Topic required"))?;
-    let id = params.get("Id").and_then(Value::as_i64).ok_or_else(|| ApiError::new(400, "Id required"))?;
+    // Match Go's `wcRespondError` (wltwc/api.go): all fields are deserialized
+    // case-insensitively and NONE is validated in the handler. The topic is
+    // checked first by the manager (RespondSessionError -> session lookup),
+    // which yields "unknown topic" for an inactive session. So the Id must not
+    // be rejected before the topic is looked up — Go defaults a missing ID to 0.
+    // (The Dart client sends the key as "ID", not "Id".)
+    let topic = params.get("Topic").and_then(Value::as_str)
+        .or_else(|| params.get("topic").and_then(Value::as_str))
+        .unwrap_or("");
+    let id = params.get("ID").or_else(|| params.get("Id")).or_else(|| params.get("id"))
+        .and_then(Value::as_i64).unwrap_or(0);
     let code = params.get("Code").and_then(Value::as_i64).unwrap_or(0);
     let message = params.get("Message").and_then(Value::as_str).unwrap_or("");
     let mgr = manager(env)?;
