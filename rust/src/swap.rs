@@ -22,6 +22,19 @@ pub const MAX_SLIPPAGE_BPS: u16 = 5000;
 const OKX_EVM_NATIVE: &str = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const WRAPPED_SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 
+/// OKX's identifier for NATIVE SOL on its DEX quote/swap endpoints: the all-1s
+/// System Program address (the 32-byte zero pubkey), NOT the wSOL mint (Go
+/// `okxSolanaNativeSentinel`, commit bce9c70).
+///
+/// Load-bearing. Passing the wSOL mint (`So111…112`) makes OKX treat the input
+/// as "spend the user's existing wSOL SPL token" and build a tx that does NOT
+/// wrap native SOL — so the swap's source token account is uninitialized for
+/// any wallet that doesn't already hold wSOL and the swap reverts on-chain
+/// (AnchorError AccountNotInitialized / "custom program error: 0xb"). The
+/// all-1s form makes OKX include the SOL→wSOL wrap (and the wSOL→SOL unwrap when
+/// SOL is the output).
+pub const OKX_SOLANA_NATIVE: &str = "11111111111111111111111111111111";
+
 /// A token reference (Go `TokenRef`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRef {
@@ -105,7 +118,7 @@ pub fn okx_chain_index(kind: &str, chain_id: &str) -> Result<String> {
 pub fn okx_token_addr(kind: &str, addr: &str) -> String {
     let addr = strip_chain_prefix(addr);
     if addr.is_empty() || addr.eq_ignore_ascii_case("NATIVE") {
-        return if kind == "solana" { WRAPPED_SOL_MINT } else { OKX_EVM_NATIVE }.to_owned();
+        return if kind == "solana" { OKX_SOLANA_NATIVE } else { OKX_EVM_NATIVE }.to_owned();
     }
     addr.to_owned()
 }
@@ -533,4 +546,276 @@ pub fn get_quote(
         token_in,
         token_out,
     })
+}
+
+// ── OKX settlement robustness (ports of wltswap/okx.go) ─────────────────────
+
+/// True when `addr` refers to native SOL (Go `isNativeTokenAddress`): the empty
+/// string, the case-insensitive "NATIVE" sentinel, or the on-chain wSOL mint.
+/// Does NOT strip a chain prefix (matches Go — it keys off the host sentinel).
+pub fn is_native_token_address(addr: &str) -> bool {
+    addr.is_empty() || addr.eq_ignore_ascii_case("NATIVE") || addr == WRAPPED_SOL_MINT
+}
+
+/// Resolve an output-token address to its on-chain mint (Go
+/// `solanaNativeMintOrAddr`): strips a `<type>.<chainId>.` prefix and maps
+/// native/empty to the real wSOL mint.
+pub fn solana_native_mint_or_addr(addr: &str) -> String {
+    let a = strip_chain_prefix(addr);
+    if a == "NATIVE" || a.is_empty() {
+        WRAPPED_SOL_MINT.to_owned()
+    } else {
+        a.to_owned()
+    }
+}
+
+/// Client-side min-receive tripwire (Go `okxAssertMinReceive`, commit 2f419bc).
+/// Rejects a swap whose provider-returned `min_receive` (OKX's execute-time
+/// `minReceiveAmount`) falls grossly below the approved `min_amount_out` — a
+/// tamper / gross-underpayment guard, NOT the user's real slippage protection
+/// (that is `minReceiveAmount` itself, enforced on-chain against the current
+/// price).
+///
+/// The comparison can't be exact: `min_amount_out` is a stale snapshot
+/// (amountOut at quote time × the user's slippage) while OKX recomputes
+/// `minReceiveAmount` from a FRESH quote at execute time, so normal downward
+/// price drift in the seconds between quote and execute leaves it a hair under
+/// the approved minimum on a perfectly honest fill (the field case: 713177 vs
+/// 713274, 0.0136%). We therefore relax the floor by one slippage band:
+/// `floor = min_amount_out × (10_000 − slippageBps) / 10_000`. No-op when
+/// `min_receive` is blank / unparseable or the quote carries no minimum.
+pub fn okx_assert_min_receive(
+    min_amount_out: Option<&BigInt>,
+    slippage_bps: u16,
+    min_receive: &str,
+) -> Result<()> {
+    let mr = min_receive.trim();
+    if mr.is_empty() {
+        return Ok(());
+    }
+    let got = match BigInt::parse_bytes(mr.as_bytes(), 10) {
+        Some(g) => g,
+        None => return Ok(()),
+    };
+    let min_out = match min_amount_out {
+        Some(m) => m,
+        None => return Ok(()),
+    };
+    // floor = MinAmountOut × (10_000 − slippageBps) / 10_000 — relax the
+    // approved minimum by one slippage band to absorb quote→execute drift.
+    let slip = normalize_slippage(slippage_bps) as i64;
+    let floor = (min_out * BigInt::from(10_000 - slip)) / BigInt::from(10_000);
+    if got < floor {
+        return Err(Error::Env(format!(
+            "okx: swap minReceiveAmount {got} is below the approved floor {floor} \
+             (approved minimum {min_out}, less {slip} bps drift tolerance)"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether an OKX Solana broadcast/settlement error is the kind a fresh
+/// blockhash + re-sign can cure (Go `isRetryableSolanaBroadcast`, commit
+/// 6fcb1a8).
+///
+/// Both a retryable stale-blockhash case ("… Blockhash not found") and a
+/// terminal program revert ("… Error processing Instruction 5: custom program
+/// error: 0xb") arrive as the same `-32002 "Transaction simulation failed"`
+/// envelope, so we check the DETERMINISTIC markers FIRST and bail, then allow
+/// only genuine transient / blockhash markers.
+pub fn is_retryable_solana_broadcast(err: &str) -> bool {
+    if err.is_empty() {
+        return false;
+    }
+    let s = err.to_lowercase();
+    // Deterministic reverts — a fresh blockhash changes nothing.
+    for m in [
+        "custom program error",
+        "error processing instruction",
+        "insufficient",
+        "slippage",
+        "exceeds desired",
+        "deserialize",
+    ] {
+        if s.contains(m) {
+            return false;
+        }
+    }
+    // Transient / stale-blockhash failures a fresh fetch + re-sign can cure.
+    for m in ["blockhash", "block height exceeded", "expired", "timeout", "timed out", "deadline"] {
+        if s.contains(m) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Resolve whether to request OKX MEV-protected broadcast for an EVM swap (Go
+/// `mevEnabled`, commit dd8197e). Defaults to on when the host sets no
+/// preference; honors an explicit host choice otherwise. Solana ignores it.
+pub fn mev_enabled(pref: Option<bool>) -> bool {
+    pref.unwrap_or(true)
+}
+
+/// One tracked OKX order (Go `okxOrderStatusEntry`). `tx_status` is OKX's
+/// numeric code as a string: "1" pending, "2" success, "3" failed.
+/// `fail_reason` carries the upstream RPC error on failure; `tx_hash` is set
+/// once the tx is on chain.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OkxOrderStatusEntry {
+    #[serde(default, rename = "orderId")]
+    pub order_id: String,
+    #[serde(default, rename = "txStatus")]
+    pub tx_status: String,
+    #[serde(default, rename = "failReason")]
+    pub fail_reason: String,
+    #[serde(default, rename = "txHash")]
+    pub tx_hash: String,
+}
+
+/// The `Crypto/Okx:orderStatus` data entry: a paginated envelope wrapping the
+/// matched orders (Go `okxOrderStatusPage`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OkxOrderStatusPage {
+    #[serde(default)]
+    pub cursor: String,
+    #[serde(default)]
+    pub orders: Vec<OkxOrderStatusEntry>,
+}
+
+/// Normalize OKX's numeric `txStatus` into a stable label (Go
+/// `okxTxStatusLabel`): "pending" | "success" | "failed". A missing entry
+/// (order not yet visible to OKX) reads as "pending".
+pub fn okx_tx_status_label(entry: Option<&OkxOrderStatusEntry>) -> &'static str {
+    match entry {
+        None => "pending",
+        Some(e) => match e.tx_status.as_str() {
+            "2" => "success",
+            "3" => "failed",
+            "1" => "pending",
+            _ => {
+                if !e.tx_hash.is_empty() {
+                    "success"
+                } else {
+                    "pending"
+                }
+            }
+        },
+    }
+}
+
+/// Fetch a single OKX orderStatus entry (Go `okxFetchOrderStatus`). Returns
+/// `Ok(None)` when the order isn't visible to OKX yet (just-accepted / unknown
+/// id); surfaces transport / decode errors for callers that want them.
+pub fn okx_fetch_order_status(
+    key: &ApiKey,
+    base: &str,
+    chain_index: &str,
+    address: &str,
+    order_id: &str,
+) -> Result<Option<OkxOrderStatusEntry>> {
+    let params = json!({ "chainIndex": chain_index, "address": address, "orderId": order_id });
+    let data = key.apply_get(base, "Crypto/Okx:orderStatus", &params)?;
+    let entry_val = match &data {
+        Value::Array(a) => match a.first() {
+            Some(v) => v.clone(),
+            None => return Ok(None),
+        },
+        Value::Null => return Ok(None),
+        other => other.clone(),
+    };
+    let page: OkxOrderStatusPage = serde_json::from_value(entry_val)
+        .map_err(|e| Error::Env(format!("okx: decode orderStatus: {e}")))?;
+    Ok(page.orders.into_iter().next())
+}
+
+/// Normalized settlement state of a broadcast swap (Go `SwapOrderStatus`), the
+/// `Swap:orderStatus` output. Status is "pending" | "success" | "failed".
+#[derive(Debug, Clone, Serialize)]
+pub struct SwapOrderStatus {
+    #[serde(rename = "orderId")]
+    pub order_id: String,
+    pub chain: String,
+    pub status: String,
+    #[serde(rename = "txHash", skip_serializing_if = "String::is_empty")]
+    pub tx_hash: String,
+    #[serde(rename = "failReason", skip_serializing_if = "String::is_empty")]
+    pub fail_reason: String,
+}
+
+/// Whether `owner` already holds at least one SPL token account for `mint` (Go
+/// `solanaHasTokenAccount`): a `getTokenAccountsByOwner` probe with a mint
+/// filter.
+pub fn solana_has_token_account(rpc: &str, owner: &str, mint: &str) -> Result<bool> {
+    let res = crate::rpc::call(
+        rpc,
+        "getTokenAccountsByOwner",
+        json!([owner, { "mint": mint }, { "encoding": "base64" }]),
+    )?;
+    Ok(res
+        .get("value")
+        .and_then(Value::as_array)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false))
+}
+
+/// Rent-exempt minimum lamports for an account of `data_bytes` (Go
+/// `SolanaRentExemptMinimum`).
+pub fn solana_rent_exempt_minimum(rpc: &str, data_bytes: u64) -> Result<u64> {
+    let res = crate::rpc::call(rpc, "getMinimumBalanceForRentExemption", json!([data_bytes]))?;
+    res.as_u64()
+        .ok_or_else(|| Error::Env("parse getMinimumBalanceForRentExemption".into()))
+}
+
+/// Canonical SPL token-account rent fallback (lamports), used when the live
+/// `getMinimumBalanceForRentExemption` probe fails.
+pub const SOLANA_TOKEN_ACCOUNT_RENT: u64 = 2_039_280;
+
+/// Extra lamports a native-SOL → SPL swap must hold back beyond the plain-send
+/// reservation — the reservation for `Swap:maxSpendable` on Solana (Go
+/// `solanaSwapSolReservation`, commit 03ad446). A native-SOL swap can create up
+/// to TWO transient rent-exempt token accounts the wallet must front at peak
+/// (both are closed before the tx ends, but Solana debits them mid-execution,
+/// so the balance has to cover them or the swap reverts with "custom program
+/// error: 0xb"):
+///
+///  1. the INPUT wSOL wrap account — unless the user already holds wSOL;
+///  2. the OUTPUT token's ATA — unless it already exists or the output is wSOL.
+///
+/// Returns 0 when the input isn't native SOL. RPC probe errors degrade to
+/// "assume the account is missing" (reserve it) so a slow upstream hands a
+/// conservative max. The `SOLANA_TOKEN_ACCOUNT_RENT` fallback matches the
+/// canonical SPL token-account rent.
+///
+/// NOTE: `Swap:maxSpendable` is EVM-only in this Rust port, so this helper is
+/// not yet wired into an endpoint; it captures the Go decision + arithmetic
+/// exactly and is exercised directly.
+pub fn solana_swap_sol_reservation(
+    rpc: &str,
+    owner: &str,
+    token_in_addr: &str,
+    token_out_addr: &str,
+) -> u64 {
+    if !is_native_token_address(token_in_addr) {
+        return 0;
+    }
+    let mut rent = solana_rent_exempt_minimum(rpc, 165).unwrap_or(0); // 165 = SPL token-account size
+    if rent == 0 {
+        rent = SOLANA_TOKEN_ACCOUNT_RENT;
+    }
+
+    let mut total = 0u64;
+    // (1) Input wSOL wrap account, unless the user already holds wSOL.
+    if !matches!(solana_has_token_account(rpc, owner, WRAPPED_SOL_MINT), Ok(true)) {
+        total += rent;
+    }
+    // (2) Output token ATA, unless it already exists or the output is wSOL.
+    let out_mint = solana_native_mint_or_addr(token_out_addr);
+    if out_mint != WRAPPED_SOL_MINT {
+        let has = solana_has_token_account(rpc, owner, &out_mint).unwrap_or(false);
+        if !has {
+            total += rent;
+        }
+    }
+    total
 }

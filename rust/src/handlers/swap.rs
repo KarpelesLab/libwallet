@@ -276,8 +276,56 @@ pub fn build_approval_data(_env: &Env, params: &Value) -> ApiResult {
     }))
 }
 
-/// `Swap:orderStatus` {orderId} — poll OKX settlement for a broadcast swap
-/// (Go `swapOrderStatus`). Stub pending the port of the OKX orderStatus path.
-pub fn order_status(_env: &Env, _params: &Value) -> ApiResult {
-    Err(ApiError::new(501, "Swap:orderStatus not yet ported"))
+/// `Swap:orderStatus` {orderId} — poll OKX settlement for a broadcast swap (Go
+/// `swapOrderStatus`). Swap:execute reports success the instant OKX ACCEPTS the
+/// broadcast (before the tx is validated or landed — OKX returns an orderId for
+/// a garbage payload too), so a host that needs certainty the swap actually
+/// landed polls here until Status is no longer "pending". Resolves the signing
+/// account's on-chain address, queries `Crypto/Okx:orderStatus`, and returns a
+/// normalized `{orderId, chain, status, txHash, failReason}`.
+pub fn order_status(env: &Env, params: &Value) -> ApiResult {
+    let order_id = params
+        .get("OrderId")
+        .or_else(|| params.get("orderId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "orderId is required"))?;
+
+    let account_id = params
+        .get("Account")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Account required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let net_id = params.get("Network").and_then(Value::as_str).unwrap_or("@");
+    let net = crate::models::network::fetch(env, net_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, "network not found"))?;
+    let chain_index = swap::okx_chain_index(&net.kind, &net.chain_id)
+        .map_err(|e| ApiError::new(400, e.to_string()))?;
+
+    let key_id = params.get("KeyId").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "KeyId required"))?;
+    let secret = params.get("Secret").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Secret required"))?;
+    let key = ApiKey::from_secret_b64(key_id, secret).map_err(ApiError::internal)?;
+    let base = params.get("Backend").and_then(Value::as_str).unwrap_or(crate::rest::DEFAULT_HOST);
+
+    let entry = swap::okx_fetch_order_status(&key, base, &chain_index, &account.address, order_id)
+        .map_err(|e| ApiError::new(502, format!("okx: orderStatus: {e}")))?;
+    let status = swap::okx_tx_status_label(entry.as_ref());
+    let mut res = swap::SwapOrderStatus {
+        order_id: order_id.to_owned(),
+        chain: net.kind.clone(),
+        status: status.to_owned(),
+        tx_hash: String::new(),
+        fail_reason: String::new(),
+    };
+    if let Some(e) = entry {
+        res.tx_hash = e.tx_hash;
+        if status == "failed" {
+            res.fail_reason = e.fail_reason.trim().to_owned();
+        }
+    }
+    Ok(serde_json::to_value(res).unwrap())
 }
