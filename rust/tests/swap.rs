@@ -161,7 +161,8 @@ fn okx_chain_index_maps_networks() {
 fn okx_token_addr_and_slippage() {
     // Native -> chain sentinel; strips a "type.chain." prefix.
     assert_eq!(swap::okx_token_addr("evm", "NATIVE"), "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
-    assert_eq!(swap::okx_token_addr("solana", "NATIVE"), "So11111111111111111111111111111111111111112");
+    // Solana native now maps to the System Program id so OKX wraps SOL (fixes 0xb).
+    assert_eq!(swap::okx_token_addr("solana", "NATIVE"), "11111111111111111111111111111111");
     assert_eq!(swap::okx_token_addr("evm", "evm.1.0xABC"), "0xABC");
     assert_eq!(swap::okx_token_addr("evm", "0xdef"), "0xdef");
     // Slippage clamping.
