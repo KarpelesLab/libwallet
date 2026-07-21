@@ -297,9 +297,24 @@ fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     Err(ApiError::new(503, "spot client is not online"))
 }
 
-/// `Wallet:repairRemoteKey` — re-upload the wallet's locally-stored RemoteKey
-/// share to restore a desynced 2FA share (Go `apiWalletRepairRemoteKey`). Stub
-/// pending the port.
-pub fn repair_remote_key(_env: &Arc<Env>, _params: &Value) -> ApiResult {
-    Err(ApiError::new(501, "Wallet:repairRemoteKey not yet ported"))
+/// `Wallet:repairRemoteKey` {Key} — re-upload the wallet's locally-stored
+/// RemoteKey share (sealed to the wdrone fleet, byte-identical to the original
+/// upload and preserved by backup) to restore a server-side 2FA share desynced
+/// by an abandoned reshare upload (Go `apiWalletRepairRemoteKey`). `Key` is a
+/// freshly validated crws session (`RemoteKey:reshare` → `:validate`). The
+/// wallet id comes from the path (`Wallet/<id>:repairRemoteKey`, injected as
+/// `Id`) or `WalletId`. Returns the updated wallet.
+pub fn repair_remote_key(env: &Arc<Env>, params: &Value) -> ApiResult {
+    let wallet_id = params
+        .get("WalletId")
+        .or_else(|| params.get("Id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "wallet id required"))?;
+    let key = params.get("Key").and_then(Value::as_str).unwrap_or("");
+    if key.is_empty() {
+        return Err(ApiError::new(400, "Key (validated RemoteKey session) is required"));
+    }
+    let w = crate::models::wallet::repair_remote_key(env, wallet_id, key).map_err(|e| ApiError::new(500, e.to_string()))?;
+    Ok(serde_json::to_value(w).unwrap())
 }

@@ -969,10 +969,121 @@ pub(crate) fn seal_share_full(
                 share.to_vec()
             };
             let sealed = keystore::seal_json(&payload, &recipients).map_err(|e| Error::Env(e.to_string()))?;
-            crate::walletsign::upload_generated_key(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed)?;
+            // Tenacious retry (Go `WalletKey.encrypt` switched to
+            // restDoRetryCritical): this upload is the one reshare step whose
+            // abandonment can desync server-side state from the local
+            // (unchanged) committee — an interrupted upload may still land
+            // server-side and overwrite the live share. Keep pushing for the
+            // full budget, then surface the recovery step on final failure.
+            upload_remote_share_critical(base, client_id.as_deref(), &kd.key, curve_out, protocol, &sealed).map_err(|e| {
+                Error::Env(format!(
+                    "RemoteKey share upload failed after extended retries (local wallet committee is unchanged; if any attempt reached the server the stored remote share may be out of sync — re-run this reshare from a device holding the local shares before relying on the RemoteKey): {e}"
+                ))
+            })?;
             Ok((sealed, kd.key.clone()))
         }
     }
+}
+
+/// The `walletinfo:clientId` header value (Go `withClientID`), if set.
+fn client_id(env: &Env) -> Option<String> {
+    env.config_get("walletinfo:clientId")
+        .ok()
+        .flatten()
+        .and_then(|b| String::from_utf8(b).ok())
+        .filter(|s| !s.is_empty())
+}
+
+/// Upload a sealed RemoteKey share to `Crypto/WalletSign:setGeneratedKey` with
+/// the tenacious critical retry (Go `WalletKey.encrypt` / `pushRemoteShare`).
+/// Mirrors [`crate::walletsign::upload_generated_key`]'s params but routes the
+/// POST through [`crate::reshare::rest_do_retry_critical`].
+fn upload_remote_share_critical(
+    base: &str,
+    client_id: Option<&str>,
+    remote_key: &str,
+    curve: &str,
+    protocol: &str,
+    data_cbor: &[u8],
+) -> Result<()> {
+    let mut params = serde_json::json!({
+        "data": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data_cbor),
+        "key": remote_key,
+        "curve": curve,
+    });
+    if !protocol.is_empty() {
+        params["protocol"] = serde_json::json!(protocol);
+    }
+    crate::reshare::rest_do_retry_critical(base, "Crypto/WalletSign:setGeneratedKey", &params, client_id)?;
+    Ok(())
+}
+
+/// Derive the `(curve, protocol)` wire tags for a RemoteKey share upload from
+/// the PERSISTED `schema` + wallet `curve` (Go `pushRemoteShare`'s switch). A
+/// restored wallet has no in-memory share, so the tags come from what was
+/// stored — the same recipient vocabulary the wdrone's loadShare recognises.
+pub fn remote_share_wire_tags<'a>(schema: &str, wallet_curve: &'a str) -> Result<(&'a str, &'a str)> {
+    match schema {
+        "dkls23" => Ok(("secp256k1", "dkls23")),
+        "frost" => Ok(("ed25519", "frost")),
+        // Legacy GG18-family share: the wallet curve disambiguates ecdsa/eddsa.
+        "" => match wallet_curve {
+            "secp256k1" | "ed25519" => Ok((wallet_curve, "legacy")),
+            other => Err(Error::Env(format!("pushRemoteShare: legacy share with unsupported wallet curve {other:?}"))),
+        },
+        other => Err(Error::Env(format!("pushRemoteShare: unsupported share schema {other:?}"))),
+    }
+}
+
+/// `WalletKey.pushRemoteShare` (Go): re-upload `wk.data` (the fleet-encrypted
+/// RemoteKey share blob, byte-identical to what `seal_share_full` originally
+/// sent) under `session_key`. Unlike a live ceremony upload — which knows the
+/// wire tags from the in-memory share — this derives `(curve, protocol)` from
+/// the PERSISTED `Schema` + wallet curve, because a restored wallet has no
+/// in-memory share (the RemoteKey blob is not client-decryptable). Sets
+/// `wk.key = session_key` on success.
+pub fn push_remote_share(env: &Env, wallet: &Wallet, wk: &mut WalletKey, session_key: &str) -> Result<()> {
+    if wk.kind != "RemoteKey" {
+        return Err(Error::Env(format!("pushRemoteShare: key {} is {:?}, not a RemoteKey", wk.id, wk.kind)));
+    }
+    let (curve_param, protocol_param) = remote_share_wire_tags(&wk.schema, &wallet.curve)?;
+    let base = crate::rest::DEFAULT_HOST;
+    upload_remote_share_critical(base, client_id(env).as_deref(), session_key, curve_param, protocol_param, &wk.data)
+        .map_err(|e| Error::Env(format!("repair RemoteKey share upload failed: {e}")))?;
+    wk.key = session_key.to_string();
+    Ok(())
+}
+
+/// `Wallet:repairRemoteKey` (Go `apiWalletRepairRemoteKey`): re-upload the
+/// wallet's locally-stored RemoteKey share blob to the WalletSign backend under
+/// a fresh, validated crws session, restoring a server-side share desynced by an
+/// abandoned reshare upload. Persists the refreshed session key and returns the
+/// updated wallet.
+pub fn repair_remote_key(env: &Env, wallet_id: &str, session_key: &str) -> Result<Wallet> {
+    if session_key.is_empty() {
+        return Err(Error::Env("Key (validated RemoteKey session) is required".into()));
+    }
+    let mut wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("Wallet required".into()))?;
+    let idx = wallet
+        .keys
+        .iter()
+        .position(|k| k.kind == "RemoteKey")
+        .ok_or_else(|| Error::Env("wallet has no RemoteKey share".into()))?;
+    if wallet.keys[idx].data.is_empty() {
+        return Err(Error::Env(
+            "wallet's RemoteKey share has no local data blob — was this wallet restored from a backup that includes key data?".into(),
+        ));
+    }
+    // Split the borrow: push_remote_share needs &wallet (curve) + &mut wk.
+    let mut wk = wallet.keys[idx].clone();
+    push_remote_share(env, &wallet, &mut wk, session_key)?;
+    // Persist the refreshed session key (Go `w.save(e)`).
+    env.exec(
+        r#"UPDATE "WalletKey" SET "Key"=?1 WHERE "Id"=?2"#,
+        vec![SqlValue::Text(wk.key.clone()), SqlValue::Text(wk.id.clone())],
+    )?;
+    wallet.keys[idx] = wk;
+    Ok(wallet)
 }
 
 /// Persist a FROST reshare's new committee: seal each new share per its

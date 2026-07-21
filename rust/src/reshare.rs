@@ -11,8 +11,9 @@
 //! committees, then the tss-lib resharing rounds flow over the same transport.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex, Weak};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use tsslib::frosttss::{Key as FrostKey, Keygen, Resharing};
@@ -26,11 +27,42 @@ use crate::{Env, Error, Result};
 pub struct Hub {
     local: Mutex<HashMap<String, Arc<LocalBroker>>>,
     remote: Mutex<HashMap<String, Arc<WdronePeer>>>,
+    /// Invoked (once) with the reason carried by a `walletsign:error` frame — a
+    /// remote (wdrone) participant reporting a terminal ceremony failure (e.g.
+    /// its resharing party failed to start on a stale share). Ceremony owners
+    /// wire this to their [`RoundsGuard`] so the ceremony fails fast with the
+    /// remote's reason instead of waiting out the rounds deadline. Fleet
+    /// versions that predate the frame simply never send it (Go `tssHub.onError`).
+    on_error: Mutex<Option<Box<dyn Fn(String) + Send + Sync>>>,
+    error_fired: AtomicBool,
 }
 
 impl Hub {
     fn new() -> Arc<Hub> {
-        Arc::new(Hub { local: Mutex::new(HashMap::new()), remote: Mutex::new(HashMap::new()) })
+        Arc::new(Hub {
+            local: Mutex::new(HashMap::new()),
+            remote: Mutex::new(HashMap::new()),
+            on_error: Mutex::new(None),
+            error_fired: AtomicBool::new(false),
+        })
+    }
+
+    /// Wire the terminal-failure handler (Go `hub.onError = failRounds`).
+    fn set_on_error(&self, f: Box<dyn Fn(String) + Send + Sync>) {
+        *self.on_error.lock().unwrap() = Some(f);
+    }
+
+    /// Deliver a remote-reported terminal error to the ceremony owner, once
+    /// (Go `tssHub.fail` guarded by `errorOnce`).
+    fn fail(&self, reason: String) {
+        if self.error_fired.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(f) = self.on_error.lock().unwrap().as_ref() {
+            f(reason);
+        }
+        // No handler wired: the reason is dropped (Go logs it). In this port
+        // the handler is always installed before remotes start.
     }
 
     /// Register an in-process party and return its broker (Go `addLocal`).
@@ -261,6 +293,21 @@ impl WdronePeer {
         if jm.typ.is_empty() {
             return;
         }
+        // Terminal-failure frame from a wdrone participant (Go `spotPeer.
+        // messageHandler`): fail the ceremony immediately with the remote's
+        // reason rather than waiting out the rounds deadline in silence.
+        if jm.typ == "walletsign:error" {
+            let reason = jm.data.as_str().unwrap_or("").to_string();
+            let reason = if reason.is_empty() {
+                "remote participant reported an unspecified failure".to_string()
+            } else {
+                reason
+            };
+            if let Some(hub) = self.hub.upgrade() {
+                hub.fail(reason);
+            }
+            return;
+        }
         if let Some(hub) = self.hub.upgrade() {
             let _ = hub.deliver(&jm);
         }
@@ -293,6 +340,236 @@ fn peers_json(sorted: &[PartyId]) -> Value {
     Value::Array(sorted.iter().map(|p| serde_json::to_value(p).unwrap_or(Value::Null)).collect())
 }
 
+// ── Reshare rounds deadline + remote-reported failures (Go reshare.go) ───────
+
+/// Bounds the interactive TSS reshare rounds (remote peer init + message
+/// exchange). The rounds themselves complete in seconds, but the window must
+/// also cover the remote-peer init worst case (`maxInitAttempts=3 × (15s
+/// selectPeer + 15s init query) ≈ 90s`) plus ~30s of rounds headroom. Without
+/// a bound, a remote party that goes silent after init hangs the ceremony
+/// forever (Go `reshareRoundsTimeout`).
+pub const RESHARE_ROUNDS_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Bounds a [`RoundsGuard`]-wrapped reshare and turns the terminal condition
+/// into a descriptive, actionable error (Go `reshareRoundsContext`). Because
+/// the Rust reshare runs its parties on threads (not ctx-aware goroutines), the
+/// guard carries the deadline plus a slot for a remote-reported failure reason;
+/// the collection loop consults both.
+pub struct RoundsGuard {
+    /// When the interactive rounds must be abandoned.
+    deadline: Instant,
+    /// Set once by the [`Hub`] `on_error` hook when a `walletsign:error` frame
+    /// arrives (Go: the remote's reason becomes the ctx cancel cause).
+    fail_reason: Arc<Mutex<Option<String>>>,
+    /// The host/caller aborted (Go `parent.Err() != nil`): errors pass through
+    /// untouched. No parent ctx exists in this synchronous port, so this is only
+    /// set in tests to exercise the passthrough branch.
+    caller_canceled: bool,
+}
+
+impl RoundsGuard {
+    /// A fresh guard whose deadline starts now (Go derives the bounded ctx).
+    pub fn new() -> RoundsGuard {
+        RoundsGuard {
+            deadline: Instant::now() + RESHARE_ROUNDS_TIMEOUT,
+            fail_reason: Arc::new(Mutex::new(None)),
+            caller_canceled: false,
+        }
+    }
+
+    /// Builder for the caller-cancelled variant (test parity with Go's
+    /// "caller cancel passes through untouched").
+    pub fn with_caller_canceled(mut self) -> RoundsGuard {
+        self.caller_canceled = true;
+        self
+    }
+
+    /// The [`Hub`] `on_error` hook: records the remote's reason once (Go
+    /// `fail(reason)` cancelling the ctx with the reason as cause).
+    pub fn on_error_hook(&self) -> Box<dyn Fn(String) + Send + Sync> {
+        let slot = self.fail_reason.clone();
+        Box::new(move |reason| {
+            let mut g = slot.lock().unwrap();
+            if g.is_none() {
+                *g = Some(reason);
+            }
+        })
+    }
+
+    /// The remote-reported failure reason, if any arrived.
+    pub fn remote_failure(&self) -> Option<String> {
+        self.fail_reason.lock().unwrap().clone()
+    }
+
+    /// Whether the rounds deadline has elapsed.
+    fn expired(&self) -> bool {
+        Instant::now() >= self.deadline
+    }
+
+    /// Turn the rounds' terminal condition into a descriptive error, mirroring
+    /// Go `reshareRoundsContext`'s wrap. Priorities: caller cancel → passthrough;
+    /// remote-reported reason → surface it; our deadline → "stopped responding";
+    /// otherwise the party error is returned unchanged.
+    pub fn wrap(&self, err_msg: String, hit_deadline: bool) -> Error {
+        // Caller-initiated cancel: pass the error through untouched.
+        if self.caller_canceled {
+            return Error::Env(err_msg);
+        }
+        // A remote participant reported a terminal failure — surface its reason
+        // (not a timeout), with the committee-unchanged assurance.
+        if let Some(reason) = self.remote_failure() {
+            return Error::Env(format!(
+                "reshare failed — remote participant reported: {reason}; the wallet committee is unchanged"
+            ));
+        }
+        // Our own deadline fired: a participant went silent mid-ceremony.
+        if hit_deadline {
+            return Error::Env(format!(
+                "reshare TSS rounds timed out after {}s — a committee participant stopped responding mid-ceremony (for a RemoteKey this can indicate the server-side share is out of sync); the wallet committee is unchanged: {err_msg}",
+                RESHARE_ROUNDS_TIMEOUT.as_secs()
+            ));
+        }
+        Error::Env(err_msg)
+    }
+}
+
+impl Default for RoundsGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Collect one result per reshare party over `rx`, bounded by `guard`'s deadline
+/// and interrupted fast by a remote-reported failure. New-committee parties
+/// occupy indices `0..new_sorted.len()`; only their (non-`None`) shares are
+/// returned, keyed by `PartyId.id` (Go: `wg.Wait()` + the `wrapRoundsErr` gate).
+fn collect_reshared<K>(
+    guard: &RoundsGuard,
+    new_sorted: &[PartyId],
+    rx: mpsc::Receiver<(usize, std::result::Result<Option<K>, String>)>,
+    total: usize,
+) -> Result<HashMap<String, K>> {
+    let mut new_shares: HashMap<String, K> = HashMap::new();
+    let mut got = 0usize;
+    while got < total {
+        // A wdrone reported a terminal failure: abort now with its reason.
+        if guard.remote_failure().is_some() {
+            return Err(guard.wrap(String::new(), false));
+        }
+        if guard.expired() {
+            return Err(guard.wrap("rounds deadline exceeded".into(), true));
+        }
+        // Poll in short slices so a mid-flight remote failure / the deadline is
+        // observed promptly even while a party thread is still running.
+        let remaining = guard.deadline.saturating_duration_since(Instant::now());
+        let poll = remaining.min(Duration::from_millis(250));
+        match rx.recv_timeout(poll) {
+            Ok((i, res)) => {
+                got += 1;
+                match res {
+                    Ok(share) => {
+                        if i < new_sorted.len() {
+                            if let Some(k) = share {
+                                new_shares.insert(new_sorted[i].id.clone(), k);
+                            }
+                        }
+                    }
+                    // A party failed: wrap prefers a remote reason if one landed.
+                    Err(e) => return Err(guard.wrap(format!("reshare failed: {e}"), false)),
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(new_shares)
+}
+
+// ── Tenacious RemoteKey share upload (Go restretry.go restDoRetryCritical) ───
+
+const CRITICAL_RETRY_BUDGET: Duration = Duration::from_secs(300);
+const CRITICAL_RETRY_BACKOFF: Duration = Duration::from_secs(2);
+const CRITICAL_RETRY_BACKOFF_MAX: Duration = Duration::from_secs(30);
+
+/// A classified upload failure, mirroring the shapes Go's
+/// `isRetryableCriticalError` distinguishes on a `rest.Error`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UploadError {
+    /// A rest-level HTTP error carrying a status code (Go `rest.Error` with a
+    /// non-nil `Response`).
+    Rest(u16),
+    /// A rest-level error with no HTTP response attached (Go `rest.Error{}` /
+    /// `Response == nil`): the transport failed, retry.
+    RestNoResponse,
+    /// A transport-level failure — http2 header timeout, connection reset, … —
+    /// (not a `rest.Error`): the request may already have landed, retry.
+    Transport(String),
+}
+
+/// Retry 5xx AND anything that is not a definitive rest-level 4xx: a non-rest
+/// (transport) error means we cannot know whether the server processed the
+/// request, and abandoning a share upload can desync server-side state (Go
+/// `isRetryableCriticalError`). `None` (no error) is not retryable.
+pub fn is_retryable_critical_error(err: Option<&UploadError>) -> bool {
+    match err {
+        None => false,
+        Some(UploadError::Rest(code)) => *code >= 500,
+        Some(UploadError::RestNoResponse) => true,
+        Some(UploadError::Transport(_)) => true,
+    }
+}
+
+/// Recover a classification from the REST layer's stringly-typed error. The
+/// `rest` module collapses HTTP status into the error message; when a
+/// `status code <N>` is present we treat it as a rest-level HTTP error,
+/// otherwise as a transport failure (Go's default for a non-`rest.Error`).
+pub fn classify_upload_error(err: &Error) -> UploadError {
+    let s = err.to_string();
+    match parse_status_code(&s) {
+        Some(code) => UploadError::Rest(code),
+        None => UploadError::Transport(s),
+    }
+}
+
+/// Extract an HTTP status code from a REST error string (`… status code 404 …`).
+fn parse_status_code(s: &str) -> Option<u16> {
+    let idx = s.find("status code ")?;
+    let rest = &s[idx + "status code ".len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Keep attempting `Crypto/WalletSign:setGeneratedKey` (via [`crate::rest::
+/// do_post`]) until it succeeds, hits a deterministic 4xx, or
+/// [`CRITICAL_RETRY_BUDGET`] elapses — retrying 5xx and transport failures with
+/// exponential backoff (Go `restDoRetryCritical`). Used for the one reshare step
+/// whose abandonment can desync the server-side RemoteKey share.
+pub fn rest_do_retry_critical(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
+    let deadline = Instant::now() + CRITICAL_RETRY_BUDGET;
+    let mut backoff = CRITICAL_RETRY_BACKOFF;
+    loop {
+        match crate::rest::do_post(base, path, params, client_id) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                let ue = classify_upload_error(&e);
+                if !is_retryable_critical_error(Some(&ue)) {
+                    return Err(e);
+                }
+                if Instant::now() >= deadline {
+                    return Err(e);
+                }
+                std::thread::sleep(backoff);
+                if backoff < CRITICAL_RETRY_BACKOFF_MAX {
+                    backoff = (backoff * 2).min(CRITICAL_RETRY_BACKOFF_MAX);
+                }
+            }
+        }
+    }
+}
+
 /// The transport + committee scaffolding shared by every reshare protocol: the
 /// resolved old/new committees, the wired [`Hub`], and the started wdrone peers.
 struct Ceremony {
@@ -317,6 +594,7 @@ fn setup_ceremony(
     threshold: usize,
     curve: &str,
     protocol: &str,
+    on_error: Box<dyn Fn(String) + Send + Sync>,
 ) -> Result<Ceremony> {
     let mut old_parties: Vec<PartyId> = Vec::with_capacity(old_keys.len());
     for kd in old_keys {
@@ -330,6 +608,10 @@ fn setup_ceremony(
     let new_sorted = PartyId::sort(new_parties.clone(), 0);
 
     let hub = Hub::new();
+    // Wire the terminal-failure handler before any remote starts, so a
+    // `walletsign:error` frame during init or rounds fails fast (Go sets
+    // `hub.onError = failRounds` before `startReshareRemotes`).
+    hub.set_on_error(on_error);
     for p in &new_sorted {
         hub.add_local(p);
     }
@@ -376,6 +658,15 @@ fn setup_ceremony(
             peer: Mutex::new(String::new()),
         });
         hub.add_remote(rp.clone());
+        // Descriptive spot-offline error (Go `waitOnlineSpot` wrap at the
+        // remote-init sites): a bare timeout here is indistinguishable from a
+        // ceremony failure, so name the real cause.
+        if client.connection_count().1 == 0 {
+            return Err(Error::Env(
+                "spot network unavailable (could not reach the relay mesh to contact the remote 2FA participant): spot client is not online"
+                    .into(),
+            ));
+        }
         let info = json!({
             "old_peers": peers_json(&old_sorted),
             "new_peers": peers_json(&new_sorted),
@@ -412,17 +703,27 @@ pub fn reshare_frost(
         return Err(Error::Env("invalid new committee size/threshold".into()));
     }
 
-    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "ed25519", "frost")?;
+    // Bound the interactive rounds so a silent remote party errors out instead
+    // of hanging the ceremony forever (Go `reshareRoundsContext`). The guard's
+    // deadline covers the remote-peer init inside setup_ceremony too.
+    let guard = RoundsGuard::new();
+    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "ed25519", "frost", guard.on_error_hook())?;
 
     // Spawn resharing parties: new committee (input None) + local old committee
-    // (input = decrypted old share). Each runs on its own thread.
-    let mut handles: Vec<std::thread::JoinHandle<std::result::Result<Option<FrostKey>, String>>> = Vec::new();
+    // (input = decrypted old share). Each runs on its own thread and reports its
+    // result over `tx`; new-committee parties occupy indices 0..new_sorted.len().
+    let (tx, rx) = mpsc::channel::<(usize, std::result::Result<Option<FrostKey>, String>)>();
+    let mut idx = 0usize;
     for p in &cx.new_sorted {
         let broker = cx.hub.local.lock().unwrap().get(&p.id).cloned().unwrap();
         let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, p.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
-        handles.push(std::thread::spawn(move || {
-            Resharing::new(params, None).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
-        }));
+        let tx = tx.clone();
+        let i = idx;
+        idx += 1;
+        std::thread::spawn(move || {
+            let r = Resharing::new(params, None).map_err(|e| format!("{e:?}")).and_then(|r| r.wait().map_err(|e| format!("{e:?}")));
+            let _ = tx.send((i, r));
+        });
     }
     for kd in old_keys {
         let wk = wallet.keys.iter().find(|k| k.id == kd.id).unwrap();
@@ -433,20 +734,18 @@ pub fn reshare_frost(
         let key = FrostKey::from_json(&open_local_share(wk, &kd.key)?).map_err(|e| Error::Env(format!("load old frost share: {e:?}")))?;
         let broker = cx.hub.local.lock().unwrap().get(&sp.id).cloned().unwrap();
         let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, sp.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
-        handles.push(std::thread::spawn(move || {
-            Resharing::new(params, Some(key)).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
-        }));
+        let tx = tx.clone();
+        let i = idx;
+        idx += 1;
+        std::thread::spawn(move || {
+            let r = Resharing::new(params, Some(key)).map_err(|e| format!("{e:?}")).and_then(|r| r.wait().map_err(|e| format!("{e:?}")));
+            let _ = tx.send((i, r));
+        });
     }
+    let total = idx;
+    drop(tx);
 
-    let mut new_shares: HashMap<String, FrostKey> = HashMap::new();
-    for (i, h) in handles.into_iter().enumerate() {
-        let key = h.join().map_err(|_| Error::Env("reshare party thread panicked".into()))?.map_err(|e| Error::Env(format!("reshare failed: {e}")))?;
-        if i < cx.new_sorted.len() {
-            if let Some(k) = key {
-                new_shares.insert(cx.new_sorted[i].id.clone(), k);
-            }
-        }
-    }
+    let new_shares = collect_reshared(&guard, &cx.new_sorted, rx, total)?;
     crate::models::wallet::persist_reshared_frost(env, &wallet, new_keys, &cx.new_wk_ids, &cx.new_parties, &new_shares)?;
     Ok(())
 }
@@ -481,16 +780,24 @@ pub fn reshare_dkls(
         .map_err(|e| Error::Env(format!("bad wallet pubkey: {e:?}")))?
         .to_projective();
 
-    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "secp256k1", "dkls23")?;
+    // Bound the interactive rounds — see RESHARE_ROUNDS_TIMEOUT (Go
+    // `reshareRoundsContext`).
+    let guard = RoundsGuard::new();
+    let cx = setup_ceremony(env, &wallet, old_keys, new_keys, threshold, "secp256k1", "dkls23", guard.on_error_hook())?;
 
-    let mut handles: Vec<std::thread::JoinHandle<std::result::Result<Option<DklsKey>, String>>> = Vec::new();
+    let (tx, rx) = mpsc::channel::<(usize, std::result::Result<Option<DklsKey>, String>)>();
+    let mut idx = 0usize;
     for p in &cx.new_sorted {
         let broker = cx.hub.local.lock().unwrap().get(&p.id).cloned().unwrap();
         let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, p.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
         let pub_pt = old_ecdsa_pub.clone();
-        handles.push(std::thread::spawn(move || {
-            ResharingParty::new(params, pub_pt, None).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
-        }));
+        let tx = tx.clone();
+        let i = idx;
+        idx += 1;
+        std::thread::spawn(move || {
+            let r = ResharingParty::new(params, pub_pt, None).map_err(|e| format!("{e:?}")).and_then(|r| r.wait().map_err(|e| format!("{e:?}")));
+            let _ = tx.send((i, r));
+        });
     }
     for kd in old_keys {
         let wk = wallet.keys.iter().find(|k| k.id == kd.id).unwrap();
@@ -502,20 +809,18 @@ pub fn reshare_dkls(
         let broker = cx.hub.local.lock().unwrap().get(&sp.id).cloned().unwrap();
         let params = ReSharingParameters::new(cx.old_sorted.clone(), cx.new_sorted.clone(), threshold, threshold, sp.clone(), broker as Arc<dyn MessageBroker + Send + Sync>);
         let pub_pt = old_ecdsa_pub.clone();
-        handles.push(std::thread::spawn(move || {
-            ResharingParty::new(params, pub_pt, Some(key)).map_err(|e| format!("{e:?}"))?.wait().map_err(|e| format!("{e:?}"))
-        }));
+        let tx = tx.clone();
+        let i = idx;
+        idx += 1;
+        std::thread::spawn(move || {
+            let r = ResharingParty::new(params, pub_pt, Some(key)).map_err(|e| format!("{e:?}")).and_then(|r| r.wait().map_err(|e| format!("{e:?}")));
+            let _ = tx.send((i, r));
+        });
     }
+    let total = idx;
+    drop(tx);
 
-    let mut new_shares: HashMap<String, DklsKey> = HashMap::new();
-    for (i, h) in handles.into_iter().enumerate() {
-        let key = h.join().map_err(|_| Error::Env("reshare party thread panicked".into()))?.map_err(|e| Error::Env(format!("reshare failed: {e}")))?;
-        if i < cx.new_sorted.len() {
-            if let Some(k) = key {
-                new_shares.insert(cx.new_sorted[i].id.clone(), k);
-            }
-        }
-    }
+    let new_shares = collect_reshared(&guard, &cx.new_sorted, rx, total)?;
     crate::models::wallet::persist_reshared_dkls(env, &wallet, new_keys, &cx.new_wk_ids, &cx.new_parties, &new_shares)?;
     Ok(())
 }
