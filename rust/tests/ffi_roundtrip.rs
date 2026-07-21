@@ -32,11 +32,21 @@ fn request(h: usize, body: &str) -> serde_json::Value {
     let cb: ResponseCallback = capture;
     LibwalletRequest(h, req.as_ptr(), Some(cb), ud);
 
+    // Drain any streamed `progress` envelopes and return the terminal one.
+    // (Wallet:create now streams progress like Go; the user_data box must stay
+    // alive across every callback, so we only free it after the terminal one.)
     // Generous timeout: a Wallet POST runs a full DKLs/FROST keygen (several
     // seconds), which can be slower under parallel test load.
-    let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+    let value = loop {
+        let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON envelope");
+        if v["result"] == "progress" {
+            continue;
+        }
+        break v;
+    };
     drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
-    serde_json::from_str(&json).expect("valid JSON envelope")
+    value
 }
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -2516,15 +2526,16 @@ fn wallet_backup_restore_roundtrip_via_ffi() {
     let backup = request(src, &format!(r#"{{"path":"Wallet:backup","params":{{"Id":"{wallet_id}"}}}}"#));
     assert_eq!(backup["result"], "success", "{backup}");
     let entry = &backup["data"][0];
-    assert!(entry["Filename"].as_str().unwrap().starts_with("wallet_"));
-    let data = entry["Data"].as_str().unwrap().to_string();
+    // Go's backupDataEntry uses lowercase json tags filename/data.
+    assert!(entry["filename"].as_str().unwrap().starts_with("wallet_"));
+    let data = entry["data"].as_str().unwrap().to_string();
     LibwalletDestroy(src);
 
     // Restore into a FRESH environment.
     let dst = new_env();
     let restored = request(
         dst,
-        &format!(r#"{{"path":"Wallet:restore","params":{{"Files":[{{"Data":"{data}"}}]}}}}"#),
+        &format!(r#"{{"path":"Wallet:restore","params":{{"files":[{{"data":"{data}"}}]}}}}"#),
     );
     assert_eq!(restored["result"], "success", "{restored}");
     assert_eq!(restored["data"]["restored"][0], wallet_id);

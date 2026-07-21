@@ -58,12 +58,20 @@ fn dispatch(h: usize, body: &str) -> (Receiver<String>, *mut Sender<String>) {
     (rx, ud)
 }
 
-/// A synchronous dispatch: fire and block for the single response envelope.
+/// A synchronous dispatch: fire and block for the terminal response envelope,
+/// draining any streamed `progress` envelopes first (Wallet:create streams).
 fn request(h: usize, body: &str) -> serde_json::Value {
     let (rx, ud) = dispatch(h, body);
-    let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+    let value = loop {
+        let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON envelope");
+        if v["result"] == "progress" {
+            continue;
+        }
+        break v;
+    };
     drop(unsafe { Box::from_raw(ud) });
-    serde_json::from_str(&json).expect("valid JSON envelope")
+    value
 }
 
 /// Register the host event sink and return the receiver plus the raw Sender

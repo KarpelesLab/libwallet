@@ -29,9 +29,14 @@ fn request(h: usize, body: &str) -> serde_json::Value {
     let cb: ResponseCallback = capture;
     LibwalletRequest(h, req.as_ptr(), Some(cb), ud);
 
-    let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+    let value = loop {
+        let json = rx.recv_timeout(Duration::from_secs(30)).expect("callback fired");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON envelope");
+        if v["result"] == "progress" { continue; }
+        break v;
+    };
     drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
-    serde_json::from_str(&json).expect("valid JSON envelope")
+    value
 }
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
