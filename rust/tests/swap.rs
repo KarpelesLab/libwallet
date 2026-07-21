@@ -65,20 +65,30 @@ fn execute_solana_splices_and_broadcasts() {
     raw_tx.extend_from_slice(&message);
     let tx_data_b58 = bs58::encode(&raw_tx).into_string();
 
-    let okx = mock_multi(vec![format!(
-        r#"{{"result":"success","data":[{{"tx":{{"data":"{tx_data_b58}"}}}}]}}"#
-    )]);
-    let node = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"5xSolSignature"}"#.to_string()]);
+    // OKX serves, in call order: the swap tx (GET /swap), the broadcast accept
+    // (POST broadcastTransaction → orderId), and the settlement poll (GET
+    // orderStatus → success). Broadcast now goes through OKX, not the node.
+    let okx = mock_multi(vec![
+        format!(r#"{{"result":"success","data":[{{"tx":{{"data":"{tx_data_b58}"}}}}]}}"#),
+        r#"{"result":"success","data":[{"orderId":"ord-sol"}]}"#.to_string(),
+        r#"{"result":"success","data":[{"orders":[{"orderId":"ord-sol","txStatus":"2"}]}]}"#.to_string(),
+    ]);
+    let node = "http://unused.invalid"; // rpc is no longer used for Solana broadcast
 
     let key = ApiKey::from_seed("kid", [4u8; 32]);
     let token_in = TokenRef { address: "NATIVE".into(), symbol: "SOL".into(), decimals: 9 };
     let token_out = TokenRef { address: "EPjF...".into(), symbol: "USDC".into(), decimals: 6 };
 
     let res = swap::execute_solana(
-        &env, &acct.id, &unlock, &key, &okx, &node, "mainnet", &token_in, &token_out, "1000000000", 50,
+        &env, &acct.id, &unlock, &key, &okx, node, "mainnet", &token_in, &token_out, "1000000000", 50, false, "q_test",
     )
     .unwrap();
-    assert_eq!(res["signature"], "5xSolSignature");
+    assert_eq!(res["orderId"], "ord-sol");
+    assert_eq!(res["quoteId"], "q_test");
+    // No distinct on-chain hash from OKX → txid = base58(slot-0 signature).
+    let sig = res["signature"].as_str().unwrap();
+    assert!(!sig.is_empty() && bs58::decode(sig).into_vec().is_ok());
+    assert_eq!(res["hash"], res["signature"]);
 
     // Cross-check: the message that was signed verifies under the account key.
     let msg = tx_message(&raw_tx).unwrap();
@@ -111,25 +121,29 @@ fn execute_evm_signs_and_broadcasts() {
         .map(|(k, p)| (k.id.clone(), format!("password{p}")))
         .collect();
 
-    // OKX proxy returns a swap tx (router calldata to a DEX contract).
+    // OKX proxy serves, in call order: the swap tx (GET /swap), the broadcast
+    // accept (POST broadcastTransaction → orderId), and the settlement poll
+    // (GET orderStatus → success + on-chain txHash).
     let okx = mock_multi(vec![
         r#"{"result":"success","data":[{"tx":{"from":"0xfrom","to":"0x1111111111111111111111111111111111111111","value":"0","data":"0xabcdef","gas":"120000","gasPrice":"20000000000"}}]}"#.to_string(),
+        r#"{"result":"success","data":[{"orderId":"ord-evm"}]}"#.to_string(),
+        r#"{"result":"success","data":[{"orders":[{"orderId":"ord-evm","txStatus":"2","txHash":"0xLANDED"}]}]}"#.to_string(),
     ]);
-    // Node: eth_getTransactionCount(pending) = 3, then eth_sendRawTransaction.
-    let node = mock_multi(vec![
-        r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string(),
-        r#"{"jsonrpc":"2.0","id":1,"result":"0xswaphash"}"#.to_string(),
-    ]);
+    // Node is used only for the nonce now (broadcast goes through OKX).
+    let node = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string()]);
 
     let key = ApiKey::from_seed("kid", [4u8; 32]);
     let token_in = TokenRef { address: "0xIN".into(), symbol: "IN".into(), decimals: 18 };
     let token_out = TokenRef { address: "0xOUT".into(), symbol: "OUT".into(), decimals: 6 };
 
     let res = swap::execute_evm(
-        &env, &a.id, &unlock, &key, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50,
+        &env, &a.id, &unlock, &key, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50, true, "q_test",
     )
     .unwrap();
-    assert_eq!(res["hash"], "0xswaphash");
+    // Hash comes from the OKX orderStatus (the confirmed on-chain tx), not our node.
+    assert_eq!(res["hash"], "0xLANDED");
+    assert_eq!(res["orderId"], "ord-evm");
+    assert_eq!(res["quoteId"], "q_test");
     let raw_hex = res["raw"].as_str().unwrap();
     assert!(raw_hex.starts_with("0x"));
 

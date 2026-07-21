@@ -235,7 +235,11 @@ fn okx_slippage_percent(bps: u16) -> String {
 
 /// Execute an EVM swap (Go `okxExecuteEVM`): fetch the swap transaction from the
 /// OKX proxy, build a legacy EVM tx (gas raised 50% per OKX guidance), DKLs-sign
-/// it locally, and broadcast via the node. Returns `{hash, raw}`.
+/// it locally, and broadcast **through OKX** (`Crypto/Okx:broadcastTransaction`,
+/// MEV protection per `mev`) rather than our own node — OKX routes it through a
+/// MEV-protected mempool where supported. Confirms settlement via orderStatus
+/// (OKX returns an orderId on accept, before the tx lands, so a revert would
+/// otherwise read as a phantom success). Returns `{chain, hash, orderId, quoteId}`.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_evm(
     env: &Env,
@@ -249,6 +253,8 @@ pub fn execute_evm(
     token_out: &TokenRef,
     amount_in: &str,
     slippage_bps: u16,
+    mev: bool,
+    quote_id: &str,
 ) -> Result<serde_json::Value> {
     let acct = crate::models::account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
@@ -307,10 +313,29 @@ pub fn execute_evm(
     };
     let raw = crate::evm::sign_tx(env, account_id, unlock, &req)?;
     let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    // Local tx hash = keccak256(signed RLP), used as a fallback until OKX
+    // reports the on-chain hash.
+    let local_hash = format!(
+        "0x{}",
+        purecrypto::hash::keccak256(&raw).iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
 
-    // 4. Broadcast via the node.
-    let hash = crate::rpc::eth_send_raw_transaction(rpc, &format!("0x{raw_hex}"))?;
-    Ok(json!({ "hash": hash, "raw": format!("0x{raw_hex}") }))
+    // 4. Broadcast through OKX (MEV per pref) and confirm settlement. We do NOT
+    // retry EVM here — re-signing burns the nonce; the host can re-quote.
+    let bres = okx_broadcast_swap_tx(key, base, &chain_index, &acct.address, quote_id, &format!("0x{raw_hex}"), mev)?;
+    let mut hash = local_hash;
+    if !bres.order_id.is_empty() {
+        let (tx_hash, failed, reason) = okx_await_order(key, base, &chain_index, &acct.address, &bres.order_id);
+        if failed {
+            return Err(Error::Env(format!("okx evm swap did not land (orderId {}): {reason}", bres.order_id)));
+        }
+        if !tx_hash.is_empty() {
+            hash = tx_hash;
+        }
+    } else if !bres.tx_hash.is_empty() {
+        hash = bres.tx_hash;
+    }
+    Ok(json!({ "chain": "evm", "hash": hash, "orderId": bres.order_id, "quoteId": quote_id, "raw": format!("0x{raw_hex}") }))
 }
 
 /// Decode an OKX Solana `tx.data` blob (Go `okxDecodeSolanaTxData`): try base58
@@ -347,10 +372,17 @@ pub fn decode_solana_tx_data(s: &str, signer: &[u8; 32]) -> Result<Vec<u8>> {
     Err(Error::Env("tx.data is neither valid base58 nor base64 transaction".into()))
 }
 
+/// Bounds the Solana fetch→sign→broadcast retries (Go `okxSolanaBroadcastAttempts`).
+const OKX_SOLANA_BROADCAST_ATTEMPTS: u32 = 3;
+
 /// Execute a Solana swap (Go `okxExecuteSolana`): fetch the swap tx from the OKX
 /// proxy, FROST-sign its message, splice the signature into slot 0 (self-verified
-/// under the fee-payer key), and broadcast via `sendTransaction`. Returns
-/// `{signature}`.
+/// under the fee-payer key), and broadcast **through OKX** (base58 signedTx —
+/// OKX's node knows the blockhash it embedded, avoiding node-lag "Blockhash not
+/// found"). On a retryable broadcast/settlement failure, re-fetches with a fresh
+/// blockhash and re-signs (up to 3 attempts). Confirms via orderStatus. Returns
+/// `{chain, hash, signature, orderId, quoteId}`. `rpc` is unused now that
+/// broadcast goes through OKX, but kept for signature parity with `execute_evm`.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_solana(
     env: &Env,
@@ -358,12 +390,14 @@ pub fn execute_solana(
     unlock: &[(String, String)],
     key: &ApiKey,
     base: &str,
-    rpc: &str,
+    _rpc: &str,
     chain_id: &str,
     token_in: &TokenRef,
     token_out: &TokenRef,
     amount_in: &str,
     slippage_bps: u16,
+    _mev: bool,
+    quote_id: &str,
 ) -> Result<serde_json::Value> {
     let acct = crate::models::account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
@@ -373,7 +407,6 @@ pub fn execute_solana(
     let signer = crate::solana::pubkey_from_b64url(&acct.pubkey)
         .ok_or_else(|| Error::Env("bad account pubkey".into()))?;
     let chain_index = okx_chain_index("solana", chain_id)?;
-
     let params = json!({
         "chainIndex": chain_index,
         "fromTokenAddress": okx_token_addr("solana", &token_in.address),
@@ -382,40 +415,77 @@ pub fn execute_solana(
         "userWalletAddress": acct.address,
         "slippagePercent": okx_slippage_percent(slippage_bps),
     });
-    let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
-    let entry = match &data {
-        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
-        _ => data.clone(),
-    };
-    let tx_data = entry
-        .get("tx")
-        .and_then(|t| t.get("data"))
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| Error::Env("okx: solana swap returned empty tx.data".into()))?;
 
-    let raw_tx = decode_solana_tx_data(tx_data, &signer)?;
-    let message = crate::solana::tx_message(&raw_tx)
-        .ok_or_else(|| Error::Env("okx solana tx: no message".into()))?
-        .to_vec();
+    let mut last_err: Option<Error> = None;
+    for attempt in 1..=OKX_SOLANA_BROADCAST_ATTEMPTS {
+        // Re-fetch the swap tx each attempt so a retry gets a fresh blockhash.
+        let data = key.apply_get(base, "Crypto/Okx:swap", &params)?;
+        let entry = match &data {
+            Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
+            _ => data.clone(),
+        };
+        let tx_data = entry
+            .get("tx")
+            .and_then(|t| t.get("data"))
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| Error::Env("okx: solana swap returned empty tx.data".into()))?;
 
-    // FROST-sign the message and self-verify under the fee-payer key.
-    let sig = crate::models::wallet::sign_frost_local(env, &acct.wallet, unlock, &message)?;
-    let sig64: [u8; 64] = sig
-        .clone()
-        .try_into()
-        .map_err(|_| Error::Env("unexpected signature length".into()))?;
-    if !crate::tss::ed25519_verify(&signer, &message, &sig64) {
-        return Err(Error::Env("signature does not verify under fee-payer pubkey".into()));
+        let raw_tx = decode_solana_tx_data(tx_data, &signer)?;
+        let message = crate::solana::tx_message(&raw_tx)
+            .ok_or_else(|| Error::Env("okx solana tx: no message".into()))?
+            .to_vec();
+
+        // FROST-sign the message and self-verify under the fee-payer key.
+        let sig = crate::models::wallet::sign_frost_local(env, &acct.wallet, unlock, &message)?;
+        let sig64: [u8; 64] = sig
+            .try_into()
+            .map_err(|_| Error::Env("unexpected signature length".into()))?;
+        if !crate::tss::ed25519_verify(&signer, &message, &sig64) {
+            return Err(Error::Env("signature does not verify under fee-payer pubkey".into()));
+        }
+        let signed = crate::solana::splice_signature(&raw_tx, &sig64)
+            .ok_or_else(|| Error::Env("failed to splice signature".into()))?;
+
+        // Broadcast through OKX as base58 (NOT base64 — OKX base58-decodes it).
+        // MEV is Solana-ignored, so pass false.
+        let signed_b58 = bs58::encode(&signed).into_string();
+        let bres = match okx_broadcast_swap_tx(key, base, &chain_index, &acct.address, quote_id, &signed_b58, false) {
+            Ok(b) => b,
+            Err(e) => {
+                let es = e.to_string();
+                last_err = Some(e);
+                if attempt < OKX_SOLANA_BROADCAST_ATTEMPTS && is_retryable_solana_broadcast(&es) {
+                    continue;
+                }
+                return Err(last_err.unwrap());
+            }
+        };
+
+        // Solana txid = base58(slot-0 signature); OKX may report a different
+        // on-chain hash once it lands. `signature` stays the local signature.
+        let signature = bs58::encode(&sig64).into_string();
+        let mut hash = signature.clone();
+        if !bres.order_id.is_empty() {
+            let (tx_hash, failed, reason) = okx_await_order(key, base, &chain_index, &acct.address, &bres.order_id);
+            if failed {
+                let msg = format!("okx solana swap did not land (orderId {}): {reason}", bres.order_id);
+                if attempt < OKX_SOLANA_BROADCAST_ATTEMPTS && is_retryable_solana_broadcast(&reason) {
+                    last_err = Some(Error::Env(msg));
+                    continue;
+                }
+                return Err(Error::Env(msg));
+            }
+            if !tx_hash.is_empty() {
+                hash = tx_hash;
+            }
+        }
+        return Ok(json!({
+            "chain": "solana", "hash": hash, "signature": signature,
+            "orderId": bres.order_id, "quoteId": quote_id,
+        }));
     }
-    let signed = crate::solana::splice_signature(&raw_tx, &sig64)
-        .ok_or_else(|| Error::Env("failed to splice signature".into()))?;
-
-    // Broadcast (base64 wire form).
-    let signed_b64 = base64::engine::general_purpose::STANDARD.encode(&signed);
-    let res = crate::rpc::call(rpc, "sendTransaction", json!([signed_b64, { "encoding": "base64" }]))?;
-    let signature = res.as_str().unwrap_or_default().to_owned();
-    Ok(json!({ "signature": signature }))
+    Err(last_err.unwrap_or_else(|| Error::Env("okx solana broadcast: exhausted attempts".into())))
 }
 
 /// The unlimited-approval amount (uint256 max, 2^256 − 1).
@@ -727,6 +797,95 @@ pub fn okx_fetch_order_status(
     let page: OkxOrderStatusPage = serde_json::from_value(entry_val)
         .map_err(|e| Error::Env(format!("okx: decode orderStatus: {e}")))?;
     Ok(page.orders.into_iter().next())
+}
+
+/// A client-generated, opaque swap correlation id (Go `newQuoteID`): `"q_" +
+/// hex(16 random bytes)`. Passed to OKX `broadcastTransaction` as `quoteId`;
+/// OKX treats it as an opaque tracking token (settlement is keyed by the
+/// returned `orderId`, not this).
+pub fn new_quote_id() -> String {
+    format!("q_{}", uuid::Uuid::new_v4().simple())
+}
+
+/// The `Crypto/Okx:broadcastTransaction` result entry (Go `okxBroadcastResult`).
+/// `order_id` means OKX ACCEPTED the tx — not that it landed; confirm via
+/// [`okx_await_order`].
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct OkxBroadcastResult {
+    #[serde(default, rename = "orderId")]
+    pub order_id: String,
+    #[serde(default, rename = "txHash")]
+    pub tx_hash: String,
+}
+
+/// Broadcast a signed swap tx through OKX (Go `okxBroadcastSwapTx`). `signed_tx`
+/// is base58 (Solana) or 0x-hex (EVM) — OKX base58-decodes the Solana form, so
+/// base64 silently fails to land. `mev` is honored EVM-side only. The returned
+/// `order_id` means "accepted", not "landed" — confirm via [`okx_await_order`].
+pub fn okx_broadcast_swap_tx(
+    key: &ApiKey,
+    base: &str,
+    chain_index: &str,
+    address: &str,
+    quote_id: &str,
+    signed_tx: &str,
+    mev: bool,
+) -> Result<OkxBroadcastResult> {
+    let mut body = json!({
+        "quoteId": quote_id,
+        "chainIndex": chain_index,
+        "address": address,
+        "signedTx": signed_tx,
+    });
+    if mev {
+        body["enableMevProtection"] = Value::Bool(true);
+    }
+    let data = key.apply_post(base, "Crypto/Okx:broadcastTransaction", &body)?;
+    let entry = match &data {
+        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
+        other => other.clone(),
+    };
+    if entry.is_null() {
+        return Err(Error::Env("okx: broadcastTransaction returned empty response".into()));
+    }
+    serde_json::from_value(entry).map_err(|e| Error::Env(format!("okx: decode broadcast entry: {e}")))
+}
+
+/// Post-broadcast settlement poll bounds (Go `okxSolanaConfirmTimeout` /
+/// `okxSolanaConfirmInterval`).
+const OKX_CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+const OKX_CONFIRM_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Poll `Crypto/Okx:orderStatus` until the order lands (success / has a txHash),
+/// terminally fails, or the timeout elapses (Go `okxAwaitOrder`). Returns the
+/// on-chain `txHash` when known, whether it failed, and the failure reason. A
+/// timeout-while-pending returns `("", false, "")` so the caller proceeds
+/// optimistically — the tx may still be in flight.
+pub fn okx_await_order(
+    key: &ApiKey,
+    base: &str,
+    chain_index: &str,
+    address: &str,
+    order_id: &str,
+) -> (String, bool, String) {
+    let deadline = std::time::Instant::now() + OKX_CONFIRM_TIMEOUT;
+    loop {
+        let entry = okx_fetch_order_status(key, base, chain_index, address, order_id)
+            .ok()
+            .flatten();
+        match okx_tx_status_label(entry.as_ref()) {
+            "success" => return (entry.map(|e| e.tx_hash).unwrap_or_default(), false, String::new()),
+            "failed" => {
+                let e = entry.unwrap_or_default();
+                return (e.tx_hash, true, e.fail_reason);
+            }
+            _ => {} // pending
+        }
+        if std::time::Instant::now() >= deadline {
+            return (String::new(), false, String::new());
+        }
+        std::thread::sleep(OKX_CONFIRM_INTERVAL);
+    }
 }
 
 /// Normalized settlement state of a broadcast swap (Go `SwapOrderStatus`), the

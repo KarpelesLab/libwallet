@@ -112,6 +112,54 @@ impl ApiKey {
         let nonce = uuid::Uuid::new_v4().to_string();
         self.apply_get_at(base, path, params, time, &nonce)
     }
+
+    /// Authenticated POST of a KLB REST endpoint (Go `rest.Apply`, POST path):
+    /// `params` are JSON-encoded into the request BODY; `_key`/`_time`/`_nonce`
+    /// are query params, and the request is Ed25519-signed into `_sign` over
+    /// `POST \0 path \0 <encoded query> \0 sha256(body)`. Returns the envelope's
+    /// `data`. `time`/`nonce` are injected for deterministic tests.
+    ///
+    /// The exact bytes hashed for the signature are the exact bytes sent as the
+    /// body (`send_bytes`, not `send_json`) — re-serialization could reorder
+    /// keys and break the body hash.
+    pub fn apply_post_at(
+        &self,
+        base: &str,
+        path: &str,
+        params: &Value,
+        time: i64,
+        nonce: &str,
+    ) -> Result<Value> {
+        let body = serde_json::to_vec(params).unwrap_or_else(|_| b"null".to_vec());
+        let mut query: BTreeMap<String, String> = BTreeMap::new();
+        query.insert("_key".to_string(), self.key_id.clone());
+        query.insert("_time".to_string(), time.to_string());
+        query.insert("_nonce".to_string(), nonce.to_string());
+        let sign = self.sign_query("POST", path, &query, &body);
+        query.insert("_sign".to_string(), sign);
+
+        let url = format!("{base}/_special/rest/{path}?{}", encode_query(&query));
+        let resp: Value = ureq::post(&url)
+            .set("Sec-Rest-Http", "false")
+            .set("Content-Type", "application/json")
+            .timeout(Duration::from_secs(30))
+            .send_bytes(&body)
+            .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
+            .into_json()
+            .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
+        unwrap_envelope(path, resp)
+    }
+
+    /// Like [`apply_post_at`](Self::apply_post_at) but generates the timestamp
+    /// and nonce.
+    pub fn apply_post(&self, base: &str, path: &str, params: &Value) -> Result<Value> {
+        let time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let nonce = uuid::Uuid::new_v4().to_string();
+        self.apply_post_at(base, path, params, time, &nonce)
+    }
 }
 
 /// Encode query params the way Go `url.Values.Encode` does: keys sorted

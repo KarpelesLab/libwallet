@@ -156,10 +156,19 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     let unlock: Vec<(String, String)> =
         keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
 
+    // MEV protection is opt-out (on by default; OKX ignores it where unsupported).
+    let mev = swap::mev_enabled(params.get("MevProtection").and_then(Value::as_bool));
+    // Opaque OKX broadcast correlation id: caller-supplied or freshly generated.
+    let quote_id = params
+        .get("QuoteId")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(swap::new_quote_id);
+
     let res = if net.kind == "solana" {
-        swap::execute_solana(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
+        swap::execute_solana(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
     } else {
-        swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage)
+        swap::execute_evm(env, account_id, &unlock, &key, base, rpc, &net.chain_id, &token_in, &token_out, amount_in, slippage, mev, &quote_id)
     };
     res.map_err(ApiError::internal)
 }
