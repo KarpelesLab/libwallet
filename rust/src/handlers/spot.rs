@@ -296,3 +296,10 @@ fn wait_online(client: &spotlib::Client) -> Result<(), ApiError> {
     }
     Err(ApiError::new(503, "spot client is not online"))
 }
+
+/// `Wallet:repairRemoteKey` — re-upload the wallet's locally-stored RemoteKey
+/// share to restore a desynced 2FA share (Go `apiWalletRepairRemoteKey`). Stub
+/// pending the port.
+pub fn repair_remote_key(_env: &Arc<Env>, _params: &Value) -> ApiResult {
+    Err(ApiError::new(501, "Wallet:repairRemoteKey not yet ported"))
+}

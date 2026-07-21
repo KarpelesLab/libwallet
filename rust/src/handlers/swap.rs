@@ -275,3 +275,9 @@ pub fn build_approval_data(_env: &Env, params: &Value) -> ApiResult {
         "isUnlimited": swap::is_unlimited_approval(&amount),
     }))
 }
+
+/// `Swap:orderStatus` {orderId} — poll OKX settlement for a broadcast swap
+/// (Go `swapOrderStatus`). Stub pending the port of the OKX orderStatus path.
+pub fn order_status(_env: &Env, _params: &Value) -> ApiResult {
+    Err(ApiError::new(501, "Swap:orderStatus not yet ported"))
+}
