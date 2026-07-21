@@ -214,8 +214,15 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             }
             let req: CreateReq =
                 serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
+            // Stream keygen progress so the Dart `wallets.create(...)` stream
+            // yields at least one `Progress` before `Complete` (Go streams
+            // progress during the keygen ceremony). No-op unless the FFI worker
+            // installed a progress sink for this request; direct/unit callers
+            // and the non-streaming FFI helpers see nothing extra.
+            crate::dispatch::emit_progress(0.05); // keygen starting
             let w = crate::models::wallet::create(env, &req.name, &req.curve, &req.keys)
                 .map_err(ApiError::internal)?;
+            crate::dispatch::emit_progress(0.9); // keygen done, persisting
             // Notify the host (balance poller / UI) that a wallet appeared.
             env.broadcast(&crate::response::event(
                 "wallet:created",
@@ -305,19 +312,26 @@ pub fn backup(env: &Env, params: &Value) -> ApiResult {
     Ok(Value::Array(entries))
 }
 
-/// `Wallet:restore` {Files: [{Data}]} — restore wallets from backup entries (Go
-/// apiWalletRestore). Returns the restored wallet ids.
+/// `Wallet:restore` {files: [{filename, data}]} — restore wallets from backup
+/// entries (Go apiWalletRestore). Accepts lowercase (Dart/Go) or capitalised
+/// keys. Returns the restored wallet ids.
 pub fn restore(env: &Env, params: &Value) -> ApiResult {
+    // Accept both the lowercase keys the Dart client sends (`files`/`data`,
+    // matching Go's `walletRestoreRequest`/`backupDataEntry` json tags) and the
+    // capitalised variants some callers use — Go's json.Unmarshal is
+    // case-insensitive, so both must round-trip here.
     let files = params
-        .get("Files")
+        .get("files")
+        .or_else(|| params.get("Files"))
         .and_then(Value::as_array)
-        .ok_or_else(|| ApiError::new(400, "Files (backup entries) required"))?;
+        .ok_or_else(|| ApiError::new(400, "files (backup entries) required"))?;
     let mut restored = Vec::new();
     for f in files {
         let data = f
-            .get("Data")
+            .get("data")
+            .or_else(|| f.get("Data"))
             .and_then(Value::as_str)
-            .ok_or_else(|| ApiError::new(400, "backup entry missing Data"))?;
+            .ok_or_else(|| ApiError::new(400, "backup entry missing data"))?;
         restored.push(crate::models::wallet::restore_entry(env, data).map_err(ApiError::internal)?);
     }
     Ok(serde_json::json!({ "restored": restored }))

@@ -203,8 +203,25 @@ pub extern "C" fn LibwalletRequest(
         let worker = handle.clone();
         std::thread::spawn(move || {
             let _guard = guard; // decrements in-flight count on return/panic
-            let out = catch_unwind(AssertUnwindSafe(|| dispatch::handle_request(&worker, &req)))
-                .unwrap_or_else(|_| response::error("internal panic", 500));
+
+            // Progress sink: long-running handlers (e.g. Wallet create keygen)
+            // call `dispatch::emit_progress`, which forwards here as extra
+            // `{"result":"progress",...}` callbacks BEFORE the final response.
+            // The Dart client keeps the request's response stream open until a
+            // non-progress envelope arrives (see ffi_transport `_onResponse`),
+            // so these surface as `Progress` events ahead of the `Complete`.
+            let sink_handle = worker.clone();
+            let sink: Box<dyn Fn(f64)> = Box::new(move |fraction: f64| {
+                if sink_handle.shutdown.load(Ordering::SeqCst) {
+                    return; // don't call back after shutdown
+                }
+                respond(cb, user_data, &response::progress(fraction));
+            });
+
+            let out = catch_unwind(AssertUnwindSafe(|| {
+                dispatch::with_progress_sink(sink, || dispatch::handle_request(&worker, &req))
+            }))
+            .unwrap_or_else(|_| response::error("internal panic", 500));
             if worker.shutdown.load(Ordering::SeqCst) {
                 return; // don't call back after shutdown
             }

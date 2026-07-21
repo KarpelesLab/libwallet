@@ -752,7 +752,7 @@ pub fn import_mnemonic(
 pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_json::Value) -> Result<Vec<u8>> {
     let w = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
     let entry = backup_entry(&w)?;
-    let data_b64 = entry.get("Data").and_then(|v| v.as_str()).ok_or_else(|| Error::Env("backup produced no data".into()))?;
+    let data_b64 = entry.get("data").and_then(|v| v.as_str()).ok_or_else(|| Error::Env("backup produced no data".into()))?;
     let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(data_b64)
         .map_err(|e| Error::Env(format!("decode backup: {e}")))?;
@@ -767,7 +767,12 @@ pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_
 
 /// Serialize a wallet for `Wallet:backup` — includes the encrypted key `Data`
 /// (base64, as Go marshals `[]byte`), unlike the FFI response which skips it.
-/// Returns the `{Filename, Data}` backup entry (Go `doBackup`).
+/// Returns the `{filename, data}` backup entry (Go `doBackup`). The entry
+/// envelope keys are **lowercase** to match Go's `backupDataEntry` struct tags
+/// (`json:"filename"` / `json:"data"`) and the Dart `WalletBackupEntry` model,
+/// which reads `json['filename']`/`json['data']`. (The inner wallet JSON inside
+/// `data` keeps its capitalised Go field names — that blob must stay
+/// byte-compatible with Go's `json.Marshal(*Wallet)`.)
 pub fn backup_entry(w: &Wallet) -> Result<serde_json::Value> {
     use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     if w.keys.is_empty() {
@@ -793,8 +798,8 @@ pub fn backup_entry(w: &Wallet) -> Result<serde_json::Value> {
         .map_err(|_| Error::Env("bad wallet id".into()))?
         .uuid();
     Ok(serde_json::json!({
-        "Filename": format!("wallet_{}.dat", URL_SAFE_NO_PAD.encode(uuid.as_bytes())),
-        "Data": URL_SAFE_NO_PAD.encode(&buf),
+        "filename": format!("wallet_{}.dat", URL_SAFE_NO_PAD.encode(uuid.as_bytes())),
+        "data": URL_SAFE_NO_PAD.encode(&buf),
     }))
 }
 
