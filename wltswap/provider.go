@@ -25,7 +25,7 @@ type Provider interface {
 	Name() string
 	Chain() string // "solana" | "evm"
 	Quote(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) (*Quote, error)
-	Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error)
+	Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error)
 }
 
 // providers is the registry. Keys are the stable names exposed in

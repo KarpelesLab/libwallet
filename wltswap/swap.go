@@ -180,6 +180,18 @@ type ExecuteRequest struct {
 	QuoteId string                    `json:"quoteId"`
 	From    string                    `json:"from,omitempty"`
 	Keys    []*wltsign.KeyDescription `json:"Keys,omitempty"`
+	// MevProtection lets the host opt in/out of OKX's MEV-protected
+	// broadcast for EVM swaps. nil = use the default (on); Solana ignores
+	// it. Pointer so an omitted field is "unset" rather than false.
+	MevProtection *bool `json:"mevProtection,omitempty"`
+}
+
+// ExecuteOpts carries per-execution host preferences resolved from the
+// ExecuteRequest and threaded to Provider.Execute.
+type ExecuteOpts struct {
+	// MevProtection toggles OKX's MEV-protected broadcast for EVM swaps.
+	// nil = provider default (on); Solana ignores it.
+	MevProtection *bool
 }
 
 // SwapResult is the output of Swap:execute. Kept as a distinct type
@@ -653,7 +665,7 @@ func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Ac
 	}
 	maxV := new(big.Int).Set(res.Max.Value())
 
-	if extra := solanaOutputAtaReservation(ctx, n, acct, req); extra > 0 {
+	if extra := solanaSwapSolReservation(ctx, n, acct, req); extra > 0 {
 		ataR := new(big.Int).SetUint64(extra)
 		if maxV.Cmp(ataR) > 0 {
 			maxV.Sub(maxV, ataR)
@@ -665,48 +677,51 @@ func resolveMaxAmountIn(ctx context.Context, n *wltnet.Network, acct *wltacct.Ac
 	return maxV.String(), nil
 }
 
-// solanaOutputAtaReservation returns the extra lamports that need to
-// be held back on a native-SOL → SPL swap when the user has no ATA
-// for the output mint yet. Returns 0 when:
+// solanaSwapSolReservation returns the extra lamports a native-SOL → SPL
+// swap must hold back beyond the plain-send reservation (fee + sender rent,
+// which MaxSendable already covers). The swap can create up to TWO transient
+// rent-exempt token accounts the wallet must front at peak — both are closed
+// before the tx ends, but Solana debits them mid-execution, so the balance
+// has to cover them or the swap reverts on-chain (the field-reported
+// "custom program error: 0xb" at the swap instruction):
 //
-//   - the chain isn't Solana, or
-//   - the input isn't native SOL (an SPL→SPL swap consumes SOL for
-//     ATA creation but it doesn't come out of the input amount —
-//     surfacing that needs a different mechanism), or
-//   - the output is itself native SOL / wSOL, or
-//   - the user already has an ATA for the output mint.
+//  1. the INPUT wSOL wrap account — created, funded with amount_in, and
+//     closed every native-SOL swap, UNLESS the user already holds a wSOL
+//     account. This is the one the older code missed, so "max SOL swap"
+//     over-stated by ~2.04M lamports and couldn't fund the wrap.
+//  2. the OUTPUT token's ATA — when the user doesn't already have one (and
+//     the output isn't wSOL itself).
 //
-// Errors from the RPC probes degrade to "no reservation" so a slow
-// upstream doesn't fail the MAX path; in the worst case the upstream
-// will still reject the actual swap and the user retries with a
-// smaller amount. The fallback rent value (2_039_280) matches the
-// canonical SPL token-account rent and is used when the live
-// getMinimumBalanceForRentExemption call fails.
-func solanaOutputAtaReservation(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) uint64 {
-	if n.Type != "solana" {
-		return 0
-	}
-	if !isNativeTokenAddress(req.TokenIn.Address) {
-		return 0
-	}
-	outMint := solanaNativeMintOrAddr(req.TokenOut.Address)
-	if outMint == WrappedSOLMint {
-		return 0
-	}
-	has, err := solanaHasTokenAccount(ctx, n, acct.GetAddress(), outMint)
-	if err != nil {
-		// Conservative on probe failure: assume no ATA so we keep
-		// the user safe rather than hand them a too-aggressive max.
-		has = false
-	}
-	if has {
+// Returns 0 when the chain isn't Solana or the input isn't native SOL
+// (SPL→SPL ATA costs don't come out of the input amount). RPC probe errors
+// degrade to "assume the account is missing" (reserve it) so a slow upstream
+// hands a conservative max rather than a too-aggressive one. The 2_039_280
+// fallback matches the canonical SPL token-account rent.
+func solanaSwapSolReservation(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, req *QuoteRequest) uint64 {
+	if n.Type != "solana" || !isNativeTokenAddress(req.TokenIn.Address) {
 		return 0
 	}
 	rent, err := wlttx.SolanaRentExemptMinimum(ctx, n, 165) // 165 = SPL token-account size
 	if err != nil || rent == 0 {
-		return 2_039_280
+		rent = 2_039_280
 	}
-	return rent
+
+	var total uint64
+	// (1) Input wSOL wrap account, unless the user already holds wSOL.
+	if hasW, werr := solanaHasTokenAccount(ctx, n, acct.GetAddress(), WrappedSOLMint); werr != nil || !hasW {
+		total += rent
+	}
+	// (2) Output token ATA, unless it already exists or the output is wSOL.
+	if outMint := solanaNativeMintOrAddr(req.TokenOut.Address); outMint != WrappedSOLMint {
+		has, herr := solanaHasTokenAccount(ctx, n, acct.GetAddress(), outMint)
+		if herr != nil {
+			has = false // conservative
+		}
+		if !has {
+			total += rent
+		}
+	}
+	return total
 }
 
 // solanaHasTokenAccount returns true when owner already has at least
@@ -778,7 +793,7 @@ func swapExecute(ctx context.Context, req *ExecuteRequest) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	result, err := provider.Execute(ctx, n, acct, q, req.Keys)
+	result, err := provider.Execute(ctx, n, acct, q, req.Keys, &ExecuteOpts{MevProtection: req.MevProtection})
 	if err != nil {
 		return nil, err
 	}
@@ -836,4 +851,71 @@ func resolveAccountAndNetwork(e wltintf.Env, from, _ string) (*wltacct.Account, 
 		return nil, nil, err
 	}
 	return acct, n, nil
+}
+
+// OrderStatusRequest is the input to Swap:orderStatus.
+type OrderStatusRequest struct {
+	// OrderId is the SwapResult.orderId returned by Swap:execute.
+	OrderId string `json:"orderId"`
+	// From selects the account that signed the swap (default: current).
+	// The order is keyed by that wallet's on-chain address, so it must
+	// match the swap that produced the orderId.
+	From string `json:"from,omitempty"`
+	// Network overrides the network the order belongs to (default: current).
+	Network string `json:"network,omitempty"`
+}
+
+// SwapOrderStatus is the normalized settlement state of a broadcast swap,
+// polled from the provider. Status is one of "pending" | "success" |
+// "failed". FailReason carries the provider/RPC error on failure; TxHash is
+// set once the tx is on chain.
+type SwapOrderStatus struct {
+	OrderId    string `json:"orderId"`
+	Chain      string `json:"chain"`
+	Status     string `json:"status"`
+	TxHash     string `json:"txHash,omitempty"`
+	FailReason string `json:"failReason,omitempty"`
+}
+
+// swapOrderStatus is the Swap:orderStatus endpoint — poll the settlement
+// state of a previously executed swap by its orderId. Swap:execute reports
+// success as soon as the provider ACCEPTS the broadcast (which, for OKX,
+// happens before the tx has even been validated — it returns an orderId for
+// a garbage payload too), so a host that needs certainty the swap actually
+// landed polls here until Status is no longer "pending".
+func swapOrderStatus(ctx context.Context, req *OrderStatusRequest) (any, error) {
+	e := wltintf.GetEnv(ctx)
+	if e == nil {
+		return nil, errors.New("failed to get env")
+	}
+	if req == nil || strings.TrimSpace(req.OrderId) == "" {
+		return nil, newErr(ErrCodeInvalidRequest, "orderId is required")
+	}
+	acct, n, err := resolveAccountAndNetwork(e, req.From, req.Network)
+	if err != nil {
+		return nil, err
+	}
+	if err := acct.UpdateAddressForNetwork(n); err != nil {
+		return nil, err
+	}
+	chainIndex, err := okxChainIndexFor(n)
+	if err != nil {
+		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
+	}
+	entry, err := okxFetchOrderStatus(ctx, chainIndex, acct.GetAddress(), req.OrderId)
+	if err != nil {
+		return nil, newErr(ErrCodeProviderUnavailable, "okx: orderStatus: "+err.Error())
+	}
+	res := &SwapOrderStatus{
+		OrderId: req.OrderId,
+		Chain:   n.Type,
+		Status:  okxTxStatusLabel(entry),
+	}
+	if entry != nil {
+		res.TxHash = entry.TxHash
+		if res.Status == "failed" {
+			res.FailReason = strings.TrimSpace(entry.FailReason)
+		}
+	}
+	return res, nil
 }

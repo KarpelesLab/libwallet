@@ -21,6 +21,7 @@ package wltwallet
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/KarpelesLab/rest"
@@ -74,6 +75,70 @@ func restApplyRetry(ctx context.Context, req, method string, param rest.Param, t
 		lastErr = err
 	}
 	return lastErr
+}
+
+// Tenacious retry for state-critical uploads (RemoteKey share upload via
+// Crypto/WalletSign:setGeneratedKey). Unlike restDoRetry, this also retries
+// TRANSPORT-level failures (http2 "timeout awaiting response headers",
+// connection resets, …), because for this call giving up is worse than
+// waiting: the request may already have been delivered, and an abandoned
+// share upload leaves the server-side share out of sync with the local
+// (unchanged) committee — the field-reported cause of a later reshare
+// hanging mid-rounds. Deterministic 4xx still fails immediately.
+const (
+	criticalRetryBudget     = 5 * time.Minute
+	criticalRetryBackoff    = 2 * time.Second
+	criticalRetryBackoffMax = 30 * time.Second
+)
+
+// isRetryableCriticalError: retry 5xx AND anything that is not a definitive
+// rest-level 4xx — a non-rest error means the transport failed and we cannot
+// know whether the server processed the request.
+func isRetryableCriticalError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var re *rest.Error
+	if errors.As(err, &re) {
+		if re.Response == nil {
+			return true
+		}
+		return re.Response.Code >= 500
+	}
+	return true
+}
+
+// restDoRetryCritical keeps attempting the call until it succeeds, hits a
+// deterministic 4xx, the ctx dies, or criticalRetryBudget elapses.
+func restDoRetryCritical(ctx context.Context, req, method string, param rest.Param) (*rest.Response, error) {
+	deadline := time.Now().Add(criticalRetryBudget)
+	backoff := criticalRetryBackoff
+	var lastErr error
+	for attempt := 1; ; attempt++ {
+		resp, err := rest.Do(ctx, req, method, param)
+		if err == nil {
+			return resp, nil
+		}
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		if !isRetryableCriticalError(err) {
+			return resp, err
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		log.Printf("%s attempt %d failed (%s); retrying in %s", req, attempt, err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if backoff < criticalRetryBackoffMax {
+			backoff *= 2
+		}
+	}
 }
 
 // restDoRetry is restApplyRetry's twin for callers using rest.Do.

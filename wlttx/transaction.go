@@ -322,14 +322,18 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 	}
 	switch tx.Type {
 	case "transfer": // transfer of an Asset
-		if tx.Amount == nil || tx.Amount.Sign() <= 0 {
+		// IsMax() (the MAX sentinel) legitimately has Sign()==0; it's
+		// resolved to a concrete value later (native EVM via
+		// resolveEvmMaxAmount, native Solana via preflightSolanaNativeSend),
+		// so don't reject it here.
+		if tx.Amount == nil || (!tx.Amount.IsMax() && tx.Amount.Sign() <= 0) {
 			return errors.New("invalid amount")
 		}
 		if tx.Asset == "" {
 			return errors.New("asset is required")
 		}
 	case "solana_transfer", "solana_spl_transfer":
-		if tx.Amount == nil || tx.Amount.Sign() <= 0 {
+		if tx.Amount == nil || (!tx.Amount.IsMax() && tx.Amount.Sign() <= 0) {
 			return errors.New("invalid amount")
 		}
 	case "evm": // evm raw transaction (for example as sent via eth_sendTransaction)
@@ -412,6 +416,12 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 		if tok.GetType() != "erc20" {
 			return fmt.Errorf("token %q has type %q; only erc20 is supported on EVM networks", tx.Asset, tok.GetType())
 		}
+		if tx.Amount.IsMax() {
+			// resolveEvmMaxAmount only resolves the native balance; an
+			// ERC-20 MAX needs the token balance. Fail clearly rather than
+			// deref the sentinel's nil Value() in encodeERC20Transfer.
+			return errors.New("Amount=MAX is not yet supported for ERC-20 token transfers — compute the amount with Transaction:maxSendable")
+		}
 		recipient := tx.To
 		data, err := encodeERC20Transfer(recipient, tx.Amount.Value())
 		if err != nil {
@@ -444,6 +454,11 @@ func (tx *Transaction) Validate(e wltintf.Env) error {
 			tt := tx.resolvedToken.GetType()
 			if tt != "spl-token" && tt != "spl-token-2022" {
 				return fmt.Errorf("solana token %q has type %q; expected \"spl-token\" or \"spl-token-2022\"", tx.Asset, tt)
+			}
+			if tx.Amount.IsMax() {
+				// Native-SOL MAX resolves in preflightSolanaNativeSend; SPL
+				// MAX would need the token balance, which isn't wired yet.
+				return errors.New("Amount=MAX is not yet supported for SPL token transfers — compute the amount with Transaction:maxSendable")
 			}
 		}
 		// Native-send preflight only when we're actually building a

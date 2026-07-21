@@ -24,6 +24,7 @@ import (
 	"github.com/KarpelesLab/libwallet/wltintf"
 	"github.com/KarpelesLab/libwallet/wltlog"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
 )
 
 // Warning severity levels. Stable — apps pattern-match on these.
@@ -211,10 +212,16 @@ func preflightSolanaNativeSend(e wltintf.Env, n *wltnet.Network, acct *wltacct.A
 	if tx.Amount == nil {
 		return nil
 	}
+	// MAX sentinel (Amount.max(9) from the host / Transaction:maxSendable's
+	// recommended path): resolve it here to the exact safe maximum using the
+	// same balance/fee/rent inputs this preflight already gathers, then let
+	// the rest of the function treat it as a concrete amount. Without this,
+	// MAX reaches signAndSendSolana with a nil Value() and the send fails.
+	isMax := tx.Amount.IsMax()
 	// All Solana amounts are 9-decimal lamports; the amount is
 	// fixed-point so .Value() is already lamports.
 	amountLamports := tx.Amount.Value()
-	if amountLamports == nil || amountLamports.Sign() < 0 {
+	if !isMax && (amountLamports == nil || amountLamports.Sign() < 0) {
 		return nil
 	}
 
@@ -225,6 +232,14 @@ func preflightSolanaNativeSend(e wltintf.Env, n *wltnet.Network, acct *wltacct.A
 
 	balance, err := solanaLamportsBalance(ctx, n, acct.GetAddress())
 	if err != nil {
+		if isMax {
+			// Can't resolve a MAX amount without the balance — fail loudly
+			// rather than let an unresolved sentinel reach the signer.
+			return &PreflightError{
+				Code:    "insufficient_balance",
+				Message: fmt.Sprintf("cannot resolve MAX amount: balance lookup failed: %v", err),
+			}
+		}
 		// Treat RPC failure as non-blocking — the broadcast path
 		// will surface any real problem, and we don't want to
 		// block a legitimate tx because a node burped. Log it so a
@@ -260,6 +275,22 @@ func preflightSolanaNativeSend(e wltintf.Env, n *wltnet.Network, acct *wltacct.A
 			recipientExists = false
 			recipientRent = senderRent
 		}
+	}
+
+	// Resolve the MAX sentinel to the exact safe maximum and rewrite
+	// tx.Amount in place so signAndSendSolana sends a concrete lamport
+	// value. Uses the same computeSolanaMaxSendable as Transaction:maxSendable
+	// (so the resolved amount matches that endpoint), but with the real
+	// priority-inclusive feeLamports above rather than a flat 5000. The
+	// resolved value is safe by construction, so we're done — the balance
+	// checks below would all pass.
+	if isMax {
+		maxLamports, _, reason := computeSolanaMaxSendable(balance, feeLamports, senderRent, recipientRent, recipientExists)
+		if maxLamports == 0 {
+			return &PreflightError{Code: "insufficient_balance", Message: reason}
+		}
+		tx.Amount = wltobj.NewAmountRaw(new(big.Int).SetUint64(maxLamports), 9)
+		return nil
 	}
 
 	// Cast amount safely; Solana caps at ~18.4e9 SOL total supply

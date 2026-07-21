@@ -242,6 +242,18 @@ func (t *token) GetSymbol() string      { return t.Symbol }
 // enrichment) that want to overlay user-saved metadata on top of a
 // chain-fetched balance list without erroring out when the mint isn't
 // tracked.
+// TokensByNetwork returns every registered Token row for the given network.
+// Used by Asset:list to enumerate the user's ERC-20 tokens (the Solana path
+// discovers tokens on-chain instead; EVM has no cheap on-chain enumeration,
+// so the registry the user builds via Token:create / Token:discoverToken is
+// the source of truth).
+func TokensByNetwork(e wltintf.Env, networkId *xuid.XUID) ([]*token, error) {
+	if networkId == nil {
+		return nil, nil
+	}
+	return psql.Fetch[token](e, map[string]any{"Network": networkId})
+}
+
 func LookupTokenByMint(e wltintf.Env, networkId *xuid.XUID, address string) (*token, error) {
 	if networkId == nil || address == "" {
 		return nil, nil
@@ -326,14 +338,67 @@ func apiFetchToken(ctx *apirouter.Context, in struct{ Id string }) (any, error) 
 	return TokenById(e, id)
 }
 
-func apiCreateToken(ctx *apirouter.Context, t *token) (any, error) {
+// resolveNetworkRef accepts a network reference in either form the clients
+// use and returns the network's xuid:
+//
+//   - a network xuid ("net-…"), or
+//   - the canonical "<type>.<chainId>" key (e.g. "evm.137", "solana.mainnet")
+//     — what Asset.network and the Dart Token API send.
+//
+// The canonical form is the one that previously blew up as
+// "invalid UUID length: 7" (e.g. "evm.137") because Token:create /
+// Token:discoverToken parsed Network directly as an xuid. Network existence
+// is validated by the caller (NetworkById); this only maps ref → id.
+func resolveNetworkRef(ref string) (*xuid.XUID, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, errors.New("Network is required")
+	}
+	// A real network xuid has dashes ("net-…"); the canonical key uses dots.
+	if id, err := xuid.Parse(ref); err == nil {
+		return id, nil
+	}
+	if i := strings.IndexByte(ref, '.'); i > 0 && i < len(ref)-1 {
+		return wltnet.NetworkIdForTypeAndChainId(ref[:i], ref[i+1:]), nil
+	}
+	return nil, fmt.Errorf("invalid network reference %q (want a net-… id or \"<type>.<chainId>\")", ref)
+}
+
+// apiCreateToken takes Network as a string (xuid OR "<type>.<chainId>") rather
+// than binding it straight into token.Network (*xuid.XUID), which rejected the
+// canonical "evm.137" form with "invalid UUID length: 7".
+func apiCreateToken(ctx *apirouter.Context, in struct {
+	Name     string
+	Symbol   string
+	Address  string
+	Decimals int
+	Type     string
+	Network  string
+	Logo     string
+	Memo     string
+}) (any, error) {
 	e := wltintf.GetEnv(ctx)
 	if e == nil {
 		return nil, errors.New("failed to get env")
 	}
 
-	err := t.validate(e)
+	netId, err := resolveNetworkRef(in.Network)
 	if err != nil {
+		return nil, err
+	}
+
+	t := &token{
+		Name:     in.Name,
+		Symbol:   in.Symbol,
+		Address:  in.Address,
+		Decimals: in.Decimals,
+		Type:     in.Type,
+		Network:  netId,
+		Logo:     in.Logo,
+		Memo:     in.Memo,
+	}
+
+	if err := t.validate(e); err != nil {
 		return nil, err
 	}
 
@@ -342,8 +407,7 @@ func apiCreateToken(ctx *apirouter.Context, t *token) (any, error) {
 		return nil, err
 	}
 
-	err = t.save(e)
-	if err != nil {
+	if err := t.save(e); err != nil {
 		return nil, err
 	}
 

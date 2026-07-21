@@ -402,6 +402,11 @@ class SwapResult {
   /// Block-explorer URL for [hash].
   final String url;
 
+  /// OKX broadcast handle, present when the swap was broadcast through
+  /// OKX (Solana, and EVM). Empty for paths broadcast directly to a chain
+  /// RPC. Poll `Crypto/Okx:orderStatus` with it to track final settlement.
+  final String orderId;
+
   /// A copy of the quote that was executed — convenient for the app
   /// to display "you swapped X for Y" without caching separately.
   final SwapQuote quote;
@@ -413,6 +418,7 @@ class SwapResult {
     required this.hash,
     required this.url,
     required this.quote,
+    this.orderId = '',
   });
 
   factory SwapResult.fromJson(Map<String, dynamic> json) => SwapResult(
@@ -421,7 +427,50 @@ class SwapResult {
         chain: (json['chain'] as String?) ?? '',
         hash: (json['hash'] as String?) ?? '',
         url: (json['url'] as String?) ?? '',
+        orderId: (json['orderId'] as String?) ?? '',
         quote: SwapQuote.fromJson(Map<String, dynamic>.from(json['quote'] as Map)),
+      );
+}
+
+/// Settlement state of a broadcast swap, from `Swap:orderStatus`.
+///
+/// [SwapApi.execute] returns as soon as the provider *accepts* the broadcast
+/// (OKX returns an [SwapResult.orderId] before the tx has even been
+/// validated), so a host that needs certainty the swap actually landed polls
+/// [SwapApi.orderStatus] until [status] is no longer `pending`.
+class SwapOrderStatus {
+  final String orderId;
+
+  /// "solana" | "evm".
+  final String chain;
+
+  /// Normalized settlement state: `pending` | `success` | `failed`.
+  final String status;
+
+  /// On-chain transaction hash, once known. Empty while pending.
+  final String txHash;
+
+  /// Provider/RPC failure reason when [status] is `failed`. Empty otherwise.
+  final String failReason;
+
+  const SwapOrderStatus({
+    required this.orderId,
+    required this.chain,
+    required this.status,
+    this.txHash = '',
+    this.failReason = '',
+  });
+
+  bool get isPending => status == 'pending';
+  bool get isSuccess => status == 'success';
+  bool get isFailed => status == 'failed';
+
+  factory SwapOrderStatus.fromJson(Map<String, dynamic> json) => SwapOrderStatus(
+        orderId: (json['orderId'] as String?) ?? '',
+        chain: (json['chain'] as String?) ?? '',
+        status: (json['status'] as String?) ?? 'pending',
+        txHash: (json['txHash'] as String?) ?? '',
+        failReason: (json['failReason'] as String?) ?? '',
       );
 }
 

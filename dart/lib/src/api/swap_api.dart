@@ -236,17 +236,50 @@ class SwapApi {
   /// - `slippage_exceeded` — price moved; re-quote with tighter
   ///   slippage or accept more
   /// - `provider_unavailable` — aggregator or chain RPC failure
+  /// [mevProtection] toggles OKX's MEV-protected broadcast for EVM swaps.
+  /// Leave `null` to use the default (on); pass `false` to opt out (e.g.
+  /// when the protected mempool is landing slowly). Ignored on Solana.
   Future<SwapResult> execute({
     required String quoteId,
     required List<SigningKey> keys,
     String? from,
+    bool? mevProtection,
   }) async {
     final params = <String, dynamic>{
       'quoteId': quoteId,
       'Keys': keys.map((k) => k.toJson()).toList(),
     };
     if (from != null) params['from'] = from;
+    if (mevProtection != null) params['mevProtection'] = mevProtection;
     final data = await _conn.request('Swap:execute', 'POST', params);
     return SwapResult.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Poll the settlement state of a previously executed swap.
+  ///
+  /// [execute] reports success the moment the provider *accepts* the
+  /// broadcast — for OKX that's before the tx has even been validated (it
+  /// returns an [SwapResult.orderId] for a malformed payload too), so the
+  /// `hash` it returns is not proof the swap landed. To confirm, poll this
+  /// with [SwapResult.orderId] until [SwapOrderStatus.isPending] is false:
+  ///
+  /// ```dart
+  /// final r = await client.swap.execute(quoteId: q, keys: keys);
+  /// var st = await client.swap.orderStatus(r.orderId);
+  /// while (st.isPending) {
+  ///   await Future.delayed(const Duration(seconds: 2));
+  ///   st = await client.swap.orderStatus(r.orderId);
+  /// }
+  /// if (st.isFailed) showError(st.failReason);
+  /// ```
+  ///
+  /// [from] selects the signing account (default: current); the order is
+  /// keyed by that wallet's on-chain address. Pass the same account that
+  /// executed the swap.
+  Future<SwapOrderStatus> orderStatus(String orderId, {String? from}) async {
+    final params = <String, dynamic>{'orderId': orderId};
+    if (from != null) params['from'] = from;
+    final data = await _conn.request('Swap:orderStatus', 'POST', params);
+    return SwapOrderStatus.fromJson(data as Map<String, dynamic>);
   }
 }

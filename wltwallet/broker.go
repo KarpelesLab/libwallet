@@ -23,6 +23,27 @@ type tssHub struct {
 	mu     sync.Mutex
 	local  map[string]*localBroker // keyed by *tss.PartyID.Id
 	remote map[string]*spotPeer    // keyed by *tss.PartyID.Id
+
+	// onError, when set, is invoked (once) with the reason carried by a
+	// "walletsign:error" frame — a remote (wdrone) participant reporting a
+	// terminal ceremony failure (e.g. its resharing party failed to start
+	// on a stale share). Ceremony owners wire this to their rounds-context
+	// cancel so the ceremony fails fast with the remote's reason instead
+	// of waiting out the rounds deadline. Fleet versions that predate the
+	// frame simply never send it.
+	onError   func(reason string)
+	errorOnce sync.Once
+}
+
+// fail delivers a remote-reported terminal error to the ceremony owner.
+func (h *tssHub) fail(reason string) {
+	h.errorOnce.Do(func() {
+		if h.onError != nil {
+			h.onError(reason)
+		} else {
+			log.Printf("tssHub: remote participant reported failure (no handler wired): %s", reason)
+		}
+	})
 }
 
 func newTssHub() *tssHub {
@@ -328,6 +349,18 @@ func (s *spotPeer) messageHandler(msg *spotproto.Message) ([]byte, error) {
 	}
 	if jm.Type == "" {
 		return nil, errors.New("spotPeer: empty message type")
+	}
+
+	// Terminal-failure frame from a wdrone participant (walletsign_guard.go
+	// fleet-side): fail the ceremony immediately with the remote's reason
+	// rather than waiting out the rounds deadline in silence.
+	if jm.Type == "walletsign:error" {
+		reason, _ := jm.Data.(string)
+		if reason == "" {
+			reason = "remote participant reported an unspecified failure"
+		}
+		s.hub.fail(reason)
+		return nil, nil
 	}
 
 	// Diagnostics only: validate that Sender path carries the expected /walletsign/<sid>.

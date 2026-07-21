@@ -18,6 +18,185 @@
   sub-frame whose origin differs from the top document, so an embedded
   ad/tracker iframe cannot enumerate the connected account even if the
   host injects into all frames.
+## 0.4.78
+
+- **Registered ERC-20 tokens now appear in `Asset:list` with live
+  balances.** EVM tokens added via `Token:create` / `Token:discoverToken`
+  (or auto-registered by a swap) previously produced a Token row but never
+  showed up in the asset/balance list — only native currencies and Solana
+  SPL tokens did. `Asset:list` now enumerates the network's registered
+  ERC-20 tokens and reads each balance via `eth_call balanceOf`, riding the
+  existing balance-snapshot cache and the 60 s poller (so `balances_changed`
+  now fires for ERC-20 movements too). Zero balances are included on
+  purpose: a token the user explicitly registered shows as "0" rather than
+  vanishing. Reimplements the feature from the long-lived `erc20` branch
+  natively on the current codebase (the branch predates the `wlttoken`
+  package and the Asset:list rewrite).
+
+## 0.4.77
+
+- **Remote reshare failures now surface their real cause in seconds.** The
+  signing fleet (wdrone) now validates at init time that its stored 2FA
+  share matches the committee the reshare asks it to play — a stale/desynced
+  share (the `Wallet:repairRemoteKey` scenario) fails the ceremony
+  immediately with an actionable message instead of stalling. Any later
+  fleet-side round failure is shipped back as a `walletsign:error` frame,
+  which the client now intercepts to fail the ceremony with the remote's
+  reason ("reshare failed — remote participant reported: …; the wallet
+  committee is unchanged") rather than waiting out the 2-minute rounds
+  deadline. Wire-compatible in both directions with older fleet/clients.
+
+## 0.4.76
+
+- **Add `Wallet:repairRemoteKey` (`wallets.repairRemoteKey`) — restore a
+  desynced server-side 2FA share from a backup.** The RemoteKey share lives
+  server-side per `crws-…` record and is overwritten in place by share
+  uploads, so a reshare abandoned mid-upload can leave the record holding a
+  share from the abandoned ceremony while the wallet keeps its old
+  committee. If the StoreKey is also gone, the wallet drops below T+1
+  recoverable shares — no in-app reshare can authorize. Because the wallet
+  keeps a byte-identical, fleet-encrypted copy of the uploaded share in its
+  key data (preserved by `Wallet:backup`), a wallet restored from backup can
+  now push that consistent copy back under a fresh validated 2FA session:
+  `remoteKeys.reshare` → `validate` → `wallets.repairRemoteKey(walletId,
+  remoteKey: v.remoteKey)` → then run the recovery reshare as usual. The
+  blob is encrypted to the signing fleet's keys — the device never sees the
+  share plaintext. Validated end-to-end against the live fleet, including a
+  faithful reproduction of the corruption (an "abandoned" ceremony whose
+  upload lands) and post-repair recovery.
+
+## 0.4.75
+
+- **Reshare no longer hangs forever on a silent participant.** The TSS
+  reshare rounds (all four protocols: dkls23, FROST, legacy GG18/EdDSA) are
+  now bounded at 2 minutes — sized to the remote-peer init worst case
+  (3 attempts × 30 s) plus rounds headroom; healthy ceremonies complete in
+  seconds. A
+  remote (RemoteKey/wdrone) participant that goes quiet after init now
+  surfaces a descriptive error ("a committee participant stopped responding
+  mid-ceremony…, the wallet committee is unchanged") instead of hanging the
+  host UI indefinitely. Field case: device-share recovery stuck at
+  `ready for TSS rounds` when the server-side RemoteKey share was out of
+  sync. A host-initiated cancel still passes through unchanged.
+- **Tenacious RemoteKey share upload.** `Crypto/WalletSign:setGeneratedKey`
+  — the one reshare step whose abandonment can leave the server-side share
+  out of sync with the local (unchanged) committee — now retries transport
+  failures (http2 header timeouts, connection resets) as well as 5xx, with
+  exponential backoff for up to 5 minutes before giving up. On final
+  failure the error spells out the recovery step (re-run the reshare from a
+  device holding the local shares). Previously a single 90-second http2
+  timeout aborted the reshare after one attempt — the abandoned upload
+  could still land server-side and silently desync the RemoteKey share
+  (root cause of the recovery hang above).
+
+## 0.4.74
+
+- **Fix native-SOL swaps not wrapping (the real `0xb` cause).** For native
+  SOL, the OKX adapter sent the **wSOL mint** (`So111…112`) as the token
+  identifier, which OKX interprets as "spend the user's existing wSOL SPL
+  token" — it builds a tx that does **not** wrap native SOL. So for any
+  wallet that doesn't already hold wSOL (i.e. almost every user) the swap's
+  source token account was uninitialized and the tx reverted on-chain
+  (`AccountNotInitialized` / `custom program error: 0xb`), regardless of
+  balance or slippage. The adapter now sends OKX's **native-SOL identifier**
+  (`11111111111111111111111111111111`), which makes OKX include the SOL→wSOL
+  wrap (and the wSOL→SOL unwrap when SOL is the output). Confirmed by
+  simulating real OKX txs against mainnet for an affected wallet. (Pairs with
+  a platform-side fix to the OKX commission account for native-SOL swaps.)
+- **Confirm EVM swap settlement (no more phantom success).** The EVM swap
+  path broadcast through OKX and returned the `orderId`/hash without checking
+  whether the tx actually landed — so a swap that reverted on-chain (missing
+  ERC-20 approval, slippage, gas) reported success with a hash that never
+  mined. It now polls `Crypto/Okx:orderStatus` (same as Solana) and surfaces
+  the real `failReason` on failure. (The EVM `signedTx` hex encoding was
+  verified correct against OKX, so this was purely the missing confirmation.)
+- **Fix adding tokens on Polygon (and any chain): `invalid UUID length: 7`.**
+  `Token:create` / `Token:discoverToken` parsed the `Network` field directly
+  as an xuid, but the Dart API sends the canonical `"<type>.<chainId>"` form
+  (e.g. `"evm.137"` = 7 chars) that `Asset.network` uses — so token-add failed
+  with `invalid UUID length: 7`. Both endpoints now resolve a network ref in
+  either form (xuid `net-…` or `"<type>.<chainId>"`).
+
+## 0.4.73
+
+- **Reserve the wSOL wrap rent on max native-SOL swaps.** `Swap:maxSpendable`
+  for a native-SOL input reserved the *output* token ATA rent but not the
+  transient *input* wSOL wrap account (~2.04M lamports) that every native-SOL
+  swap creates, funds with `amount_in`, and closes. The wallet must front
+  that rent at peak, so the reported max over-stated by ~0.002 SOL and a
+  max/near-max SOL swap couldn't fund the wrap — failing on-chain at the swap
+  instruction (`custom program error: 0xb`). Max now reserves both the input
+  wSOL wrap and the output ATA (each gated on whether the account already
+  exists). Note: this corrects the max-amount math; a host that lets the user
+  enter an amount manually should still validate it against `maxSpendable`.
+
+## 0.4.72
+
+- **Fail fast on deterministic swap reverts.** The Solana swap retry loop
+  treated any `-32002 "Transaction simulation failed"` as a stale-blockhash
+  case and re-fetched + re-signed up to 3×. But a program revert (e.g.
+  `Error processing Instruction N: custom program error: 0xb` — typically
+  slippage / unfillable route) is deterministic: a fresh blockhash changes
+  nothing. Such errors now surface immediately with their reason instead of
+  burning two extra signing rounds. (A genuinely failing swap still fails —
+  this only makes it fast and clear; raise slippage if the revert is a
+  min-output check.)
+
+## 0.4.71
+
+- **Fix Solana swaps silently not landing.** OKX's broadcast endpoint
+  base58-decodes the Solana `signedTx`, but we were sending **base64** —
+  OKX accepted the request (returned an `orderId`) yet the chain RPC
+  rejected it with `invalid base58 encoding`, so the tx never hit the chain
+  while the app saw a success with a hash. Now broadcast the signed Solana
+  tx as base58.
+- **Confirm OKX swap broadcasts before reporting success.** OKX returns an
+  `orderId` the moment it *accepts* a request — before the tx has landed or
+  even been validated (it returns one even for a garbage payload). We now
+  poll `Crypto/Okx:orderStatus` after broadcasting and only report success
+  once the order lands (or surface the real `failReason` / retry with a
+  fresh blockhash on failure), instead of trusting the `orderId`. Also
+  fixes the orderStatus response parsing (the orders are nested under a
+  paginated envelope with a numeric `txStatus`).
+- **Add `Swap:orderStatus` (typed `swap.orderStatus(orderId)`).** Lets the
+  host poll a swap's settlement state by `orderId` — `pending` / `success`
+  / `failed`, with the on-chain `txHash` and, on failure, the provider's
+  `failReason`. Use it after `execute` to confirm a swap actually landed
+  (a success from `execute` only means the broadcast was accepted, not
+  settled).
+- **Support the MAX amount sentinel on native Solana sends.** `Amount.max(9)`
+  (`{"v":"MAX"}`) can now be passed as a native-SOL `Transaction.amount` and
+  is resolved server-side to balance − fee − rent at build time — same as
+  EVM. Hosts should prefer this over precomputing the max client-side (it
+  avoids decimals mistakes and the quote→send race). Unsupported MAX paths
+  (ERC-20, SPL, Bitcoin) now fail with a clear message instead of a vague
+  error.
+
+## 0.4.70
+
+- **Fix swaps rejected by an over-strict min-receive tripwire.** The 0.4.69
+  client-side tripwire compared OKX's execute-time `minReceiveAmount`
+  against the stale quote-time `MinAmountOut` and rejected on *any*
+  shortfall, so normal sub-bps price drift between quote and execute failed
+  every swap (`minReceiveAmount 713177 is below the approved minimum
+  713274` — a 0.0136% gap). The check now tolerates drift up to one
+  slippage band below the approved minimum (the drift the user already
+  accepts; the on-chain `minReceiveAmount` still enforces their real
+  slippage), while still tripping on the gross underpayment a tampered
+  response would produce.
+- **EVM swap MEV protection is now opt-out.** It stays on by default but
+  the host can disable it per-swap via
+  `SwapApi.execute(mevProtection: false)` (in 0.4.69 it was unconditionally
+  on). Threaded through `ExecuteRequest.mevProtection` → `ExecuteOpts` →
+  `Provider.Execute`; Solana ignores it.
+- **Surface OKX `orderId` on the Dart `SwapResult`.** The `orderId` from
+  the OKX broadcast is now exposed on the Dart model (it was already on the
+  Go `SwapResult`) so the host can poll `Crypto/Okx:orderStatus` for final
+  settlement.
+- **Update `outscript` to v0.3.34 (security).** Pulls in upstream hardening
+  on decode/sign paths libwallet uses — Solana transaction decoding,
+  EVM tx `Signature()`/`ParseTransaction` panic guards, `evmabi` address
+  encoding, plus Bitcoin script and address bounds/overflow fixes.
 
 ## 0.4.69
 

@@ -10,6 +10,7 @@ func init() {
 	pobj.RegisterStatic("Swap:availability", swapAvailability)
 	pobj.RegisterStatic("Swap:countryAvailability", swapCountryAvailability)
 	pobj.RegisterStatic("Swap:maxSpendable", swapMaxSpendable)
+	pobj.RegisterStatic("Swap:orderStatus", swapOrderStatus)
 
 	// OKX DEX is the only routed swap provider. Both adapters
 	// register themselves at package init so test doubles can

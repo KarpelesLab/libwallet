@@ -70,12 +70,24 @@ import (
 // industry-standard sentinel every major EVM aggregator uses.
 const okxEVMNativeSentinel = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
-// okxSolanaNativeSentinel is the address OKX uses on Solana for
-// native SOL — the canonical wSOL mint. Confusing on its face, but
-// it's what `Crypto/Okx:allTokens?chainId=501` returns for the
-// native token entry, so it's what the quote / swap endpoints
-// expect for native SOL inputs and outputs.
-const okxSolanaNativeSentinel = WrappedSOLMint
+// okxSolanaNativeSentinel is the identifier OKX's DEX quote/swap endpoints
+// use for NATIVE SOL: the all-1s System Program address (the 32-byte zero
+// pubkey), NOT the wSOL mint.
+//
+// This is load-bearing. Passing the wSOL mint (So111…112) makes OKX treat
+// the input as "spend the user's existing wSOL SPL token" and build a tx
+// that does NOT wrap native SOL — so the swap's source token account is
+// uninitialized for any wallet that doesn't already hold wSOL (i.e. almost
+// every user), and the swap reverts on-chain with AnchorError
+// AccountNotInitialized / "custom program error: 0xb". Confirmed by
+// simulating real OKX txs against mainnet: the wSOL-mint form leaves the
+// source account uninitialized, while the all-1s form makes OKX include the
+// SOL→wSOL wrap (and the wSOL→SOL unwrap when SOL is the output).
+//
+// (The `allTokens` endpoint lists native SOL under the wSOL mint, which is
+// what misled the original constant — but the quote/swap endpoints need the
+// all-1s native identifier to actually wrap.)
+const okxSolanaNativeSentinel = "11111111111111111111111111111111"
 
 // okxSolanaProvider is the registry entry for Solana swaps.
 // Implementation lives on the shared `okx` helpers below; the two
@@ -90,7 +102,8 @@ func (okxSolanaProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wlt
 	return okxQuote(ctx, n, acct, req, "okx_solana", "OKX")
 }
 
-func (okxSolanaProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+func (okxSolanaProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, _ *ExecuteOpts) (*SwapResult, error) {
+	// MEV protection (opts.MevProtection) is EVM-only; Solana ignores it.
 	return okxExecuteSolana(ctx, n, acct, q, keys)
 }
 
@@ -106,8 +119,8 @@ func (okxEVMProvider) Quote(ctx context.Context, n *wltnet.Network, acct *wltacc
 	return okxQuote(ctx, n, acct, req, "okx_evm", "OKX")
 }
 
-func (okxEVMProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
-	return okxExecuteEVM(ctx, n, acct, q, keys)
+func (okxEVMProvider) Execute(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error) {
+	return okxExecuteEVM(ctx, n, acct, q, keys, opts)
 }
 
 // ── wire shapes ─────────────────────────────────────────────────
@@ -637,10 +650,11 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 		// Broadcast through OKX rather than our own RPC sendTransaction:
 		// OKX's node knows the blockhash it just embedded (so there's no
 		// node-lag "Blockhash not found" at preflight) and lands the tx via
-		// its staked submission path. Solana's wire format for the broadcast
-		// endpoint is base64.
+		// its staked submission path. OKX base58-decodes the Solana signedTx
+		// (NOT base64 — sending base64 makes OKX reject it with "invalid
+		// base58 encoding" and the tx silently never lands).
 		bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId,
-			base64.StdEncoding.EncodeToString(signed), false)
+			solanaBase58(signed), false)
 		if err != nil {
 			lastErr = fmt.Errorf("okx solana broadcastTransaction: %w", err)
 			if attempt < okxSolanaBroadcastAttempts && isRetryableSolanaBroadcast(err) {
@@ -651,28 +665,25 @@ func okxExecuteSolana(ctx context.Context, n *wltnet.Network, acct *wltacct.Acco
 			return nil, lastErr
 		}
 
-		// The Solana txid is the slot-0 signature we just spliced; prefer
-		// OKX's reported hash when present but fall back to the local one so
-		// the UI always has a working explorer link without polling.
-		hash := solanaBase58(sig)
-		if bres.TxHash != "" {
-			hash = bres.TxHash
-		}
-
-		// Cheap, single best-effort confirm: if OKX already considers the
-		// order terminally failed (e.g. it couldn't land before expiry),
-		// retry with a fresh blockhash rather than report a phantom success.
-		// Pending/success/not-yet-seen all proceed — the host tracks final
-		// settlement via Crypto/Okx:orderStatus(orderId).
+		// OKX returns an orderId the instant it accepts the request — BEFORE
+		// the tx has landed or even been validated; it reports the real
+		// outcome only via orderStatus. So we must poll to tell a landed swap
+		// apart from one that failed async, otherwise we'd report a phantom
+		// success for a tx that never hit the chain.
+		hash := solanaBase58(sig) // Solana txid = base58(slot-0 signature)
 		if bres.OrderId != "" {
-			if st := okxOrderFailed(ctx, chainIndex, acct.GetAddress(), bres.OrderId); st != "" {
+			txHash, failed, reason := okxAwaitOrder(ctx, chainIndex, acct.GetAddress(), bres.OrderId)
+			if failed {
 				lastErr = newErr(ErrCodeProviderUnavailable,
-					fmt.Sprintf("okx reported swap %s (orderId %s)", st, bres.OrderId))
-				if attempt < okxSolanaBroadcastAttempts {
-					wltlog.Errorf("swap: okx order %s %s, retrying with fresh blockhash", bres.OrderId, st)
+					fmt.Sprintf("okx swap did not land (orderId %s): %s", bres.OrderId, reason))
+				if attempt < okxSolanaBroadcastAttempts && isRetryableSolanaBroadcast(fmt.Errorf("%s", reason)) {
+					wltlog.Errorf("swap: okx order %s failed, retrying with fresh blockhash: %s", bres.OrderId, reason)
 					continue
 				}
 				return nil, lastErr
+			}
+			if txHash != "" {
+				hash = txHash
 			}
 		}
 
@@ -702,16 +713,28 @@ type okxBroadcastResult struct {
 	TxHash     string `json:"txHash"`
 }
 
-// okxOrderStatusResult is the entry shape returned by Crypto/Okx:orderStatus.
-type okxOrderStatusResult struct {
-	OrderId string `json:"orderId"`
-	TxHash  string `json:"txHash"`
-	Status  string `json:"status"` // pending|success|failed (OKX terminology)
+// okxOrderStatusPage is the Crypto/Okx:orderStatus data entry: a paginated
+// envelope wrapping the matched orders — [ { "cursor": "...", "orders": […] } ].
+type okxOrderStatusPage struct {
+	Cursor string                `json:"cursor"`
+	Orders []okxOrderStatusEntry `json:"orders"`
+}
+
+// okxOrderStatusEntry is one tracked order. TxStatus is OKX's numeric code as
+// a string: "1" pending, "2" success, "3" failed. FailReason carries the
+// upstream RPC error on failure; TxHash is set once the tx is on chain.
+type okxOrderStatusEntry struct {
+	OrderId    string `json:"orderId"`
+	TxStatus   string `json:"txStatus"`
+	FailReason string `json:"failReason"`
+	TxHash     string `json:"txHash"`
 }
 
 // okxBroadcastSwapTx broadcasts a signed swap tx through OKX and returns the
-// resulting order handle. signedTx is base64 (Solana) or hex (EVM); mev is
-// honored EVM-side only (Solana ignores it).
+// resulting order handle. signedTx is base58 (Solana) or 0x-hex (EVM) — OKX
+// base58-decodes the Solana form, so base64 silently fails to land. mev is
+// honored EVM-side only (Solana ignores it). NOTE: the returned orderId means
+// "accepted", not "landed" — confirm via orderStatus (see okxAwaitOrder).
 func okxBroadcastSwapTx(ctx context.Context, chainIndex, address, quoteId, signedTx string, mev bool) (*okxBroadcastResult, error) {
 	body := rest.Param{
 		"quoteId":    quoteId,
@@ -736,42 +759,132 @@ func okxBroadcastSwapTx(ctx context.Context, chainIndex, address, quoteId, signe
 	return &res, nil
 }
 
-// okxOrderFailed does a single best-effort orderStatus check right after
-// broadcast. It returns the status string only when OKX already reports the
-// order terminally failed — so the caller can retry/surface it instead of
-// claiming success; "" means pending/success/unknown/not-yet-seen. Errors are
-// swallowed (it's advisory): final settlement is tracked host-side.
-func okxOrderFailed(ctx context.Context, chainIndex, address, orderId string) string {
+// okxSolanaConfirmTimeout / okxSolanaConfirmInterval bound the post-broadcast
+// orderStatus poll. Solana settles in seconds, so a landed or failed order
+// usually shows within the first couple of polls.
+const (
+	okxSolanaConfirmTimeout  = 25 * time.Second
+	okxSolanaConfirmInterval = 2 * time.Second
+)
+
+// okxAwaitOrder polls Crypto/Okx:orderStatus until the order lands (success /
+// has a txHash), terminally fails, the context ends, or the timeout elapses.
+// Returns the on-chain txHash when known, whether it failed, and the failure
+// reason. A timeout-while-pending returns (",", false, "") so the caller
+// proceeds optimistically — the tx may still be in flight.
+func okxAwaitOrder(ctx context.Context, chainIndex, address, orderId string) (txHash string, failed bool, reason string) {
+	deadline := time.Now().Add(okxSolanaConfirmTimeout)
+	for {
+		if e := okxOrderStatusOnce(ctx, chainIndex, address, orderId); e != nil {
+			switch e.TxStatus {
+			case "2": // success
+				return e.TxHash, false, ""
+			case "3": // failed
+				return e.TxHash, true, strings.TrimSpace(e.FailReason)
+			}
+			if e.TxHash != "" { // landed even if status not yet "2"
+				return e.TxHash, false, ""
+			}
+		}
+		if time.Now().After(deadline) {
+			return "", false, "" // still pending — caller proceeds optimistically
+		}
+		select {
+		case <-ctx.Done():
+			return "", false, ""
+		case <-time.After(okxSolanaConfirmInterval):
+		}
+	}
+}
+
+// okxFetchOrderStatus fetches a single orderStatus order entry. Returns
+// (nil, nil) when the order isn't visible to OKX yet (just-accepted / unknown
+// id); surfaces transport / decode errors for callers that want them.
+func okxFetchOrderStatus(ctx context.Context, chainIndex, address, orderId string) (*okxOrderStatusEntry, error) {
 	var raw []json.RawMessage
 	if err := rest.Apply(ctx, "Crypto/Okx:orderStatus", "GET", rest.Param{
 		"chainIndex": chainIndex,
 		"address":    address,
 		"orderId":    orderId,
-	}, &raw); err != nil || len(raw) == 0 {
-		return ""
+	}, &raw); err != nil {
+		return nil, err
 	}
-	var res okxOrderStatusResult
-	if err := json.Unmarshal(raw[0], &res); err != nil {
-		return ""
+	if len(raw) == 0 {
+		return nil, nil
 	}
-	if strings.EqualFold(res.Status, "failed") || strings.EqualFold(res.Status, "fail") {
-		return res.Status
+	var page okxOrderStatusPage
+	if err := json.Unmarshal(raw[0], &page); err != nil {
+		return nil, fmt.Errorf("okx: decode orderStatus: %w", err)
 	}
-	return ""
+	if len(page.Orders) == 0 {
+		return nil, nil
+	}
+	return &page.Orders[0], nil
 }
 
-// isRetryableSolanaBroadcast reports whether an OKX broadcast error is the
-// kind a fresh blockhash + re-sign can cure (stale/expired blockhash, preflight
-// simulation miss, transient timeout) versus a terminal one (e.g. insufficient
-// balance) that retrying would only waste a signing round-trip on.
+// okxOrderStatusOnce is the error-swallowing variant used by the in-execute
+// poll, where a transient lookup miss should just mean "not settled yet".
+func okxOrderStatusOnce(ctx context.Context, chainIndex, address, orderId string) *okxOrderStatusEntry {
+	e, err := okxFetchOrderStatus(ctx, chainIndex, address, orderId)
+	if err != nil {
+		return nil
+	}
+	return e
+}
+
+// okxTxStatusLabel normalizes OKX's numeric txStatus into a stable label:
+// "pending" | "success" | "failed". A nil entry (order not yet visible)
+// reads as "pending".
+func okxTxStatusLabel(e *okxOrderStatusEntry) string {
+	if e == nil {
+		return "pending"
+	}
+	switch e.TxStatus {
+	case "2":
+		return "success"
+	case "3":
+		return "failed"
+	case "1":
+		return "pending"
+	default:
+		if e.TxHash != "" {
+			return "success"
+		}
+		return "pending"
+	}
+}
+
+// isRetryableSolanaBroadcast reports whether an OKX broadcast/settlement
+// error is the kind a fresh blockhash + re-sign can cure (stale/expired
+// blockhash, transient timeout) versus a DETERMINISTIC on-chain revert that
+// will fail identically on every retry.
+//
+// The discriminator matters because both arrive as the same JSON-RPC -32002
+// "Transaction simulation failed: …" envelope: a stale-blockhash retryable
+// case ("… Blockhash not found") and a terminal program revert ("… Error
+// processing Instruction 5: custom program error: 0xb") look alike on the
+// "-32002"/"simulation failed" substring alone. So we check the deterministic
+// markers FIRST and bail, then allow only genuine transient/blockhash markers.
 func isRetryableSolanaBroadcast(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := strings.ToLower(err.Error())
+	// Deterministic reverts — a fresh blockhash changes nothing; retrying
+	// only burns signing rounds. Includes program reverts (slippage,
+	// liquidity, etc.) and plainly terminal conditions.
 	for _, m := range []string{
-		"blockhash", "block height", "expired", "simulation failed",
-		"-32002", "not found", "timeout", "timed out", "deadline",
+		"custom program error", "error processing instruction",
+		"insufficient", "slippage", "exceeds desired", "deserialize",
+	} {
+		if strings.Contains(s, m) {
+			return false
+		}
+	}
+	// Transient / stale-blockhash failures a fresh fetch + re-sign can cure.
+	for _, m := range []string{
+		"blockhash", "block height exceeded", "expired",
+		"timeout", "timed out", "deadline",
 	} {
 		if strings.Contains(s, m) {
 			return true
@@ -782,7 +895,7 @@ func isRetryableSolanaBroadcast(err error) bool {
 
 // ── Execute (EVM) ───────────────────────────────────────────────
 
-func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription) (*SwapResult, error) {
+func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account, q *Quote, keys []*wltsign.KeyDescription, opts *ExecuteOpts) (*SwapResult, error) {
 	tx, err := okxFetchSwapTx(ctx, n, acct, q)
 	if err != nil {
 		return nil, err
@@ -838,11 +951,13 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 		Network:  n.Id,
 	}
 
-	// Broadcast every EVM swap through OKX with MEV protection on. We sign
-	// locally, then hand the raw signed tx to OKX rather than
-	// eth_sendRawTransaction'ing it ourselves: OKX routes it through a
-	// MEV-protected (private) mempool where supported and silently ignores
-	// the flag on chains that don't, so it's safe to enable unconditionally.
+	// Broadcast every EVM swap through OKX. MEV protection is on by default
+	// (the host can opt out via ExecuteRequest.mevProtection) and routes the
+	// tx through a MEV-protected (private) mempool where supported; OKX
+	// silently ignores the flag on chains that don't, so enabling it is
+	// always safe. We sign locally, then hand the raw signed tx to OKX
+	// rather than eth_sendRawTransaction'ing it ourselves.
+	mev := mevEnabled(opts)
 	chainIndex, err := okxChainIndexFor(n)
 	if err != nil {
 		return nil, newErr(ErrCodeUnsupportedChain, err.Error())
@@ -851,12 +966,27 @@ func okxExecuteEVM(ctx context.Context, n *wltnet.Network, acct *wltacct.Account
 	if err != nil {
 		return nil, err
 	}
-	bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId, rawHex, true)
+	bres, err := okxBroadcastSwapTx(ctx, chainIndex, acct.GetAddress(), q.QuoteId, rawHex, mev)
 	if err != nil {
 		return nil, fmt.Errorf("okx evm broadcastTransaction: %w", err)
 	}
-	if bres.TxHash != "" {
-		hash = bres.TxHash
+
+	// Confirm the order actually settled. Like Solana, OKX returns an
+	// orderId the moment it ACCEPTS the broadcast — before the tx is mined,
+	// so a swap that reverts on-chain (missing ERC-20 approval, slippage,
+	// gas) would otherwise report a phantom success. Surface the real
+	// failReason instead. We do NOT retry here (re-signing burns the nonce);
+	// the host can re-quote. Pending-after-timeout returns optimistically —
+	// the tx may still confirm; the host tracks it via Swap:orderStatus.
+	if bres.OrderId != "" {
+		txHash, failed, reason := okxAwaitOrder(ctx, chainIndex, acct.GetAddress(), bres.OrderId)
+		if failed {
+			return nil, newErr(ErrCodeProviderUnavailable,
+				fmt.Sprintf("okx evm swap did not land (orderId %s): %s", bres.OrderId, reason))
+		}
+		if txHash != "" {
+			hash = txHash
+		}
 	}
 	return &SwapResult{
 		QuoteId:  q.QuoteId,
@@ -920,14 +1050,24 @@ func okxValidateEVMTx(q *Quote, tx *okxSwapTx) error {
 	return nil
 }
 
-// okxAssertMinReceive refuses to proceed when the provider-returned
-// minReceiveAmount is below the Quote.MinAmountOut the user approved.
-// This is the client-side enforcement of the slippage floor: if price
-// moved adversely between quote and execute such that OKX would settle
-// below the approved minimum, we reject so the user re-quotes rather
-// than silently accepting a worse fill. No-op when the field is absent
-// or unparseable (a display value we won't hard-fail on), or when the
-// quote carries no minimum.
+// okxAssertMinReceive rejects a swap whose provider-returned
+// minReceiveAmount falls grossly below the Quote.MinAmountOut the user
+// approved — a tamper / gross-underpayment tripwire, NOT the user's actual
+// slippage protection (that's minReceiveAmount itself, which the swap
+// program enforces on-chain against the current price).
+//
+// The comparison can't be exact: Quote.MinAmountOut is a stale snapshot
+// (amountOut at quote time × the user's slippage), while OKX recomputes
+// minReceiveAmount from a FRESH quote at execute time. So any normal
+// downward price drift in the seconds between quote and execute leaves
+// minReceiveAmount a hair under MinAmountOut on a perfectly honest fill —
+// which is exactly what the field reported (713177 vs 713274, 0.0136%).
+//
+// We therefore allow minReceiveAmount to sit up to one slippage band below
+// MinAmountOut: that's the price drift the user already signalled they
+// tolerate, and it still trips on the order-of-magnitude shortfall a
+// tampered /swap response would produce. No-op when the field is absent /
+// unparseable or the quote carries no minimum.
 func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
 	if strings.TrimSpace(tx.MinReceiveAmount) == "" {
 		return nil
@@ -939,12 +1079,28 @@ func okxAssertMinReceive(q *Quote, tx *okxSwapTx) error {
 	if q.MinAmountOut == nil || q.MinAmountOut.Value() == nil {
 		return nil
 	}
-	if got.Cmp(q.MinAmountOut.Value()) < 0 {
+	// floor = MinAmountOut × (10_000 − slippageBps) / 10_000, i.e. relax the
+	// approved minimum by one slippage band to absorb quote→execute drift.
+	slip := int64(normalizeSlippageBps(q.SlippageBps))
+	floor := new(big.Int).Mul(q.MinAmountOut.Value(), big.NewInt(10_000-slip))
+	floor.Quo(floor, big.NewInt(10_000))
+	if got.Cmp(floor) < 0 {
 		return newErr(ErrCodeSlippageExceeded, fmt.Sprintf(
-			"okx: swap minReceiveAmount %s is below the approved minimum %s",
-			got, q.MinAmountOut.Value()))
+			"okx: swap minReceiveAmount %s is below the approved floor %s "+
+				"(approved minimum %s, less %d bps drift tolerance)",
+			got, floor, q.MinAmountOut.Value(), slip))
 	}
 	return nil
+}
+
+// mevEnabled resolves whether to request OKX MEV-protected broadcast for an
+// EVM swap. Defaults to true (on) when the host doesn't set a preference;
+// honors an explicit opts.MevProtection otherwise.
+func mevEnabled(opts *ExecuteOpts) bool {
+	if opts != nil && opts.MevProtection != nil {
+		return *opts.MevProtection
+	}
+	return true
 }
 
 // okxFetchSwapTx hits Crypto/Okx:swap once and returns the inner tx

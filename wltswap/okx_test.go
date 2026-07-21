@@ -11,11 +11,13 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"testing"
 
 	"github.com/KarpelesLab/base58"
 	"github.com/KarpelesLab/libwallet/wltnet"
+	"github.com/KarpelesLab/libwallet/wltobj"
 )
 
 func TestOkxDecodeSolanaTxData(t *testing.T) {
@@ -417,5 +419,124 @@ func TestComputeAvailability_Okx(t *testing.T) {
 	res = computeAvailability("bitcoin", "dogecoin", reg)
 	if res.Available || res.Reason != "unsupported_chain" {
 		t.Errorf("bitcoin expected unsupported, got %+v", res)
+	}
+}
+
+func TestOkxAssertMinReceive(t *testing.T) {
+	// Quote approving a 713274 floor at the default 50 bps slippage.
+	mkQuote := func(minOut int64, slip uint16) *Quote {
+		return &Quote{
+			MinAmountOut: wltobj.NewAmountRaw(big.NewInt(minOut), 0),
+			SlippageBps:  slip,
+		}
+	}
+	cases := []struct {
+		name      string
+		q         *Quote
+		minRecv   string
+		wantError bool
+	}{
+		{
+			// The field report: 0.0136% drift below the approved minimum —
+			// well inside the 50 bps band, must NOT reject.
+			name: "honest drift within slippage", q: mkQuote(713274, 50),
+			minRecv: "713177", wantError: false,
+		},
+		{
+			// SlippageBps==0 normalizes to the 50 bps default.
+			name: "zero slippage normalizes to default", q: mkQuote(713274, 0),
+			minRecv: "713177", wantError: false,
+		},
+		{
+			name: "exactly the approved minimum", q: mkQuote(713274, 50),
+			minRecv: "713274", wantError: false,
+		},
+		{
+			// floor = 713274 * 9950/10000 = 709707; one unit under it rejects.
+			name: "just below the relaxed floor", q: mkQuote(713274, 50),
+			minRecv: "709706", wantError: true,
+		},
+		{
+			// Order-of-magnitude shortfall a tampered response would produce.
+			name: "gross underpayment", q: mkQuote(713274, 50),
+			minRecv: "400000", wantError: true,
+		},
+		{
+			name: "absent field is a no-op", q: mkQuote(713274, 50),
+			minRecv: "", wantError: false,
+		},
+		{
+			name: "no quote minimum is a no-op", q: &Quote{SlippageBps: 50},
+			minRecv: "1", wantError: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := okxAssertMinReceive(tc.q, &okxSwapTx{MinReceiveAmount: tc.minRecv})
+			if tc.wantError && err == nil {
+				t.Fatalf("expected rejection, got nil")
+			}
+			if !tc.wantError && err != nil {
+				t.Fatalf("expected pass, got %v", err)
+			}
+		})
+	}
+}
+
+func TestIsRetryableSolanaBroadcast(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   string
+		retry bool
+	}{
+		{
+			// The original node-lag / stale-blockhash bug — retry helps.
+			name:  "blockhash not found",
+			err:   `{"code":-32002,"message":"Transaction simulation failed: Blockhash not found"}`,
+			retry: true,
+		},
+		{"block height exceeded", "block height exceeded", true},
+		{"expired", "transaction expired", true},
+		{"timeout", "context deadline exceeded", true},
+		{
+			// Jeremy's FLASH case: deterministic program revert — retrying
+			// 3x just burns signing rounds, must NOT retry.
+			name:  "custom program error 0xb",
+			err:   `{"code":-32002,"message":"Transaction simulation failed: Error processing Instruction 5: custom program error: 0xb"}`,
+			retry: false,
+		},
+		{"insufficient funds", "insufficient lamports", false},
+		{"slippage", "exceeds desired slippage limit", false},
+		{"empty", "", false},
+		{"unrelated", "some other error", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			if tc.err != "" {
+				err = errors.New(tc.err)
+			}
+			if got := isRetryableSolanaBroadcast(err); got != tc.retry {
+				t.Fatalf("isRetryableSolanaBroadcast(%q) = %v, want %v", tc.err, got, tc.retry)
+			}
+		})
+	}
+}
+
+// TestOkxSolanaNativeSentinelWrapsNativeSol pins the OKX native-SOL
+// identifier to the all-1s System Program address. It must NOT be the wSOL
+// mint: passing the wSOL mint makes OKX skip the SOL wrap, so the swap's
+// source token account is uninitialized for users who don't already hold
+// wSOL (the field-reported AccountNotInitialized / custom program error 0xb).
+func TestOkxSolanaNativeSentinelWrapsNativeSol(t *testing.T) {
+	if okxSolanaNativeSentinel != "11111111111111111111111111111111" {
+		t.Fatalf("okxSolanaNativeSentinel = %q, want the all-1s native SOL address", okxSolanaNativeSentinel)
+	}
+	if okxSolanaNativeSentinel == WrappedSOLMint {
+		t.Fatal("okxSolanaNativeSentinel must not be the wSOL mint — OKX would not wrap native SOL")
+	}
+	sol := &wltnet.Network{Type: "solana", ChainId: "mainnet"}
+	if got := okxTokenAddrFor(sol, "NATIVE"); got != "11111111111111111111111111111111" {
+		t.Fatalf("okxTokenAddrFor(NATIVE) = %q, want all-1s native SOL address", got)
 	}
 }
