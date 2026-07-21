@@ -91,7 +91,78 @@ pub fn fetch(env: &Env, id: &str) -> Result<Option<Asset>> {
 pub fn list(env: &Env) -> Result<Vec<Asset>> {
     let sql = format!(r#"SELECT {COLS} FROM "Asset" ORDER BY "Key" ASC"#);
     let rows = env.query(&sql, Vec::new())?;
-    Ok(rows.iter().map(|r| row_to_asset(r)).collect())
+    let mut assets: Vec<Asset> = rows.iter().map(|r| row_to_asset(r)).collect();
+    // Registered ERC-20 tokens on the current EVM network, with live balances
+    // (port of the EVM leg Go `computeAssets` gained in wltbase/asset.go).
+    // Appended after the persisted rows; best-effort, so a missing current
+    // network/account or an unresolvable RPC simply contributes nothing.
+    assets.extend(registered_erc20_assets(env));
+    Ok(assets)
+}
+
+/// The current EVM network's registered ERC-20 tokens as live-balance assets
+/// (port of the EVM leg of Go `computeAssets`). Unlike Solana — where token
+/// accounts are enumerable on-chain — EVM has no cheap owner→tokens query, so
+/// the user's Token registry (Token:create / Token:discoverToken / swap
+/// EnsureToken) is the source of truth. Zero balances are included on purpose:
+/// a token the user explicitly registered shows as "0" rather than vanishing.
+/// A per-token RPC failure skips that token instead of failing the whole list.
+/// Best-effort throughout — any setup failure yields no rows.
+fn registered_erc20_assets(env: &Env) -> Vec<Asset> {
+    let net = match crate::models::network::fetch(env, "@") {
+        Ok(Some(n)) if n.kind == "evm" => n,
+        _ => return Vec::new(),
+    };
+    let account = match crate::models::account::current(env) {
+        Ok(Some(a)) if a.kind == "ethereum" && !a.address.is_empty() && a.address != "N/A" => a,
+        _ => return Vec::new(),
+    };
+    let rpc = match net.resolved_rpc() {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let tokens = match crate::models::token::tokens_by_network(env, &net.id) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for token in tokens {
+        if token.kind != "erc20" {
+            continue;
+        }
+        let bal = match crate::erc20::balance_of(&rpc, &token.address, &account.address) {
+            Ok(b) => b,
+            Err(_) => continue, // per-token RPC failure: skip (Go logs + continues)
+        };
+        // Fall back to a truncated contract address when the row carries no
+        // display metadata (matches Go's name/symbol fallbacks).
+        let name = if token.name.is_empty() {
+            format!("{}...", &token.address[..token.address.len().min(10)])
+        } else {
+            token.name.clone()
+        };
+        let symbol = if token.symbol.is_empty() {
+            token.address[..token.address.len().min(8)].to_owned()
+        } else {
+            token.symbol.clone()
+        };
+        out.push(Asset {
+            id: String::new(),
+            key: format!("{}.{}", net.key_prefix(), token.address),
+            name,
+            symbol,
+            amount: Amount::new_raw(bal, token.decimals),
+            kind: "fungible".to_owned(),
+            network: net.id.clone(),
+            created: String::new(),
+            updated: String::new(),
+            fiat_amount: None,
+            fiat_currency: String::new(),
+            fiat_quote: None,
+            testnet: net.testnet,
+        });
+    }
+    out
 }
 
 fn row_to_asset(row: &[SqlValue]) -> Asset {

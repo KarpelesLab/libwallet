@@ -64,6 +64,53 @@ pub fn list(env: &Env) -> Result<Vec<Token>> {
     Ok(rows.iter().map(|r| row_to_token(r)).collect())
 }
 
+/// Every registered Token row for `network_id` (port of Go `TokensByNetwork`).
+/// Used by `Asset:list` to enumerate the user's ERC-20 tokens: EVM has no cheap
+/// on-chain owner→tokens query (unlike Solana, which discovers token accounts
+/// on-chain), so the registry the user builds via `Token:create` /
+/// `Token:discoverToken` (or swap EnsureToken) is the source of truth. An empty
+/// id yields no rows (Go returns nil for a nil id).
+pub fn tokens_by_network(env: &Env, network_id: &str) -> Result<Vec<Token>> {
+    if network_id.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sql = format!(r#"SELECT {COLS} FROM "Token" WHERE "Network" = ?1"#);
+    let rows = env.query(&sql, vec![SqlValue::Text(network_id.to_owned())])?;
+    Ok(rows.iter().map(|r| row_to_token(r)).collect())
+}
+
+/// Resolve a network reference to the network's id (xuid string), accepting
+/// either form the clients use (port of Go `resolveNetworkRef`):
+///
+///   - a network xuid ("net-…") passes through unchanged;
+///   - the canonical "<type>.<chainId>" key (e.g. "evm.137", "solana.mainnet")
+///     — the form `Asset.network` and the Dart Token API send — maps to the
+///     deterministic network id.
+///
+/// The canonical form is the one that previously failed as "invalid UUID
+/// length: 7" (e.g. "evm.137") because `Network` was parsed straight as an
+/// xuid. Network existence is validated by the caller (`network::fetch`), not
+/// here; this only maps ref → id.
+pub fn resolve_network_ref(reference: &str) -> Result<String> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Err(crate::Error::Env("Network is required".into()));
+    }
+    // A real network xuid parses under the "net" prefix; the canonical key uses
+    // dots and won't.
+    if Xuid::parse_prefix(reference, "net").is_ok() {
+        return Ok(reference.to_owned());
+    }
+    if let Some((typ, chain)) = reference.split_once('.') {
+        if !typ.is_empty() && !chain.is_empty() {
+            return Ok(crate::models::network::network_id_for(typ, chain));
+        }
+    }
+    Err(crate::Error::Env(format!(
+        "invalid network reference {reference:?} (want a net-… id or \"<type>.<chainId>\")"
+    )))
+}
+
 fn row_to_token(row: &[SqlValue]) -> Token {
     let text = |i: usize| row.get(i).and_then(|v| v.as_text()).unwrap_or("").to_owned();
     Token {
@@ -128,6 +175,12 @@ pub fn validate(env: &Env, t: &mut Token) -> Result<()> {
 /// Create a token (port of Go `apiCreateToken`): validate/normalize, assign a
 /// random `tok` id, persist, and return the created row.
 pub fn create(env: &Env, mut t: Token) -> Result<Token> {
+    // Accept the canonical "<type>.<chainId>" network ref (e.g. "evm.137") the
+    // Dart Token API sends, in addition to a stored net-… xuid, resolving it to
+    // the network id (Go apiCreateToken / resolveNetworkRef). Storing the
+    // resolved id — not "evm.137" verbatim — is also what lets Asset:list find
+    // the row via tokens_by_network.
+    t.network = resolve_network_ref(&t.network)?;
     validate(env, &mut t)?;
     t.id = Xuid::new_random("tok").to_string();
     save(env, &mut t)?;

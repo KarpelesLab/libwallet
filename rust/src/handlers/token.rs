@@ -104,7 +104,17 @@ pub fn discover_token(env: &Env, params: &Value) -> ApiResult {
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "Address required"))?;
 
-    let net = crate::models::network::fetch(env, network)
+    // Accept a canonical "<type>.<chainId>" network ref (Go resolveNetworkRef)
+    // in addition to a stored network id/xuid — the form the Dart Token API
+    // sends. The dot form maps to the network's deterministic id so the stored
+    // (seeded) row — with its RPC — is fetched rather than an ephemeral one.
+    let net_ref = if network.contains('.') {
+        crate::models::token::resolve_network_ref(network)
+            .map_err(|e| ApiError::new(400, e.to_string()))?
+    } else {
+        network.to_owned()
+    };
+    let net = crate::models::network::fetch(env, &net_ref)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "network not found"))?;
     let rpc = net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?;
