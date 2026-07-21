@@ -79,10 +79,13 @@ fn first_run_is_db_backed() {
     let h = new_env();
     let resp = request(h, r#"{"path":"Info:first_run"}"#);
     assert_eq!(resp["result"], "success");
-    // Seeded on first init; shape is the TimeId {type,unix,nano,idx}.
-    assert!(resp["data"]["unix"].as_u64().unwrap() > 1_700_000_000);
-    assert!(resp["data"].get("nano").is_some());
-    assert_eq!(resp["data"]["type"], "");
+    // Seeded on first init. Matches Go's TimeId.MarshalJSON: a JSON string
+    // "<type>:<unix>:<nano>:<idx>", where an empty type renders as "nil".
+    let s = resp["data"].as_str().expect("first_run is a JSON string");
+    let parts: Vec<&str> = s.split(':').collect();
+    assert_eq!(parts.len(), 4, "TimeId string has 4 fields: {s}");
+    assert_eq!(parts[0], "nil", "empty type renders as nil");
+    assert!(parts[1].parse::<u64>().unwrap() > 1_700_000_000, "unix seconds: {s}");
     LibwalletDestroy(h);
 }
 
