@@ -108,18 +108,16 @@ fn wallet_info_value(env: &Env) -> Value {
 }
 
 /// `Info:first_run` — the first-launch TimeId. Port of `infoFirstRun`: decode
-/// the 16-byte config blob into `{type, unix, nano, idx}` (the JSON shape of
-/// `wltobj.TimeId`).
+/// the 16-byte config blob into a `wltobj.TimeId`. Go marshals a `TimeId` via
+/// `MarshalJSON` → `json.Marshal(t.String())`, i.e. the JSON *string*
+/// `"nil:<unix>:<nano>:<idx>"` (empty type renders as `nil`). Match that shape
+/// exactly so the Dart client can cast the result to `String?`.
 pub fn first_run(env: &Env) -> ApiResult {
     let raw = env
         .config_get("first_run")
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(500, "first_run not set"))?;
-    if raw.len() != 16 {
-        return Err(ApiError::new(500, format!("bad first_run length: {}", raw.len())));
-    }
-    let unix = u64::from_be_bytes(raw[0..8].try_into().unwrap());
-    let nano = u32::from_be_bytes(raw[8..12].try_into().unwrap());
-    let idx = u32::from_be_bytes(raw[12..16].try_into().unwrap());
-    Ok(json!({ "type": "", "unix": unix, "nano": nano, "idx": idx }))
+    let tid = crate::timeid::TimeId::from_bytes(&raw)
+        .map_err(|e| ApiError::new(500, format!("bad first_run: {e}")))?;
+    Ok(Value::String(tid.to_string()))
 }
