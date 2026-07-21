@@ -27,9 +27,29 @@ fn mock_solana(balance: u64, rent: u64, recipient_exists: bool) -> String {
             // Handle each connection on its own thread so accepting the next
             // request never blocks on finishing the current one.
             thread::spawn(move || {
+                // Read until the JSON-RPC body (which carries the method name)
+                // has arrived — a single read() can return just the HTTP
+                // headers when the request splits across TCP segments under
+                // parallel test load, which would otherwise misroute the mock.
+                let mut acc = Vec::new();
                 let mut buf = [0u8; 8192];
-                let n = s.read(&mut buf).unwrap_or(0);
-                let req = String::from_utf8_lossy(&buf[..n]);
+                loop {
+                    match s.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            acc.extend_from_slice(&buf[..n]);
+                            let txt = String::from_utf8_lossy(&acc);
+                            if txt.contains("getMinimumBalanceForRentExemption")
+                                || txt.contains("getBalance")
+                                || txt.contains("getAccountInfo")
+                            {
+                                break;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let req = String::from_utf8_lossy(&acc);
                 let result = if req.contains("getMinimumBalanceForRentExemption") {
                     format!("{rent}")
                 } else if req.contains("getBalance") {
