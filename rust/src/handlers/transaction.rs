@@ -353,10 +353,26 @@ fn sign_and_send_solana(
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| ApiError::new(400, "to is required"))?;
-    let lamports_bi = amount_significand(tx.get("amount"))
-        .ok_or_else(|| ApiError::new(400, "amount is required"))?;
-    let lamports = bigint_to_u64(&lamports_bi)
-        .ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 lamports"))?;
+
+    // Resolve the MAX amount sentinel (`Amount.max(9)`) to a concrete lamport
+    // value before building the transfer — balance − fee − rent reserve, the
+    // same math as Transaction:maxSendable (Go `preflightSolanaNativeSend`).
+    // Without this, MAX reaches the signer with no value and the send fails.
+    let amount_is_max = tx
+        .get("amount")
+        .and_then(|v| serde_json::from_value::<crate::Amount>(v.clone()).ok())
+        .map(|a| a.is_max())
+        .unwrap_or(false);
+    let lamports = if amount_is_max {
+        let fee_lamports = solana_fee_lamports(tx);
+        crate::transfer::resolve_solana_max_lamports(rpc, &account.address, to_b58, fee_lamports)
+            .map_err(|e| ApiError::new(400, e.to_string()))?
+    } else {
+        let lamports_bi = amount_significand(tx.get("amount"))
+            .ok_or_else(|| ApiError::new(400, "amount is required"))?;
+        bigint_to_u64(&lamports_bi)
+            .ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 lamports"))?
+    };
 
     // Recent blockhash (finalized, matching Go's commitment).
     let bh = crate::rpc::call(rpc, "getLatestBlockhash", json!([{ "commitment": "finalized" }]))
@@ -401,7 +417,13 @@ fn sign_and_send_solana(
         hash: hash.clone(),
         url: tx_url(net, &hash),
         network: net.id.clone(),
-        amount: tx_amount_field(tx.get("amount")),
+        // On MAX, persist the resolved concrete lamports (Go rewrites tx.Amount
+        // in place) rather than round-tripping the {"v":"MAX"} sentinel.
+        amount: if amount_is_max {
+            Some(crate::Amount::new_raw(BigInt::from(lamports), 9))
+        } else {
+            tx_amount_field(tx.get("amount"))
+        },
         value: None,
         data: String::new(),
         created: crate::now_rfc3339(),
@@ -411,6 +433,17 @@ fn sign_and_send_solana(
     };
     crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// The fee (in lamports) to reserve when resolving a MAX native-SOL send: the
+/// caller's `fee` Amount (9-decimal lamports) when present, else the flat
+/// base signature fee. Mirrors Go's use of the priority-inclusive `tx.Fee`
+/// with a 5000 fallback.
+fn solana_fee_lamports(tx: &Value) -> u64 {
+    tx.get("fee")
+        .and_then(|v| serde_json::from_value::<crate::Amount>(v.clone()).ok())
+        .and_then(|a| a.value().and_then(bigint_to_u64))
+        .unwrap_or(crate::transfer::SOLANA_BASE_FEE_LAMPORTS)
 }
 
 /// Bitcoin `Transaction:signAndSend` (Go `buildBitcoinTx` + `broadcastBitcoinTx`,

@@ -138,6 +138,107 @@ pub(crate) fn url_unescape(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+// --- Solana native-send MAX resolution --------------------------------------
+//
+// Port of the MAX-sentinel branch of Go `wlttx/preflight.go`
+// (`preflightSolanaNativeSend`) plus `computeSolanaMaxSendable` from
+// `wlttx/maxsendable.go`. When a native-SOL send carries the MAX amount
+// sentinel (`Amount.max(9)` — see `crate::amount`), the concrete lamports must
+// be resolved to `balance − fee − rent reserve` at build time so the signer
+// sends a real value instead of the sentinel. Lives here (a public module)
+// rather than in the private `handlers` module so it stays unit-testable, and
+// is wired into the Solana `Transaction:signAndSend` path.
+
+/// Canonical rent-exempt minimum for a 0-byte system account, used as the
+/// fallback when `getMinimumBalanceForRentExemption` is unavailable. Matches
+/// Go's 890880 fallback.
+pub const SOLANA_DEFAULT_SENDER_RENT: u64 = 890_880;
+
+/// Solana native-transfer base signature fee (lamports). Used when the tx
+/// carries no explicit (priority-inclusive) fee. Matches Go's flat 5000.
+pub const SOLANA_BASE_FEE_LAMPORTS: u64 = 5_000;
+
+/// RPC-free max-sendable math (port of Go `computeSolanaMaxSendable`). All
+/// arguments are lamports; `recipient_exists == false` also reserves
+/// `recipient_rent`. Returns `(max, reserved, reason)` where `reason` is
+/// `Some` (and `max == 0`) when nothing is sendable.
+pub fn compute_solana_max_sendable(
+    balance: u64,
+    fee: u64,
+    sender_rent: u64,
+    recipient_rent: u64,
+    recipient_exists: bool,
+) -> (u64, u64, Option<String>) {
+    let reserved = if recipient_exists {
+        fee + sender_rent
+    } else {
+        fee + sender_rent + recipient_rent
+    };
+    if balance <= reserved {
+        let mut reason = format!(
+            "balance {balance} lamports is not enough to cover fee {fee} + sender rent {sender_rent}"
+        );
+        if !recipient_exists {
+            reason = format!("{reason} + new-recipient rent {recipient_rent}");
+        }
+        return (0, reserved, Some(reason));
+    }
+    (balance - reserved, reserved, None)
+}
+
+/// Resolve the MAX sentinel on a native-SOL send to a concrete lamport amount:
+/// `balance − fee − sender rent (− new-recipient rent)`, using the same
+/// balance/rent inputs as `Transaction:maxSendable`. Port of the MAX branch of
+/// Go `preflightSolanaNativeSend`. `to` may be empty (no recipient-rent
+/// reservation). Fails loudly rather than let an unresolved sentinel reach the
+/// signer when the balance lookup fails or nothing is sendable.
+pub fn resolve_solana_max_lamports(
+    rpc: &str,
+    from_address: &str,
+    to: &str,
+    fee_lamports: u64,
+) -> Result<u64> {
+    // Balance (lamports). Without it MAX can't be resolved — fail loudly.
+    let bal_res = crate::rpc::call(rpc, "getBalance", serde_json::json!([from_address]))
+        .map_err(|e| Error::Env(format!("cannot resolve MAX amount: balance lookup failed: {e}")))?;
+    let balance = bal_res
+        .get("value")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| Error::Env("cannot resolve MAX amount: unexpected getBalance response".into()))?;
+
+    // Sender rent-exempt minimum (0-byte system account); canonical fallback.
+    let sender_rent = crate::rpc::call(rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
+        .ok()
+        .and_then(|v| v.as_u64())
+        .unwrap_or(SOLANA_DEFAULT_SENDER_RENT);
+
+    // A brand-new recipient must be funded to its own rent-exempt minimum,
+    // which comes out of the sendable max.
+    let mut recipient_exists = true;
+    let mut recipient_rent = 0u64;
+    if !to.is_empty() {
+        if let Ok(info) = crate::rpc::call(
+            rpc,
+            "getAccountInfo",
+            serde_json::json!([to, { "encoding": "base64" }]),
+        ) {
+            // getAccountInfo returns "value": null for missing accounts.
+            let exists = info.get("value").map(|v| !v.is_null()).unwrap_or(false);
+            if !exists {
+                recipient_exists = false;
+                recipient_rent = sender_rent;
+            }
+        }
+    }
+
+    let (max, _reserved, reason) =
+        compute_solana_max_sendable(balance, fee_lamports, sender_rent, recipient_rent, recipient_exists);
+    if max == 0 {
+        return Err(Error::Env(reason.unwrap_or_else(|| "insufficient balance".into())));
+    }
+    Ok(max)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
