@@ -341,7 +341,55 @@ impl Network {
 }
 
 pub fn init(env: &Env) -> Result<()> {
-    env.ensure_table(TABLE_DDL)
+    env.ensure_table(TABLE_DDL)?;
+    make_default_networks(env)
+}
+
+/// The built-in networks seeded at env init (port of Go `MakeDefaultNetworks`):
+/// (type, chainId, priority, testNet). Ordering here mirrors the Go seed order;
+/// the effective list order is by Priority DESC.
+const DEFAULT_NETWORKS: &[(&str, &str, i64, bool)] = &[
+    // EVM chains.
+    ("evm", "1", 100, false),
+    ("evm", "137", 50, false),
+    ("evm", "56", 10, false),
+    ("evm", "11155111", -10, true),
+    ("evm", "80002", -50, true),
+    // Bitcoin family.
+    ("bitcoin", "bitcoin", 99, false),
+    ("bitcoin", "bitcoin-cash", 98, false),
+    ("bitcoin", "litecoin", 49, false),
+    ("bitcoin", "dogecoin", 40, false),
+    // Solana.
+    ("solana", "mainnet", 97, false),
+];
+
+/// Seed the built-in networks (port of Go `MakeDefaultNetworks`, called from
+/// `wltnet.InitEnv`). Idempotent: a network already present — keyed on its
+/// deterministic type+chainId id — is left untouched, matching Go's
+/// `evmNetwork`/`bitcoinNetwork`/`solanaNetwork` "return the existing row,
+/// otherwise create it" semantics. `check()` fills chain-derived defaults
+/// (name/symbol/rpc/explorer); like Go (which discards the per-network error)
+/// a network whose `check()` fails is simply skipped rather than aborting the
+/// whole seed.
+pub fn make_default_networks(env: &Env) -> Result<()> {
+    for &(kind, chain_id, priority, testnet) in DEFAULT_NETWORKS {
+        if by_id_opt(env, &network_id_for(kind, chain_id)) {
+            continue; // already seeded — skip (idempotent re-init)
+        }
+        let mut n = Network {
+            kind: kind.to_owned(),
+            chain_id: chain_id.to_owned(),
+            priority,
+            testnet,
+            ..Network::default()
+        };
+        if n.check().is_err() {
+            continue; // Go discards evmNetwork/... errors; unknown chain → skip
+        }
+        save(env, &n)?;
+    }
+    Ok(())
 }
 
 /// Fetch by id. Supports "@" (current network), "type.chainId" (ephemeral),

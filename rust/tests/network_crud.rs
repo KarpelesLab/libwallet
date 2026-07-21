@@ -7,6 +7,10 @@ use libwallet::Env;
 fn env() -> Env {
     let env = Env::init_memory().unwrap();
     network::init(&env).unwrap();
+    // network::init now seeds the built-in networks (Go MakeDefaultNetworks).
+    // These CRUD tests count rows precisely and want an isolated table, so
+    // clear the seeded rows to restore a clean slate.
+    env.exec(r#"DELETE FROM "Network""#, Vec::new()).unwrap();
     env
 }
 

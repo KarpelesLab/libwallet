@@ -288,6 +288,10 @@ mod tests {
     }
 
     fn evm_network(env: &Env, rpc: &str) {
+        // network::init now seeds the built-in networks (incl. evm.1), which
+        // would collide with this fixture on UNIQUE(Type,ChainId). Clear the
+        // table so the test controls the (evm, 1) row and its mock RPC.
+        env.exec(r#"DELETE FROM "Network""#, Vec::new()).unwrap();
         env.exec(
             r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
             vec![
@@ -359,6 +363,9 @@ mod tests {
         // Solana uses an explicit RPC; store it directly on a solana network.
         let account_info = r#"{"value":{"data":{"parsed":{"type":"mint","info":{"decimals":6,"supply":"5000000000","mintAuthority":null}},"program":"spl-token"}}}"#;
         let rpc = mock_rpc(vec![account_info.to_string()]);
+        // Clear seeded networks (init now seeds solana.mainnet) so this fixture
+        // doesn't collide on UNIQUE(Type,ChainId).
+        env.exec(r#"DELETE FROM "Network""#, Vec::new()).unwrap();
         env.exec(
             r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
             vec![
