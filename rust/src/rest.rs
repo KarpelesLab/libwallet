@@ -54,14 +54,17 @@ pub fn do_get(base: &str, path: &str) -> Result<Value> {
 /// used by the WalletSign helpers (`Crypto/WalletSign:keys`).
 pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) -> Result<Value> {
     let url = format!("{base}/_special/rest/{path}");
-    let mut req = ureq::get(&url).set("Sec-Rest-Http", "false").timeout(Duration::from_secs(20));
+    let mut req = rsurl::Request::new("GET", &url)
+        .map_err(|e| Error::Env(format!("rest {path} request build failed: {e}")))?
+        .header("Sec-Rest-Http", "false")
+        .read_timeout(Some(Duration::from_secs(20)));
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
-        req = req.set("Sec-ClientId", id);
+        req = req.header("Sec-ClientId", id);
     }
     let resp: Value = req
-        .call()
+        .send()
         .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
-        .into_json()
+        .json()
         .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
     unwrap_envelope(path, resp)
 }
@@ -73,17 +76,21 @@ pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) ->
 /// backend's concern — these endpoints gate 2FA on ClientID + rate limits.
 pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
     let url = format!("{base}/_special/rest/{path}");
-    let mut req = ureq::post(&url)
-        .set("Sec-Rest-Http", "false")
-        .set("Content-Type", "application/json")
-        .timeout(Duration::from_secs(20));
+    let body = serde_json::to_vec(params)
+        .map_err(|e| Error::Env(format!("rest {path} encode failed: {e}")))?;
+    let mut req = rsurl::Request::new("POST", &url)
+        .map_err(|e| Error::Env(format!("rest {path} request build failed: {e}")))?
+        .header("Sec-Rest-Http", "false")
+        .header("Content-Type", "application/json")
+        .read_timeout(Some(Duration::from_secs(20)))
+        .body(body);
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
-        req = req.set("Sec-ClientId", id);
+        req = req.header("Sec-ClientId", id);
     }
     let resp: Value = req
-        .send_json(params.clone())
+        .send()
         .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
-        .into_json()
+        .json()
         .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
     unwrap_envelope(path, resp)
 }
@@ -96,14 +103,17 @@ pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) 
 pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
     let json = serde_json::to_string(params).unwrap_or_else(|_| "null".into());
     let url = format!("{base}/_special/rest/{path}?_={}", go_query_escape(&json));
-    let mut req = ureq::get(&url).set("Sec-Rest-Http", "false").timeout(Duration::from_secs(30));
+    let mut req = rsurl::Request::new("GET", &url)
+        .map_err(|e| Error::Env(format!("rest {path} request build failed: {e}")))?
+        .header("Sec-Rest-Http", "false")
+        .read_timeout(Some(Duration::from_secs(30)));
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
-        req = req.set("Sec-ClientId", id);
+        req = req.header("Sec-ClientId", id);
     }
     let resp: Value = req
-        .call()
+        .send()
         .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?
-        .into_json()
+        .json()
         .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
     unwrap_envelope(path, resp)
 }

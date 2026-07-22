@@ -1,8 +1,8 @@
 //! Minimal blocking JSON-RPC client for blockchain nodes (port of the wltnet
 //! DoRPC path). ethrpc-rs's own client is async; the FFI runs each request on a
 //! worker thread, so a blocking transport fits without pulling in a runtime.
-//! Used for EVM/Bitcoin/Solana node calls (eth_getBalance, eth_sendRawTransaction,
-//! net_version, modchain_*, ...).
+//! Built on rsurl (the project's HTTP client). Used for EVM/Bitcoin/Solana node
+//! calls (eth_getBalance, eth_sendRawTransaction, net_version, modchain_*, ...).
 
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -13,11 +13,16 @@ use crate::{Error, Result};
 /// node returned a JSON-RPC error).
 pub fn call(url: &str, method: &str, params: Value) -> Result<Value> {
     let body = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params });
-    let resp: Value = ureq::post(url)
-        .timeout(Duration::from_secs(20))
-        .send_json(body)
+    let body = serde_json::to_vec(&body)
+        .map_err(|e| Error::Env(format!("rpc {method} encode failed: {e}")))?;
+    let resp: Value = rsurl::Request::new("POST", url)
+        .map_err(|e| Error::Env(format!("rpc {method} request build failed: {e}")))?
+        .header("Content-Type", "application/json")
+        .read_timeout(Some(Duration::from_secs(20)))
+        .body(body)
+        .send()
         .map_err(|e| Error::Env(format!("rpc {method} request failed: {e}")))?
-        .into_json()
+        .json()
         .map_err(|e| Error::Env(format!("rpc {method} decode failed: {e}")))?;
 
     if let Some(err) = resp.get("error") {

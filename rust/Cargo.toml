@@ -34,7 +34,7 @@ bottlers = "0"
 purecrypto = "0"
 tsslib = "0.2.5"
 bs58 = "0.5"
-ureq = { version = "2", features = ["json"] }
+rsurl = "0.1.5"
 tungstenite = "0.20"
 outscript = "0.1.2"
 spotlib = "0.1.0"
