@@ -41,6 +41,7 @@ jobs:
 
       - name: Build FFI cdylib for host (Dart local-dev path)
         run: |
+          mkdir -p dart/testserver
           cd rust && cargo build --release
           cp target/release/liblibwallet.dylib ../dart/testserver/liblibwallet.dylib
 
