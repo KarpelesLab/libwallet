@@ -165,17 +165,12 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         "wallet_addEthereumChain" => wallet_add_chain(env, &key, &q_params),
         "mpurse_getAddress" => mpurse_get_address(env, &key),
         "mpurse_sendRawTransaction" => rpc_passthrough(&net, params, "sendrawtransaction", &q_params),
-        // mpurse_sendAsset builds+signs+broadcasts a Counterparty asset
-        // transfer. Counterparty tx construction depends on the external
-        // Counterparty server API, which is out of scope for this wallet — the
-        // Go handler (wltbase/web3.go) deliberately returns this same error, so
-        // this is intentional back-compat parity, NOT a porting gap. dApps
-        // should build the tx via counterparty and then call
-        // mpurse_signRawTransaction + mpurse_sendRawTransaction.
-        "mpurse_sendAsset" => Err(ApiError::new(
-            501,
-            "mpurse_sendAsset is not implemented; build via counterparty + signRawTransaction",
-        )),
+        // mpurse_sendAsset composes a Counterparty asset transfer, signs it, and
+        // broadcasts it. This DIVERGES from Go: wltbase/web3.go returns "not
+        // implemented" and delegates Counterparty composition to the dApp; here
+        // we compose server-side via the counterparty-lib `create_send` API,
+        // then reuse the bitcoin transaction_sign + sendrawtransaction paths.
+        "mpurse_sendAsset" => mpurse_send_asset(env, &key, &net, params, &q_params),
         "mpurse_signMessage" => mpurse_sign_message(env, &key, &net, &q_params),
         "mpurse_signRawTransaction" => mpurse_sign_raw_tx(env, &key, &q_params),
         // Open relay: forward any other JSON-RPC method to the active network
@@ -202,6 +197,101 @@ fn mpurse_sign_raw_tx(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     let out = super::request::run(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
+}
+
+/// `mpurse_sendAsset` params `[{to, asset, amount, memoType, memoValue}]` —
+/// compose a Counterparty `send`, sign it via the bitcoin `transaction_sign`
+/// approval, broadcast via `sendrawtransaction`, and return the txid.
+///
+/// DIVERGENCE FROM GO: the Go handler returns "not implemented" and leaves
+/// Counterparty composition to the dApp. This composes server-side (see
+/// `crate::counterparty`). The Counterparty endpoint comes from a
+/// `CounterpartyRPC` param override, else a per-network default (Monacoin only).
+fn mpurse_send_asset(
+    env: &Env,
+    host: &str,
+    net: &crate::models::network::Network,
+    params: &Value,
+    q_params: &[Value],
+) -> ApiResult {
+    let obj = q_params.first().and_then(Value::as_object).ok_or_else(|| {
+        ApiError::new(400, "mpurse_sendAsset requires one object param {to, asset, amount, memoType, memoValue}")
+    })?;
+    let to = obj.get("to").and_then(Value::as_str).filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "mpurse_sendAsset: 'to' is required"))?;
+    let asset = obj.get("asset").and_then(Value::as_str).filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "mpurse_sendAsset: 'asset' is required"))?;
+    let quantity = obj.get("amount").and_then(as_u64_quantity)
+        .ok_or_else(|| ApiError::new(400, "mpurse_sendAsset: 'amount' must be a non-negative integer quantity"))?;
+    // Counterparty memo: text unless memoType names hex.
+    let memo_value = obj.get("memoValue").and_then(Value::as_str).unwrap_or("");
+    let memo = (!memo_value.is_empty()).then_some(memo_value);
+    let memo_is_hex = obj.get("memoType").and_then(Value::as_str).unwrap_or("").eq_ignore_ascii_case("hex");
+
+    // Resolve the connected (source) account — same rule as the other mpurse
+    // methods: the first account connected for this origin.
+    let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
+    let account = crate::models::account::find(
+        env,
+        &conn.first().ok_or_else(|| ApiError::new(400, "no account connected; call mpurse_getAddress first"))?.account,
+    )
+    .map_err(ApiError::internal)?
+    .ok_or_else(|| ApiError::new(404, "connected account not found"))?;
+
+    // Compose the unsigned Counterparty transaction.
+    let cp_url = counterparty_url(net, params)?;
+    let unsigned_hex = crate::counterparty::create_send(&cp_url, &account.address, to, asset, quantity, memo, memo_is_hex)
+        .map_err(|e| ApiError::new(502, format!("counterparty create_send: {e}")))?;
+
+    // Sign it under the account's bitcoin keys via the transaction_sign approval
+    // (identical machinery to mpurse_signRawTransaction).
+    let req = crate::models::request::Request {
+        kind: "transaction_sign".into(),
+        host: host.to_owned(),
+        account: Some(account.id.clone()),
+        value: Some(json!({ "method": "mpurse_sendAsset", "chain": "bitcoin", "raw": unsigned_hex })),
+        ..Default::default()
+    };
+    let out = super::request::run(env, req)?;
+    let signed = out
+        .result
+        .as_ref()
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(500, "transaction approval produced no signed tx"))?
+        .to_owned();
+
+    // Broadcast the signed tx (RPC override honoured, as the other mpurse arms do).
+    let rpc = match params.get("RPC").and_then(Value::as_str) {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
+    };
+    crate::rpc::call(&rpc, "sendrawtransaction", json!([signed])).map_err(ApiError::internal)
+}
+
+/// Parse a Counterparty `amount` (integer quantity in base units) from either a
+/// JSON number or a decimal string. Rejects negatives / non-integers / overflow.
+fn as_u64_quantity(v: &Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return Some(n);
+    }
+    v.as_str().and_then(|s| s.trim().parse::<u64>().ok())
+}
+
+/// Resolve the Counterparty compose endpoint: an explicit `CounterpartyRPC`
+/// param wins (tests / host-configured routing); otherwise a per-network
+/// default. Only Monacoin (the Mpurse chain) has a default today.
+fn counterparty_url(net: &crate::models::network::Network, params: &Value) -> Result<String, ApiError> {
+    if let Some(u) = params.get("CounterpartyRPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        return Ok(u.to_owned());
+    }
+    match (net.kind.as_str(), net.chain_id.as_str()) {
+        ("bitcoin", "monacoin") => Ok(crate::counterparty::DEFAULT_MONACOIN_COUNTERPARTY_URL.to_owned()),
+        _ => Err(ApiError::new(
+            400,
+            "mpurse_sendAsset: no Counterparty endpoint for this network; pass a CounterpartyRPC override",
+        )),
+    }
 }
 
 /// `mpurse_signMessage` params [message] — raise a `message_sign` approval; the

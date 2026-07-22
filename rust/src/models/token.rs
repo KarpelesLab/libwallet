@@ -79,6 +79,28 @@ pub fn tokens_by_network(env: &Env, network_id: &str) -> Result<Vec<Token>> {
     Ok(rows.iter().map(|r| row_to_token(r)).collect())
 }
 
+/// Find the registered token on `network_id` whose on-chain address / mint
+/// matches `addr`, comparing via a base58 round-trip so equivalent encodings
+/// collapse (port of Go `LookupTokenByMint`). Returns `None` when no row
+/// matches. Used to resolve a canonical "<type>.<chainId>.<mint>" asset key to
+/// its Token row on the SPL send path.
+pub fn lookup_by_mint(env: &Env, network_id: &str, addr: &str) -> Result<Option<Token>> {
+    let want = bs58::decode(addr).into_vec().ok();
+    for t in tokens_by_network(env, network_id)? {
+        if t.address == addr {
+            return Ok(Some(t));
+        }
+        // Fall back to a byte-level compare so a differently-cased/padded but
+        // equivalent base58 encoding still matches.
+        if let (Some(a), Some(b)) = (&want, bs58::decode(&t.address).into_vec().ok()) {
+            if *a == b {
+                return Ok(Some(t));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Resolve a network reference to the network's id (xuid string), accepting
 /// either form the clients use (port of Go `resolveNetworkRef`):
 ///

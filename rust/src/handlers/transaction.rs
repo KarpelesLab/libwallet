@@ -326,9 +326,10 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
 /// Solana `Transaction:signAndSend` (Go `signAndSendSolana`, native path):
 /// fetch a recent blockhash, build the SystemProgram transfer message, FROST-sign
 /// it with the account's shares, assemble + base58-encode, broadcast via
-/// `sendTransaction`, persist, and return the Transaction row. The SPL-token path
-/// (compute-budget sizing, ATA derivation, Token-2022 transfer-fee math) is a
-/// documented 501 for now — native SOL transfers are covered.
+/// `sendTransaction`, persist, and return the Transaction row. When the tx's
+/// asset resolves to a registered SPL token, routes to `sign_and_send_solana_spl`
+/// (ATA-provisioning TransferChecked build); otherwise builds the native
+/// SystemProgram transfer below.
 fn sign_and_send_solana(
     env: &Env,
     tx: &Value,
@@ -339,13 +340,12 @@ fn sign_and_send_solana(
 ) -> ApiResult {
     let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
     let asset = tx.get("asset").and_then(Value::as_str).unwrap_or("");
-    // SPL routing is not ported: reject the token sub-case explicitly rather than
-    // silently building a native SOL transfer with the token amount in lamports.
-    if typ == "solana_spl_transfer" || !is_native_asset(asset) {
-        return Err(ApiError::new(
-            501,
-            "Transaction:signAndSend for Solana SPL tokens is not ported (native SOL only) — use Account:signAndSendTransaction",
-        ));
+
+    // Resolve tx.asset against the Token table (Go `resolveTokenAsset`). A
+    // non-native asset routes to the SPL build; a native asset (empty / NATIVE /
+    // "*.NATIVE") falls through to the SystemProgram transfer.
+    if let Some(token) = resolve_token_asset(env, net, asset)? {
+        return sign_and_send_solana_spl(env, tx, params, account, net, rpc, typ, &token);
     }
 
     let to_b58 = tx
@@ -424,6 +424,215 @@ fn sign_and_send_solana(
         } else {
             tx_amount_field(tx.get("amount"))
         },
+        value: None,
+        data: String::new(),
+        created: crate::now_rfc3339(),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
+    };
+    crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// Resolve `asset` against the local Token table for a Solana send (port of Go
+/// `resolveTokenAsset`). Returns `None` for a native asset (empty / NATIVE /
+/// "*.NATIVE"); the token row for a `tok-…` XUID or a canonical
+/// "<type>.<chainId>.<mint>" key; and a 400 error when the asset is non-native
+/// but not resolvable (a caller mistake we surface at send time).
+fn resolve_token_asset(
+    env: &Env,
+    net: &crate::models::network::Network,
+    asset: &str,
+) -> Result<Option<crate::models::token::Token>, ApiError> {
+    if is_native_asset(asset) {
+        return Ok(None);
+    }
+    // XUID shape ("tok-…") — look up by id.
+    if xuid::Xuid::parse_prefix(asset, "tok").is_ok() {
+        return crate::models::token::fetch(env, asset)
+            .map_err(ApiError::internal)?
+            .map(Some)
+            .ok_or_else(|| ApiError::new(400, format!("token {asset} not found")));
+    }
+    // Canonical "<type>.<chainId>.<mint>" — the part after the second dot is the
+    // on-chain mint address.
+    let parts: Vec<&str> = asset.splitn(3, '.').collect();
+    if parts.len() != 3 || parts[2].is_empty() {
+        return Err(ApiError::new(
+            400,
+            format!("asset {asset:?} is not a recognised key (expected a tok-… XUID or \"<type>.<chainId>.<mint>\")"),
+        ));
+    }
+    crate::models::token::lookup_by_mint(env, &net.id, parts[2])
+        .map_err(ApiError::internal)?
+        .map(Some)
+        .ok_or_else(|| ApiError::new(400, format!("token {} not registered on network {}", parts[2], net.id)))
+}
+
+/// Fetch a Solana account's raw data via `getAccountInfo` (base64), returning
+/// the decoded bytes (Go `solanaFetchMintAccount`). Used to introspect a
+/// Token-2022 mint's extensions before an SPL send.
+fn fetch_mint_account(rpc: &str, mint_b58: &str) -> Result<Vec<u8>, ApiError> {
+    let resp = crate::rpc::call(
+        rpc,
+        "getAccountInfo",
+        json!([mint_b58, { "encoding": "base64" }]),
+    )
+    .map_err(ApiError::internal)?;
+    let data_b64 = resp
+        .get("value")
+        .and_then(|v| v.get("data"))
+        .and_then(|d| d.get(0))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(502, format!("mint {mint_b58} not found or missing data")))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(data_b64)
+        .map_err(|e| ApiError::new(502, format!("bad base64 mint data: {e}")))
+}
+
+/// Solana SPL-token `Transaction:signAndSend` (Go `signAndSendSolana`, SPL path):
+/// derive the sender/recipient ATAs for the mint, build a `TransferChecked`
+/// message (prefixed with an idempotent ATA-create so a fresh recipient is
+/// provisioned in-tx), FROST-sign, broadcast, persist, and return the row.
+///
+/// Scope: Token-1 (`spl-token`) and non-fee Token-2022 (`spl-token-2022`).
+/// A Token-2022 mint with an active transfer-fee extension is rejected with 501
+/// rather than broadcasting a plain TransferChecked the program would revert.
+/// Compute-unit sizing is a fixed conservative limit (no simulation).
+#[allow(clippy::too_many_arguments)]
+fn sign_and_send_solana_spl(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    net: &crate::models::network::Network,
+    rpc: &str,
+    typ: &str,
+    token: &crate::models::token::Token,
+) -> ApiResult {
+    use base64::Engine;
+
+    let to_b58 = tx
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "to is required"))?;
+
+    // Amount is the token's base units (e.g. 1_315_764 for 1.315764 USDT @ 6
+    // decimals). MAX is native-only — reject it here rather than silently
+    // sending zero.
+    let amount_is_max = tx
+        .get("amount")
+        .and_then(|v| serde_json::from_value::<crate::Amount>(v.clone()).ok())
+        .map(|a| a.is_max())
+        .unwrap_or(false);
+    if amount_is_max {
+        return Err(ApiError::new(400, "MAX amount is not supported for SPL token sends"));
+    }
+    let amount_bi = amount_significand(tx.get("amount"))
+        .ok_or_else(|| ApiError::new(400, "amount is required"))?;
+    let amount = bigint_to_u64(&amount_bi)
+        .ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 base units"))?;
+
+    let token_program = crate::solana_spl::token_program_for_type(&token.kind)
+        .map_err(|e| ApiError::new(400, e))?;
+    let mint = b58_32(&token.address)?;
+    if token.decimals < 0 || token.decimals > u8::MAX as i64 {
+        return Err(ApiError::new(400, "token decimals out of range"));
+    }
+    let decimals = token.decimals as u8;
+
+    // Token-2022: introspect the mint. An active transfer-fee extension needs
+    // the fee-carrying instruction the Go build emits — out of scope here, so
+    // fail closed rather than broadcasting a plain TransferChecked that reverts.
+    if token.kind == "spl-token-2022" {
+        let data = fetch_mint_account(rpc, &token.address)?;
+        if let Some(cfg) = crate::solana_spl::token2022_transfer_fee(&data)
+            .map_err(|e| ApiError::new(502, e))?
+        {
+            if cfg.is_active() {
+                return Err(ApiError::new(
+                    501,
+                    "Token-2022 mints with an active transfer-fee extension are not supported yet",
+                ));
+            }
+        }
+    }
+
+    let from = crate::solana::pubkey_from_b64url(&account.pubkey)
+        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+    let to = b58_32(to_b58)?;
+    let sender_ata = crate::solana_spl::derive_ata(&from, &mint, &token_program)
+        .ok_or_else(|| ApiError::new(500, "failed to derive sender ATA"))?;
+    let recipient_ata = crate::solana_spl::derive_ata(&to, &mint, &token_program)
+        .ok_or_else(|| ApiError::new(500, "failed to derive recipient ATA"))?;
+
+    // Compute-unit budget: a caller may pin computeUnitLimit / computeUnitPrice;
+    // otherwise use the fixed SPL default limit (covers the ATA-create prelude)
+    // and no priority price.
+    let cu_limit = tx
+        .get("computeUnitLimit")
+        .and_then(Value::as_u64)
+        .map(|v| v as u32)
+        .filter(|v| *v > 0)
+        .unwrap_or(crate::solana_spl::SPL_DEFAULT_CU_LIMIT);
+    let cu_price = tx.get("computeUnitPrice").and_then(Value::as_u64).unwrap_or(0);
+
+    // Recent blockhash (finalized, matching Go's commitment).
+    let bh = crate::rpc::call(rpc, "getLatestBlockhash", json!([{ "commitment": "finalized" }]))
+        .map_err(ApiError::internal)?;
+    let bh_b58 = bh
+        .get("value")
+        .and_then(|v| v.get("blockhash"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(502, "no blockhash in getLatestBlockhash response"))?;
+    let blockhash = b58_32(bh_b58)?;
+
+    let msg = crate::solana_spl::build_spl_transfer_message(
+        &from,
+        &to,
+        &mint,
+        &sender_ata,
+        &recipient_ata,
+        &token_program,
+        amount,
+        decimals,
+        &blockhash,
+        cu_limit,
+        cu_price,
+    );
+    let unlock = unlock_from_params(params)?;
+    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+        .map_err(ApiError::internal)?;
+    let raw = crate::solana::assemble_tx(&msg, &sig);
+    let tx_b58 = bs58::encode(&raw).into_string();
+    let hash = crate::rpc::call(rpc, "sendTransaction", json!([tx_b58, { "encoding": "base58" }]))
+        .map_err(ApiError::internal)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::new(502, "sendTransaction did not return a signature"))?;
+
+    let fee_lamports = crate::solana_spl::fee_lamports(cu_limit, cu_price);
+    let record = crate::models::transaction::Transaction {
+        id: xuid::Xuid::new("tx").to_string(),
+        kind: typ.to_string(),
+        asset: tx.get("asset").and_then(Value::as_str).unwrap_or("").to_string(),
+        from: account.address.clone(),
+        to: to_b58.to_string(),
+        gas: 0,
+        gas_price: String::new(),
+        max_fee_per_gas: String::new(),
+        max_priority_fee_per_gas: String::new(),
+        fee: Some(crate::Amount::new_raw(BigInt::from(fee_lamports), 9)),
+        nonce: 0,
+        format: String::new(),
+        raw: base64::engine::general_purpose::STANDARD.encode(&raw),
+        hash: hash.clone(),
+        url: tx_url(net, &hash),
+        network: net.id.clone(),
+        // Persist the transferred amount in the token's own base units/decimals.
+        amount: Some(crate::Amount::new_raw(amount_bi, token.decimals)),
         value: None,
         data: String::new(),
         created: crate::now_rfc3339(),

@@ -33,6 +33,8 @@ pub mod evm;
 pub mod eip712;
 // Solana transaction building (wlttx Solana path).
 pub mod solana;
+
+pub mod solana_spl;
 // Bitcoin transaction building + threshold signing (wlttx Bitcoin path).
 pub mod bitcoin;
 // Blocking JSON-RPC client for blockchain nodes (wltnet).
@@ -45,6 +47,8 @@ pub mod quote;
 pub mod coininfo;
 // Token-swap quotes via the OKX DEX proxy (wltswap).
 pub mod swap;
+
+pub mod counterparty;
 // WalletConnect v2 envelope crypto + pairing URI (wltwc).
 pub mod walletconnect;
 // WalletConnect v2 session state machine (wltwc Manager).
