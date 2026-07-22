@@ -1,0 +1,66 @@
+name: Deploy Wallet to Pages
+
+# Builds the browser WASM module from the Rust crate (wasm-pack, target=web) into
+# web/pkg/, then publishes the static client-side wallet in web/ to GitHub Pages.
+# The wasm exposes only the offline crypto (crate::wasm → crate::walletcore); all
+# networking happens in the page via JS fetch.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deploy at a time; a newer push supersedes an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Build WASM module
+        working-directory: rust
+        run: wasm-pack build --release --target web --out-dir ../web/pkg --no-typescript
+
+      - name: Drop wasm-pack scaffolding (keep only the ES module + .wasm)
+        run: rm -f web/pkg/.gitignore web/pkg/package.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

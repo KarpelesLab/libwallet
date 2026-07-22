@@ -1,0 +1,331 @@
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<meta name="description" content="A self-custodial cryptocurrency wallet that runs entirely in your browser. Keys are generated locally and never leave this device." />
+<title>libwallet — self-custodial browser wallet</title>
+<link rel="stylesheet" href="./styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='none' stroke='%238E96FF' stroke-width='2'/%3E%3Ccircle cx='16' cy='13' r='4' fill='none' stroke='%238E96FF' stroke-width='2'/%3E%3Cpath d='M16 17v6' stroke='%238E96FF' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+<!-- Guilloché backdrop, shown behind vault (onboarding / unlock) screens only -->
+<div class="vault-bg" id="vaultBg" hidden></div>
+
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="libwallet home">
+      <svg class="seal" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="1.5" opacity="0.5"/>
+        <circle cx="16" cy="16" r="10" stroke="currentColor" stroke-width="1.5"/>
+        <circle cx="16" cy="13.5" r="3.4" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M16 16.8v4.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span>lib</span><b>wallet</b>
+    </a>
+    <div class="lockstate" id="lockState">
+      <span class="dot"></span>
+      <span class="label">Unlocked</span>
+      <button class="btn subtle sm" id="btnLock" type="button">Lock</button>
+    </div>
+  </header>
+
+  <main class="main">
+
+    <!-- ══ LOADING ══════════════════════════════════════════════════════ -->
+    <section class="screen center active" id="screen-loading">
+      <div class="loader">
+        <div class="spinner"></div>
+        <div class="msg">Loading cryptographic core…</div>
+      </div>
+    </section>
+
+    <!-- ══ WASM LOAD ERROR ══════════════════════════════════════════════ -->
+    <section class="screen center" id="screen-wasm-error">
+      <div class="card narrow rise">
+        <div class="card-pad stack" style="--gap:16px">
+          <div class="eyebrow" style="color:var(--danger)">Core unavailable</div>
+          <h1 class="title">The signing engine didn't load</h1>
+          <p class="subtitle">
+            This wallet needs its WebAssembly core (<span class="mono">pkg/libwallet.js</span>),
+            which is compiled and published by CI. If you're previewing locally, build it first
+            with <span class="mono">wasm-pack build --target web</span> into <span class="mono">web/pkg/</span>.
+          </p>
+          <div class="panel mono" id="wasmErrDetail" style="font-size:12px"></div>
+          <button class="btn ghost block" type="button" onclick="location.reload()">Retry</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ ONBOARDING ═══════════════════════════════════════════════════ -->
+    <section class="screen center" id="screen-onboarding">
+
+      <!-- Step: choose path -->
+      <div class="card rise" data-step="choose">
+        <div class="card-pad stack" style="--gap:22px">
+          <div class="stack" style="--gap:10px">
+            <div class="eyebrow">Set up · nothing leaves this browser</div>
+            <h1 class="title">Your keys, held only here</h1>
+            <p class="subtitle">
+              Create a new wallet or bring an existing recovery phrase. It's encrypted with a
+              password and stored on this device alone — no account, no server, no recovery by us.
+            </p>
+          </div>
+          <div class="choices">
+            <button class="choice" type="button" data-go="create">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </span>
+              <span>
+                <h4>Create a new wallet</h4>
+                <p>Generate a fresh recovery phrase for Ethereum, Bitcoin and Solana.</p>
+              </span>
+            </button>
+            <button class="choice" type="button" data-go="import">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span>
+                <h4>Import a recovery phrase</h4>
+                <p>Restore an existing 12 or 24-word BIP-39 wallet.</p>
+              </span>
+            </button>
+          </div>
+          <p class="foot">Works fully offline once loaded · open source</p>
+        </div>
+      </div>
+
+      <!-- Step: create (show mnemonic) -->
+      <div class="card rise hidden" data-step="create">
+        <div class="card-pad stack" style="--gap:20px">
+          <div class="spread">
+            <div class="eyebrow">New wallet · recovery phrase</div>
+            <div class="segmented" id="wordCount" role="group" aria-label="Phrase length">
+              <button type="button" data-words="12" class="on">12 words</button>
+              <button type="button" data-words="24">24 words</button>
+            </div>
+          </div>
+
+          <div class="panel warn">
+            <div class="lead">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M12 9v4m0 4h.01M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Write this down
+            </div>
+            These words <strong>are</strong> your wallet. Copy them to paper and keep them offline.
+            They never leave this browser and <strong>cannot be recovered by anyone</strong> — lose them and the funds are gone.
+          </div>
+
+          <div class="seed-frame">
+            <div class="seed-grid" id="seedGrid" aria-label="Recovery phrase"></div>
+            <div class="seal-cover" id="sealCover" role="button" tabindex="0" aria-label="Reveal recovery phrase">
+              <svg class="lock-ic" width="22" height="22" viewBox="0 0 24 24" fill="none"><rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              <span class="hint">Tap to reveal your phrase</span>
+            </div>
+          </div>
+
+          <div class="btn-row">
+            <button class="btn ghost sm grow" type="button" id="copySeed">Copy phrase</button>
+            <button class="btn ghost sm grow" type="button" id="regenSeed">Regenerate</button>
+          </div>
+
+          <label class="check">
+            <input type="checkbox" id="savedConfirm" />
+            <span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span>I've written down my recovery phrase and understand it can't be recovered if lost.</span>
+          </label>
+
+          <div class="btn-row">
+            <button class="btn subtle" type="button" data-back="choose">Back</button>
+            <button class="btn primary grow" type="button" id="createContinue" disabled>Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step: import -->
+      <div class="card rise hidden" data-step="import">
+        <div class="card-pad stack" style="--gap:18px">
+          <div class="stack" style="--gap:8px">
+            <div class="eyebrow">Import · recovery phrase</div>
+            <h1 class="title">Enter your phrase</h1>
+            <p class="subtitle">Type or paste your 12 or 24 words in order, separated by spaces.</p>
+          </div>
+          <div>
+            <label class="field-label" for="importPhrase">Recovery phrase</label>
+            <textarea class="textarea mono" id="importPhrase" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="witch collapse practice feed shame open despair creek road again ice least"></textarea>
+            <div class="err-inline" id="importErr"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn subtle" type="button" data-back="choose">Back</button>
+            <button class="btn primary grow" type="button" id="importContinue">Continue</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step: set password -->
+      <div class="card narrow rise hidden" data-step="password">
+        <div class="card-pad stack" style="--gap:18px">
+          <div class="stack" style="--gap:8px">
+            <div class="eyebrow">Secure · set a password</div>
+            <h1 class="title">Lock your wallet</h1>
+            <p class="subtitle">This password encrypts your phrase on this device. There's no reset — choose something you'll remember.</p>
+          </div>
+          <div>
+            <label class="field-label" for="pwNew">Password</label>
+            <div class="input-wrap">
+              <input class="input" id="pwNew" type="password" autocomplete="new-password" placeholder="At least 8 characters" />
+              <button class="ghost-btn" type="button" data-toggle="pwNew">Show</button>
+            </div>
+            <div class="strength" hidden id="strengthWrap">
+              <div class="strength-bar"><i id="strengthFill"></i></div>
+              <div class="strength-note" id="strengthNote"></div>
+            </div>
+          </div>
+          <div>
+            <label class="field-label" for="pwConfirm">Confirm password</label>
+            <input class="input" id="pwConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" />
+            <div class="err-inline" id="pwErr"></div>
+          </div>
+          <button class="btn primary block" type="button" id="finishSetup">Create wallet</button>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ══ UNLOCK ═══════════════════════════════════════════════════════ -->
+    <section class="screen center" id="screen-unlock">
+      <div class="card narrow rise">
+        <div class="card-pad stack" style="--gap:18px">
+          <div class="stack center-text" style="--gap:12px; align-items:center">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="color:var(--iris)"><rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.6" fill="currentColor"/></svg>
+            <div>
+              <h1 class="title">Welcome back</h1>
+              <p class="subtitle" style="margin:6px auto 0">Enter your password to unlock this wallet.</p>
+            </div>
+          </div>
+          <form id="unlockForm" class="stack" style="--gap:12px">
+            <div class="input-wrap">
+              <input class="input" id="pwUnlock" type="password" autocomplete="current-password" placeholder="Password" autofocus />
+              <button class="ghost-btn" type="button" data-toggle="pwUnlock">Show</button>
+            </div>
+            <div class="err-inline" id="unlockErr"></div>
+            <button class="btn primary block" type="submit">Unlock</button>
+          </form>
+          <div class="divider"></div>
+          <button class="btn danger sm" type="button" id="forgetFromUnlock">Remove this wallet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══ DASHBOARD ════════════════════════════════════════════════════ -->
+    <section class="screen" id="screen-dashboard">
+      <div class="dash">
+
+        <div class="security-banner">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.4-3 8.3-7 9.7C8 19.3 5 15.4 5 11V6l7-3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div><b>Everything stays on this device.</b> Your keys are generated and stored encrypted in this browser. The only things sent to the network are public balance reads and transactions you choose to broadcast.</div>
+        </div>
+
+        <div class="tabs" role="tablist">
+          <button class="on" data-tab="accounts" role="tab">Accounts</button>
+          <button data-tab="send" role="tab">Send</button>
+          <button data-tab="settings" role="tab">Settings</button>
+        </div>
+
+        <!-- Accounts pane -->
+        <div class="tabpane on" data-pane="accounts">
+          <div class="section-head">
+            <div class="eyebrow muted">Balances · mainnet</div>
+            <button class="btn ghost sm" type="button" id="refreshBalances">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 0115.5-6.3M21 12a9 9 0 01-15.5 6.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M18.5 3v3.5H15M5.5 21v-3.5H9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Refresh
+            </button>
+          </div>
+          <div class="assets" id="assetList"><!-- filled by JS --></div>
+
+          <div class="divider" style="margin:22px 0 16px"></div>
+          <div class="btn-row wrap">
+            <button class="btn ghost grow" type="button" id="revealPhrase">Reveal recovery phrase</button>
+            <button class="btn danger" type="button" id="removeWallet">Remove wallet</button>
+          </div>
+        </div>
+
+        <!-- Send pane -->
+        <div class="tabpane" data-pane="send">
+          <div class="section-head" style="margin-bottom:12px">
+            <div class="eyebrow muted">Send · signed locally</div>
+            <select class="input" id="sendChain" style="width:auto; min-width:150px">
+              <option value="evm">Ethereum (EVM)</option>
+              <option value="bitcoin">Bitcoin</option>
+              <option value="solana">Solana</option>
+            </select>
+          </div>
+
+          <div class="asset" data-chain="evm" id="sendCard">
+            <div class="form-grid">
+              <div class="spread">
+                <div class="eyebrow muted" id="sendFromLabel">From</div>
+                <div class="mono" id="sendFromAddr" style="font-size:12px;color:var(--text-dim);max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+              </div>
+              <div>
+                <label class="field-label" for="sendTo">Recipient address</label>
+                <input class="input mono" id="sendTo" autocomplete="off" spellcheck="false" placeholder="Destination address" />
+              </div>
+              <div>
+                <label class="field-label" for="sendAmount"><span id="amountLabel">Amount</span></label>
+                <div class="amount-row">
+                  <input class="input mono" id="sendAmount" inputmode="decimal" autocomplete="off" placeholder="0.0" />
+                  <button class="max" type="button" id="sendMax">MAX</button>
+                </div>
+                <div class="fee-note" id="feeNote" style="margin-top:8px"></div>
+              </div>
+              <div class="err-inline" id="sendErr"></div>
+              <button class="btn primary block" type="button" id="sendSubmit">Review &amp; send</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings pane -->
+        <div class="tabpane" data-pane="settings">
+          <div class="eyebrow muted" style="margin-bottom:12px">EVM network</div>
+          <div class="asset" data-chain="evm">
+            <div class="form-grid">
+              <p class="subtitle">Point the EVM tab at any chain by editing its RPC endpoint and chain ID. Defaults to Ethereum mainnet.</p>
+              <div>
+                <label class="field-label" for="setChainName">Network name</label>
+                <input class="input" id="setChainName" placeholder="Ethereum" />
+              </div>
+              <div class="amount-row">
+                <div class="grow">
+                  <label class="field-label" for="setChainId">Chain ID</label>
+                  <input class="input mono" id="setChainId" inputmode="numeric" placeholder="1" />
+                </div>
+              </div>
+              <div>
+                <label class="field-label" for="setRpc">RPC endpoint</label>
+                <input class="input mono" id="setRpc" spellcheck="false" placeholder="https://ethereum-rpc.publicnode.com" />
+              </div>
+              <div>
+                <label class="field-label" for="setExplorer">Explorer tx URL prefix</label>
+                <input class="input mono" id="setExplorer" spellcheck="false" placeholder="https://etherscan.io/tx/" />
+              </div>
+              <div class="btn-row">
+                <button class="btn ghost" type="button" id="resetChain">Reset to Ethereum</button>
+                <button class="btn primary grow" type="button" id="saveChain">Save network</button>
+              </div>
+            </div>
+          </div>
+          <p class="foot" style="margin-top:20px" id="verLine">libwallet · self-custodial · client-side only</p>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ══ MODALS ══════════════════════════════════════════════════════════ -->
+<div class="modal-scrim" id="modalScrim">
+  <div class="modal" id="modalBox"><!-- filled by JS --></div>
+</div>
+
+<!-- Toasts -->
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script type="module" src="./app.js"></script>

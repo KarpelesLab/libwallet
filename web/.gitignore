@@ -1,0 +1,3 @@
+# WASM artifacts are produced by CI (wasm-pack build --target web); not checked in.
+/pkg/*
+!/pkg/README.md

@@ -14,86 +14,111 @@
 //!   returns them via `LibwalletFree`, which reconstructs and drops them
 //!   (same allocator on both sides).
 
-// Core infrastructure (ported from Go wltbase).
-mod db;
-mod env;
+// ── Always compiled, including the browser-WASM build ───────────────────────
+// Offline crypto only: the error type, BIP-39, HD derivation, Solana tx
+// building, and the single-key wallet core (mnemonic / addresses / vault /
+// raw-key signing). None of these touch the DB, network, or threads.
 mod error;
-// Value types (ported from Go wltobj).
-mod amount;
-mod timeid;
-// Key-share storage crypto (bottlers/purecrypto).
-pub mod keystore;
-// Key descriptions (wltsign).
-pub mod sign;
-// HD public-key derivation for accounts (secp256k1/ecckd).
-pub mod hdderive;
-// EVM transaction building + threshold signing (wlttx EVM path).
-pub mod evm;
-// EIP-712 typed-data hashing (eth_signTypedData).
-pub mod eip712;
-// Solana transaction building (wlttx Solana path).
-pub mod solana;
-
-pub mod solana_spl;
-// Bitcoin transaction building + threshold signing (wlttx Bitcoin path).
-pub mod bitcoin;
-// Blocking JSON-RPC client for blockchain nodes (wltnet).
-pub mod rpc;
-// Blocking client for the KarpelesLab REST backend (rest.Do).
-pub mod rest;
-// Market-quote lookup via the REST backend (wltquote).
-pub mod quote;
-// Coin metadata lookup via the REST backend (wltasset CoinInfo).
-pub mod coininfo;
-// Token-swap quotes via the OKX DEX proxy (wltswap).
-pub mod swap;
-
-pub mod counterparty;
-// WalletConnect v2 envelope crypto + pairing URI (wltwc).
-pub mod walletconnect;
-// WalletConnect v2 session state machine (wltwc Manager).
-pub mod wcmanager;
-// ERC-20 read calls (balanceOf / allowance).
-pub mod erc20;
-// Cross-device (RemoteKey) spot message routing (wltwallet broker).
-pub mod remotekey;
-// Cross-device tsslib broker over a serialized transport (ceremony transport).
-pub mod spotbroker;
-// Device-to-device wallet transfer crypto + pairing URL.
-pub mod transfer;
-// ClawdWallet:pair — agent pairing link verification over Spot.
-pub mod clawdpair;
-// WalletSign backend glue for RemoteKey shares (fetch fleet keys + upload).
-pub mod walletsign;
-// Interactive RemoteKey reshare over the live wdrone fleet (tssHub + spotPeer).
-pub mod reshare;
-// Curated token registry (wlttoken/curated) for Token:listCurated.
-pub mod curated;
-// BIP-39 mnemonic decode + seed + master (Wallet:importMnemonic).
 pub mod bip39;
-// Wallet:probeActivity core — seed → candidate addresses → RPC activity probe.
+pub mod hdderive;
+pub mod solana;
+pub mod walletcore;
+
+pub use error::{Error, Result};
+
+// wasm-bindgen bindings for the browser wallet (thin wrappers over walletcore).
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
+
+// ── Native only (excluded from wasm32) ──────────────────────────────────────
+// Everything below needs the DB (graphitesql), networking (rsurl / tungstenite),
+// OS threads, or the TSS stack — none of which run in the browser. The C-ABI FFI
+// boundary at the bottom of this file is likewise native-only.
+#[cfg(not(target_arch = "wasm32"))]
+mod db;
+#[cfg(not(target_arch = "wasm32"))]
+mod env;
+#[cfg(not(target_arch = "wasm32"))]
+mod amount;
+#[cfg(not(target_arch = "wasm32"))]
+mod timeid;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod keystore;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sign;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod evm;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod eip712;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod solana_spl;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bitcoin;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rpc;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rest;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod quote;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod coininfo;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod swap;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod counterparty;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod walletconnect;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wcmanager;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod erc20;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod remotekey;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod spotbroker;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod transfer;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod clawdpair;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod walletsign;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod reshare;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod curated;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod probe;
-// Transaction:backfill — tx-history provider sweep (modchain / signatures).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod txhistory;
-// Name resolution — ENS/SNS (wltnames).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod names;
-// Curated contract labels (wltcontract).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod contract;
-// Threshold-signature ceremonies (tsslib).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tss;
-// Object models (ported from the Go wlt* packages).
+#[cfg(not(target_arch = "wasm32"))]
 pub mod models;
-// FFI boundary + request dispatch.
+#[cfg(not(target_arch = "wasm32"))]
 mod dispatch;
+#[cfg(not(target_arch = "wasm32"))]
 mod handle;
+#[cfg(not(target_arch = "wasm32"))]
 mod handlers;
+#[cfg(not(target_arch = "wasm32"))]
 mod response;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use amount::{Amount, AmountError};
+#[cfg(not(target_arch = "wasm32"))]
 pub use db::{now_rfc3339, SqlValue};
+#[cfg(not(target_arch = "wasm32"))]
 pub use env::Env;
-pub use error::{Error, Result};
+#[cfg(not(target_arch = "wasm32"))]
 pub use timeid::{ParseTimeIdError, TimeId};
+
+// The remaining FFI machinery in this file is native-only.
+#[cfg(not(target_arch = "wasm32"))]
+mod ffi_boundary {
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
@@ -102,7 +127,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
-use handle::Handle;
+use crate::{dispatch, handle::Handle, handlers, response, Env};
 
 /// `void (*)(const char* response_json, uintptr_t user_data)`
 pub type ResponseCallback = unsafe extern "C" fn(response_json: *const c_char, user_data: usize);
@@ -291,4 +316,15 @@ pub extern "C" fn LibwalletFree(ptr: *mut c_char) {
             unsafe { drop(CString::from_raw(ptr)) };
         }
     }));
-}
+} // end of ffi_boundary::LibwalletFree
+} // mod ffi_boundary
+
+// Surface the C-ABI entry points + callback types at the crate root: the
+// exported symbols come from #[no_mangle] regardless of module, but Rust
+// consumers (the integration tests, and `handle` via `crate::EventCallback`)
+// reference them by path.
+#[cfg(not(target_arch = "wasm32"))]
+pub use ffi_boundary::{
+    EventCallback, LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest,
+    LibwalletSetEventCallback, LibwalletShowDebug, ResponseCallback,
+};
