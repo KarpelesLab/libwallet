@@ -29,7 +29,10 @@ num-traits = "0.2"
 base64 = "0.22"
 bs58 = "0.5"
 getrandom = "0.2"
-purecrypto = "0"
+# Minimal feature set: the crate only uses hash/ec/rng/kdf/cipher/bignum. The
+# default features pull in tls/quic, whose OsRng is Unix-only and breaks the
+# wasm32 build; disabling them keeps purecrypto compiling for the browser.
+purecrypto = { version = "0", default-features = false, features = ["std", "alloc", "bignum", "hash", "cipher", "kdf", "ec", "rng"] }
 outscript = "0.1.2"
 
 # Native-only dependencies — DB, networking, threads, TSS. Excluded from the
