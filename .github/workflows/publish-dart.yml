@@ -24,7 +24,7 @@ jobs:
     # The per-attempt timeout below handles the same hang at a finer
     # granularity (15 min × 3 attempts), this is the backstop.
     timeout-minutes: 45
-    # Wait for the Go library release to be created with all binaries,
+    # Wait for the native library release to be created with all binaries,
     # otherwise the Dart package's hook/build.dart would fail on install.
     needs: []
     permissions:
@@ -80,7 +80,7 @@ jobs:
         working-directory: dart
         run: dart run tools/bump_version.dart --check
 
-      - name: Wait for Go release assets
+      - name: Wait for native release assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -89,7 +89,7 @@ jobs:
           TARGET_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           # The Build workflow must have already created the GitHub Release
-          # with c-shared binaries. Poll for the release to exist.
+          # with the native FFI binaries. Poll for the release to exist.
           for i in {1..60}; do
             if gh release view "$TARGET_TAG" --json assets --jq '.assets[].name' 2>/dev/null | grep -q 'liblibwallet-'; then
               echo "Release $TARGET_TAG has binary assets, proceeding"

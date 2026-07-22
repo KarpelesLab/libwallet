@@ -1,115 +1,147 @@
 name: Build
 
+# Builds the per-platform C-FFI native libraries (liblibwallet-<os>-<arch>.*)
+# from the Rust crate under rust/. These are the artifacts the Dart client's
+# hook/build.dart and ios/libwallet.podspec download from the matching GitHub
+# Release. The crate exposes the same C ABI the old Go cshared library did, so
+# the Dart side is unchanged; only the builder moved Go -> Rust.
+
 on:
   push:
     branches: [master]
     tags: ["v*"]
 
 jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
+
+      - name: Build cdylib for Linux (Dart FFI)
+        working-directory: rust
+        run: |
+          cargo build --release
+          cp target/release/liblibwallet.so ../liblibwallet-linux-x64.so
+
+      - name: Upload Dart FFI artifacts (Linux)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-linux
+          path: liblibwallet-linux-x64.so
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
+
+      - name: Build cdylibs for macOS (Dart FFI)
+        working-directory: rust
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          cp target/aarch64-apple-darwin/release/liblibwallet.dylib ../liblibwallet-macos-arm64.dylib
+          cp target/x86_64-apple-darwin/release/liblibwallet.dylib ../liblibwallet-macos-x64.dylib
+
+      - name: Upload Dart FFI artifacts (macOS)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-macos
+          path: liblibwallet-macos-*.dylib
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
+
+      - name: Build static archives for iOS device + simulator (Dart FFI)
+        working-directory: rust
+        run: |
+          cargo build --release --target aarch64-apple-ios
+          cargo build --release --target aarch64-apple-ios-sim
+          cargo build --release --target x86_64-apple-ios
+          cp target/aarch64-apple-ios/release/liblibwallet.a ../liblibwallet-ios-arm64.a
+          cp target/aarch64-apple-ios-sim/release/liblibwallet.a ../liblibwallet-iossimulator-arm64.a
+          cp target/x86_64-apple-ios/release/liblibwallet.a ../liblibwallet-iossimulator-x64.a
+
+      - name: Upload Dart FFI artifacts (iOS)
+        uses: actions/upload-artifact@v7
+        with:
+          name: dart-ios
+          path: liblibwallet-ios*.a
+
   build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: "1.26"
+          targets: aarch64-linux-android,x86_64-linux-android,armv7-linux-androideabi
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
-      - name: Install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go get golang.org/x/mobile/bind
-          gomobile init
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
 
-      - name: Install Android NDK
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
-      # Compute the linker flags once and stash them in $GITHUB_ENV so
-      # every build step in the job uses identical version metadata.
-      # TAG_VERSION is empty unless the workflow was triggered by a
-      # `v*` tag — wltbase reads it as the "release vs dev" signal and
-      # exposes it via Info:version for runtime mismatch detection.
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
 
-      - name: Build Android AAR
-        # -Wl,-z,max-page-size=16384 is required on Android 15+: the OS
-        # now supports 16 KB page devices (Pixel 8+ etc.) and refuses to
-        # load .so files whose PT_LOAD segments are aligned below that.
-        # Set via CGO_LDFLAGS so every cgo-linked .so inside the AAR
-        # picks it up.
+      - name: Build cdylibs for Android (Dart FFI, 16 KB aligned)
+        working-directory: rust
         env:
-          CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          # Android 15+ (16 KB page devices) refuses .so files whose PT_LOAD
+          # segments align below 16 KB — force the linker to 16 KB.
+          RUSTFLAGS: "-C link-arg=-Wl,-z,max-page-size=16384"
         run: |
-          gomobile bind -v -target android -androidapi 21 \
-            -javapkg com.karpeleslabs.libwallet \
-            -ldflags="$LIBWALLET_LDFLAGS" \
-            -o libwallet.aar .
-
-      - name: Build c-shared libraries for Android (Dart FFI)
-        env:
-          CGO_LDFLAGS: "-Wl,-z,max-page-size=16384"
-        run: |
-          NDK=$ANDROID_HOME/ndk/27.2.12479018
-          for arch_go_abi in "arm64:aarch64-linux-android21:android-arm64" "amd64:x86_64-linux-android21:android-x64" "arm:armv7a-linux-androideabi21:android-arm"; do
-            IFS=: read -r GOARCH CC_PREFIX NAME <<< "$arch_go_abi"
-            CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/${CC_PREFIX}-clang"
-            CGO_ENABLED=1 GOOS=android GOARCH=$GOARCH CC=$CC \
-              go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o "liblibwallet-${NAME}.so" ./cshared/
-          done
+          cargo ndk -t arm64-v8a -t x86_64 -t armeabi-v7a build --release
+          cp target/aarch64-linux-android/release/liblibwallet.so ../liblibwallet-android-arm64.so
+          cp target/x86_64-linux-android/release/liblibwallet.so ../liblibwallet-android-x64.so
+          cp target/armv7-linux-androideabi/release/liblibwallet.so ../liblibwallet-android-arm.so
 
       - name: Verify Android .so files are 16 KB aligned
         run: |
           set -e
-          fail=0
-          # Dart-FFI .so files sit at the repo root.
           for so in liblibwallet-android-*.so; do
             echo "── $so ──"
             readelf -lW "$so" | awk '
               /LOAD/ {
                 n = strtonum($NF)
-                status = (n >= 16384) ? "OK" : "FAIL"
-                printf "  %s  LOAD  Align=%s (%d)\n", status, $NF, n
+                printf "  %s  LOAD  Align=%s (%d)\n", (n >= 16384 ? "OK" : "FAIL"), $NF, n
                 if (n < 16384) exit 1
-              }' || fail=1
+              }'
           done
-          # .so files inside the AAR (jni/<abi>/*.so).
-          tmp=$(mktemp -d)
-          unzip -q libwallet.aar -d "$tmp"
-          for so in "$tmp"/jni/*/*.so; do
-            echo "── ${so#$tmp/} ──"
-            readelf -lW "$so" | awk '
-              /LOAD/ {
-                n = strtonum($NF)
-                status = (n >= 16384) ? "OK" : "FAIL"
-                printf "  %s  LOAD  Align=%s (%d)\n", status, $NF, n
-                if (n < 16384) exit 1
-              }' || fail=1
-          done
-          rm -rf "$tmp"
-          if [ $fail -ne 0 ]; then
-            echo "::error::One or more Android .so files have LOAD segments aligned below 16 KB — will fail to load on Android 15+ devices."
-            exit 1
-          fi
-
-      - name: Upload Android artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: android
-          path: |
-            libwallet.aar
-            libwallet-sources.aar
 
       - name: Upload Dart FFI artifacts (Android)
         uses: actions/upload-artifact@v7
@@ -117,159 +149,14 @@ jobs:
           name: dart-android
           path: liblibwallet-android-*.so
 
-  build-ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-
-      - name: Install gomobile
-        run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          go get golang.org/x/mobile/bind
-          gomobile init
-
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
-
-      - name: Build iOS xcframework
-        run: |
-          gomobile bind -v --target ios,iossimulator \
-            -ldflags="$LIBWALLET_LDFLAGS" \
-            -o libwallet.xcframework .
-
-      - name: Build c-archive for iOS device (Dart FFI)
-        run: |
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-ios-arm64.a ./cshared/
-
-      - name: Build c-archive for iOS simulator (Dart FFI)
-        run: |
-          # Simulator on Apple Silicon (arm64)
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-iossimulator-arm64.a ./cshared/
-          # Simulator on Intel Macs (x64)
-          CGO_ENABLED=1 GOOS=ios GOARCH=amd64 \
-            CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-iossimulator-x64.a ./cshared/
-
-      - name: Build c-shared for macOS (Dart FFI)
-        run: |
-          # -headerpad_max_install_names reserves header space so that
-          # install_name_tool can later rewrite rpath/id without relinking.
-          # Dart's native_assets pipeline does exactly this on bundling.
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-            CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-macos-arm64.dylib ./cshared/
-          CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
-            CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-macos-x64.dylib ./cshared/
-
-      - name: Upload iOS artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ios
-          path: libwallet.xcframework
-
-      - name: Upload Dart FFI artifacts (iOS + macOS)
-        uses: actions/upload-artifact@v7
-        with:
-          name: dart-apple
-          path: liblibwallet-*
-
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
-
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
-
-      - name: Build c-shared for Linux (Dart FFI)
-        run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
-            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" -o liblibwallet-linux-x64.so ./cshared/
-
-      - name: Upload Dart FFI artifacts (Linux)
-        uses: actions/upload-artifact@v7
-        with:
-          name: dart-linux
-          path: liblibwallet-linux-*.so
-
-  package:
-    runs-on: ubuntu-latest
-    needs: [build-android, build-ios]
-    steps:
-      - name: Download Android artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: android
-          path: android
-
-      - name: Download iOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: ios
-          path: ios/libwallet.xcframework
-
-      - name: Create tarball
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="${GITHUB_SHA::7}"
-          fi
-          tar czf "libwallet-${VERSION}.tar.gz" ios android
-
-      - name: Upload tarball
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-tarball
-          path: libwallet-*.tar.gz
-
   release:
     runs-on: ubuntu-latest
-    needs: [package, build-linux]
+    needs: [build-linux, build-macos, build-ios, build-android]
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     steps:
-      - name: Download tarball
-        uses: actions/download-artifact@v8
-        with:
-          name: release-tarball
-
-      - name: Download Dart FFI artifacts
+      - name: Download all FFI artifacts
         uses: actions/download-artifact@v8
         with:
           pattern: dart-*
@@ -279,4 +166,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes libwallet-*.tar.gz liblibwallet-*
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes liblibwallet-*

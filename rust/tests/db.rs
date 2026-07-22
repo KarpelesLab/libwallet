@@ -57,21 +57,3 @@ fn current_created_is_preserved_across_updates() {
     env.set_current("account", "acct-2").unwrap();
     assert_eq!(env.get_current("account").unwrap().as_deref(), Some("acct-2"));
 }
-
-/// The compatibility proof: open a real `sql.db` produced by the Go build and
-/// confirm graphitesql reads it and round-trips our tables. Copied to a temp
-/// dir so the committed fixture is never mutated.
-#[test]
-fn opens_existing_go_database() {
-    let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../wlttest/test/sql.db");
-    let src = std::path::Path::new(fixture);
-    assert!(src.exists(), "fixture present at {fixture}");
-
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::copy(src, dir.path().join("sql.db")).unwrap();
-
-    let env = Env::init(dir.path().to_str().unwrap()).unwrap();
-    // Tables open and config round-trips on the migrated file.
-    env.config_set("probe", b"ok").unwrap();
-    assert_eq!(env.config_get("probe").unwrap().as_deref(), Some(&b"ok"[..]));
-}

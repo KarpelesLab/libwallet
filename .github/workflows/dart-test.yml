@@ -1,5 +1,11 @@
 name: Dart Tests
 
+# The Dart client (dart/) loads the Rust-built C-FFI library. These jobs build
+# that library from the crate under rust/ for each platform, stage it where the
+# Dart FFI loader / iOS podspec expect it, then run the Dart + integration
+# tests. Only the native-build steps moved Go -> Rust; the Dart tests are
+# unchanged.
+
 on:
   push:
     branches: [master]
@@ -7,48 +13,36 @@ on:
     branches: [master]
 
 jobs:
-  # Unit tests + host integration tests (Go test server + dart test)
+  # Unit tests + host integration tests (Rust FFI cdylib + flutter test)
   test-host:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.26"
+      - uses: dtolnay/rust-toolchain@stable
 
-      # Flutter is the test runner here: libwallet's Dart side now
-      # depends on atonline_api (which transitively pulls in Flutter
-      # via flutter_secure_storage), so `dart test` fails to load any
-      # file that imports `package:libwallet/libwallet.dart` —
-      # `flutter test` compiles those imports correctly. setup-dart is
-      # no longer needed; this job doesn't publish.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      # Flutter is the test runner here: libwallet's Dart side depends on
+      # atonline_api (which transitively pulls in Flutter via
+      # flutter_secure_storage), so `dart test` fails to load any file that
+      # imports `package:libwallet/libwallet.dart` — `flutter test` compiles
+      # those imports correctly.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
 
-      # Same ldflag plumbing as build.yml so CI test binaries also
-      # carry populated dateTag/gitTag in Info:version. Lets the
-      # integration test assert that the ldflag mechanism works at
-      # all, instead of silently regressing the way the broken
-      # `-X main.dateTag=...` did for years.
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+      # Bake version metadata into the FFI lib so the integration test's
+      # Info:version assertion sees populated dateTag/gitTag.
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
 
-      - name: Build c-shared library for FFI tests
+      - name: Build FFI cdylib for host (Dart local-dev path)
         run: |
-          CGO_ENABLED=1 CGO_LDFLAGS="-Wl,-headerpad_max_install_names" \
-            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" \
-            -o dart/testserver/liblibwallet.dylib ./cshared/
+          cd rust && cargo build --release
+          cp target/release/liblibwallet.dylib ../dart/testserver/liblibwallet.dylib
 
       - name: Install Dart dependencies
         working-directory: dart
@@ -59,11 +53,9 @@ jobs:
         run: flutter analyze lib test hook
 
       # Belt-and-suspenders for the version-constant lockstep:
-      # version_constant_test.dart catches drift if you run the tests,
-      # but if a release commit only updates pubspec.yaml without
-      # touching anything in test/, the test wouldn't run on PR. The
-      # CLI check covers that case. bump_version.dart is plain Dart
-      # — `dart run` works inside a Flutter project tree.
+      # version_constant_test.dart catches drift if you run the tests, but if a
+      # release commit only updates pubspec.yaml without touching anything in
+      # test/, the test wouldn't run on PR. The CLI check covers that case.
       - name: Verify pubspec ↔ lib/src/version.dart lockstep
         working-directory: dart
         run: dart run tools/bump_version.dart --check
@@ -74,75 +66,45 @@ jobs:
 
       - name: Run FFI integration tests
         working-directory: dart
-        run: |
-          # The Go c-shared runtime's background goroutines can crash on
-          # process exit when the Dart VM tears down NativeCallable pointers.
-          # All tests pass before the exit crash, so accept exit code 134 (SIGABRT).
-          flutter test --concurrency=1 test/ffi_integration_test.dart || {
-            EXIT=$?
-            if [ $EXIT -eq 134 ]; then
-              echo "Go runtime exit crash (expected with c-shared + flutter test)"
-            else
-              exit $EXIT
-            fi
-          }
+        run: flutter test --concurrency=1 test/ffi_integration_test.dart
 
-  # iOS simulator integration tests (FFI via c-archive).
+  # iOS simulator integration tests (FFI via Rust static archive).
   # The Xcode build for the test host takes 25-40 minutes on CI.
-  # Happy path including tests is ~8 min; we've seen 20-25 min runs
-  # on slow runners though, so keep 30 min as the cap. All libwallet
-  # RPC calls are bounded by a 30 s timeout internally, so any real
-  # hang fails fast rather than stalling the whole pipeline.
   test-ios:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: "1.26"
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
 
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
-      - name: Build c-archive slices for iOS (device + both sim arches)
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
+
+      - name: Build static archives for iOS (device + both sim arches)
+        # The ios/libwallet.podspec wraps these into a libwallet.xcframework at
+        # pod install time. When the per-SDK files exist in dart/ios/,
+        # prepare_command skips the GitHub Release download — that's the path we
+        # want for CI on master, since pre-release commits have no matching
+        # release yet. We MUST build both sim arches (arm64 + x86_64) even
+        # though the runner only uses arm64: Xcode targets the iphonesimulator
+        # SDK for all arches, and CocoaPods rejects an xcframework whose
+        # simulator slice doesn't cover x86_64. prepare_command lipo's the two
+        # sim slices into liblibwallet-iossimulator.a before xcodebuild.
         run: |
-          # The ios/libwallet.podspec wraps these into a libwallet.xcframework
-          # at pod install time. If the per-SDK files exist in dart/ios/,
-          # prepare_command skips the GitHub Release download — that's the
-          # path we want for CI on master, since pre-release commits don't
-          # have a matching release yet.
-          #
-          # We MUST build both sim arches (arm64 + x86_64) even though the
-          # CI runner only uses arm64: Xcode targets the iphonesimulator
-          # SDK for ALL its arches by default, and CocoaPods will reject
-          # an xcframework whose simulator slice doesn't cover x86_64 with
-          # "Unable to find matching slice for the current build
-          # architectures (arm64 x86_64)".
-          # prepare_command then lipo's the two sim slices into
-          # liblibwallet-iossimulator.a before invoking xcodebuild.
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator-arm64.a ./cshared/
-          CGO_ENABLED=1 GOOS=ios GOARCH=amd64 \
-            CGO_CFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphonesimulator --show-sdk-path) -mios-simulator-version-min=13.0 -arch x86_64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-iossimulator-x64.a ./cshared/
-          CGO_ENABLED=1 GOOS=ios GOARCH=arm64 \
-            CGO_CFLAGS="-fembed-bitcode -isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            CGO_LDFLAGS="-isysroot $(xcrun --sdk iphoneos --show-sdk-path) -miphoneos-version-min=13.0 -arch arm64" \
-            go build -buildmode=c-archive -ldflags="$LIBWALLET_LDFLAGS" -o dart/ios/liblibwallet-ios-arm64.a ./cshared/
+          cd rust
+          cargo build --release --target aarch64-apple-ios
+          cargo build --release --target aarch64-apple-ios-sim
+          cargo build --release --target x86_64-apple-ios
+          cp target/aarch64-apple-ios/release/liblibwallet.a ../dart/ios/liblibwallet-ios-arm64.a
+          cp target/aarch64-apple-ios-sim/release/liblibwallet.a ../dart/ios/liblibwallet-iossimulator-arm64.a
+          cp target/x86_64-apple-ios/release/liblibwallet.a ../dart/ios/liblibwallet-iossimulator-x64.a
 
       - uses: subosito/flutter-action@v2
         with:
@@ -151,51 +113,23 @@ jobs:
       - name: Reset CoreSimulator + boot iOS simulator
         run: |
           set -euo pipefail
-          # The "Application ... is unknown to FrontBoard" / "Simulator
-          # device failed to launch" failures we kept hitting were
-          # NOT caused by a stale device — they were caused by stale
-          # state inside the CoreSimulator service itself, which
-          # survives across jobs on the hosted-runner pool and even
-          # across simctl create/delete cycles. The fix shipped by
-          # thousands of mature iOS CI configs is just:
-          #   1. shutdown every booted sim
-          #   2. erase the device contents (clears installd / DB /
-          #      FrontBoard mapping per-device)
-          #   3. let CoreSimulator restart with a clean device pool
-          # That's strictly enough — no need to invent a new sim.
+          # The "Application ... is unknown to FrontBoard" / "Simulator device
+          # failed to launch" failures were caused by stale state inside the
+          # CoreSimulator service, which survives across jobs on the hosted
+          # runner pool. The fix: shutdown every booted sim, erase device
+          # contents, let CoreSimulator restart with a clean device pool.
           xcrun simctl shutdown all 2>/dev/null || true
           xcrun simctl erase all
-          # Kill any orphan Simulator.app processes from prior runs
-          # so the rebooted CoreSimulator service comes up clean.
           killall Simulator 2>/dev/null || true
 
-          # Pick the most recent iPhone available from the preinstalled
-          # device pool. Sorting by numeric model number (parsed out of
-          # "iPhone 15 Pro Max" etc.) is robust against Apple's
-          # alphabetic / array-order quirks that previously selected
-          # iPhone XS Max. Filter to runtimes whose major version
-          # matches Xcode's iphonesimulator SDK so we never land on a
-          # preview runtime whose deployment-target gates the test
-          # app's launch (the FBOpenApplicationServiceErrorDomain
-          # failure we kept seeing).
+          # Pick the most recent iPhone available from the preinstalled device
+          # pool, filtered to runtimes whose major version matches Xcode's
+          # iphonesimulator SDK so we never land on a preview runtime whose
+          # deployment target gates the test app's launch.
           SDK_MAJOR=$(xcrun --sdk iphonesimulator --show-sdk-version | cut -d. -f1)
           echo "Xcode iphonesimulator SDK major = $SDK_MAJOR"
 
           DEVICES_JSON=$(xcrun simctl list devices available -j)
-          # jq pipeline:
-          #   1. Walk every runtime key whose name starts with
-          #      "iOS-<SDK_MAJOR>" (matches "iOS-18-0" / "iOS-18-5"
-          #      but not "iOS-26-0") so we never land on a preview
-          #      runtime whose deployment target gates the test
-          #      app's launch.
-          #   2. Filter to available iPhones whose name parses as
-          #      "iPhone N", "iPhone N Plus", "iPhone N Pro", or
-          #      "iPhone N Pro Max".
-          #   3. Sort by [model_number, variant_rank] so ties on
-          #      model number resolve to the higher variant
-          #      (base < Plus < Pro < Pro Max). Without the variant
-          #      rank, jq's stable sort can land on the base model
-          #      depending on Apple's array order.
           PICK_PIPELINE='
             map(select(.isAvailable and (.name | test("^iPhone [0-9]+($| Plus$| Pro$| Pro Max$)")))
                 | { udid, name,
@@ -216,9 +150,6 @@ jobs:
             | map(.value[])
           ' | jq -r "$PICK_PIPELINE")
           if [ -z "$PICK" ] || [ "$PICK" = "null" ]; then
-            # No preinstalled device of the right runtime / model
-            # shape — fall back to the highest-numbered iPhone of any
-            # runtime so the job at least attempts to run.
             echo "No iPhone matching iOS-$SDK_MAJOR runtime; falling back to any iPhone"
             PICK=$(echo "$DEVICES_JSON" | jq -r '
               .devices
@@ -235,17 +166,7 @@ jobs:
           echo "Using simulator: $DEVICE_NAME ($DEVICE_ID)"
 
           xcrun simctl boot "$DEVICE_ID"
-          # Block until launchd reports Status=Booted, Status Type=Usable.
-          # Without this, simctl boot returns as soon as the boot
-          # process starts, but installd / SpringBoard may not yet be
-          # ready and the subsequent flutter test install/launch races.
           xcrun simctl bootstatus "$DEVICE_ID" -b
-          # Extra paranoia after the boot reports Usable — wait for
-          # SpringBoard to actually appear in the running-process
-          # list. simctl bootstatus has historically returned a
-          # micro-second before SpringBoard finishes its first
-          # bringup, and flutter's install-then-launch sequence is
-          # tight enough to race that gap on hot runners.
           for i in $(seq 1 30); do
             if xcrun simctl spawn "$DEVICE_ID" launchctl print system 2>/dev/null | grep -q 'com.apple.SpringBoard$'; then
               echo "SpringBoard ready after ${i}s"
@@ -260,43 +181,13 @@ jobs:
 
       - name: Run iOS integration tests (xcodebuild test)
         working-directory: dart/test_app
-        # Single attempt, no retries, no watchdog — we drove the
-        # iOS test through `flutter test` for a long time and kept
-        # hitting "awaiting connection to test device" hangs caused
-        # by the Bonjour/mDNS attach race between the host's
-        # flutter tool and the in-sim Dart VM Service. That race is
-        # in Apple's network stack on the macos-latest runner image;
-        # no amount of CoreSimulator hygiene or retry budget clears
-        # it. The architectural fix is to stop using `flutter test`
-        # for this job and run the integration test as a regular
-        # XCTest case via xcodebuild — the same mechanism Flutter's
-        # own engine CI uses.
-        #
-        # How it works:
-        #   1. `flutter build ios --config-only --simulator <target>`
-        #      writes FLUTTER_TARGET into Generated.xcconfig, so the
-        #      Xcode build picks the integration_test entry point
-        #      instead of lib/main.dart. No actual compile yet.
-        #   2. `xcodebuild test` builds Runner.app (with the chosen
-        #      dart target compiled in via Flutter's "Run Script"
-        #      build phase), builds RunnerTests.xctest, installs
-        #      both, and launches Runner under XCTest control.
-        #      The bundled RunnerTests.m uses Flutter's
-        #      INTEGRATION_TEST_IOS_RUNNER macro to dynamically
-        #      generate one XCTest invocation per dart `testWidgets`
-        #      case; each one calls into FLTIntegrationTestRunner
-        #      which runs the dart tests in-process and reports
-        #      pass/fail through the XCTest runtime. No DDS, no
-        #      Bonjour, no mDNS — XCTest's native IPC.
-        #
-        # CODE_SIGNING_ALLOWED=NO because the simulator doesn't
-        # care about signatures and the runner has no provisioning
-        # profile to sign with.
+        # Run the integration test as a native XCTest via xcodebuild (the same
+        # mechanism Flutter's engine CI uses) rather than `flutter test`, which
+        # hits an mDNS attach race on the hosted runner. CODE_SIGNING_ALLOWED=NO
+        # because the simulator ignores signatures.
         run: |
           set +e
-          # 1. Wire the dart entry point.
           flutter build ios --config-only --simulator integration_test/libwallet_test.dart || exit $?
-          # 2. Run XCTest against the booted sim.
           XCRESULT="$RUNNER_TEMP/xcodebuild-test.xcresult"
           rm -rf "$XCRESULT"
           xcodebuild test \
@@ -309,15 +200,6 @@ jobs:
             COMPILER_INDEX_STORE_ENABLE=NO
           EXIT=$?
           if [ "$EXIT" != "0" ] && [ -d "$XCRESULT" ]; then
-            # XCTAssert failure messages live in the xcresult bundle, not
-            # in xcodebuild's stdout. Walk anything in the JSON tree that
-            # carries a failureText / message / failureMessages / details
-            # field; that catches both Xcode 15's legacy schema and
-            # Xcode 16's modern test-results schema regardless of where
-            # the failure record actually lives.
-            echo "::group::xcresulttool — modern test-results"
-            xcrun xcresulttool get test-results tests --path "$XCRESULT" 2>&1 || true
-            echo "::endgroup::"
             echo "::group::xcresulttool — failure scan"
             (
               xcrun xcresulttool get test-results tests --path "$XCRESULT" 2>/dev/null
@@ -338,52 +220,46 @@ jobs:
       - name: Cleanup simulator
         if: always()
         run: |
-          # Just shutdown the preinstalled device we used — DON'T
-          # delete it (the runner image owns the device pool; the next
-          # job on the same hosted runner reuses + erases). simctl
-          # erase at the start of the next run handles state cleanup.
           if [ -n "${DEVICE_ID:-}" ]; then
             xcrun simctl shutdown "$DEVICE_ID" 2>/dev/null || true
           fi
 
-  # Android emulator integration tests (FFI via c-shared)
+  # Android emulator integration tests (FFI via Rust cdylib)
   test-android:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-go@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version: "1.26"
+          targets: x86_64-linux-android
 
-      - name: Install Android NDK
-        run: |
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
-      - name: Compute libwallet ldflags
-        run: |
-          GIT_TAG=$(git rev-parse --short HEAD)
-          DATE_TAG=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y%m%d%H%M%S HEAD)
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-          else
-            TAG_VERSION=""
-          fi
-          PKG=github.com/KarpelesLab/libwallet/wltbase
-          echo "LIBWALLET_LDFLAGS=-X $PKG.dateTag=$DATE_TAG -X $PKG.gitTag=$GIT_TAG -X $PKG.version=$TAG_VERSION" >> "$GITHUB_ENV"
+      - name: Set up Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
 
-      - name: Build c-shared library for Android x86_64
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Compute libwallet version metadata
+        run: .github/scripts/version-env.sh
+
+      - name: Build FFI cdylib for Android x86_64 (emulator ABI)
+        working-directory: rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          # The emulator is x86_64, so we only need that ABI
-          NDK=$ANDROID_HOME/ndk/27.2.12479018
-          export CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang"
-          export CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android21-clang++"
-          CGO_ENABLED=1 GOOS=android GOARCH=amd64 \
-            go build -buildmode=c-shared -ldflags="$LIBWALLET_LDFLAGS" \
-            -o dart/test_app/android/app/src/main/jniLibs/x86_64/liblibwallet.so \
-            ./cshared/
+          mkdir -p ../dart/test_app/android/app/src/main/jniLibs/x86_64
+          cargo ndk -t x86_64 build --release
+          cp target/x86_64-linux-android/release/liblibwallet.so \
+            ../dart/test_app/android/app/src/main/jniLibs/x86_64/liblibwallet.so
 
       - uses: actions/setup-java@v4
         with:
