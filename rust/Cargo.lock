@@ -711,8 +711,6 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "outscript"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6010d817a93f5272f8ce2d313a303ae116317e28e13fd40d5967671001e275ab"
 dependencies = [
  "hex",
  "num-bigint",

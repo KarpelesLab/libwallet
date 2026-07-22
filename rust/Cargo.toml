@@ -65,3 +65,12 @@ base64 = "0.22"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+# Vendored outscript, identical to 0.1.2 except its purecrypto dependency sets
+# default-features = false. Upstream pulls purecrypto's default features, which
+# include tls/quic — those reference a Unix-only OsRng that breaks the wasm32
+# build, and Cargo feature unification means we can't drop them any other way.
+# On native the tls/quic features still arrive via bottlers/spotlib (fine); on
+# wasm those deps are excluded, so purecrypto compiles.
+[patch.crates-io]
+outscript = { path = "third_party/outscript" }
