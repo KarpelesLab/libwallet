@@ -226,6 +226,7 @@
           <button class="on" data-tab="accounts" role="tab">Accounts</button>
           <button data-tab="send" role="tab">Send</button>
           <button data-tab="settings" role="tab">Settings</button>
+          <button data-tab="backend" role="tab">Backend</button>
         </div>
 
         <!-- Accounts pane -->
@@ -312,6 +313,139 @@
             </div>
           </div>
           <p class="foot" style="margin-top:20px" id="verLine">libwallet · self-custodial · client-side only</p>
+        </div>
+
+        <!-- Backend pane — the REAL libwallet request API, running via WASM -->
+        <div class="tabpane" data-pane="backend">
+
+          <div class="panel bk-manifest">
+            <div class="lead">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              Real backend · in your browser
+            </div>
+            This runs the <strong>actual libwallet backend</strong> — its SQLite database, TSS
+            keygen and signing, and request handlers — compiled to WebAssembly and executing
+            entirely on this device. State is <strong>session-only</strong>: the database lives in
+            memory and is discarded on reload (durable storage needs DB serialization, a follow-up).
+            Live balances and broadcast are unavailable here — the networking handlers are gated out
+            of the browser build, which is exactly what lets every call run synchronously and offline.
+          </div>
+
+          <!-- Session + version -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Session</div>
+              <span class="bk-status" id="bkStatus"><span class="bk-dot"></span><span id="bkStatusText">Starting…</span></span>
+            </div>
+            <div class="panel" style="padding:4px 16px" id="bkVersion">
+              <div class="kv"><span class="k">Waiting for the backend…</span><span class="v mono">—</span></div>
+            </div>
+          </div>
+
+          <!-- Create wallet -->
+          <div class="bk-block">
+            <div class="section-head"><div class="eyebrow muted">Create a real wallet · TSS keygen</div></div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">Runs a real 1-of-3 threshold (DKLs23, secp256k1) key generation
+                  in this tab. The three shares are each sealed with the password you enter — an
+                  all-local committee, no server.</p>
+                <div>
+                  <label class="field-label" for="bkWalletName">Wallet name</label>
+                  <input class="input" id="bkWalletName" placeholder="My browser wallet" value="Browser TSS wallet" />
+                </div>
+                <div>
+                  <label class="field-label" for="bkWalletPw">Share password</label>
+                  <input class="input mono" id="bkWalletPw" type="password" autocomplete="new-password" placeholder="Encrypts each key share" value="correct horse battery staple" />
+                </div>
+                <div class="err-inline" id="bkWalletErr"></div>
+                <button class="btn primary block" type="button" id="bkCreateWallet">Generate wallet</button>
+              </div>
+            </div>
+            <div id="bkWalletOut" class="bk-block hidden"></div>
+          </div>
+
+          <!-- Wallets list -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Wallets · <span class="mono">Wallet</span> GET</div>
+              <button class="btn ghost sm" type="button" id="bkListWallets">Refresh</button>
+            </div>
+            <div id="bkWalletList" class="assets"></div>
+          </div>
+
+          <!-- Accounts + networks -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Derive an account · <span class="mono">Account</span> POST</div>
+            </div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">Derive an address from the created wallet for one of the seeded
+                  networks. Ethereum and Bitcoin come off the same secp256k1 key.</p>
+                <div class="amount-row">
+                  <select class="input" id="bkAccountType" style="min-width:150px">
+                    <option value="ethereum">Ethereum</option>
+                    <option value="bitcoin">Bitcoin</option>
+                  </select>
+                  <button class="btn primary grow" type="button" id="bkCreateAccount" disabled>Derive address</button>
+                </div>
+                <div class="err-inline" id="bkAccountErr"></div>
+              </div>
+            </div>
+            <div id="bkAccountList" class="assets" style="margin-top:14px"></div>
+            <div class="section-head" style="margin-top:18px">
+              <div class="eyebrow muted">Seeded networks · <span class="mono">Network</span> GET</div>
+            </div>
+            <div class="panel mono bk-nets" id="bkNetworks" style="font-size:12px">—</div>
+          </div>
+
+          <!-- Sign message -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Sign a message · <span class="mono">Account:signMessage</span></div>
+            </div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">EIP-191 personal_sign over an Ethereum account's TSS key. The
+                  signing ceremony reconstructs from the sealed shares using your password.</p>
+                <div>
+                  <label class="field-label" for="bkSignAccount">Signing account</label>
+                  <select class="input mono" id="bkSignAccount" style="font-size:12.5px"><option value="">Derive an Ethereum account first</option></select>
+                </div>
+                <div>
+                  <label class="field-label" for="bkSignMsg">Message</label>
+                  <input class="input mono" id="bkSignMsg" placeholder="Message to sign" value="Hello from the real libwallet backend" />
+                </div>
+                <div class="err-inline" id="bkSignErr"></div>
+                <button class="btn primary block" type="button" id="bkSignBtn" disabled>Sign message</button>
+                <div id="bkSignOut" class="hidden"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Raw console -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Raw request console</div>
+              <button class="btn ghost sm" type="button" id="bkRawRun">Run request</button>
+            </div>
+            <textarea class="textarea mono" id="bkRawReq" spellcheck="false" autocapitalize="off" style="min-height:120px">{
+  "path": "Info:version",
+  "verb": "GET"
+}</textarea>
+            <div class="panel mono bk-json" id="bkRawOut" style="margin-top:12px">// Response appears here</div>
+          </div>
+
+          <!-- Event log -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Event tape · <span class="mono">set_event_callback</span></div>
+              <button class="btn subtle sm" type="button" id="bkLogClear">Clear</button>
+            </div>
+            <div class="bk-log" id="bkLog" aria-live="polite"></div>
+          </div>
+
         </div>
 
       </div>

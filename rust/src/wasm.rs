@@ -95,6 +95,9 @@ thread_local! {
 /// storage is the in-memory DB and persistence is the host's concern).
 #[wasm_bindgen]
 pub fn libwallet_init() -> Result<u32, JsValue> {
+    // Surface Rust panics as console errors (a panic otherwise aborts with an
+    // opaque "unreachable" RuntimeError).
+    console_error_panic_hook::set_once();
     let env = Env::init_memory().map_err(|e| js_err(e.to_string()))?;
     handlers::init_models(&env).map_err(|e| js_err(e.to_string()))?;
     let handle = Rc::new(Handle::new(env));

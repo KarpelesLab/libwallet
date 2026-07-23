@@ -3,32 +3,39 @@
 //
 // purecrypto's wasm32-unknown-unknown OsRng backend imports a host function
 // `purecrypto.random_get(ptr, len)` that the embedder MUST supply (typically
-// crypto.getRandomValues). wasm-pack's generated glue only provides the `wbg`
-// import module, so without this the module fails to instantiate with a
-// LinkError. We add a `purecrypto` import that fills the wasm linear-memory
-// range [ptr, ptr+len) from the browser CSPRNG, chunked to the 65536-byte
-// crypto.getRandomValues limit.
-//
-// Injection is idempotent and anchored on the imports object the init flow
-// builds, so it doesn't depend on the internal shape of the wbg module.
+// crypto.getRandomValues). wasm-bindgen (--target web) handles this by emitting
+// a bare ES import `import * as importN from "purecrypto"` at the top of the
+// glue and passing it as the `purecrypto` import object. That bare specifier is
+// UNRESOLVABLE without a bundler or import map, so the module fails to load in a
+// plain browser. We do two things, both idempotent:
+//   1. Replace the bare `import * as importN from "purecrypto"` with a local
+//      `const importN = {}` stub so the module loads.
+//   2. Override `imports.purecrypto` with a real `random_get` that fills the
+//      requested wasm linear-memory range from the browser CSPRNG (chunked to
+//      the 65536-byte crypto.getRandomValues limit).
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const file = process.argv[2] || 'web/pkg/libwallet.js';
 let src = readFileSync(file, 'utf8');
+let changed = false;
 
-if (src.includes('imports.purecrypto')) {
-  console.log(`inject-entropy: already wired in ${file}, skipping`);
-  process.exit(0);
+// (1) Neutralize the unresolvable bare purecrypto import → local stub.
+const bareImport = /import \* as (\w+) from ['"]purecrypto['"];?/;
+const m = src.match(bareImport);
+if (m) {
+  src = src.replace(bareImport, `const ${m[1]} = {}; // purecrypto host import neutralized (see inject-entropy.mjs)`);
+  changed = true;
 }
 
-const anchor = 'const imports = __wbg_get_imports();';
-if (!src.includes(anchor)) {
-  console.error(`inject-entropy: anchor not found in ${file} — wasm-bindgen glue shape changed`);
-  process.exit(1);
-}
-
-const shim = `${anchor}
+// (2) Provide random_get at runtime.
+if (!src.includes('imports.purecrypto =')) {
+  const anchor = 'const imports = __wbg_get_imports();';
+  if (!src.includes(anchor)) {
+    console.error(`inject-entropy: anchor not found in ${file} — wasm-bindgen glue shape changed`);
+    process.exit(1);
+  }
+  const shim = `${anchor}
     // purecrypto's wasm OsRng imports this host entropy function; supply it
     // from the browser CSPRNG (see web/tools/inject-entropy.mjs).
     imports.purecrypto = {
@@ -39,7 +46,13 @@ const shim = `${anchor}
             }
         },
     };`;
+  src = src.split(anchor).join(shim);
+  changed = true;
+}
 
-src = src.split(anchor).join(shim);
-writeFileSync(file, src);
-console.log(`inject-entropy: wired purecrypto.random_get into ${file}`);
+if (changed) {
+  writeFileSync(file, src);
+  console.log(`inject-entropy: wired purecrypto entropy + neutralized bare import in ${file}`);
+} else {
+  console.log(`inject-entropy: already wired in ${file}, skipping`);
+}

@@ -620,6 +620,77 @@ select.input { appearance: none; cursor: pointer;
 .divider { height: 1px; background: var(--line); margin: 4px 0; }
 .err-inline { color: var(--danger); font-size: 12.5px; min-height: 1em; }
 
+/* ============================================================================
+   Backend pane — the real libwallet request API running via WASM.
+   An "instrument panel": monospace truth, a live event tape, JSON readouts.
+   Reuses the existing vault system; only the console/tape are new.
+   ========================================================================== */
+.bk-block { margin-top: 22px; }
+.bk-block:first-child { margin-top: 0; }
+
+/* Honest "what this is" manifest, keyed to iris rather than a warning color */
+.panel.bk-manifest {
+  border-color: color-mix(in srgb, var(--iris) 34%, transparent);
+  background: color-mix(in srgb, var(--iris) 7%, var(--surface));
+  color: color-mix(in srgb, var(--iris-bright) 34%, var(--text-dim));
+}
+.panel.bk-manifest .lead { color: var(--iris); }
+
+/* Session status pill */
+.bk-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-dim);
+}
+.bk-status .bk-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-faint) 22%, transparent);
+  transition: background 0.2s, box-shadow 0.2s;
+}
+.bk-status.live .bk-dot { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+.bk-status.busy .bk-dot { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.bk-status.err  .bk-dot { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent); }
+
+/* JSON readouts — monospace on the deepest surface, horizontally scrollable */
+.panel.bk-json, .bk-nets {
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  white-space: pre;
+  overflow-x: auto;
+  line-height: 1.55;
+  tab-size: 2;
+}
+.panel.bk-json { max-height: 340px; overflow-y: auto; }
+.bk-nets { white-space: pre-wrap; word-break: break-word; }
+
+/* Event tape — a scrolling ledger of requests, responses and backend events */
+.bk-log {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex; flex-direction: column;
+}
+.bk-log:empty::before { content: "// no activity yet"; color: var(--text-faint); }
+.bk-log .row { display: flex; gap: 10px; align-items: baseline; padding: 1px 0; }
+.bk-log .tag {
+  flex: none; width: 58px; text-align: right;
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  opacity: 0.9;
+}
+.bk-log .row.req .tag { color: var(--iris); }
+.bk-log .row.res .tag { color: var(--ok); }
+.bk-log .row.evt .tag { color: var(--btc); }
+.bk-log .row.err .tag { color: var(--danger); }
+.bk-log .msg { flex: 1; min-width: 0; color: var(--text-dim); word-break: break-word; }
+.bk-log .row.err .msg { color: color-mix(in srgb, var(--danger) 70%, var(--text)); }
+
 /* Focus visibility everywhere */
 :focus-visible { outline: 2px solid var(--iris); outline-offset: 2px; border-radius: 6px; }
 

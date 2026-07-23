@@ -850,7 +850,10 @@ function wireStaticEvents() {
     $$('.tabs button').forEach(x => x.classList.remove('on'));
     b.classList.add('on');
     $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
+    if (b.dataset.tab === 'backend') backendOpen();
   });
+
+  wireBackendEvents();
 
   // --- Dashboard: accounts ---
   $('#refreshBalances').onclick = refreshAllBalances;
@@ -877,6 +880,332 @@ function wireStaticEvents() {
     if (e.target.id === 'modalScrim' || e.target.closest('[data-close]')) closeModal();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+}
+
+// ============================================================================
+// Backend demo — the REAL libwallet request API, running in-browser via WASM.
+//
+// This is fully additive and independent of the walletcore wallet above: it
+// opens its own in-memory libwallet session (SQLite DB + TSS engine + handlers,
+// all compiled to WASM) and drives it with the same {path,verb,params} request
+// contract the Dart client uses. Nothing here touches the persistent vault.
+//
+// Request shapes below are mirrored from dart/lib/src/api/*.dart:
+//   Info:version            → info_api.dart      version()
+//   Wallet (POST)           → wallet_api.dart    create()  (1-of-3 committee)
+//   Wallet (GET)            → wallet_api.dart    list()
+//   Network (GET)           → network_api.dart   list()
+//   Account (POST)          → account_api.dart   create()
+//   Account/<id>:signMessage→ account_api.dart   signMessage()
+// ============================================================================
+
+const backend = {
+  handle:   null,   // libwallet session handle (u32)
+  ready:    false,
+  wallet:   null,   // last created Wallet object (has .Keys for signing)
+  password: null,   // share password for the created wallet (session-only)
+  accounts: []      // derived Account objects
+};
+
+// UTF-8 string → standard base64 (for Account:signMessage Message param).
+function b64utf8(str) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
+}
+
+function bkEsc(s) {
+  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+}
+
+function bkStatus(kind, text) {
+  const pill = $('#bkStatus');
+  pill.className = 'bk-status' + (kind ? ' ' + kind : '');
+  $('#bkStatusText').textContent = text;
+}
+
+// Append one line to the event tape. kind ∈ req|res|evt|err.
+function bkLog(kind, msg) {
+  const log = $('#bkLog');
+  const row = el('div', 'row ' + kind);
+  const tag = { req: 'request', res: 'result', evt: 'event', err: 'error' }[kind] || kind;
+  row.innerHTML = `<span class="tag">${tag}</span><span class="msg">${bkEsc(msg)}</span>`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+  // Cap the tape so a long session doesn't grow unbounded.
+  while (log.childElementCount > 200) log.removeChild(log.firstChild);
+}
+
+// Core call: serialise {path,verb,params}, dispatch synchronously, parse the
+// envelope. Logs both sides to the tape. Throws on an error envelope.
+function backendRequest(path, verb = 'GET', params) {
+  if (backend.handle == null) throw new Error('Backend session not initialised.');
+  const reqObj = { path, verb };
+  if (params !== undefined) reqObj.params = params;
+  bkLog('req', `${verb} ${path}`);
+  const raw = wasm.libwallet_request(backend.handle, JSON.stringify(reqObj));
+  let env;
+  try { env = JSON.parse(raw); }
+  catch { bkLog('err', 'unparseable response'); throw new Error('Backend returned invalid JSON.'); }
+  if (env.result === 'error') {
+    bkLog('err', `${env.code || ''} ${env.error || 'error'}`.trim());
+    const e = new Error(env.error || 'Backend error'); e.code = env.code; throw e;
+  }
+  bkLog('res', `${path} · ${typeof env.data === 'object' ? 'ok' : String(env.data)}`);
+  return env.data;
+}
+
+// Lazily open the session the first time the tab is shown.
+function backendOpen() {
+  if (backend.ready || backend.handle != null) return;
+  try {
+    backend.handle = wasm.libwallet_init();
+  } catch (err) {
+    bkStatus('err', 'init failed');
+    bkLog('err', 'libwallet_init: ' + (err.message || err));
+    return;
+  }
+  // Stream backend-emitted events (e.g. wallet:created) onto the tape.
+  try {
+    wasm.libwallet_set_event_callback(backend.handle, json => {
+      let name = 'event';
+      try { const e = JSON.parse(json); name = e.event || 'event'; } catch {}
+      bkLog('evt', name + ' · ' + json);
+    });
+  } catch { /* callback wiring is best-effort */ }
+
+  backend.ready = true;
+  bkStatus('live', 'session #' + backend.handle);
+  bkLog('evt', 'session opened · in-memory DB');
+
+  // Prove the real backend answers, then show the seeded state.
+  loadBackendVersion();
+  backendListNetworks();
+  backendListWallets();
+}
+
+function loadBackendVersion() {
+  try {
+    const v = backendRequest('Info:version', 'GET');
+    const rows = [
+      ['version', v.version || '(dev build — untagged)'],
+      ['gitTag', v.gitTag || '—'],
+      ['dateTag', v.dateTag || '—']
+    ];
+    $('#bkVersion').innerHTML = rows
+      .map(([k, val]) => `<div class="kv"><span class="k">${k}</span><span class="v">${bkEsc(val)}</span></div>`)
+      .join('');
+    bkStatus('live', 'Info:version ✓ · #' + backend.handle);
+  } catch (e) {
+    $('#bkVersion').innerHTML = `<div class="kv"><span class="k">Info:version failed</span><span class="v">${bkEsc(e.message)}</span></div>`;
+  }
+}
+
+function backendListNetworks() {
+  try {
+    const nets = backendRequest('Network', 'GET') || [];
+    $('#bkNetworks').textContent = nets.length
+      ? nets.map(n => `${(n.Type || '').padEnd(8)} ${(n.ChainId || '').padEnd(14)} ${n.Name || ''}  ${n.CurrencySymbol || ''}${n.TestNet ? '  · testnet' : ''}`).join('\n')
+      : '(no networks)';
+  } catch (e) {
+    $('#bkNetworks').textContent = 'Network list failed: ' + e.message;
+  }
+}
+
+function backendListWallets() {
+  const list = $('#bkWalletList');
+  try {
+    const wallets = backendRequest('Wallet', 'GET') || [];
+    if (!wallets.length) { list.innerHTML = `<p class="subtitle">No wallets yet — generate one above.</p>`; return; }
+    list.innerHTML = wallets.map(w => backendWalletCardHtml(w)).join('');
+  } catch (e) {
+    list.innerHTML = `<p class="err-inline">Wallet list failed: ${bkEsc(e.message)}</p>`;
+  }
+}
+
+function backendWalletCardHtml(w) {
+  return `
+    <div class="asset" data-chain="evm">
+      <div class="asset-head">
+        <div class="asset-name">
+          <span class="chain-badge">W</span>
+          <span class="meta"><span class="n">${bkEsc(w.Name || 'Wallet')}</span><br><span class="t">${bkEsc(w.Curve || '')} · ${bkEsc(w.Protocol || '')} · ${w.Threshold + 1}-of-${(w.Keys || []).length}</span></span>
+        </div>
+      </div>
+      <div class="panel" style="padding:4px 16px">
+        <div class="kv"><span class="k">Id</span><span class="v">${bkEsc(w.Id)}</span></div>
+        <div class="kv"><span class="k">Pubkey</span><span class="v">${bkEsc(short(w.Pubkey || '', 14, 12))}</span></div>
+        <div class="kv"><span class="k">Key shares</span><span class="v">${(w.Keys || []).map(k => k.Type).join(' · ')}</span></div>
+      </div>
+    </div>`;
+}
+
+function backendCreateWallet() {
+  const name = $('#bkWalletName').value.trim() || 'Browser TSS wallet';
+  const pw = $('#bkWalletPw').value;
+  const err = $('#bkWalletErr');
+  err.textContent = '';
+  if (pw.length < 4) { err.textContent = 'Enter a share password (4+ characters).'; return; }
+
+  const btn = $('#bkCreateWallet');
+  btn.disabled = true; btn.textContent = 'Running keygen…';
+  bkStatus('busy', 'TSS keygen…');
+  // Defer so the button state paints before the (synchronous) keygen blocks.
+  setTimeout(() => {
+    try {
+      // A modern TSS wallet is inherently multi-party: the backend mandates a
+      // ≥3-share committee (threshold hardcoded to 1 → 1-of-3). We build three
+      // local Password shares from the entered password — an all-local,
+      // server-free committee. (Mirrors the reference account_create test.)
+      const keys = [
+        { Type: 'Password', Key: pw },
+        { Type: 'Password', Key: pw },
+        { Type: 'Password', Key: pw }
+      ];
+      const w = backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+      backend.wallet = w;
+      backend.password = pw;
+      backend.accounts = [];
+      $('#bkAccountList').innerHTML = '';
+      $('#bkCreateAccount').disabled = false;
+      refreshSignAccounts();
+
+      const out = $('#bkWalletOut');
+      out.classList.remove('hidden');
+      out.innerHTML = backendWalletCardHtml(w);
+      bkStatus('live', 'wallet created · #' + backend.handle);
+      toast('ok', 'Real wallet created', 'TSS keygen ran in your browser (' + (w.Curve) + ' / ' + w.Protocol + ').');
+      backendListWallets();
+    } catch (e) {
+      err.textContent = e.message || String(e);
+      bkStatus('err', 'keygen failed');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Generate wallet';
+    }
+  }, 30);
+}
+
+function backendCreateAccount() {
+  const err = $('#bkAccountErr');
+  err.textContent = '';
+  if (!backend.wallet) { err.textContent = 'Create a wallet first.'; return; }
+  const type = $('#bkAccountType').value;
+  const index = backend.accounts.filter(a => a.Type === type).length;
+  try {
+    const a = backendRequest('Account', 'POST', {
+      Name: '', Wallet: backend.wallet.Id, Type: type, Index: index
+    });
+    backend.accounts.push(a);
+    $('#bkAccountList').insertAdjacentHTML('beforeend', backendAccountCardHtml(a));
+    refreshSignAccounts();
+    toast('ok', 'Address derived', `${type} · ${short(a.Address, 8, 8)}`);
+  } catch (e) {
+    err.textContent = e.message || String(e);
+  }
+}
+
+function backendAccountCardHtml(a) {
+  const chain = a.Type === 'ethereum' ? 'evm' : (a.Type === 'solana' ? 'solana' : 'bitcoin');
+  const badge = a.Type === 'ethereum' ? 'Ξ' : (a.Type === 'solana' ? '◎' : '₿');
+  return `
+    <div class="asset" data-chain="${chain}">
+      <div class="asset-head">
+        <div class="asset-name">
+          <span class="chain-badge">${badge}</span>
+          <span class="meta"><span class="n">${bkEsc(a.Name || a.Type)}</span><br><span class="t">${bkEsc(a.Type)} · ${bkEsc(a.Path || '')}</span></span>
+        </div>
+      </div>
+      <div class="addr-row">
+        <span class="addr" title="${bkEsc(a.Address)}">${bkEsc(a.Address)}</span>
+        <button class="copy" type="button" data-copy="${bkEsc(a.Address)}">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a2 2 0 012-2h10" stroke="currentColor" stroke-width="1.8"/></svg>
+          Copy
+        </button>
+      </div>
+    </div>`;
+}
+
+// Only Ethereum (secp256k1 EIP-191) accounts are offered for signMessage —
+// the personal_sign path returns a clean 0x signature.
+function refreshSignAccounts() {
+  const sel = $('#bkSignAccount');
+  const signable = backend.accounts.filter(a => a.Type === 'ethereum');
+  if (!signable.length) {
+    sel.innerHTML = '<option value="">Derive an Ethereum account first</option>';
+    $('#bkSignBtn').disabled = true;
+    return;
+  }
+  sel.innerHTML = signable
+    .map(a => `<option value="${bkEsc(a.Id)}">${bkEsc(a.Type)} · ${bkEsc(short(a.Address, 10, 8))}</option>`)
+    .join('');
+  $('#bkSignBtn').disabled = false;
+}
+
+function backendSignMessage() {
+  const err = $('#bkSignErr');
+  err.textContent = '';
+  const accountId = $('#bkSignAccount').value;
+  const message = $('#bkSignMsg').value;
+  if (!accountId) { err.textContent = 'Choose an account to sign with.'; return; }
+  if (!message) { err.textContent = 'Enter a message.'; return; }
+  if (!backend.wallet || !backend.password) { err.textContent = 'Create a wallet first.'; return; }
+
+  // Reconstruct the signing committee from the wallet's sealed shares, each
+  // unlocked with the create-time password (keyed by that share's WalletKey Id).
+  const keys = (backend.wallet.Keys || [])
+    .filter(k => k.Type === 'Password')
+    .map(k => ({ Type: 'Password', Id: k.Id, Key: backend.password }));
+
+  const btn = $('#bkSignBtn');
+  btn.disabled = true; btn.textContent = 'Signing…';
+  bkStatus('busy', 'TSS sign…');
+  setTimeout(() => {
+    try {
+      const res = backendRequest(`Account/${accountId}:signMessage`, 'POST', {
+        Message: b64utf8(message), Keys: keys
+      });
+      const out = $('#bkSignOut');
+      out.classList.remove('hidden');
+      out.innerHTML = `
+        <div class="panel" style="padding:4px 16px;margin-top:4px">
+          <div class="kv"><span class="k">Message</span><span class="v">${bkEsc(message)}</span></div>
+          <div class="kv"><span class="k">Signature</span><span class="v" style="max-width:100%">${bkEsc(res.signature || JSON.stringify(res))}</span></div>
+        </div>`;
+      bkStatus('live', 'signed · #' + backend.handle);
+      toast('ok', 'Message signed', 'Real EIP-191 TSS signature produced in-browser.');
+    } catch (e) {
+      err.textContent = e.message || String(e);
+      bkStatus('err', 'sign failed');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Sign message';
+    }
+  }, 30);
+}
+
+function backendRunRaw() {
+  const out = $('#bkRawOut');
+  let reqObj;
+  try { reqObj = JSON.parse($('#bkRawReq').value); }
+  catch (e) { out.textContent = '// invalid JSON: ' + e.message; return; }
+  try {
+    const data = backendRequest(reqObj.path, reqObj.verb || 'GET', reqObj.params);
+    out.textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    out.textContent = '// error ' + (e.code ? '(' + e.code + ') ' : '') + (e.message || String(e));
+  }
+}
+
+function wireBackendEvents() {
+  $('#bkCreateWallet').onclick  = backendCreateWallet;
+  $('#bkListWallets').onclick   = backendListWallets;
+  $('#bkCreateAccount').onclick = backendCreateAccount;
+  $('#bkSignBtn').onclick       = backendSignMessage;
+  $('#bkRawRun').onclick        = backendRunRaw;
+  $('#bkLogClear').onclick      = () => { $('#bkLog').innerHTML = ''; };
+
+  // Delegated copy for dynamically-rendered addresses in the backend pane.
+  $('[data-pane="backend"]').addEventListener('click', e => {
+    const btn = e.target.closest('[data-copy]');
+    if (btn) copyText(btn.dataset.copy, btn);
+  });
 }
 
 // Confirm-remove modal (used from both unlock and dashboard).

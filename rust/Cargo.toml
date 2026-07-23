@@ -34,11 +34,11 @@ bs58 = "0.5"
 # wasm and no dependency patching is needed.
 purecrypto = "0.6.28"
 outscript = "0.1.2"
-# The DB (pure-Rust SQLite, wasm-capable in-memory VFS) and time are common —
-# the browser build persists to an in-memory DB. graphitesql's `wasm` feature
-# and chrono's `wasmbind` are added on the wasm target below.
-graphitesql = "0.1.6"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# graphitesql (pure-Rust SQLite) is declared per-target: native uses the default
+# std + filesystem VFS; the browser drops `std` (default-features = false) so its
+# initial_rng_seed uses the no_std constant seed instead of SystemTime::now()
+# (unsupported on wasm32) and runs against the always-available in-memory VFS.
 # ID/UUID types and the key-share AEAD (bottlers) back the object models and
 # keystore — pure Rust, compile for wasm (uuid gets its `js` rng below).
 xuid-rs = "0.1.0"
@@ -49,6 +49,7 @@ tsslib = "0.2.5"
 # Native-only dependencies — networking (ethrpc pulls tokio), TSS, and the app
 # layers that still depend on them. Being migrated to the browser incrementally.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+graphitesql = "0.1.6"
 ethrpc-rs = "0.3.0"
 rsurl = "0.1.5"
 tungstenite = "0.20"
@@ -60,10 +61,11 @@ spotlib = "0.1.0"
 # feature selects its browser VFS.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+console_error_panic_hook = "0.1"
 js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
-graphitesql = { version = "0.1.6", features = ["wasm"] }
+graphitesql = { version = "0.1.6", default-features = false }
 uuid = { version = "1", features = ["js"] }
 
 [dev-dependencies]
