@@ -626,6 +626,7 @@ dependencies = [
  "chrono",
  "ethrpc-rs",
  "graphitesql",
+ "js-sys",
  "num-bigint",
  "num-traits",
  "outscript",

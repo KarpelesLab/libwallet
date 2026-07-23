@@ -24,8 +24,13 @@ use crate::walletconnect::RelayTransport;
 use crate::wcmanager::WcManager;
 
 /// A host event sink — receives server-pushed event JSON (the Rust analogue of
-/// Go's BroadcastJson → event FD → host callback).
+/// Go's BroadcastJson → event FD → host callback). On native it crosses the FFI
+/// worker threads, so it is `Send + Sync`; the single-threaded browser build
+/// wires it to a `js_sys::Function`, which is neither.
+#[cfg(not(target_arch = "wasm32"))]
 pub type EventSink = Box<dyn Fn(&str) + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+pub type EventSink = Box<dyn Fn(&str)>;
 
 /// The WalletConnect manager over a boxed relay transport (stored in the Env so
 /// the connection persists across FFI requests).
