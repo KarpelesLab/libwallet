@@ -49,6 +49,9 @@ jobs:
       - name: Drop wasm-pack scaffolding (keep only the ES module + .wasm)
         run: rm -f web/pkg/.gitignore web/pkg/package.json
 
+      - name: Wire purecrypto's wasm entropy import into the glue
+        run: node web/tools/inject-entropy.mjs web/pkg/libwallet.js
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

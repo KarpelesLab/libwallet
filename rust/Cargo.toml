@@ -28,11 +28,11 @@ num-bigint = "0.4"
 num-traits = "0.2"
 base64 = "0.22"
 bs58 = "0.5"
-getrandom = "0.2"
-# Minimal feature set: the crate only uses hash/ec/rng/kdf/cipher/bignum. The
-# default features pull in tls/quic, whose OsRng is Unix-only and breaks the
-# wasm32 build; disabling them keeps purecrypto compiling for the browser.
-purecrypto = { version = "0", default-features = false, features = ["std", "alloc", "bignum", "hash", "cipher", "kdf", "ec", "rng"] }
+# purecrypto ≥0.6.28 has a wasm32 OsRng backend (routes to a host-supplied
+# `purecrypto.random_get` import — the web build wires it to
+# crypto.getRandomValues), so the default features (incl. tls/quic) compile for
+# wasm and no dependency patching is needed.
+purecrypto = "0.6.28"
 outscript = "0.1.2"
 
 # Native-only dependencies — DB, networking, threads, TSS. Excluded from the
@@ -49,13 +49,11 @@ rsurl = "0.1.5"
 tungstenite = "0.20"
 spotlib = "0.1.0"
 
-# Browser (wasm32) only — the wasm-bindgen boundary + JS-backed RNG (getrandom's
-# `js` feature routes to crypto.getRandomValues; features are additive with the
-# common getrandom above).
+# Browser (wasm32) only — the wasm-bindgen boundary. Entropy comes from
+# purecrypto's wasm OsRng (host import), so no getrandom js backend is needed.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
-getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -65,12 +63,3 @@ base64 = "0.22"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-
-# Vendored outscript, identical to 0.1.2 except its purecrypto dependency sets
-# default-features = false. Upstream pulls purecrypto's default features, which
-# include tls/quic — those reference a Unix-only OsRng that breaks the wasm32
-# build, and Cargo feature unification means we can't drop them any other way.
-# On native the tls/quic features still arrive via bottlers/spotlib (fine); on
-# wasm those deps are excluded, so purecrypto compiles.
-[patch.crates-io]
-outscript = { path = "third_party/outscript" }

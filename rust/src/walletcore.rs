@@ -24,6 +24,7 @@ use purecrypto::cipher::XChaCha20Poly1305;
 use purecrypto::ec::ed25519::Ed25519PrivateKey;
 use purecrypto::hash::{keccak256, Sha256};
 use purecrypto::kdf::pbkdf2;
+use purecrypto::rng::{OsRng, RngCore};
 
 /// Default single-key derivation paths.
 pub const EVM_PATH: &str = "m/44'/60'/0'/0/0";
@@ -39,8 +40,16 @@ const DUST_SATS: u64 = 546;
 
 type R<T> = Result<T, String>;
 
+/// Fill `buf` with cryptographic randomness via purecrypto's OsRng. On native
+/// this is the OS CSPRNG; on wasm32 it routes to the host-supplied
+/// `purecrypto.random_get` import (wired to crypto.getRandomValues in the web
+/// build). `fill_bytes` is infallible (it traps if the host can't supply
+/// entropy), so this never returns Err — the Result is kept for call-site
+/// symmetry.
 fn fill_random(buf: &mut [u8]) -> R<()> {
-    getrandom::getrandom(buf).map_err(|e| format!("rng failure: {e}"))
+    let mut rng = OsRng;
+    rng.fill_bytes(buf);
+    Ok(())
 }
 
 fn b64(bytes: &[u8]) -> String {

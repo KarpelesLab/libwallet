@@ -51,9 +51,9 @@ dependencies = [
 
 [[package]]
 name = "bottlers"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37525c19a3febf109ed95c33af5c5bcd8f756e5bb69d4804449e7feb90185269"
+checksum = "1281ada5fe8a8c82d9a18adb26c271660b9102a1ea8740e093c6924c6374a0b5"
 dependencies = [
  "base64",
  "ciborium",
@@ -386,10 +386,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
- "js-sys",
  "libc",
  "wasi",
- "wasm-bindgen",
 ]
 
 [[package]]
@@ -401,6 +399,18 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+]
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -608,7 +618,6 @@ dependencies = [
  "bs58",
  "chrono",
  "ethrpc-rs",
- "getrandom 0.2.17",
  "graphitesql",
  "num-bigint",
  "num-traits",
@@ -711,6 +720,8 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "outscript"
 version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6010d817a93f5272f8ce2d313a303ae116317e28e13fd40d5967671001e275ab"
 dependencies = [
  "hex",
  "num-bigint",
@@ -768,9 +779,9 @@ checksum = "9a6c79d475776b5bf1d46db3101203d6a58a6df1e76460a7fa99f8666cd1951f"
 
 [[package]]
 name = "purecrypto"
-version = "0.6.25"
+version = "0.6.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d29b8f98b5af94fdf6f06453e45eed452f7034ebd054699b4e9b33a1c30d9fa8"
+checksum = "0583b39b21c1e5223a5d5c55d6cd36a54d5ed7aac8ef20c4b3b29df2f45b739f"
 dependencies = [
  "cacrt",
  "compcol 0.4.7",
@@ -836,18 +847,24 @@ dependencies = [
 
 [[package]]
 name = "rsurl"
-version = "0.1.5"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88bf185ba6ce57280a11a8859fbda56defeed5cd4b054510d084419c2dc2d77b"
+checksum = "ad948aba581214582b231963a8e1f50e8029b740606bdf37554ab7bfee2f75ff"
 dependencies = [
  "compcol 0.6.7",
+ "futures-channel",
+ "futures-util",
  "intl",
+ "js-sys",
  "psl2",
  "purecrypto",
  "puressh",
  "serde",
  "serde_json",
  "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "zeroize",
 ]
 
@@ -971,23 +988,28 @@ dependencies = [
 
 [[package]]
 name = "spotlib"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "278777e318928049bbf3082f807b0e82db3dfe44a8e1f47fd78f52d734edc021"
+checksum = "628e5c0e6ad8fdfa7b5334fa6487066b1d325a93fef24033fc7d75070ae6c593"
 dependencies = [
  "bottlers",
  "ciborium",
+ "futures-channel",
+ "futures-util",
+ "gloo-timers",
+ "js-sys",
  "purecrypto",
  "rsurl",
  "serde_json",
  "spotproto",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]
 name = "spotproto"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5acfa482a7e98129535dacf1258cdedd4bc0785de64c62889a432773640cf826"
+checksum = "b3d86eda10dc6752ad762f13bb4d37811924658ef2d1eaa27c3506f7930b3811"
 dependencies = [
  "bottlers",
  "ciborium",
@@ -1239,6 +1261,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-futures"
+version = "0.4.76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c62df1340f32221cb9c54d6a27b030e3dba64361d4a95bed55f9aacb44da291d"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-macro"
 version = "0.2.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,6 +1300,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc1b4cb0cc549fcf58d7dfc081778139b3d283a081644e833e84682ad71cea24"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-sys"
+version = "0.3.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8622dcb61c0bcc9fffa6938bed81210af2da9a7e4a1a834b2e37a59b6dfb6141"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
 ]
 
 [[package]]
