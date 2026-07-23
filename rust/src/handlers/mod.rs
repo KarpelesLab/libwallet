@@ -3,28 +3,41 @@
 //! handlers are added and this match grows toward the ~107 Go endpoints.
 
 mod account;
+#[cfg(not(target_arch = "wasm32"))]
 mod asset;
+#[cfg(not(target_arch = "wasm32"))]
 mod coininfo;
 mod contact;
+#[cfg(not(target_arch = "wasm32"))]
 mod contract;
 mod crash;
 mod info;
 mod lifecycle;
+#[cfg(not(target_arch = "wasm32"))]
 mod names;
 mod network;
+#[cfg(not(target_arch = "wasm32"))]
 mod request;
+#[cfg(not(target_arch = "wasm32"))]
 mod simulate;
+#[cfg(not(target_arch = "wasm32"))]
 mod spot;
 mod nft;
+#[cfg(not(target_arch = "wasm32"))]
 mod quote;
+#[cfg(not(target_arch = "wasm32"))]
 mod remotekey;
 mod storekey;
+#[cfg(not(target_arch = "wasm32"))]
 mod swap;
 mod token;
+#[cfg(not(target_arch = "wasm32"))]
 mod transaction;
 mod wallet;
 mod wallet_key;
+#[cfg(not(target_arch = "wasm32"))]
 mod wc;
+#[cfg(not(target_arch = "wasm32"))]
 mod web3;
 
 use serde_json::Value;
@@ -38,10 +51,12 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::crash::init(env)?;
     crate::models::wallet::init(env)?;
     crate::models::account::init(env)?;
+    #[cfg(not(target_arch = "wasm32"))]
     crate::models::asset::init(env)?;
     crate::models::network::init(env)?;
     crate::models::token::init(env)?;
     crate::models::nft::init(env)?;
+    #[cfg(not(target_arch = "wasm32"))]
     crate::models::transaction::init(env)?;
     crate::models::wc_session::init(env)?;
     crate::models::request::init(env)?;
@@ -140,14 +155,19 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
                 (id, action) => wallet_key::route(env, verb, id.unwrap_or(""), action, params),
             };
         }
+        #[cfg(not(target_arch = "wasm32"))]
         "Web3/Connection" => return web3::connection_route(env, verb, id, params),
         "Wallet" if id.is_some() => {
             let wid = id.unwrap();
             match action {
+                #[cfg(not(target_arch = "wasm32"))]
                 "probeActivity" => return wallet::probe_activity(env, wid, params),
                 "promoteMnemonic" => return wallet::promote_mnemonic(env, wid, params),
+                #[cfg(not(target_arch = "wasm32"))]
                 "exportToDevice" => return spot::export_to_device(env, wid, params),
+                #[cfg(not(target_arch = "wasm32"))]
                 "reshare" => return spot::wallet_reshare(env, wid, params),
+                #[cfg(not(target_arch = "wasm32"))]
                 "promote" => return spot::wallet_promote(env, wid, params),
                 _ => {}
             }
@@ -181,52 +201,86 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Account" => account::route(&handle.env, verb, params),
         "Account:signMessage" => account::sign_message(&handle.env, params),
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:signAndSendTransaction" => account::sign_and_send_transaction(&handle.env, params),
         // Canonical Go names are plural; keep the singular as a compat alias.
+        #[cfg(not(target_arch = "wasm32"))]
         "Names:resolve" | "Name:resolve" => names::resolve(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Contracts:lookup" | "Contract:lookup" => contract::lookup(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Quote:get" => quote::get(&handle.env, params),
         "StoreKey:create" => storekey::create(&handle.env, params),
         "StoreKey:derivePassword" => storekey::derive_password(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:start" => wc::start(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:stop" => wc::stop(&handle.env),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:pair" => wc::pair(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:approveSession" => wc::approve_session(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:respond" => wc::respond(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:rejectSession" => wc::reject_session(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:respondError" => wc::respond_error(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:emitEvent" => wc::emit_event(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "WalletConnect:disconnect" => wc::disconnect(&handle.env, params),
         "Wc:listSessions" | "WalletConnect:sessions" => {
             let list = crate::models::wc_session::list_by_state(&handle.env, "active")
                 .map_err(ApiError::internal)?;
             Ok(serde_json::to_value(list).unwrap())
         }
+        #[cfg(not(target_arch = "wasm32"))]
         "Coin:info" => coininfo::info(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:quote" => swap::quote(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:execute" => swap::execute(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:quotes" => swap::quotes(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:maxSpendable" => swap::max_spendable(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:buildApprovalData" => swap::build_approval_data(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:buildApproval" => swap::build_approval(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:availability" => swap::availability(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:countryAvailability" => swap::country_availability(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Swap:orderStatus" => swap::order_status(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:balance" => account::balance(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:tokenBalance" => account::token_balance(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:maxSendable" | "Transaction:maxSendable" => account::max_sendable(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:nativeAsset" => account::native_asset(&handle.env, params),
         "Account:xpub" => account::xpub(&handle.env, params),
         "Account:createView" => account::create_view(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:nextAddress" => account::next_address(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:listUTXOs" | "Account:utxos" => account::utxos(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Account:allAddresses" => account::all_addresses(&handle.env, params),
         "Account:addressFormats" => account::address_formats(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Network:testRPC" => network::test_rpc(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Network:resolveRPC" => network::resolve_rpc(&handle.env, params),
         "Network:setCurrent" => network::set_current(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Asset" => asset::route(&handle.env, verb, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Asset:invalidateCache" => {
             // Drop the cached quote table so the next Asset conversion refetches.
             handle.env.cache_delete(&[crate::quote::CACHE_KEY]).map_err(ApiError::internal)?;
@@ -235,34 +289,61 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Network" => network::route(&handle.env, verb, params),
         "Token" => token::route(&handle.env, verb, params),
         "Token:listCurated" => token::list_curated(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Token:discoverToken" => token::discover_token(&handle.env, params),
         "Nft" => nft::route(&handle.env, verb, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Transaction" => transaction::route(&handle.env, verb, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Transaction:validate" => transaction::validate(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Transaction:signAndSend" => transaction::sign_and_send(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Transaction:backfill" => transaction::backfill(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Transaction:simulate" => simulate::simulate(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Web3:injectionScript" => web3::injection_script(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Web3:request" => web3::request(&handle.env, params),
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Spot:status" => spot::status(&handle.env),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:exportToDevice" => spot::export_to_device(&handle.env, "", params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:exportToDeviceConfirm" => spot::export_confirm(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:exportToDeviceCancel" => spot::export_cancel(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:importFromDevice" => spot::import_from_device(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:reshare" => spot::wallet_reshare(&handle.env, "", params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:promote" => spot::wallet_promote(&handle.env, "", params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:initiateKeygen" => spot::initiate_keygen(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:joinSign" => spot::join_sign(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:buildNewAgentBody" => spot::build_new_agent_body(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "ClawdWallet:pair" => spot::clawd_pair(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Wallet:repairRemoteKey" => spot::repair_remote_key(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "RemoteKey:new" => remotekey::new(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "RemoteKey:reshare" => remotekey::reshare(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "RemoteKey:validate" => remotekey::validate(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Request" => request::route(&handle.env, verb, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Request:test" => request::test(&handle.env),
+        #[cfg(not(target_arch = "wasm32"))]
         "Request:approve" => request::approve(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
         "Request:reject" => request::reject(&handle.env, params),
         _ => Err(ApiError::not_found(path)),
     }

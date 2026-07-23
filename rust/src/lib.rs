@@ -95,7 +95,7 @@ pub mod clawdpair;
 pub mod walletsign;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reshare;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod curated;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod probe;
@@ -107,13 +107,15 @@ pub mod names;
 pub mod contract;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod tss;
-#[cfg(not(target_arch = "wasm32"))]
+// Request dispatch — the offline handler surface compiles for wasm; the
+// networking handlers/route-arms inside are gated native-only.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod dispatch;
-#[cfg(not(target_arch = "wasm32"))]
-mod handle;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub mod handle;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod handlers;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod response;
 
 #[cfg_attr(target_arch = "wasm32", allow(unused_imports))]

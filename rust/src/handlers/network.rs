@@ -74,6 +74,7 @@ fn network_from_params(params: &Value) -> Network {
 ///   evm     : {RPC, Type, ChainId, Name?, CurrencySymbol?}
 ///   solana  : {RPC, Type, SolanaVersion, SolanaCluster}
 ///   bitcoin : {RPC, Type, Chain, Blocks}
+#[cfg(not(target_arch = "wasm32"))]
 pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
     let url = params
         .get("URL")
@@ -96,6 +97,7 @@ pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn test_rpc_evm(url: &str) -> ApiResult {
     let idv = crate::rpc::call(url, "net_version", serde_json::json!([])).map_err(ApiError::internal)?;
     let id: u64 = idv
@@ -123,6 +125,7 @@ fn solana_cluster(genesis: &str) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn test_rpc_solana(url: &str) -> ApiResult {
     // getVersion -> {"solana-core": "1.17.x", "feature-set": 12345}
     let ver = crate::rpc::call(url, "getVersion", serde_json::json!([]))
@@ -142,6 +145,7 @@ fn test_rpc_solana(url: &str) -> ApiResult {
     }))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn test_rpc_bitcoin(url: &str) -> ApiResult {
     // getblockchaininfo works against modchain proxies, native bitcoind, and
     // any fork (litecoind, dogecoind, ...).
@@ -160,6 +164,7 @@ fn test_rpc_bitcoin(url: &str) -> ApiResult {
 /// `Network:resolveRPC` — the RPC URL to dial for a network {Id}. Resolves the
 /// modchain/Helius/explicit cases (Go Network.getRPC); auto EVM selection is not
 /// ported and returns an error.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_rpc(env: &Env, params: &Value) -> ApiResult {
     let id = params
         .get("Id")

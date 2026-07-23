@@ -116,6 +116,7 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
 /// `Account:signAndSendTransaction` — sign the EVM transaction, then broadcast
 /// it via the node RPC (eth_sendRawTransaction) and return the tx hash. The RPC
 /// endpoint is taken from the `RPC` param (network-resolution lands with wltnet).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -142,6 +143,7 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
 
 /// Build, DKLs-sign, and broadcast a Bitcoin P2PKH transfer. UTXOs and outputs
 /// are supplied in the request (auto-discovery via modchain lands next).
+#[cfg(not(target_arch = "wasm32"))]
 fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
 
@@ -201,6 +203,7 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
 /// Build, FROST-sign, and broadcast a Solana transfer: fetch a recent
 /// blockhash, serialize the transfer, sign, assemble, base58-encode, and
 /// sendTransaction. Returns the transaction signature.
+#[cfg(not(target_arch = "wasm32"))]
 fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
     let to_b58 = tx.get("to").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "to required"))?;
@@ -258,6 +261,7 @@ fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
 /// `Account:balance` — the account's native balance via the node RPC. For an
 /// ethereum account this is eth_getBalance (wei); solana uses getBalance
 /// (lamports). Returned as a decimal string.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn balance(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -304,6 +308,7 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
 /// `Account:maxSendable` — the maximum native amount an EVM account can send:
 /// balance − (21000 × gasPrice) reserved for the fee (Go maxSendableEVM, legacy
 /// fee path). {RPC?} — returns {chain, balance, fee, max} as amounts.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
     use num_bigint::BigInt;
     // "Id" (Account:maxSendable) or "Account" (Transaction:maxSendable).
@@ -415,6 +420,7 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
 
 /// `Account:tokenBalance` — the ERC-20 balance of an EVM account for a token
 /// contract, via eth_call balanceOf. {Token, RPC?} — decimal string base units.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -500,6 +506,7 @@ pub fn address_formats(env: &Env, params: &Value) -> ApiResult {
 
 /// `Account:allAddresses` — all used HD addresses (receive + change) plus the
 /// next clean address on each chain (Go `accountAllAddresses`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn all_addresses(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -531,6 +538,7 @@ pub fn all_addresses(env: &Env, params: &Value) -> ApiResult {
 
 /// `Account:utxos` — the account's spendable NATIVE UTXOs (Go
 /// `fetchBitcoinUTXOs`), for hosts that build/sign Bitcoin transactions.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn utxos(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -552,6 +560,7 @@ pub fn utxos(env: &Env, params: &Value) -> ApiResult {
 /// `Account:nextAddress` — the next unused HD receive/change address for a
 /// bitcoin-family account (Go `accountNextAddress`). Uses the account xpub +
 /// modchain_lookupTxoBIP32 to find the highest used index and derives the next.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn next_address(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
@@ -609,6 +618,7 @@ fn decode_b64url_32(s: &str) -> Result<[u8; 32], ApiError> {
 /// balance, and build the Asset (Key/Name/Symbol/Amount). With an optional
 /// `Currency` it is priced into fiat. This is the computed (non-persisted)
 /// native asset from Go's asset snapshot.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")

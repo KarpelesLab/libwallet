@@ -10,6 +10,7 @@ use super::{ApiError, ApiResult};
 /// wallet, derive the canonical addresses for each supported chain, and probe
 /// each chain's RPC for on-chain activity (Go `apiWalletProbeActivity`).
 /// Read-only. `Id` is the wallet id (from the object path or params).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn probe_activity(env: &Env, id: &str, params: &Value) -> ApiResult {
     let keys: Vec<crate::sign::KeyDescription> = params
         .get("Keys")

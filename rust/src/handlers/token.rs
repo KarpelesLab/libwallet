@@ -79,6 +79,8 @@ pub fn list_curated(_env: &Env, params: &Value) -> ApiResult {
     Ok(Value::Array(crate::curated::for_chain(network)))
 }
 
+// Used only by the native-only token-discovery handlers (on-chain metadata).
+#[cfg(not(target_arch = "wasm32"))]
 use crate::models::token::{
     sanitize_token_text as sanitize_text, MAX_TOKEN_DECIMALS, MAX_TOKEN_NAME_LEN,
     MAX_TOKEN_SYMBOL_LEN,
@@ -94,6 +96,7 @@ const SEL_TOTAL_SUPPLY: &str = "0x18160ddd";
 /// from chain (Go apiDiscoverToken). EVM: name/symbol/decimals/totalSupply via
 /// eth_call. Solana: getAccountInfo(jsonParsed) on the mint. Untrusted metadata
 /// (decimals) is range-checked before it is trusted.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn discover_token(env: &Env, params: &Value) -> ApiResult {
     let network = params
         .get("Network")
@@ -126,6 +129,7 @@ pub fn discover_token(env: &Env, params: &Value) -> ApiResult {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn discover_erc20(rpc: &str, address: &str) -> ApiResult {
     let name = eth_call_string(rpc, address, SEL_NAME)
         .map(|s| sanitize_text(&s, MAX_TOKEN_NAME_LEN))
@@ -161,6 +165,7 @@ fn discover_erc20(rpc: &str, address: &str) -> ApiResult {
     Ok(out)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn discover_spl(rpc: &str, address: &str) -> ApiResult {
     let resp = crate::rpc::call(rpc, "getAccountInfo", serde_json::json!([address, { "encoding": "jsonParsed" }]))
         .map_err(ApiError::internal)?;
@@ -192,6 +197,7 @@ fn discover_spl(rpc: &str, address: &str) -> ApiResult {
 /// `eth_call` and decode an ABI-encoded string result. The offset/length words
 /// are attacker-controlled, so every bound is range-checked before slicing
 /// (a bogus length would otherwise panic the handler — remote DoS).
+#[cfg(not(target_arch = "wasm32"))]
 fn eth_call_string(rpc: &str, to: &str, selector: &str) -> Result<String, ApiError> {
     let out = crate::rpc::call(rpc, "eth_call", serde_json::json!([{ "to": to, "data": selector }, "latest"]))
         .map_err(ApiError::internal)?;
@@ -222,6 +228,7 @@ fn eth_call_string(rpc: &str, to: &str, selector: &str) -> Result<String, ApiErr
     Ok(s.trim().to_owned())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn eth_call_uint256(rpc: &str, to: &str, selector: &str) -> Result<num_bigint::BigInt, ApiError> {
     let out = crate::rpc::call(rpc, "eth_call", serde_json::json!([{ "to": to, "data": selector }, "latest"]))
         .map_err(ApiError::internal)?;
