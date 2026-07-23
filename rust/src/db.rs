@@ -74,7 +74,8 @@ impl From<SqlValue> for Value {
             SqlValue::Null => Value::Null,
             SqlValue::Int(i) => Value::Integer(i),
             SqlValue::Real(r) => Value::Real(r),
-            SqlValue::Text(s) => Value::Text(s),
+            // graphitesql 0.1.x wraps text in a `Text` newtype (From<String>).
+            SqlValue::Text(s) => Value::Text(s.into()),
             SqlValue::Blob(b) => Value::Blob(b),
         }
     }
@@ -86,7 +87,8 @@ impl From<&Value> for SqlValue {
             Value::Null => SqlValue::Null,
             Value::Integer(i) => SqlValue::Int(*i),
             Value::Real(r) => SqlValue::Real(*r),
-            Value::Text(s) => SqlValue::Text(s.clone()),
+            // `Text` newtype → owned String (as_str is lossy-free for valid UTF-8).
+            Value::Text(s) => SqlValue::Text(s.as_str().to_owned()),
             Value::Blob(b) => SqlValue::Blob(b.clone()),
         }
     }
@@ -256,7 +258,7 @@ impl DbInner {
     fn config_get(&mut self, key: &str) -> Result<Option<Vec<u8>>> {
         let r = self.conn.query_params(
             r#"SELECT "Value" FROM "KvConfig" WHERE "Key" = ?1"#,
-            &params(vec![Value::Text(key.to_owned())]),
+            &params(vec![Value::Text(key.to_owned().into())]),
         )?;
         Ok(r.rows.first().and_then(|row| row.first()).and_then(as_bytes))
     }
@@ -264,7 +266,7 @@ impl DbInner {
     fn config_set(&mut self, key: &str, value: &[u8]) -> Result<()> {
         self.conn.execute_params(
             r#"INSERT OR REPLACE INTO "KvConfig" ("Key", "Value") VALUES (?1, ?2)"#,
-            &params(vec![Value::Text(key.to_owned()), Value::Blob(value.to_vec())]),
+            &params(vec![Value::Text(key.to_owned().into()), Value::Blob(value.to_vec())]),
         )?;
         Ok(())
     }
@@ -273,9 +275,9 @@ impl DbInner {
         self.conn.execute_params(
             r#"INSERT OR REPLACE INTO "Cache" ("Key", "Value", "ExpiresAt") VALUES (?1, ?2, ?3)"#,
             &params(vec![
-                Value::Text(key.to_owned()),
+                Value::Text(key.to_owned().into()),
                 Value::Blob(value.to_vec()),
-                Value::Text(ttl_text(ttl)),
+                Value::Text(ttl_text(ttl).into()),
             ]),
         )?;
         Ok(())
@@ -284,7 +286,7 @@ impl DbInner {
     fn cache_load(&mut self, key: &str) -> Result<Option<Vec<u8>>> {
         let r = self.conn.query_params(
             r#"SELECT "Value", "ExpiresAt" FROM "Cache" WHERE "Key" = ?1"#,
-            &params(vec![Value::Text(key.to_owned())]),
+            &params(vec![Value::Text(key.to_owned().into())]),
         )?;
         let Some(row) = r.rows.first() else { return Ok(None) };
         if let Some(exp) = row.get(1).and_then(as_text) {
@@ -299,7 +301,7 @@ impl DbInner {
         for key in keys {
             self.conn.execute_params(
                 r#"DELETE FROM "Cache" WHERE "Key" = ?1"#,
-                &params(vec![Value::Text(key.clone())]),
+                &params(vec![Value::Text(key.clone().into())]),
             )?;
         }
         Ok(())
@@ -308,7 +310,7 @@ impl DbInner {
     fn cache_cleanup(&mut self) -> Result<usize> {
         let n = self.conn.execute_params(
             r#"DELETE FROM "Cache" WHERE "ExpiresAt" < ?1"#,
-            &params(vec![Value::Text(now_text())]),
+            &params(vec![Value::Text(now_text().into())]),
         )?;
         Ok(n)
     }
@@ -316,7 +318,7 @@ impl DbInner {
     fn current_get(&mut self, key: &str) -> Result<Option<String>> {
         let r = self.conn.query_params(
             r#"SELECT "Value" FROM "CurrentItem" WHERE "Key" = ?1"#,
-            &params(vec![Value::Text(key.to_owned())]),
+            &params(vec![Value::Text(key.to_owned().into())]),
         )?;
         Ok(r.rows.first().and_then(|row| row.first()).and_then(as_text))
     }
@@ -327,7 +329,7 @@ impl DbInner {
         // Mirrors the Go currentItem.BeforeSave hook.
         let existing = self.conn.query_params(
             r#"SELECT "Created" FROM "CurrentItem" WHERE "Key" = ?1"#,
-            &params(vec![Value::Text(key.to_owned())]),
+            &params(vec![Value::Text(key.to_owned().into())]),
         )?;
         let created = existing
             .rows
@@ -339,10 +341,10 @@ impl DbInner {
         self.conn.execute_params(
             r#"INSERT OR REPLACE INTO "CurrentItem" ("Key", "Value", "Created", "Updated") VALUES (?1, ?2, ?3, ?4)"#,
             &params(vec![
-                Value::Text(key.to_owned()),
-                Value::Text(value.to_owned()),
-                Value::Text(created),
-                Value::Text(now),
+                Value::Text(key.to_owned().into()),
+                Value::Text(value.to_owned().into()),
+                Value::Text(created.into()),
+                Value::Text(now.into()),
             ]),
         )?;
         Ok(())
@@ -391,14 +393,14 @@ fn is_expired(expires: &str) -> bool {
 fn as_bytes(v: &Value) -> Option<Vec<u8>> {
     match v {
         Value::Blob(b) => Some(b.clone()),
-        Value::Text(s) => Some(s.clone().into_bytes()),
+        Value::Text(s) => Some(s.as_bytes().to_vec()),
         _ => None,
     }
 }
 
 fn as_text(v: &Value) -> Option<String> {
     match v {
-        Value::Text(s) => Some(s.clone()),
+        Value::Text(s) => Some(s.as_str().to_owned()),
         Value::Blob(b) => String::from_utf8(b.clone()).ok(),
         _ => None,
     }

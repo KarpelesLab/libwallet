@@ -415,9 +415,9 @@ dependencies = [
 
 [[package]]
 name = "graphitesql"
-version = "0.0.13"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71616cffe43d3b94339cf72eab2788309bb1f6c610094ce7855438975a004d36"
+checksum = "a062c2a8f9ec58e9e7a03ccf9a7698f0143bbd31be056a618b9a0bab2f2bc4fc"
 
 [[package]]
 name = "half"

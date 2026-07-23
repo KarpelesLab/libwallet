@@ -38,7 +38,7 @@ outscript = "0.1.2"
 # Native-only dependencies — DB, networking, threads, TSS. Excluded from the
 # browser build, where none of these run (networking is done in JS via fetch).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-graphitesql = "0.0.13"
+graphitesql = "0.1.6"
 xuid-rs = "0.1.0"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 uuid = { version = "1", features = ["v4"] }
