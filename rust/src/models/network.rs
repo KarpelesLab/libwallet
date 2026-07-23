@@ -9,6 +9,7 @@
 
 use std::net::IpAddr;
 
+#[cfg(not(target_arch = "wasm32"))]
 use ethrpc_rs::chains;
 use serde_json::{json, Map, Value};
 use xuid::Xuid;
@@ -61,17 +62,42 @@ impl Network {
         }
         match self.kind.as_str() {
             "solana" => "https://explorer.solana.com".to_owned(),
-            "evm" => self
-                .chain_info()
-                .and_then(|i| i.explorer_url())
-                .unwrap_or("")
-                .to_owned(),
+            "evm" => self.evm_explorer().unwrap_or_default(),
             _ => String::new(),
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn chain_info(&self) -> Option<&'static chains::ChainInfo> {
         parse_chain_id(&self.chain_id).and_then(chains::get)
+    }
+
+    // EVM native-currency metadata comes from ethrpc's built-in chain registry
+    // on native; the browser has no such registry, so it falls back to the
+    // Network row's stored fields (seeded at network creation).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn evm_native_symbol(&self) -> Option<String> {
+        self.chain_info().and_then(|i| i.native_currency.as_ref()).map(|c| c.symbol.clone())
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn evm_native_symbol(&self) -> Option<String> {
+        (!self.currency_symbol.is_empty()).then(|| self.currency_symbol.clone())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn evm_native_decimals(&self) -> Option<i64> {
+        self.chain_info().and_then(|i| i.native_currency.as_ref()).map(|c| c.decimals as i64)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn evm_native_decimals(&self) -> Option<i64> {
+        None // native_decimals() falls back to 18
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn evm_explorer(&self) -> Option<String> {
+        self.chain_info().and_then(|i| i.explorer_url()).map(str::to_owned)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn evm_explorer(&self) -> Option<String> {
+        (!self.block_explorer.is_empty()).then(|| self.block_explorer.clone())
     }
 
     /// The RPC URL to dial for this network (port of the static cases of Go
@@ -107,9 +133,7 @@ impl Network {
     pub fn native_symbol(&self) -> Result<String> {
         match self.kind.as_str() {
             "evm" => self
-                .chain_info()
-                .and_then(|i| i.native_currency.as_ref())
-                .map(|c| c.symbol.clone())
+                .evm_native_symbol()
                 .ok_or_else(|| crate::Error::Env(format!("no chain info for evm {}", self.chain_id))),
             "bitcoin" => match self.chain_id.as_str() {
                 "bitcoin" => Ok("BTC".into()),
@@ -131,11 +155,7 @@ impl Network {
             return self.currency_decimals;
         }
         match self.kind.as_str() {
-            "evm" => self
-                .chain_info()
-                .and_then(|i| i.native_currency.as_ref())
-                .map(|c| c.decimals as i64)
-                .unwrap_or(18),
+            "evm" => self.evm_native_decimals().unwrap_or(18),
             "solana" => 9,
             _ => 8, // bitcoin family (satoshi)
         }
@@ -146,6 +166,7 @@ impl Network {
     /// EVM eth_getBalance (wei / decimals), Solana getBalance minus the
     /// rent-exempt reserve (lamports / 9), Bitcoin summed NATIVE UTXOs
     /// (satoshi / 8). `rpc` is a dialable endpoint; `address` the account.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn native_amount(&self, rpc: &str, address: &str) -> Result<crate::Amount> {
         use num_bigint::BigInt;
         match self.kind.as_str() {
@@ -187,6 +208,7 @@ impl Network {
     /// `<type>.<chainId>.NATIVE`, and label it from the chain registry (EVM) or
     /// the network/native symbol (Bitcoin/Solana). Computed, not persisted, so
     /// the Id is left empty.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn native_asset(&self, rpc: &str, address: &str) -> Result<crate::models::asset::Asset> {
         let amount = self.native_amount(rpc, address)?;
         let symbol = self.native_symbol()?;
@@ -224,7 +246,7 @@ impl Network {
     /// persisted, then fills chain-derived defaults. Unknown EVM chain ids are
     /// accepted (create succeeds) but leave no defaults filled — matching Go's
     /// "ignore fetch failed but do not input anything either".
-    pub fn check(&mut self) -> Result<()> {
+        pub fn check(&mut self) -> Result<()> {
         validate_network_rpc(&self.rpc)?;
         match self.kind.as_str() {
             "evm" => {} // fall through to the chain-registry fill below
@@ -292,27 +314,32 @@ impl Network {
             other => return Err(crate::Error::Env(format!("invalid network type {other}"))),
         }
         // EVM: fill from the chain registry when the chain is known; an unknown
-        // id leaves the network as-is (Go ignores the GetChainInfo error).
-        let info = match self.chain_info() {
-            Some(i) => i,
-            None => return Ok(()),
-        };
-        if parse_chain_id(&self.chain_id) == Some(137) && self.currency_symbol == "MATIC" {
-            self.currency_symbol = "POL".to_owned();
-        }
-        if self.name.is_empty() {
-            self.name = info.name.clone();
-        }
-        if self.rpc.is_empty() {
-            self.rpc = "auto".to_owned();
-        }
-        if self.currency_symbol.is_empty() {
-            if let Some(nc) = info.native_currency.as_ref() {
-                self.currency_symbol = nc.symbol.clone();
+        // id leaves the network as-is (Go ignores the GetChainInfo error). The
+        // ethrpc chain registry is native-only — the browser keeps the row's
+        // stored fields as-is.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let info = match self.chain_info() {
+                Some(i) => i,
+                None => return Ok(()),
+            };
+            if parse_chain_id(&self.chain_id) == Some(137) && self.currency_symbol == "MATIC" {
+                self.currency_symbol = "POL".to_owned();
             }
-        }
-        if self.block_explorer.is_empty() {
-            self.block_explorer = "auto".to_owned();
+            if self.name.is_empty() {
+                self.name = info.name.clone();
+            }
+            if self.rpc.is_empty() {
+                self.rpc = "auto".to_owned();
+            }
+            if self.currency_symbol.is_empty() {
+                if let Some(nc) = info.native_currency.as_ref() {
+                    self.currency_symbol = nc.symbol.clone();
+                }
+            }
+            if self.block_explorer.is_empty() {
+                self.block_explorer = "auto".to_owned();
+            }
         }
         Ok(())
     }
@@ -332,6 +359,7 @@ impl Network {
         m.insert("Created".into(), json!(self.created));
         m.insert("Updated".into(), json!(self.updated));
         m.insert("TxHistoryProvider".into(), json!(self.tx_history_provider()));
+        #[cfg(not(target_arch = "wasm32"))]
         if self.kind == "evm" {
             let info = self.chain_info().map(chain_info_json).unwrap_or(Value::Null);
             m.insert("EVM_Info".into(), info);
@@ -678,6 +706,7 @@ fn row_to_network(row: &[SqlValue]) -> Network {
 /// Build the EVM_Info object from a chain registry entry. ChainInfo only
 /// derives Deserialize in ethrpc-rs, so we assemble the JSON from its public
 /// fields (the subset the host uses: name, native currency, explorers).
+#[cfg(not(target_arch = "wasm32"))]
 fn chain_info_json(i: &chains::ChainInfo) -> Value {
     let native = i
         .native_currency

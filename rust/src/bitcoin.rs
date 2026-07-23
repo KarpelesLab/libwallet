@@ -196,6 +196,7 @@ pub struct HdAddress {
 /// Derive addresses `0..=lastI+1` on the receive (`change=false`) or change
 /// chain (Go `scanChain`): `modchain_lookupTxoBIP32` gives `lastI` (the highest
 /// used index), and each index is derived + encoded, the last marked `clean`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn scan_chain(
     rpc: &str,
     xpub: &str,
@@ -227,6 +228,7 @@ pub fn scan_chain(
 /// found via `modchain_lookupTxoBIP32` (returns the highest used index `lastI`)
 /// and derived at `m/<chain>/<lastI+1>` below the account xpub. Port of Go
 /// `accountNextAddress`. Returns `(address, index, path)`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn next_address(
     rpc: &str,
     xpub: &str,
@@ -266,6 +268,7 @@ pub struct DiscoveredUtxo {
 /// `fetchBitcoinUTXOs`). Skips entries modchain marked spent. Amounts decode via
 /// the BtcAmount rules. Does not apply the in-memory just-spent tracker (that
 /// lands with the auto-input tx builder).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
     let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([xpub]))?;
     let assets = raw
@@ -307,6 +310,7 @@ pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
 /// The maximum sendable satoshi for `xpub`: sum all UTXOs and subtract the fee
 /// to spend them all into a single output (Go `maxSendableBitcoin`, one output,
 /// no change). Returns `(total, fee, max)` in satoshi.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u64, u64)> {
     let utxos = list_utxos(rpc, xpub)?;
     let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
@@ -319,6 +323,7 @@ pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u
 
 /// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
 /// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
     let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([lookup]))?;
     let assets = raw
@@ -594,6 +599,7 @@ fn combine_tweak(account_il: &BigInt, child_tweak: &[u8; 32]) -> [u8; 32] {
 /// every signature. `fee_rate_sat_vb` is the pinned rate (or a caller default).
 /// Returns the raw signed transaction bytes.
 #[allow(clippy::too_many_arguments)]
+#[cfg(not(target_arch = "wasm32"))]
 pub fn build_and_sign_auto(
     env: &Env,
     account_id: &str,
@@ -738,6 +744,7 @@ pub fn build_and_sign_auto(
 /// each input's derivation path + amount + script, sign every input under its
 /// own derived key, and return the signed raw bytes. Every input must be a UTXO
 /// owned by `account_id`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn sign_raw_tx(
     env: &Env,
     account_id: &str,

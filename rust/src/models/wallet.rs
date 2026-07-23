@@ -749,6 +749,7 @@ pub fn import_mnemonic(
 /// Build the device-transfer payload for `wallet_id` (Go `buildTransferPayload`):
 /// `{v, wallet: <backup JSON>, device_shares}`. The wallet blob is the same
 /// backup shape `Wallet:restore` consumes, so the import side reuses restore.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_json::Value) -> Result<Vec<u8>> {
     let w = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
     let entry = backup_entry(&w)?;
@@ -932,6 +933,7 @@ fn b64url(b: &[u8]) -> String {
 /// Seal a share for one KeyDescription → `(WalletKey.data, WalletKey.key)`.
 /// Encrypt/Plain are local; Remote seals to the wdrone fleet keys and uploads to
 /// the WalletSign backend (Go `WalletKey.encrypt`). Shared by create + reshare.
+#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
 pub(crate) fn seal_share_full(
     env: &Env,
     curve_out: &str,
@@ -947,6 +949,13 @@ pub(crate) fn seal_share_full(
             Ok((sealed, pkix))
         }
         Recipient::Plain => Ok((keystore::wrap_plain(share).map_err(|e| Error::Env(e.to_string()))?, String::new())),
+        // RemoteKey shares upload to the backend — networking, so browser-only
+        // wallets can't use them (local Password/StoreKey/Plain shares work).
+        #[cfg(target_arch = "wasm32")]
+        Recipient::Remote => Err(Error::Env(
+            "RemoteKey shares are not supported in the browser build; use local shares".into(),
+        )),
+        #[cfg(not(target_arch = "wasm32"))]
         Recipient::Remote => {
             let base = crate::rest::DEFAULT_HOST;
             let client_id = env
@@ -986,6 +995,7 @@ pub(crate) fn seal_share_full(
 }
 
 /// The `walletinfo:clientId` header value (Go `withClientID`), if set.
+#[cfg(not(target_arch = "wasm32"))]
 fn client_id(env: &Env) -> Option<String> {
     env.config_get("walletinfo:clientId")
         .ok()
@@ -998,6 +1008,7 @@ fn client_id(env: &Env) -> Option<String> {
 /// the tenacious critical retry (Go `WalletKey.encrypt` / `pushRemoteShare`).
 /// Mirrors [`crate::walletsign::upload_generated_key`]'s params but routes the
 /// POST through [`crate::reshare::rest_do_retry_critical`].
+#[cfg(not(target_arch = "wasm32"))]
 fn upload_remote_share_critical(
     base: &str,
     client_id: Option<&str>,
@@ -1042,6 +1053,7 @@ pub fn remote_share_wire_tags<'a>(schema: &str, wallet_curve: &'a str) -> Result
 /// the PERSISTED `Schema` + wallet curve, because a restored wallet has no
 /// in-memory share (the RemoteKey blob is not client-decryptable). Sets
 /// `wk.key = session_key` on success.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn push_remote_share(env: &Env, wallet: &Wallet, wk: &mut WalletKey, session_key: &str) -> Result<()> {
     if wk.kind != "RemoteKey" {
         return Err(Error::Env(format!("pushRemoteShare: key {} is {:?}, not a RemoteKey", wk.id, wk.kind)));
@@ -1059,6 +1071,7 @@ pub fn push_remote_share(env: &Env, wallet: &Wallet, wk: &mut WalletKey, session
 /// a fresh, validated crws session, restoring a server-side share desynced by an
 /// abandoned reshare upload. Persists the refreshed session key and returns the
 /// updated wallet.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn repair_remote_key(env: &Env, wallet_id: &str, session_key: &str) -> Result<Wallet> {
     if session_key.is_empty() {
         return Err(Error::Env("Key (validated RemoteKey session) is required".into()));

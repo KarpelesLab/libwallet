@@ -39,15 +39,17 @@ outscript = "0.1.2"
 # and chrono's `wasmbind` are added on the wasm target below.
 graphitesql = "0.1.6"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
-
-# Native-only dependencies — networking, threads, TSS, and the app layers that
-# still depend on them. Being migrated to the browser build incrementally.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# ID/UUID types and the key-share AEAD (bottlers) back the object models and
+# keystore — pure Rust, compile for wasm (uuid gets its `js` rng below).
 xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
-ethrpc-rs = "0.3.0"
 bottlers = "0"
 tsslib = "0.2.5"
+
+# Native-only dependencies — networking (ethrpc pulls tokio), TSS, and the app
+# layers that still depend on them. Being migrated to the browser incrementally.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ethrpc-rs = "0.3.0"
 rsurl = "0.1.5"
 tungstenite = "0.20"
 spotlib = "0.1.0"
@@ -61,6 +63,7 @@ wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 graphitesql = { version = "0.1.6", features = ["wasm"] }
+uuid = { version = "1", features = ["js"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -32,6 +32,10 @@ mod db;
 // approval machinery inside is gated native-only.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod env;
+// Object models (wallet/account/transaction/network/token/…): mostly DB CRUD
+// (wasm-OK); the per-model networking/TSS methods are gated native-only.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub mod models;
 
 pub use db::{now_rfc3339, SqlValue};
 pub use env::Env;
@@ -45,21 +49,21 @@ pub mod wasm;
 // Everything below needs the DB (graphitesql), networking (rsurl / tungstenite),
 // OS threads, or the TSS stack — none of which run in the browser. The C-ABI FFI
 // boundary at the bottom of this file is likewise native-only.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod amount;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod timeid;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod keystore;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod sign;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod evm;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod eip712;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod solana_spl;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod bitcoin;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rpc;
@@ -101,10 +105,8 @@ pub mod txhistory;
 pub mod names;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod contract;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod tss;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod models;
 #[cfg(not(target_arch = "wasm32"))]
 mod dispatch;
 #[cfg(not(target_arch = "wasm32"))]
@@ -114,7 +116,7 @@ mod handlers;
 #[cfg(not(target_arch = "wasm32"))]
 mod response;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 pub use amount::{Amount, AmountError};
 #[cfg(not(target_arch = "wasm32"))]
 pub use timeid::{ParseTimeIdError, TimeId};
