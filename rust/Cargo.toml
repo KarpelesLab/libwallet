@@ -34,13 +34,16 @@ bs58 = "0.5"
 # wasm and no dependency patching is needed.
 purecrypto = "0.6.28"
 outscript = "0.1.2"
-
-# Native-only dependencies — DB, networking, threads, TSS. Excluded from the
-# browser build, where none of these run (networking is done in JS via fetch).
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The DB (pure-Rust SQLite, wasm-capable in-memory VFS) and time are common —
+# the browser build persists to an in-memory DB. graphitesql's `wasm` feature
+# and chrono's `wasmbind` are added on the wasm target below.
 graphitesql = "0.1.6"
-xuid-rs = "0.1.0"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# Native-only dependencies — networking, threads, TSS, and the app layers that
+# still depend on them. Being migrated to the browser build incrementally.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
 ethrpc-rs = "0.3.0"
 bottlers = "0"
@@ -51,9 +54,13 @@ spotlib = "0.1.0"
 
 # Browser (wasm32) only — the wasm-bindgen boundary. Entropy comes from
 # purecrypto's wasm OsRng (host import), so no getrandom js backend is needed.
+# chrono needs `wasmbind` for Utc::now() via js-sys; graphitesql's `wasm`
+# feature selects its browser VFS.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
+chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
+graphitesql = { version = "0.1.6", features = ["wasm"] }
 
 [dev-dependencies]
 tempfile = "3"

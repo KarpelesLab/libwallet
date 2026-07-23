@@ -15,8 +15,11 @@
 //! Reads parse flexibly (any fractional-second width); writes emit fixed
 //! nanosecond precision with a `Z` suffix.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{mpsc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::thread;
 use std::time::Duration;
 
@@ -24,7 +27,11 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use graphitesql::exec::eval::Params;
 use graphitesql::{Connection, Value};
 
-use crate::error::{Error, Result};
+use crate::error::Result;
+// `Error` is only named in the native actor path (thread/channel errors); the
+// wasm path reaches errors via `?`/`From`.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::error::Error;
 
 /// Current-era table definitions, matching the Go struct `sql:` tags exactly.
 const SCHEMA: &str = concat!(
@@ -94,13 +101,18 @@ impl From<&Value> for SqlValue {
     }
 }
 
+// ── Native: the connection lives on a dedicated actor thread (it is !Send, and
+// this serializes access across the FFI request-worker threads). ──────────────
+#[cfg(not(target_arch = "wasm32"))]
 type Job = Box<dyn FnOnce(&mut DbInner) + Send>;
 
 /// Handle to the database actor. Cloneable-free: share via `Arc`.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Db {
     sender: Mutex<mpsc::Sender<Job>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Db {
     pub fn open(path: &str) -> Result<Db> {
         let path = path.to_owned();
@@ -163,7 +175,35 @@ impl Db {
             .map_err(|_| Error::Env("db thread gone".into()))?;
         rx.recv().map_err(|_| Error::Env("db reply lost".into()))?
     }
+}
 
+// ── wasm: single-threaded. The browser has no threads, so the connection is
+// held directly behind a RefCell and accessed inline. `open` ignores the path
+// (there is no ambient filesystem) and uses the in-memory VFS; persistence is
+// the host's concern. ─────────────────────────────────────────────────────────
+#[cfg(target_arch = "wasm32")]
+pub struct Db {
+    inner: core::cell::RefCell<DbInner>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Db {
+    pub fn open(_path: &str) -> Result<Db> {
+        Db::open_memory()
+    }
+
+    pub fn open_memory() -> Result<Db> {
+        let inner = DbInner::new(Connection::open_memory()?)?;
+        Ok(Db { inner: core::cell::RefCell::new(inner) })
+    }
+
+    /// Run `f` against the connection inline (no actor thread on wasm).
+    fn call<R>(&self, f: impl FnOnce(&mut DbInner) -> Result<R>) -> Result<R> {
+        f(&mut self.inner.borrow_mut())
+    }
+}
+
+impl Db {
     // --- Generic query layer (for model crates) ---------------------------
 
     /// Ensure a table exists (runs `CREATE TABLE IF NOT EXISTS ...` DDL).

@@ -2,8 +2,6 @@ use std::fmt;
 
 #[derive(Debug)]
 pub enum Error {
-    // The SQLite backend is native-only; the wasm build has no DB.
-    #[cfg(not(target_arch = "wasm32"))]
     Sql(graphitesql::Error),
     Io(std::io::Error),
     /// Environment/config problem (bad data dir, non-UTF8 path, ...).
@@ -13,7 +11,6 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            #[cfg(not(target_arch = "wasm32"))]
             Error::Sql(e) => write!(f, "sql error: {e:?}"),
             Error::Io(e) => write!(f, "io error: {e}"),
             Error::Env(s) => write!(f, "env error: {s}"),
@@ -23,7 +20,6 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-#[cfg(not(target_arch = "wasm32"))]
 impl From<graphitesql::Error> for Error {
     fn from(e: graphitesql::Error) -> Self {
         Error::Sql(e)

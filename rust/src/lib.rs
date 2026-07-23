@@ -23,7 +23,13 @@ pub mod bip39;
 pub mod hdderive;
 pub mod solana;
 pub mod walletcore;
+// SQLite persistence — graphitesql is pure Rust with a wasm in-memory VFS.
+// (Compiled for wasm now; its consumers, env/models, migrate in later steps —
+// hence the transitional dead-code allowance on the browser target.)
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod db;
 
+pub use db::{now_rfc3339, SqlValue};
 pub use error::{Error, Result};
 
 // wasm-bindgen bindings for the browser wallet (thin wrappers over walletcore).
@@ -34,8 +40,6 @@ pub mod wasm;
 // Everything below needs the DB (graphitesql), networking (rsurl / tungstenite),
 // OS threads, or the TSS stack — none of which run in the browser. The C-ABI FFI
 // boundary at the bottom of this file is likewise native-only.
-#[cfg(not(target_arch = "wasm32"))]
-mod db;
 #[cfg(not(target_arch = "wasm32"))]
 mod env;
 #[cfg(not(target_arch = "wasm32"))]
@@ -109,8 +113,6 @@ mod response;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use amount::{Amount, AmountError};
-#[cfg(not(target_arch = "wasm32"))]
-pub use db::{now_rfc3339, SqlValue};
 #[cfg(not(target_arch = "wasm32"))]
 pub use env::Env;
 #[cfg(not(target_arch = "wasm32"))]
