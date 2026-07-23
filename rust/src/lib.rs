@@ -24,12 +24,17 @@ pub mod hdderive;
 pub mod solana;
 pub mod walletcore;
 // SQLite persistence — graphitesql is pure Rust with a wasm in-memory VFS.
-// (Compiled for wasm now; its consumers, env/models, migrate in later steps —
-// hence the transitional dead-code allowance on the browser target.)
+// (Compiled for wasm now; its consumers migrate in later steps — hence the
+// transitional dead-code allowance on the browser target.)
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 mod db;
+// Environment: DB + config/cache/events are common; the Spot/WalletConnect/
+// approval machinery inside is gated native-only.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+mod env;
 
 pub use db::{now_rfc3339, SqlValue};
+pub use env::Env;
 pub use error::{Error, Result};
 
 // wasm-bindgen bindings for the browser wallet (thin wrappers over walletcore).
@@ -40,8 +45,6 @@ pub mod wasm;
 // Everything below needs the DB (graphitesql), networking (rsurl / tungstenite),
 // OS threads, or the TSS stack — none of which run in the browser. The C-ABI FFI
 // boundary at the bottom of this file is likewise native-only.
-#[cfg(not(target_arch = "wasm32"))]
-mod env;
 #[cfg(not(target_arch = "wasm32"))]
 mod amount;
 #[cfg(not(target_arch = "wasm32"))]
@@ -113,8 +116,6 @@ mod response;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use amount::{Amount, AmountError};
-#[cfg(not(target_arch = "wasm32"))]
-pub use env::Env;
 #[cfg(not(target_arch = "wasm32"))]
 pub use timeid::{ParseTimeIdError, TimeId};
 

@@ -3,14 +3,24 @@
 //! Phase 1 owns the database and configuration lifecycle. The spotlib client,
 //! emitter hub, balance poller and asset cache land in later phases.
 
-use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Weak};
+use std::time::Duration;
 
 use crate::db::{Db, SqlValue};
-use crate::error::{Error, Result};
+use crate::error::Result;
+// `Error` is constructed only in the native filesystem/transport paths.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::error::Error;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::walletconnect::RelayTransport;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::wcmanager::WcManager;
 
 /// A host event sink — receives server-pushed event JSON (the Rust analogue of
@@ -19,10 +29,12 @@ pub type EventSink = Box<dyn Fn(&str) + Send + Sync>;
 
 /// The WalletConnect manager over a boxed relay transport (stored in the Env so
 /// the connection persists across FFI requests).
+#[cfg(not(target_arch = "wasm32"))]
 type BoxedWcManager = WcManager<Box<dyn RelayTransport + Send>>;
 
 /// The running WalletConnect connection: the shared manager plus its relay
 /// reader thread and stop flag.
+#[cfg(not(target_arch = "wasm32"))]
 struct WcRuntime {
     manager: Arc<Mutex<BoxedWcManager>>,
     stop: Arc<AtomicBool>,
@@ -33,22 +45,30 @@ pub struct Env {
     pub data_dir: PathBuf,
     db: Db,
     event_sink: Mutex<Option<EventSink>>,
+    // The networking/cross-device machinery below is native-only. The browser
+    // build runs single-threaded with no Spot/WalletConnect transport (and its
+    // approval flow is driven directly by the user, not a blocking channel).
+    #[cfg(not(target_arch = "wasm32"))]
     wc: Mutex<Option<WcRuntime>>,
     /// Waiters for pending user-approval requests, keyed by request id. `run`
     /// registers a sender here and blocks on the receiver; `Request:approve`/
     /// `reject` looks it up and delivers the terminal status.
+    #[cfg(not(target_arch = "wasm32"))]
     request_waiters: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<String>>>,
     /// The Spot network client (lazily started on first use), for cross-device
     /// ceremonies + `Spot:status`. Closed on Destroy.
+    #[cfg(not(target_arch = "wasm32"))]
     spot: Mutex<Option<std::sync::Arc<spotlib::Client>>>,
     /// Active device-transfer export sessions keyed by sid (the source side of
     /// Wallet:exportToDevice — the `transfer` Spot handler resolves them).
+    #[cfg(not(target_arch = "wasm32"))]
     transfer_sessions: Mutex<std::collections::HashMap<String, Arc<TransferSession>>>,
 }
 
 /// One in-flight `Wallet:exportToDevice` session: the pairing token, the wallet
 /// being exported, and a channel the host's confirm/cancel delivers into (the
 /// `transfer` Spot handler blocks on it before sealing the payload).
+#[cfg(not(target_arch = "wasm32"))]
 struct TransferSession {
     token: Vec<u8>,
     wallet_id: String,
@@ -60,6 +80,8 @@ struct TransferSession {
 impl Env {
     /// Initialize the environment rooted at `data_dir`: ensure the directory
     /// exists, open `sql.db`, create the base tables, and seed initial config.
+    /// Native-only — the browser build has no filesystem; it uses `init_memory`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn init(data_dir: &str) -> Result<Env> {
         if data_dir.is_empty() {
             return Err(Error::Env("data directory must not be empty".into()));
@@ -86,21 +108,33 @@ impl Env {
         Ok(env)
     }
 
-    /// In-memory environment for tests (mirrors Go `InitTempEnv`).
+    /// In-memory environment (mirrors Go `InitTempEnv`). The browser build uses
+    /// this as its only `Env` constructor (in-memory DB; persistence is the
+    /// host's concern).
     pub fn init_memory() -> Result<Env> {
         let env = Env {
             data_dir: PathBuf::new(),
             db: Db::open_memory()?,
             event_sink: Mutex::new(None),
+            #[cfg(not(target_arch = "wasm32"))]
             wc: Mutex::new(None),
+            #[cfg(not(target_arch = "wasm32"))]
             request_waiters: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(not(target_arch = "wasm32"))]
             spot: Mutex::new(None),
+            #[cfg(not(target_arch = "wasm32"))]
             transfer_sessions: Mutex::new(std::collections::HashMap::new()),
         };
         env.init_config()?;
         Ok(env)
     }
+}
 
+// ── Native-only: cross-device (Spot), WalletConnect, and the blocking
+// approval/transfer machinery — none of which exist in the single-threaded,
+// transport-less browser build. ─────────────────────────────────────────────
+#[cfg(not(target_arch = "wasm32"))]
+impl Env {
     /// Register a waiter for a pending approval request and return the receiver
     /// to block on. A pre-existing waiter for the same id is dropped (its
     /// receiver then sees a disconnect, matching Go's channel-close semantics).
@@ -273,7 +307,9 @@ impl Env {
     pub fn wc_manager(&self) -> Option<Arc<Mutex<BoxedWcManager>>> {
         self.wc.lock().unwrap().as_ref().map(|rt| rt.manager.clone())
     }
+}
 
+impl Env {
     /// Register (or, with None, clear) the host event sink.
     pub fn set_event_sink(&self, sink: Option<EventSink>) {
         *self.event_sink.lock().unwrap() = sink;
@@ -349,6 +385,7 @@ impl Env {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn ensure_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
         if !dir.is_dir() {
@@ -361,12 +398,15 @@ fn ensure_dir(dir: &Path) -> Result<()> {
 }
 
 /// 16-byte TimeId for the current instant: `Unix(u64 BE) | Nano(u32 BE) |
-/// Index(u32 BE)`, matching `wltobj.NewTimeId().Bytes()`.
+/// Index(u32 BE)`, matching `wltobj.NewTimeId().Bytes()`. Uses chrono so the
+/// clock works on wasm (js Date via `wasmbind`) as well as native.
 fn time_id_now_bytes() -> Vec<u8> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = chrono::Utc::now();
+    let secs = now.timestamp().max(0) as u64;
+    let nanos = now.timestamp_subsec_nanos();
     let mut b = Vec::with_capacity(16);
-    b.extend_from_slice(&now.as_secs().to_be_bytes()); // Unix, u64
-    b.extend_from_slice(&now.subsec_nanos().to_be_bytes()); // Nano, u32
+    b.extend_from_slice(&secs.to_be_bytes()); // Unix, u64
+    b.extend_from_slice(&nanos.to_be_bytes()); // Nano, u32
     b.extend_from_slice(&0u32.to_be_bytes()); // Index, u32
     b
 }
