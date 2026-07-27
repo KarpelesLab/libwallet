@@ -412,7 +412,8 @@ async function onSendSubmit() {
   btn.disabled = true; btn.textContent = 'Preparing…';
   try {
     let prepared;
-    if (currentSendChain === 'evm')          prepared = await prepareEvm(to, amount);
+    if (session.mpc)                         prepared = await prepareMpc(currentSendChain, to, amount);
+    else if (currentSendChain === 'evm')     prepared = await prepareEvm(to, amount);
     else if (currentSendChain === 'solana')  prepared = await prepareSolana(to, amount);
     else                                     prepared = await prepareBitcoin(to, amount);
     confirmSend(prepared);
@@ -442,6 +443,66 @@ async function signChainTx(chain, mpcTx, localSign) {
     Id: acct.id, Transaction: mpcTx, Keys: keys
   });
   return r.raw ?? r.Raw;
+}
+
+function validateSendAddress(chain, to) {
+  if (chain === 'evm' && !/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('That is not a valid EVM address.');
+  if (chain === 'solana' && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) throw new Error('That is not a valid Solana address.');
+}
+
+function explorerUrl(chain, id) {
+  if (chain === 'evm') return evmChain.explorer + id;
+  if (chain === 'solana') return SOLANA_EXPLORER + id;
+  return BTC_EXPLORER + id;
+}
+
+// MPC send: libwallet builds, signs (committee), and broadcasts via
+// Account:signAndSendTransaction — the browser only supplies recipient + amount
+// and the committee Keys (biometric in the confirm click). No client-side chain
+// RPC: nonce/gas/EIP-1559 fees (EVM), blockhash (Solana), and UTXO discovery
+// (Bitcoin) all happen in Rust. Preview is a best-effort Transaction:simulate.
+async function prepareMpc(chain, to, amount) {
+  validateSendAddress(chain, to);
+  const acct = session.accounts?.[chain];
+  if (!acct) throw new Error(`No account for ${chain}.`);
+  const base = toBaseUnits(amount, DECIMALS[chain]);
+  const mpcTx = chain === 'bitcoin'
+    ? { To: to, Amount: Number(base) }
+    : { to, value: base.toString() };
+
+  const rows = [
+    ['Network', CHAIN_META[chain].name],
+    ['Amount', `${amount} ${SYMBOL[chain]}`],
+    ['To', short(to, 12, 10)],
+    ['Network fee', 'computed at send'],
+  ];
+  // Best-effort preview (revert check + gas estimate). EVM simulates from the
+  // call; Solana/Bitcoin need a built tx so their preview is skipped here.
+  if (chain === 'evm') {
+    try {
+      const sim = await backendRequest('Transaction:simulate', 'POST', {
+        Id: acct.id,
+        Transaction: { type: 'evm', to, from: acct.address, value: base.toString() },
+      });
+      if (sim.willRevert) rows.push(['⚠ Warning', sim.revertReason || 'transaction may revert']);
+      if (sim.gasEstimate) rows.push(['Gas estimate', String(sim.gasEstimate)]);
+    } catch { /* preview is best-effort */ }
+  }
+
+  return {
+    chain, to, amount, rows,
+    broadcast: async () => {
+      // Runs in the confirm-modal click so the committee biometric inside
+      // mpcCommitteeKeys has transient activation.
+      const wallet = chain === 'solana' ? backend.walletEd : backend.wallet;
+      const keys = await mpcCommitteeKeys(wallet);
+      const r = await backendRequest('Account:signAndSendTransaction', 'POST', {
+        Id: acct.id, Transaction: mpcTx, Keys: keys,
+      });
+      const id = r.hash ?? r.txid ?? r.signature ?? r.Hash ?? r.Txid ?? r.Signature;
+      return { id, url: explorerUrl(chain, id) };
+    },
+  };
 }
 
 async function prepareEvm(to, amount) {
