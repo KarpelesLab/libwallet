@@ -208,15 +208,10 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
 
+    // Every chain goes through the shared async impl (block_on here, awaited on
+    // wasm) so the browser drives sends with no client-side RPC.
     match account.kind.as_str() {
-        // EVM + Solana go through the shared async impl (block_on here, awaited on
-        // wasm) so the browser drives them with no client-side RPC.
-        "ethereum" | "solana" => crate::rt::block_on(sign_and_send_impl(env, params)),
-        // Bitcoin auto-send still uses the sync builder (async twin pending).
-        "bitcoin" => {
-            let rpc_url = resolve_rpc(env, params, &account.kind)?;
-            bitcoin_send(env, &rpc_url, &account, params)
-        }
+        "ethereum" | "solana" | "bitcoin" => crate::rt::block_on(sign_and_send_impl(env, params)),
         other => Err(ApiError::new(400, format!("signAndSend not supported for {other}"))),
     }
 }
@@ -240,6 +235,7 @@ pub async fn sign_and_send_impl(env: &Env, params: &Value) -> ApiResult {
     match account.kind.as_str() {
         "ethereum" => evm_send_async(env, &account, &url, params).await,
         "solana" => solana_send_async(env, &account, &url, params).await,
+        "bitcoin" => bitcoin_send_async(env, &account, &url, params).await,
         other => Err(ApiError::new(400, format!("signAndSend (async) not supported for {other}"))),
     }
 }
@@ -356,50 +352,49 @@ async fn solana_send_async(env: &Env, account: &crate::models::account::Account,
 /// Build, DKLs-sign, and broadcast a Bitcoin P2PKH transfer. UTXOs and outputs
 /// are supplied in the request (auto-discovery via modchain lands next).
 #[cfg(not(target_arch = "wasm32"))]
-fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
+/// Bitcoin signAndSend (async twin of the old sync path): auto-input
+/// {To, Amount} discovers the account's UTXOs via modchain_assets over
+/// call_async, builds+signs through the shared offline core, and broadcasts;
+/// an explicit-UTXO Transaction goes through the offline sign_tx_bitcoin. One
+/// impl for native (block_on) and the browser (await).
+async fn bitcoin_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let unlock = unlock_keys(params);
 
-    let keys: Vec<crate::sign::KeyDescription> =
-        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-    let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
-
-    // Auto-input path: {To, Amount} with no explicit UTXOs — discover, select,
-    // add change, and sign each input under its own HD key.
     let no_utxos = tx.get("UTXOs").and_then(Value::as_array).map(|a| a.is_empty()).unwrap_or(true);
     if no_utxos {
         if let (Some(to), Some(amount)) =
             (tx.get("To").and_then(Value::as_str), tx.get("Amount").and_then(Value::as_u64))
         {
-            let net = crate::models::network::fetch(env, "@")
-                .map_err(ApiError::internal)?
-                .ok_or_else(|| ApiError::new(400, "no current network"))?;
-            if net.kind != "bitcoin" {
-                return Err(ApiError::new(400, "current network is not bitcoin"));
-            }
+            // Bitcoin-family chain id (for SIGHASH_FORKID + change address);
+            // defaults to mainnet "bitcoin", overridable via Transaction.ChainId.
+            let chain_id = tx.get("ChainId").and_then(Value::as_str).unwrap_or("bitcoin").to_owned();
             let fee_rate = tx.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
-            let raw = crate::bitcoin::build_and_sign_auto(
-                env, &account.id, &unlock, rpc, &net.chain_id, to, amount, fee_rate,
+            let xpub = account.xpub().map_err(ApiError::internal)?;
+            let assets = crate::rpc::call_async(url, "modchain_assets", serde_json::json!([xpub]))
+                .await
+                .map_err(ApiError::internal)?;
+            let all = crate::bitcoin::parse_native_utxos(&assets).map_err(ApiError::internal)?;
+            let raw = crate::bitcoin::build_and_sign_from_utxos(
+                env, &account.id, &unlock, &chain_id, to, amount, fee_rate, &all,
             )
             .map_err(ApiError::internal)?;
             let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-            let txid = crate::rpc::call(rpc, "sendrawtransaction", serde_json::json!([hex]))
+            let txid = crate::rpc::call_async(url, "sendrawtransaction", serde_json::json!([hex]))
+                .await
                 .map_err(ApiError::internal)?;
             return Ok(serde_json::json!({ "txid": txid, "raw": format!("0x{hex}") }));
         }
     }
 
-    // Explicit-UTXO path: delegate to the shared offline signer, then broadcast.
+    // Explicit-UTXO path: the shared offline signer, then broadcast.
     let signed = sign_tx_bitcoin(env, account, params)?;
     let hex = signed["raw"].as_str().unwrap_or("").trim_start_matches("0x").to_string();
-    let txid = crate::rpc::call(rpc, "sendrawtransaction", serde_json::json!([hex])).map_err(ApiError::internal)?;
+    let txid = crate::rpc::call_async(url, "sendrawtransaction", serde_json::json!([hex]))
+        .await
+        .map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "txid": txid, "raw": format!("0x{hex}") }))
 }
-
-/// Build, FROST-sign, and broadcast a Solana transfer: fetch a recent
-/// blockhash, serialize the transfer, sign, assemble, base58-encode, and
-/// sendTransaction. Returns the transaction signature.
-#[cfg(not(target_arch = "wasm32"))]
 
 /// `Account:setCurrent` — mark an account as the active one.
 pub fn set_current(env: &Env, params: &Value) -> ApiResult {
@@ -1087,5 +1082,45 @@ mod balance_tests {
         .unwrap();
         assert_eq!(out["hash"], serde_json::json!("0xabc123"));
         assert!(out["raw"].as_str().unwrap().starts_with("0x02"), "EIP-1559 typed tx: {out}");
+    }
+
+    // Bitcoin signAndSend auto-input end to end: discover the account's UTXOs via
+    // modchain_assets (mocked), build+sign through the shared offline core, and
+    // broadcast via sendrawtransaction. Exercises the DKLs bitcoin sign path.
+    #[test]
+    fn bitcoin_sign_and_send_auto_discovers_and_broadcasts() {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+
+        let url = mock_rpc_dispatch(&[
+            (
+                "modchain_assets",
+                r#"{"assets":[{"asset":"NATIVE","txo":[{"txo":"1111111111111111111111111111111111111111111111111111111111111111:0","amt":"0.00080000","path":"m/0/0","script":"p2wpkh"}]}]}"#,
+            ),
+            ("sendrawtransaction", r#""btctxid""#),
+        ]);
+        let keys: Vec<_> = w
+            .keys
+            .iter()
+            .zip(["passwordone", "passwordtwo", "passwordthree"])
+            .map(|(k, p)| serde_json::json!({ "Type": "Password", "Id": k.id, "Key": p }))
+            .collect();
+
+        let out = sign_and_send_transaction(
+            &env,
+            &serde_json::json!({
+                "Id": a.id,
+                "RPC": url,
+                "Keys": keys,
+                "Transaction": { "To": a.address, "Amount": 50000u64 }
+            }),
+        )
+        .unwrap();
+        assert_eq!(out["txid"], serde_json::json!("btctxid"));
+        assert!(out["raw"].as_str().unwrap().starts_with("0x"), "{out}");
     }
 }

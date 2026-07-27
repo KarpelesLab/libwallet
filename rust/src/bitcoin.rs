@@ -630,6 +630,9 @@ fn combine_tweak(account_il: &BigInt, child_tweak: &[u8; 32]) -> [u8; 32] {
 /// account xpub) with the combined wallet-root tweak; TssSigner self-verifies
 /// every signature. `fee_rate_sat_vb` is the pinned rate (or a caller default).
 /// Returns the raw signed transaction bytes.
+/// Native auto-input path: discover the account's UTXOs via modchain, then hand
+/// off to the offline core. The browser drives the same core over call_async
+/// (see [`build_and_sign_from_utxos`]).
 #[allow(clippy::too_many_arguments)]
 #[cfg(not(target_arch = "wasm32"))]
 pub fn build_and_sign_auto(
@@ -641,6 +644,29 @@ pub fn build_and_sign_auto(
     recipient: &str,
     want_sats: u64,
     fee_rate_sat_vb: u64,
+) -> Result<Vec<u8>> {
+    let acct = crate::models::account::fetch(env, account_id)?
+        .ok_or_else(|| Error::Env("account not found".into()))?;
+    let xpub = acct.xpub()?;
+    let all = list_utxos(rpc, &xpub)?;
+    build_and_sign_from_utxos(env, account_id, unlock, chain_id, recipient, want_sats, fee_rate_sat_vb, &all)
+}
+
+/// Offline core of the auto-input send: given the account's discovered UTXOs
+/// `all`, select inputs, add change/fee, derive each input's HD key, DKLs-sign
+/// (TssSigner self-verifies), and return the raw signed tx. NO RPC — the browser
+/// fetches `all` via `modchain_assets`/`call_async` and calls this, so native
+/// and wasm share one Bitcoin builder. `fee_rate_sat_vb` is the pinned rate.
+#[allow(clippy::too_many_arguments)]
+pub fn build_and_sign_from_utxos(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    chain_id: &str,
+    recipient: &str,
+    want_sats: u64,
+    fee_rate_sat_vb: u64,
+    all: &[DiscoveredUtxo],
 ) -> Result<Vec<u8>> {
     use base64::Engine;
     let acct = crate::models::account::fetch(env, account_id)?
@@ -664,13 +690,11 @@ pub fn build_and_sign_auto(
     };
     let wallet_id = acct.wallet.clone();
 
-    // 1. Discover + select UTXOs.
-    let xpub = build_xpub(&account_pub, &account_cc);
-    let all = list_utxos(rpc, &xpub)?;
+    // 1. Select inputs from the discovered UTXOs.
     if all.is_empty() {
         return Err(Error::Env("no spendable UTXOs".into()));
     }
-    let (selected, total_in) = select_utxos(&all, want_sats, fee_rate_sat_vb)?;
+    let (selected, total_in) = select_utxos(all, want_sats, fee_rate_sat_vb)?;
 
     // 2. Fee + change (dust threshold 546 sat), 2-output size estimate.
     let fee = estimate_vsize(&selected, 2) * fee_rate_sat_vb;
@@ -742,7 +766,7 @@ pub fn build_and_sign_auto(
     tx.add_output(recipient, want_sats).map_err(Error::Env)?;
     if change > 546 {
         let change_addr = {
-            let idx = next_change_index(&all);
+            let idx = next_change_index(all);
             let (child, _) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[1, idx])
                 .map_err(|e| Error::Env(e.to_string()))?;
             hd_address(&child, chain_id)?
