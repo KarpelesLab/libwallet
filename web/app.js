@@ -946,7 +946,7 @@ const backend = {
 };
 
 // Fixed Client ID (AtOnline appId) — the app registered on the server for this
-// wallet's origin (karpeleslab.gitlab.io). It selects the WalletSign 2FA
+// wallet's origin (karpeleslab.github.io). It selects the WalletSign 2FA
 // email/SMS branding AND the WebAuthn RP-ID/origin the server issues, so passkey
 // (Role B) verification only succeeds when the wallet is served from that
 // origin. Applied automatically; NOT user-overridable.
