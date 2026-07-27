@@ -383,6 +383,7 @@ function onSendChainChange() {
   $('#feeNote').textContent = currentSendChain === 'bitcoin'
     ? 'Fee is estimated from mempool.space and paid from your balance on top of the amount; change returns to your own address.'
     : 'Network fee is estimated live and added on top of the amount.';
+  updateSendAvailability();
 }
 
 function fillMax() {
@@ -475,7 +476,18 @@ async function prepareEvm(to, amount) {
       ['Gas limit', String(gas)]
     ],
     broadcast: async () => {
-      const raw = wasm.sign_evm_tx(session.mnemonic, JSON.stringify(txJson));
+      // Runs from the confirm modal's "Sign & broadcast" click, so the WebAuthn
+      // biometric inside mpcCommitteeKeys has valid transient activation.
+      let raw;
+      if (session.mpc) {
+        const keys = await mpcCommitteeKeys(backend.wallet);   // biometric, in this click
+        const r = await backendRequest('Account:signTransaction', 'POST', {
+          Id: session.mpcAccounts.evm.id, Transaction: txJson, Keys: keys
+        });
+        raw = r.raw ?? r.Raw;
+      } else {
+        raw = wasm.sign_evm_tx(session.mnemonic, JSON.stringify(txJson));
+      }
       const hash = await rpc(evmChain.rpc, 'eth_sendRawTransaction', [raw]);
       return { id: hash, url: evmChain.explorer + hash };
     }
@@ -1056,6 +1068,14 @@ async function deriveMpcAddresses() {
   ]);
   let sol = null;
   if (backend.walletEd) sol = await backendRequest('Account', 'POST', { Name: '', Wallet: backend.walletEd.Id, Type: 'solana', Index: 0 });
+  // Capture the created Account Ids alongside the addresses: committee send
+  // (Account:signTransaction) needs the account Id. Deterministic per
+  // wallet+type+index, so this is re-derivable on every unlock (not persisted).
+  session.mpcAccounts = {
+    evm:     { id: evm.Id, address: evm.Address },
+    bitcoin: { id: btc.Id, address: btc.Address },
+    solana:  sol ? { id: sol.Id, address: sol.Address } : null,
+  };
   return { evm: evm.Address, bitcoin: btc.Address, solana: sol ? sol.Address : null };
 }
 
@@ -1067,7 +1087,12 @@ async function enterMpcDashboard() {
   session.mpc = true;           // dashboard is backed by the MPC committee
   session.balances = {};
   const rec = readMpcRecord();
-  session.addresses = (rec && rec.addresses) ? rec.addresses : await deriveMpcAddresses();
+  // Always derive: this populates session.mpcAccounts (the Account Ids committee
+  // send needs), which the cached record does not carry. Prefer the cached
+  // addresses for render when present (identical values, saves nothing now but
+  // keeps the fast-path contract), else use the freshly derived ones.
+  const derived = await deriveMpcAddresses();
+  session.addresses = (rec && rec.addresses) ? rec.addresses : derived;
   setConsoleMode(false);        // all wallet tabs visible
   applyMpcGuards();
   // Default to the Accounts tab.
@@ -1085,14 +1110,23 @@ async function enterMpcDashboard() {
 // Remove-wallet routes to mpcForget.
 function applyMpcGuards() {
   const mpc = !!session.mpc;
-  // --- Send: committee send isn't wired yet ---
-  const sendBtn = $('#sendSubmit');
-  if (sendBtn) sendBtn.disabled = mpc;
-  const notice = $('#sendMpcNotice');
-  if (notice) notice.classList.toggle('hidden', !mpc);
+  // --- Send: committee EVM send is wired; Solana/Bitcoin still pending ---
+  updateSendAvailability();
   // --- Settings: reveal recovery phrase is walletcore-only ---
   const reveal = $('#revealPhrase');
   if (reveal) reveal.classList.toggle('hidden', mpc);
+}
+
+// Enable/disable Send per chain. For the MPC committee, EVM works now while
+// Solana/Bitcoin are still pending Rust support, so Send is disabled with a
+// notice on those chains only. For the walletcore path (session.mpc false) all
+// chains stay enabled. Called from applyMpcGuards and onSendChainChange.
+function updateSendAvailability() {
+  const blocked = !!session.mpc && currentSendChain !== 'evm';
+  const sendBtn = $('#sendSubmit');
+  if (sendBtn) sendBtn.disabled = blocked;
+  const notice = $('#sendMpcNotice');
+  if (notice) notice.classList.toggle('hidden', !blocked);
 }
 
 // Prepare the MPC unlock screen for the stored wallet: password-mode wallets
@@ -1974,6 +2008,46 @@ function refreshSignAccounts() {
   $('#bkSignBtn').disabled = false;
 }
 
+// Re-derive `wallet`'s committee Password shares and return the `Keys` array
+// expected by Account:signMessage / Account:signTransaction. Single source of
+// truth for committee-secret derivation (used by backendSignMessage and by the
+// MPC EVM send broadcast). Runs a WebAuthn `get` (biometric) for passkey-backed
+// wallets, so callers MUST invoke it inside a user-gesture task (button click)
+// so the transient activation is valid.
+async function mpcCommitteeKeys(wallet) {
+  const pwShares = (wallet.Keys || []).filter(k => k.Type === 'Password');
+  if (backend.mpc) {
+    // Passkey-2FA committee: two local Password shares mapped IN ORDER to
+    // [share1secret, share2secret]. Share 1 is always the passkey's prf.first;
+    // share 2 is the passkey's prf.second (mode 'passkey') or the stored
+    // password (mode 'password'). The committee was created as
+    // [Password(prf.first), Password(share2), RemoteKey] and Wallet:create
+    // preserves Keys order, so index 0→share1, 1→share2. The `?? share1secret`
+    // guard handles wallets with more/fewer than two Password shares.
+    let share1secret, share2secret;
+    if (backend.mpc.mode === 'passkey') {
+      // Both secrets from one biometric (two distinct PRF salts).
+      const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltSecond);
+      share1secret = r.secret1Hex; share2secret = r.secret2Hex;
+    } else {
+      // Passkey unlocks share 1; the stored password unlocks share 2.
+      const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltFirst);
+      share1secret = r.secret1Hex; share2secret = backend.mpc.password;
+    }
+    const order = [share1secret, share2secret];
+    return pwShares.map((k, i) => ({ Type: 'Password', Id: k.Id, Key: order[i] ?? share1secret }));
+  }
+  // Single-secret wallet: the passkey PRF (biometric) or the create-time
+  // password unlocks every Password share with the same secret.
+  let secret;
+  if (backend.passkey) {
+    secret = await passkeyDerive(backend.passkey.credentialId, backend.passkey.salt);
+  } else {
+    secret = backend.password;
+  }
+  return pwShares.map(k => ({ Type: 'Password', Id: k.Id, Key: secret }));
+}
+
 async function backendSignMessage() {
   const err = $('#bkSignErr');
   err.textContent = '';
@@ -1987,45 +2061,11 @@ async function backendSignMessage() {
   const btn = $('#bkSignBtn');
   btn.disabled = true;
   try {
-    // Reconstruct the signing committee's Password shares. Three unlock modes,
-    // each producing the same-shaped `keys` array; a single signMessage call runs
-    // afterwards. All WebAuthn happens in this click task (transient activation).
-    let keys;
-    const pwShares = (backend.wallet.Keys || []).filter(k => k.Type === 'Password');
-    if (backend.mpc) {
-      // Passkey-2FA committee: two local Password shares mapped IN ORDER to
-      // [share1secret, share2secret]. Share 1 is always the passkey's prf.first;
-      // share 2 is the passkey's prf.second (mode 'passkey') or the stored
-      // password (mode 'password'). The committee was created as
-      // [Password(prf.first), Password(share2), RemoteKey] and Wallet:create
-      // preserves Keys order, so index 0→share1, 1→share2. The `?? share1secret`
-      // guard handles wallets with more/fewer than two Password shares. (If a
-      // future backend ever reorders Keys, tag shares to bind them here.)
-      btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
-      let share1secret, share2secret;
-      if (backend.mpc.mode === 'passkey') {
-        // Both secrets from one biometric (two distinct PRF salts).
-        const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltSecond);
-        share1secret = r.secret1Hex; share2secret = r.secret2Hex;
-      } else {
-        // Passkey unlocks share 1; the stored password unlocks share 2.
-        const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltFirst);
-        share1secret = r.secret1Hex; share2secret = backend.mpc.password;
-      }
-      const order = [share1secret, share2secret];
-      keys = pwShares.map((k, i) => ({ Type: 'Password', Id: k.Id, Key: order[i] ?? share1secret }));
-    } else {
-      // Single-secret wallet: the passkey PRF (biometric) or the create-time
-      // password unlocks every Password share with the same secret.
-      let secret;
-      if (backend.passkey) {
-        btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
-        secret = await passkeyDerive(backend.passkey.credentialId, backend.passkey.salt);
-      } else {
-        secret = backend.password;
-      }
-      keys = pwShares.map(k => ({ Type: 'Password', Id: k.Id, Key: secret }));
-    }
+    // Reconstruct the signing committee's Password shares via the shared
+    // derivation (single implementation, see mpcCommitteeKeys). All WebAuthn
+    // happens in this click task (transient activation).
+    if (backend.mpc || backend.passkey) { btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…'); }
+    const keys = await mpcCommitteeKeys(backend.wallet);
     btn.textContent = 'Signing…'; bkStatus('busy', 'TSS sign…');
     const res = await backendRequest(`Account/${accountId}:signMessage`, 'POST', {
       Message: b64utf8(message), Keys: keys
