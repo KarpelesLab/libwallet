@@ -242,10 +242,17 @@ async function unlockWith(mnemonic) {
     toast('error', 'Derivation failed', err.message || String(err));
     return;
   }
-  // Address-only model accounts so balances/preview run through libwallet
-  // (Account:balance / Transaction:simulate) with no client-side chain RPC.
+  // Register the seed as 1-of-1 model wallets (secp256k1 + ed25519) so the
+  // walletcore wallet uses the SAME agnostic handlers as the committee wallet —
+  // Account:balance / signAndSendTransaction / Transaction:simulate. The seed is
+  // its single key; nothing here does client-side chain RPC.
   backendOpen();
-  session.accounts = await ensureViewAccounts(session.addresses);
+  session.accounts = await importWalletcoreWallet(mnemonic);
+  session.addresses = {
+    evm: session.accounts.evm.address,
+    bitcoin: session.accounts.bitcoin.address,
+    solana: session.accounts.solana.address,
+  };
   // A real wallet: restore all tabs (in case console mode hid them) and default
   // back to the Accounts tab. Clear any MPC guards (re-enable Send, show reveal).
   setConsoleMode(false);
@@ -281,7 +288,10 @@ function lock() {
   session.mnemonic = null;
   session.addresses = null;
   session.accounts = null;
+  session.wcKey = null;
   session.balances = {};
+  backend.wallet = null;
+  backend.walletEd = null;
   showScreen('unlock');
   setTimeout(() => $('#pwUnlock')?.focus(), 60);
 }
@@ -356,21 +366,36 @@ async function fetchChainBalance(chain) {
   } catch { setBalance(chain, 'unavailable'); }
 }
 
-// Create address-only (view) model accounts for a set of derived addresses so
-// balance/simulate/send-preview go through the Rust handlers. Returns the
-// chain → {id, address} map. Used by the walletcore (mnemonic) path; the MPC
-// path already has committee accounts from deriveMpcAddresses.
-async function ensureViewAccounts(addresses) {
-  const out = {};
-  for (const [chain, type] of [['evm', 'ethereum'], ['bitcoin', 'bitcoin'], ['solana', 'solana']]) {
-    const addr = addresses[chain];
-    if (!addr) continue;
-    try {
-      const a = await backendRequest('Account:createView', 'POST', { Type: type, Address: addr });
-      out[chain] = { id: a.Id, address: a.Address ?? addr };
-    } catch (e) { bkLog('err', `createView ${chain}: ${e.message || e}`); }
+// Import a BIP-39 mnemonic as 1-of-1 model wallets — secp256k1 (EVM + Bitcoin)
+// and ed25519 (Solana) — so the walletcore wallet is signed by the SAME agnostic
+// handlers as the committee wallet (Account:signAndSendTransaction etc.), with
+// the seed as its single key. Returns the chain → {id, address} account map.
+// session.wcKey is the in-memory seal password that unlocks the seed at sign
+// time (never persisted; the encrypted mnemonic vault stays the reload source).
+async function importWalletcoreWallet(mnemonic) {
+  if (!session.wcKey) {
+    const b = crypto.getRandomValues(new Uint8Array(32));
+    session.wcKey = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
   }
-  return out;
+  const pw = session.wcKey;
+  const [wSecp, wEd] = [
+    await backendRequest('Wallet:importMnemonic', 'POST',
+      { Name: 'walletcore', Curve: 'secp256k1', Mnemonic: mnemonic, Keys: [{ Type: 'Password', Key: pw }] }),
+    await backendRequest('Wallet:importMnemonic', 'POST',
+      { Name: 'walletcore', Curve: 'ed25519', Mnemonic: mnemonic, Keys: [{ Type: 'Password', Key: pw }] }),
+  ];
+  backend.wallet = wSecp;
+  backend.walletEd = wEd;
+  const [evm, btc, sol] = await Promise.all([
+    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'ethereum', Index: 0 }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'bitcoin', Index: 0 }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wEd.Id, Type: 'solana', Index: 0 }),
+  ]);
+  return {
+    evm:     { id: evm.Id, address: evm.Address },
+    bitcoin: { id: btc.Id, address: btc.Address },
+    solana:  { id: sol.Id, address: sol.Address },
+  };
 }
 
 // ============================================================================
