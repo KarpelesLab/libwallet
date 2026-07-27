@@ -912,10 +912,9 @@ const backend = {
   }
 };
 
-const BK_CLIENTID_LS = 'libwallet.backend.clientId';
-// Default Client ID (AtOnline appId) — the TibaneApp app, so the WalletSign 2FA
-// email/SMS is branded as Tibane out of the box. Users can override it above.
-const BK_DEFAULT_CLIENT_ID = 'oaap-bapax4-2dgn-b2ze-oquf-bjnuzioy';
+// Fixed Client ID (AtOnline appId) — the TibaneApp app, so WalletSign 2FA is
+// Tibane-branded. Applied automatically; NOT user-overridable.
+const BK_CLIENT_ID = 'oaap-bapax4-2dgn-b2ze-oquf-bjnuzioy';
 
 // UTF-8 string → standard base64 (for Account:signMessage Message param).
 function b64utf8(str) {
@@ -991,11 +990,8 @@ function backendOpen() {
   backendListNetworks();
   backendListWallets();
 
-  // Apply the Client ID: a value persisted from a previous session, else the
-  // TibaneApp default (so WalletSign 2FA is Tibane-branded without setup).
-  const savedClientId = (() => { try { return localStorage.getItem(BK_CLIENTID_LS); } catch { return null; } })();
-  $('#bkClientId').value = savedClientId || BK_DEFAULT_CLIENT_ID;
-  backendSetClientId();
+  // Apply the fixed Tibane Client ID (Info:setWalletInfo). Not overridable.
+  applyClientId();
 }
 
 // Reflect whether a Client ID is configured (gates the RemoteKey 2FA flow).
@@ -1006,26 +1002,18 @@ function bkClientIdState(set) {
   $('#bkRkSend').disabled = !set;
 }
 
-// Info:setWalletInfo {ClientId} — configure the Sec-ClientId header used by the
-// RemoteKey handlers, and persist it across reloads.
-async function backendSetClientId() {
+// Info:setWalletInfo {ClientId} — register the fixed Tibane Client ID (it
+// selects the WalletSign 2FA branding). Not user-overridable.
+async function applyClientId() {
   const err = $('#bkClientIdErr');
   err.textContent = '';
-  const value = $('#bkClientId').value.trim();
-  if (!value) { err.textContent = 'Enter a Client ID.'; return; }
-  const btn = $('#bkSetClientId');
-  btn.disabled = true;
   try {
-    await backendRequest('Info:setWalletInfo', 'POST', { ClientId: value });
-    backend.clientId = value;
-    try { localStorage.setItem(BK_CLIENTID_LS, value); } catch { /* private mode — session only */ }
+    await backendRequest('Info:setWalletInfo', 'POST', { ClientId: BK_CLIENT_ID });
+    backend.clientId = BK_CLIENT_ID;
     bkClientIdState(true);
-    toast('ok', 'Client ID set', 'RemoteKey 2FA can now reach the WalletSign backend.');
   } catch (e) {
     err.textContent = e.message || String(e);
     bkClientIdState(false);
-  } finally {
-    btn.disabled = false;
   }
 }
 
@@ -1449,7 +1437,6 @@ async function backendRunRaw() {
 
 function wireBackendEvents() {
   $('#bkCreateWallet').onclick  = backendCreateWallet;
-  $('#bkSetClientId').onclick   = backendSetClientId;
   $('#bkRkSend').onclick        = backendRkSend;
   $('#bkRkVerify').onclick      = backendRkVerify;
   $('#bkRkCreate').onclick      = backendRkCreate;

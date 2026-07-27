@@ -350,13 +350,9 @@
             </div>
             <div class="asset" data-chain="evm">
               <div class="form-grid">
-                <p class="subtitle">The Client ID authenticates libwallet to the WalletSign backend
-                  (sent as the <span class="mono">Sec-ClientId</span> header). It is required before
-                  the RemoteKey 2FA flow below can reach the server.</p>
-                <div class="amount-row">
-                  <input class="input mono" id="bkClientId" placeholder="crclient-… (your app's Client ID)" style="min-width:150px" />
-                  <button class="btn primary grow" type="button" id="bkSetClientId">Set</button>
-                </div>
+                <p class="subtitle">Fixed to the <strong>Tibane</strong> app — it selects the WalletSign
+                  2FA email/SMS branding and is applied automatically on startup. Not user-configurable.</p>
+                <div class="kv"><span class="k">App</span><span class="v mono">oaap-bapax4-2dgn-b2ze-oquf-bjnuzioy</span></div>
                 <div class="err-inline" id="bkClientIdErr"></div>
               </div>
             </div>
