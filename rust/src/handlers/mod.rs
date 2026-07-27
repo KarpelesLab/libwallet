@@ -18,8 +18,10 @@ mod names;
 mod network;
 #[cfg(not(target_arch = "wasm32"))]
 mod request;
-#[cfg(not(target_arch = "wasm32"))]
-mod simulate;
+// Transaction:simulate — the async simulate_impl is shared (browser preview);
+// the sync `simulate` wrapper + tests are native-only.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) mod simulate;
 #[cfg(not(target_arch = "wasm32"))]
 mod spot;
 #[cfg(target_arch = "wasm32")]
@@ -85,6 +87,36 @@ impl ApiError {
 }
 
 pub type ApiResult = Result<Value, ApiError>;
+
+/// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"): the
+/// `RPC` param wins; else the current network `@` when it matches; else the
+/// seeded DEFAULT network for that chain (evm→1, solana→mainnet, bitcoin→
+/// bitcoin). The endpoint always comes from `Network::resolved_rpc`, never a
+/// client-supplied URL. Shared by the account send/balance and simulate paths so
+/// the browser (multi-chain, no single `@`) resolves the same way as native.
+pub(crate) fn resolve_rpc_for_kind(env: &Env, params: &Value, kind: &str) -> Result<String, ApiError> {
+    if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        return Ok(url.to_owned());
+    }
+    let current = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .filter(|n| n.kind == kind);
+    let net = match current {
+        Some(n) => n,
+        None => {
+            let default_chain = match kind {
+                "evm" => "1",
+                "solana" => "mainnet",
+                "bitcoin" => "bitcoin",
+                other => return Err(ApiError::new(400, format!("no default network for {other}"))),
+            };
+            crate::models::network::fetch(env, &format!("{kind}.{default_chain}"))
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(400, format!("no seeded network for {kind}")))?
+        }
+    };
+    net.resolved_rpc().map_err(ApiError::internal)
+}
 
 /// Object names whose registered path is itself two segments (`A/B`); their id,
 /// when present, is the *third* segment (`A/B/<id>`). Every other object is a

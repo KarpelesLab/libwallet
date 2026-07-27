@@ -22,29 +22,50 @@ const APPROVAL_TOPIC: &str = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e
 const ERC20_TRANSFER_SELECTOR: &str = "a9059cbb";
 const ERC20_APPROVE_SELECTOR: &str = "095ea7b3";
 
-/// `Transaction:simulate` {tx fields, RPC?}. Resolves the current network and
-/// runs the per-chain simulator.
-pub fn simulate(env: &Env, params: &Value) -> ApiResult {
+/// `Transaction:simulate` {tx fields, RPC?}. One async implementation shared by
+/// native (`crate::rt::block_on`) and the browser (awaited in
+/// `handle_request_async`); chain I/O runs over `rpc::call_async`. The target
+/// chain comes from the tx `type`, and the endpoint from the Network model —
+/// the client never names a URL.
+pub async fn simulate_impl(env: &Env, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").unwrap_or(params);
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "no current network"))?;
-
-    if net.kind == "bitcoin" {
+    let kind = sim_kind(env, tx)?;
+    if kind == "bitcoin" {
         // Decode-from-raw only (no RPC); the UTXO dry-run preview follows.
         return Ok(simulate_bitcoin(tx));
     }
-    if net.kind != "evm" && net.kind != "solana" {
-        return Ok(json!({ "chain": net.kind, "decodedMethod": "unknown" }));
+    let rpc = super::resolve_rpc_for_kind(env, params, kind)?;
+    match kind {
+        "evm" => Ok(simulate_evm(&rpc, tx).await),
+        _ => simulate_solana(&rpc, tx).await,
     }
-    let rpc = match params.get("RPC").and_then(Value::as_str) {
-        Some(u) if !u.is_empty() => u.to_string(),
-        _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
-    };
-    match net.kind.as_str() {
-        "evm" => Ok(simulate_evm(&rpc, tx)),
-        _ => simulate_solana(&rpc, tx),
-    }
+}
+
+/// Native `Transaction:simulate`: drive the shared async impl on the worker.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn simulate(env: &Env, params: &Value) -> ApiResult {
+    crate::rt::block_on(simulate_impl(env, params))
+}
+
+/// The chain a tx targets. A chain-specific tx `type` (solana_*/bitcoin_*/evm/
+/// erc20_transfer) decides it directly — this is what the browser relies on
+/// (multi-chain, no single current network). Otherwise fall back to the current
+/// `@` network's kind (the native/Dart path), defaulting to EVM.
+fn sim_kind(env: &Env, tx: &Value) -> Result<&'static str, ApiError> {
+    Ok(match tx.get("type").and_then(Value::as_str).unwrap_or("") {
+        "solana_transfer" | "solana_spl_transfer" => "solana",
+        "bitcoin_transfer" => "bitcoin",
+        "evm" | "erc20_transfer" | "transfer" => "evm",
+        _ => match crate::models::network::fetch(env, "@")
+            .map_err(ApiError::internal)?
+            .map(|n| n.kind)
+            .as_deref()
+        {
+            Some("solana") => "solana",
+            Some("bitcoin") => "bitcoin",
+            _ => "evm",
+        },
+    })
 }
 
 /// Bitcoin simulate: decode the built `raw` tx into its inputs/outputs (Go
@@ -102,7 +123,7 @@ fn simulate_bitcoin(tx: &Value) -> Value {
 
 /// Solana simulate: `simulateTransaction` on the already-built `raw` bytes
 /// (Go `simulateSolana`). Surfaces logs, unitsConsumed, and revert status.
-fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
+async fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
     let raw = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty());
     let raw = raw.and_then(decode_tx_bytes).ok_or_else(|| {
         ApiError::new(400, "solana tx has no raw bytes; build/validate it first")
@@ -110,11 +131,12 @@ fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
     let b64 = base64_std(&raw);
 
     let mut out = json!({ "chain": "solana" });
-    let sim = crate::rpc::call(
+    let sim = crate::rpc::call_async(
         rpc,
         "simulateTransaction",
         json!([b64, { "sigVerify": false, "encoding": "base64", "commitment": "processed" }]),
-    );
+    )
+    .await;
     match sim {
         Err(e) => {
             out["willRevert"] = json!(true);
@@ -162,7 +184,7 @@ fn base64_std(b: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(b)
 }
 
-fn simulate_evm(rpc: &str, tx: &Value) -> Value {
+async fn simulate_evm(rpc: &str, tx: &Value) -> Value {
     let (decoded_method, decoded_args) = decode_evm_call(tx);
 
     let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
@@ -188,7 +210,7 @@ fn simulate_evm(rpc: &str, tx: &Value) -> Value {
 
     // Prefer callTracer for the full effect tree + revert.
     let call_tracer = json!({ "tracer": "callTracer", "tracerConfig": { "withLog": true } });
-    let traced = crate::rpc::call(rpc, "debug_traceCall", json!([call, "latest", call_tracer]));
+    let traced = crate::rpc::call_async(rpc, "debug_traceCall", json!([call, "latest", call_tracer])).await;
     if let Ok(raw) = traced {
         if let Ok(frame) = serde_json::from_value::<CallFrame>(raw) {
             if !frame.error.is_empty() {
@@ -205,9 +227,9 @@ fn simulate_evm(rpc: &str, tx: &Value) -> Value {
         }
     } else {
         // Fall back to eth_call + eth_estimateGas.
-        match crate::rpc::call(rpc, "eth_call", json!([call, "latest"])) {
+        match crate::rpc::call_async(rpc, "eth_call", json!([call, "latest"])).await {
             Ok(_) => {
-                if let Ok(g) = crate::rpc::call(rpc, "eth_estimateGas", json!([call])) {
+                if let Ok(g) = crate::rpc::call_async(rpc, "eth_estimateGas", json!([call])).await {
                     if let Some(g) = g.as_str().and_then(hex_u64) {
                         gas_estimate = g;
                     }
@@ -226,11 +248,11 @@ fn simulate_evm(rpc: &str, tx: &Value) -> Value {
     // Second pass: native-balance diff via prestateTracer (best-effort).
     let mut balance_changes: Vec<Value> = Vec::new();
     let pre_cfg = json!({ "tracer": "prestateTracer", "tracerConfig": { "diffMode": true } });
-    if let Ok(raw) = crate::rpc::call(rpc, "debug_traceCall", json!([call, "latest", pre_cfg])) {
+    if let Ok(raw) = crate::rpc::call_async(rpc, "debug_traceCall", json!([call, "latest", pre_cfg])).await {
         balance_changes = extract_balance_changes(&raw);
     }
 
-    let warnings = evm_warnings(rpc, tx, &data_hex);
+    let warnings = evm_warnings(rpc, tx, &data_hex).await;
 
     // Assemble the SimulationResult with Go's omitempty semantics.
     let mut out = json!({ "chain": "evm", "willRevert": will_revert });
@@ -490,14 +512,14 @@ fn extract_balance_changes(raw: &Value) -> Vec<Value> {
 }
 
 /// Non-blocking EVM approval warnings (recipient-is-contract, unlimited-approve).
-fn evm_warnings(rpc: &str, tx: &Value, data_hex: &str) -> Vec<Value> {
+async fn evm_warnings(rpc: &str, tx: &Value, data_hex: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let typ = tx.get("type").and_then(Value::as_str).unwrap_or("");
     let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
     let has_value = amount_bigint(tx.get("amount")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false)
         || amount_bigint(tx.get("value")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false);
 
-    if (typ == "transfer" || typ == "evm") && !to.is_empty() && has_value && data_hex.is_empty() && is_contract(rpc, to) {
+    if (typ == "transfer" || typ == "evm") && !to.is_empty() && has_value && data_hex.is_empty() && is_contract(rpc, to).await {
         out.push(json!({
             "code": "recipient_is_contract",
             "severity": "warn",
@@ -522,8 +544,8 @@ fn evm_warnings(rpc: &str, tx: &Value, data_hex: &str) -> Vec<Value> {
     out
 }
 
-fn is_contract(rpc: &str, addr: &str) -> bool {
-    let Ok(v) = crate::rpc::call(rpc, "eth_getCode", json!([addr, "latest"])) else { return false };
+async fn is_contract(rpc: &str, addr: &str) -> bool {
+    let Ok(v) = crate::rpc::call_async(rpc, "eth_getCode", json!([addr, "latest"])).await else { return false };
     let code = v.as_str().unwrap_or("");
     strip_hex(code).chars().any(|c| c != '0')
 }

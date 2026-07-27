@@ -250,7 +250,10 @@ fn u64_from_hex(s: &str) -> u64 {
 /// then broadcast. A field already present in `Transaction` is kept as-is, so a
 /// fully-specified tx makes no read calls (native/Dart behaviour) while the
 /// browser can pass just {to, value} and let Rust fetch the rest.
-async fn evm_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+/// Autofill an EVM `Transaction` from the node (chainId, nonce, gas, EIP-1559
+/// fees) for any field the caller omitted, returning the params with a fully
+/// populated `Transaction`. Shared by estimate (preview) and send (sign).
+async fn evm_fill(account: &crate::models::account::Account, url: &str, params: &Value) -> Result<Value, ApiError> {
     let mut p = params.clone();
     {
         let tx = p
@@ -314,7 +317,11 @@ async fn evm_send_async(env: &Env, account: &crate::models::account::Account, ur
             }
         }
     }
+    Ok(p)
+}
 
+async fn evm_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+    let p = evm_fill(account, url, params).await?;
     let signed = sign_tx_evm(env, account, &p)?;
     let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
     let hash = crate::rpc::call_async(url, "eth_sendRawTransaction", serde_json::json!([raw]))
@@ -840,33 +847,12 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
 /// when `@` matches. Either way the endpoint comes from `Network::resolved_rpc`,
 /// the one resolver, never a client-side URL.
 fn resolve_rpc(env: &Env, params: &Value, account_kind: &str) -> Result<String, ApiError> {
-    if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
-        return Ok(url.to_owned());
-    }
     // account kind (ethereum/solana/bitcoin) -> network type (evm/solana/bitcoin).
     let want = match account_kind {
         "ethereum" => "evm",
         other => other,
     };
-    // Prefer the current network iff it matches this account's chain.
-    let current = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .filter(|n| n.kind == want);
-    let net = match current {
-        Some(n) => n,
-        None => {
-            let default_chain = match want {
-                "evm" => "1",
-                "solana" => "mainnet",
-                "bitcoin" => "bitcoin",
-                other => return Err(ApiError::new(400, format!("no default network for {other}"))),
-            };
-            crate::models::network::fetch(env, &format!("{want}.{default_chain}"))
-                .map_err(ApiError::internal)?
-                .ok_or_else(|| ApiError::new(400, format!("no seeded network for {want}")))?
-        }
-    };
-    net.resolved_rpc().map_err(ApiError::internal)
+    super::resolve_rpc_for_kind(env, params, want)
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
