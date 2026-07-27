@@ -904,6 +904,7 @@ const backend = {
   ready:    false,
   wallet:   null,   // last created Wallet object (has .Keys for signing)
   password: null,   // share password for the created wallet (session-only)
+  passkey:  null,   // {credentialId,salt} when the wallet's shares are passkey-PRF-sealed
   accounts: [],     // derived Account objects
   clientId: null,   // configured Sec-ClientId (Info:setWalletInfo), for RemoteKey 2FA
   rk: {             // RemoteKey 2FA creation flow state
@@ -1280,49 +1281,112 @@ function backendWalletCardHtml(w) {
     </div>`;
 }
 
-function backendCreateWallet() {
+// ── Passkey device share (WebAuthn PRF) ──────────────────────────────────────
+// A passkey's PRF extension returns a stable 32-byte secret, gated by a
+// biometric/PIN user-verification gesture and never leaving the authenticator.
+// We use hex(that secret) as the committee's share password (Type:Password), so
+// the device-custody share is passwordless + hardware-backed, and re-derived per
+// signature. NOTE: navigator.credentials.create/get need transient user
+// activation, so they must run directly in the click task (no setTimeout).
+
+const PASSKEY_RP_NAME = 'Tibane Wallet';
+
+function passkeyAvailable() {
+  return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+}
+function bkRandBytes(n) { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; }
+function bkBufToHex(buf) { return [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, '0')).join(''); }
+
+// Register a new passkey with PRF enabled, then derive its secret for a fresh
+// salt. Returns {credentialId:Uint8Array, salt:Uint8Array, secretHex}. Throws if
+// the platform/authenticator can't do PRF (caller falls back to a password).
+async function passkeyCreateAndDerive(walletName) {
+  const salt = bkRandBytes(32);
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: PASSKEY_RP_NAME, id: location.hostname },
+    user: { id: bkRandBytes(16), name: walletName || 'wallet', displayName: walletName || 'wallet' },
+    challenge: bkRandBytes(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+    authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+    timeout: 60000,
+    extensions: { prf: {} },
+  }});
+  const ext = cred.getClientExtensionResults();
+  if (!ext.prf || ext.prf.enabled === false) {
+    throw new Error('This device/browser has no passkey PRF support — use a password.');
+  }
+  const secretHex = await passkeyDerive(cred.rawId, salt);
+  return { credentialId: new Uint8Array(cred.rawId), salt, secretHex };
+}
+
+// Derive the PRF secret for an existing credential + salt (biometric gesture).
+async function passkeyDerive(credentialId, salt) {
+  const assertion = await navigator.credentials.get({ publicKey: {
+    challenge: bkRandBytes(32),
+    allowCredentials: [{ type: 'public-key', id: credentialId }],
+    userVerification: 'required',
+    timeout: 60000,
+    extensions: { prf: { eval: { first: salt } } },
+  }});
+  const prf = assertion.getClientExtensionResults()?.prf?.results?.first;
+  if (!prf) throw new Error('Passkey did not return a PRF secret (unsupported here).');
+  return bkBufToHex(prf);
+}
+
+async function backendCreateWallet() {
   const name = $('#bkWalletName').value.trim() || 'Browser TSS wallet';
+  const usePasskey = !!($('#bkPasskey') && $('#bkPasskey').checked);
   const pw = $('#bkWalletPw').value;
   const err = $('#bkWalletErr');
   err.textContent = '';
-  if (pw.length < 4) { err.textContent = 'Enter a share password (4+ characters).'; return; }
+  if (!usePasskey && pw.length < 4) { err.textContent = 'Enter a share password (4+ characters).'; return; }
 
   const btn = $('#bkCreateWallet');
-  btn.disabled = true; btn.textContent = 'Running keygen…';
-  bkStatus('busy', 'TSS keygen…');
-  // Defer so the button state paints before the (synchronous) keygen blocks.
-  setTimeout(async () => {
-    try {
-      // A modern TSS wallet is inherently multi-party: the backend mandates a
-      // ≥3-share committee (threshold hardcoded to 1 → 1-of-3). We build three
-      // local Password shares from the entered password — an all-local,
-      // server-free committee. (Mirrors the reference account_create test.)
-      const keys = [
-        { Type: 'Password', Key: pw },
-        { Type: 'Password', Key: pw },
-        { Type: 'Password', Key: pw }
-      ];
-      const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
-      backend.wallet = w;
-      backend.password = pw;
-      backend.accounts = [];
-      $('#bkAccountList').innerHTML = '';
-      $('#bkCreateAccount').disabled = false;
-      refreshSignAccounts();
-
-      const out = $('#bkWalletOut');
-      out.classList.remove('hidden');
-      out.innerHTML = backendWalletCardHtml(w);
-      bkStatus('live', 'wallet created · #' + backend.handle);
-      toast('ok', 'Real wallet created', 'TSS keygen ran in your browser (' + (w.Curve) + ' / ' + w.Protocol + ').');
-      backendListWallets();
-    } catch (e) {
-      err.textContent = e.message || String(e);
-      bkStatus('err', 'keygen failed');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Generate wallet';
+  btn.disabled = true;
+  try {
+    // The device share's secret: the passkey PRF (biometric) or the password.
+    let shareSecret = pw;
+    let passkey = null;
+    if (usePasskey) {
+      btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
+      const pk = await passkeyCreateAndDerive(name);        // must be in this click task
+      shareSecret = pk.secretHex;
+      passkey = { credentialId: pk.credentialId, salt: pk.salt };
     }
-  }, 30);
+    btn.textContent = 'Running keygen…'; bkStatus('busy', 'TSS keygen…');
+    // A modern TSS wallet is inherently multi-party: the backend mandates a
+    // ≥3-share committee (threshold 1 → 1-of-3). Three local Password shares
+    // sealed with the same secret (password, or the passkey PRF output) — an
+    // all-local, server-free committee.
+    const keys = [
+      { Type: 'Password', Key: shareSecret },
+      { Type: 'Password', Key: shareSecret },
+      { Type: 'Password', Key: shareSecret },
+    ];
+    const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+    backend.wallet = w;
+    backend.password = usePasskey ? null : pw;
+    backend.passkey = passkey;
+    backend.accounts = [];
+    $('#bkAccountList').innerHTML = '';
+    $('#bkCreateAccount').disabled = false;
+    refreshSignAccounts();
+
+    const out = $('#bkWalletOut');
+    out.classList.remove('hidden');
+    out.innerHTML = backendWalletCardHtml(w);
+    bkStatus('live', 'wallet created · #' + backend.handle);
+    toast('ok', usePasskey ? 'Passkey wallet created' : 'Real wallet created',
+      usePasskey
+        ? 'Shares sealed with your device passkey (WebAuthn PRF) — no password.'
+        : 'TSS keygen ran in your browser (' + w.Curve + ' / ' + w.Protocol + ').');
+    backendListWallets();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', usePasskey ? 'passkey/keygen failed' : 'keygen failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Generate wallet';
+  }
 }
 
 async function backendCreateAccount() {
@@ -1381,45 +1445,52 @@ function refreshSignAccounts() {
   $('#bkSignBtn').disabled = false;
 }
 
-function backendSignMessage() {
+async function backendSignMessage() {
   const err = $('#bkSignErr');
   err.textContent = '';
   const accountId = $('#bkSignAccount').value;
   const message = $('#bkSignMsg').value;
   if (!accountId) { err.textContent = 'Choose an account to sign with.'; return; }
   if (!message) { err.textContent = 'Enter a message.'; return; }
-  if (!backend.wallet || !backend.password) { err.textContent = 'Create a wallet first.'; return; }
-
-  // Reconstruct the signing committee from the wallet's sealed shares, each
-  // unlocked with the create-time password (keyed by that share's WalletKey Id).
-  const keys = (backend.wallet.Keys || [])
-    .filter(k => k.Type === 'Password')
-    .map(k => ({ Type: 'Password', Id: k.Id, Key: backend.password }));
+  if (!backend.wallet) { err.textContent = 'Create a wallet first.'; return; }
+  if (!backend.passkey && !backend.password) { err.textContent = 'No unlock material for this wallet in this session.'; return; }
 
   const btn = $('#bkSignBtn');
-  btn.disabled = true; btn.textContent = 'Signing…';
-  bkStatus('busy', 'TSS sign…');
-  setTimeout(async () => {
-    try {
-      const res = await backendRequest(`Account/${accountId}:signMessage`, 'POST', {
-        Message: b64utf8(message), Keys: keys
-      });
-      const out = $('#bkSignOut');
-      out.classList.remove('hidden');
-      out.innerHTML = `
-        <div class="panel" style="padding:4px 16px;margin-top:4px">
-          <div class="kv"><span class="k">Message</span><span class="v">${bkEsc(message)}</span></div>
-          <div class="kv"><span class="k">Signature</span><span class="v" style="max-width:100%">${bkEsc(res.signature || JSON.stringify(res))}</span></div>
-        </div>`;
-      bkStatus('live', 'signed · #' + backend.handle);
-      toast('ok', 'Message signed', 'Real EIP-191 TSS signature produced in-browser.');
-    } catch (e) {
-      err.textContent = e.message || String(e);
-      bkStatus('err', 'sign failed');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Sign message';
+  btn.disabled = true;
+  try {
+    // Re-derive the share secret: the passkey PRF (biometric gesture, in this
+    // click task) for a passkey wallet, else the create-time password.
+    let secret;
+    if (backend.passkey) {
+      btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
+      secret = await passkeyDerive(backend.passkey.credentialId, backend.passkey.salt);
+    } else {
+      secret = backend.password;
     }
-  }, 30);
+    btn.textContent = 'Signing…'; bkStatus('busy', 'TSS sign…');
+    // Reconstruct the signing committee from the wallet's sealed shares, each
+    // unlocked with that secret (keyed by the share's WalletKey Id).
+    const keys = (backend.wallet.Keys || [])
+      .filter(k => k.Type === 'Password')
+      .map(k => ({ Type: 'Password', Id: k.Id, Key: secret }));
+    const res = await backendRequest(`Account/${accountId}:signMessage`, 'POST', {
+      Message: b64utf8(message), Keys: keys
+    });
+    const out = $('#bkSignOut');
+    out.classList.remove('hidden');
+    out.innerHTML = `
+      <div class="panel" style="padding:4px 16px;margin-top:4px">
+        <div class="kv"><span class="k">Message</span><span class="v">${bkEsc(message)}</span></div>
+        <div class="kv"><span class="k">Signature</span><span class="v" style="max-width:100%">${bkEsc(res.signature || JSON.stringify(res))}</span></div>
+      </div>`;
+    bkStatus('live', 'signed · #' + backend.handle);
+    toast('ok', 'Message signed', backend.passkey ? 'TSS signature unlocked with your device passkey.' : 'Real EIP-191 TSS signature produced in-browser.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'sign failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Sign message';
+  }
 }
 
 async function backendRunRaw() {
@@ -1448,6 +1519,18 @@ function wireBackendEvents() {
   $('#bkSignBtn').onclick       = backendSignMessage;
   $('#bkRawRun').onclick        = backendRunRaw;
   $('#bkLogClear').onclick      = () => { $('#bkLog').innerHTML = ''; };
+
+  // Passkey toggle: greys out the password field when on; disable + note when
+  // the browser lacks WebAuthn entirely.
+  const pk = $('#bkPasskey');
+  if (pk) {
+    if (!passkeyAvailable()) {
+      pk.checked = false; pk.disabled = true;
+      $('#bkPasskeyAvail').textContent = '(passkeys unavailable in this browser)';
+    } else {
+      pk.onchange = () => { $('#bkWalletPw').disabled = pk.checked; };
+    }
+  }
 
   // Delegated copy for dynamically-rendered addresses in the backend pane.
   $('[data-pane="backend"]').addEventListener('click', e => {

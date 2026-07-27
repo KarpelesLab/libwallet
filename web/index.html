@@ -374,6 +374,15 @@
                   <label class="field-label" for="bkWalletPw">Share password</label>
                   <input class="input mono" id="bkWalletPw" type="password" autocomplete="new-password" placeholder="Encrypts each key share" value="correct horse battery staple" />
                 </div>
+                <label class="passkey-toggle">
+                  <input type="checkbox" id="bkPasskey" />
+                  <span>Secure with device passkey (biometric)</span>
+                </label>
+                <p class="subtitle" id="bkPasskeyNote" style="margin:-4px 0 0">
+                  Seals the shares with a hardware-backed secret derived from your device passkey
+                  (WebAuthn&nbsp;PRF) — nothing to type, and it never leaves the authenticator; each
+                  signature re-derives it with a biometric gesture. <span id="bkPasskeyAvail" class="mono"></span>
+                </p>
                 <div class="err-inline" id="bkWalletErr"></div>
                 <button class="btn primary block" type="button" id="bkCreateWallet">Generate wallet</button>
               </div>

@@ -709,3 +709,8 @@ select.input { appearance: none; cursor: pointer;
   .vault-bg { animation: none; }
   .btn:active { transform: none; }
 }
+
+/* Passkey opt-in toggle in the backend create form. */
+.passkey-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; }
+.passkey-toggle input { width: 16px; height: 16px; accent-color: var(--accent, #6c8cff); cursor: pointer; }
+.passkey-toggle input:disabled { cursor: not-allowed; }
