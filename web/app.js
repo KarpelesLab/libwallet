@@ -945,9 +945,12 @@ const backend = {
   }
 };
 
-// Fixed Client ID (AtOnline appId) — the TibaneApp app, so WalletSign 2FA is
-// Tibane-branded. Applied automatically; NOT user-overridable.
-const BK_CLIENT_ID = 'oaap-bapax4-2dgn-b2ze-oquf-bjnuzioy';
+// Fixed Client ID (AtOnline appId) — the app registered on the server for this
+// wallet's origin (karpeleslab.gitlab.io). It selects the WalletSign 2FA
+// email/SMS branding AND the WebAuthn RP-ID/origin the server issues, so passkey
+// (Role B) verification only succeeds when the wallet is served from that
+// origin. Applied automatically; NOT user-overridable.
+const BK_CLIENT_ID = 'oaap-fz65wz-jaoj-b5hf-wonj-do54q5au';
 
 // UTF-8 string → standard base64 (for Account:signMessage Message param).
 function b64utf8(str) {
