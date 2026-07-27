@@ -120,6 +120,28 @@ function showScreen(name) {
   $('#lockState').classList.toggle('show', name === 'dashboard');
 }
 
+// "Console mode": reach the Backend (on-device MPC) tab WITHOUT a walletcore
+// wallet. The dashboard's account/send/settings tabs need a derived session, so
+// hide them (and the lock control) and show a way back to onboarding. The
+// Backend tab runs its own independent libwallet session (backendOpen).
+function setConsoleMode(on) {
+  ['accounts', 'send', 'settings'].forEach(t => {
+    const b = $(`.tabs button[data-tab="${t}"]`);
+    if (b) b.style.display = on ? 'none' : '';
+  });
+  const ls = $('#lockState');
+  if (ls) ls.style.display = on ? 'none' : '';
+  $('#bkBackToSetup')?.classList.toggle('hidden', !on);
+}
+
+function openBackendConsole() {
+  setConsoleMode(true);
+  showScreen('dashboard');
+  $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'backend'));
+  $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'backend'));
+  backendOpen();
+}
+
 // Onboarding is a multi-step card flow inside one screen.
 function goStep(step) {
   $$('#screen-onboarding [data-step]').forEach(c => c.classList.toggle('hidden', c.dataset.step !== step));
@@ -211,6 +233,11 @@ function unlockWith(mnemonic) {
     toast('error', 'Derivation failed', err.message || String(err));
     return;
   }
+  // A real wallet: restore all tabs (in case console mode hid them) and default
+  // back to the Accounts tab.
+  setConsoleMode(false);
+  $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'accounts'));
+  $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'accounts'));
   renderAccounts();
   onSendChainChange();
   showScreen('dashboard');
@@ -795,6 +822,11 @@ function wireStaticEvents() {
     if (go === 'import') setTimeout(() => $('#importPhrase').focus(), 60);
   });
   $$('#screen-onboarding [data-back]').forEach(b => b.onclick = () => goStep(b.dataset.back));
+
+  // Developer entry: open the on-device MPC backend console (passkeys / TSS)
+  // without first creating a walletcore wallet; and the way back.
+  $('#openBackendConsole').onclick = openBackendConsole;
+  $('#bkBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('choose'); };
 
   // --- Create: word count toggle ---
   $$('#wordCount button').forEach(b => b.onclick = () => {

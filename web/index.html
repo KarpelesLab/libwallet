@@ -89,6 +89,7 @@
             </button>
           </div>
           <p class="foot">Works fully offline once loaded · open source</p>
+          <p class="foot"><button type="button" class="ghost-btn" id="openBackendConsole">Developer · on-device MPC backend (passkeys · TSS) →</button></p>
         </div>
       </div>
 
@@ -317,6 +318,8 @@
 
         <!-- Backend pane — the REAL libwallet request API, running via WASM -->
         <div class="tabpane" data-pane="backend">
+
+          <button type="button" class="ghost-btn hidden" id="bkBackToSetup" style="margin-bottom:10px">← Back to wallet setup</button>
 
           <div class="panel bk-manifest">
             <div class="lead">
