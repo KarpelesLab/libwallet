@@ -514,9 +514,16 @@ impl<'a> Signer for TssSigner<'a> {
     }
 }
 
-/// Build and DKLs-sign a legacy P2PKH transaction spending `utxos` to
-/// `outputs` (each `(address, sats)`). `unlock` provides the Password creds for
-/// all wallet shares. Returns the raw signed transaction bytes.
+/// Build and DKLs-sign a transaction spending `utxos` to `outputs` (each
+/// `(address, sats)`). `unlock` provides the Password creds for all wallet
+/// shares. Returns the raw signed transaction bytes.
+///
+/// Each UTXO's spend flavor follows its `script_pubkey`: a supplied script is
+/// spent as legacy P2PKH (the caller vouches for the prevout); an EMPTY script
+/// means "a self-spend of the account's own coins", so we derive the account's
+/// native-SegWit (P2WPKH) scriptPubKey from its key — this is the offline path
+/// the browser drives with only `{txid, vout, amount}` (no RPC, no script
+/// lookup), matching how `build_and_sign_auto` treats the account's own UTXOs.
 pub fn sign_transfer(
     env: &Env,
     account_id: &str,
@@ -560,9 +567,21 @@ pub fn sign_transfer(
         tx.add_output(address, *sats).map_err(Error::Env)?;
     }
 
+    // The account's own P2WPKH scriptPubKey, derived once for self-spend inputs
+    // (UTXOs with an empty script). Same construction as build_and_sign_auto.
+    let p2wpkh_script = {
+        let pk = SecpPublicKey::from_sec1(&pub_bytes).map_err(|e| Error::Env(format!("{e:?}")))?;
+        outscript::script::Script::new(pk).out("p2wpkh").map_err(Error::Env)?.bytes().to_vec()
+    };
     let signs: Vec<BtcTxSign> = utxos
         .iter()
-        .map(|u| BtcTxSign::new(&signer, "p2pkh").amount(u.amount).prev_script(u.script_pubkey.clone()))
+        .map(|u| {
+            if u.script_pubkey.is_empty() {
+                BtcTxSign::new(&signer, "p2wpkh").amount(u.amount).prev_script(p2wpkh_script.clone())
+            } else {
+                BtcTxSign::new(&signer, "p2pkh").amount(u.amount).prev_script(u.script_pubkey.clone())
+            }
+        })
         .collect();
     tx.sign(&signs).map_err(Error::Env)?;
     Ok(tx.to_bytes())
@@ -932,6 +951,34 @@ mod tests {
         let parsed = BtcTx::from_bytes(&raw).expect("valid tx");
         assert_eq!(parsed.inputs.len(), 1);
         assert!(!parsed.inputs[0].script.is_empty(), "input scriptSig populated");
+    }
+
+    #[test]
+    fn btc_transfer_p2wpkh_self_spend_signs() {
+        // A UTXO with an EMPTY prevout script is a self-spend of the account's
+        // own coins: sign_transfer derives the account's P2WPKH scriptPubKey from
+        // its key (the offline path the browser drives with only txid/vout/amount).
+        // The signed input carries a SegWit witness, not a scriptSig.
+        let env = Env::init_memory().unwrap();
+        wallet::init(&env).unwrap();
+        account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+
+        let utxos = vec![Utxo { txid: [0x22; 32], vout: 0, amount: 100_000, script_pubkey: Vec::new() }];
+        let outputs = vec![(a.address.clone(), 90_000u64)]; // to self, 10k fee
+        let unlock: Vec<(String, String)> = vec![
+            (w.keys[0].id.clone(), "passwordone".to_string()),
+            (w.keys[1].id.clone(), "passwordtwo".to_string()),
+            (w.keys[2].id.clone(), "passwordthree".to_string()),
+        ];
+
+        let raw = sign_transfer(&env, &a.id, &unlock, &utxos, &outputs).expect("p2wpkh sign+self-verify");
+        let parsed = BtcTx::from_bytes(&raw).expect("valid tx");
+        assert_eq!(parsed.inputs.len(), 1);
+        assert!(parsed.inputs[0].script.is_empty(), "p2wpkh input has empty scriptSig");
+        assert!(!parsed.inputs[0].witnesses.is_empty(), "p2wpkh input carries a witness");
     }
 
     /// One-shot mock serving a single modchain_assets JSON-RPC result.

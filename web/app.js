@@ -418,6 +418,25 @@ async function onSendSubmit() {
 
 // --- EVM prepare -----------------------------------------------------------
 
+// The ONE signer for every chain. Callers build the per-chain Transaction and
+// pass a local-sign thunk; the MPC-vs-local routing (which account, which
+// curve's committee, the biometric) lives here alone — no prepare* branches on
+// session.mpc. For an MPC session it signs the committee via the chain-agnostic
+// Account:signTransaction; otherwise it runs the local mnemonic signer. Must be
+// called from a click handler so the committee biometric has transient
+// activation. Returns the raw signed tx (0x-hex for EVM/BTC, base58 for Solana).
+async function signChainTx(chain, mpcTx, localSign) {
+  if (!session.mpc) return localSign();
+  const acct = session.mpcAccounts[chain];
+  if (!acct) throw new Error(`No MPC account for ${chain}.`);
+  const wallet = chain === 'solana' ? backend.walletEd : backend.wallet;
+  const keys = await mpcCommitteeKeys(wallet);   // biometric, in the caller's click
+  const r = await backendRequest('Account:signTransaction', 'POST', {
+    Id: acct.id, Transaction: mpcTx, Keys: keys
+  });
+  return r.raw ?? r.Raw;
+}
+
 async function prepareEvm(to, amount) {
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('That is not a valid EVM address.');
   const from = session.addresses.evm;
@@ -476,18 +495,11 @@ async function prepareEvm(to, amount) {
       ['Gas limit', String(gas)]
     ],
     broadcast: async () => {
-      // Runs from the confirm modal's "Sign & broadcast" click, so the WebAuthn
-      // biometric inside mpcCommitteeKeys has valid transient activation.
-      let raw;
-      if (session.mpc) {
-        const keys = await mpcCommitteeKeys(backend.wallet);   // biometric, in this click
-        const r = await backendRequest('Account:signTransaction', 'POST', {
-          Id: session.mpcAccounts.evm.id, Transaction: txJson, Keys: keys
-        });
-        raw = r.raw ?? r.Raw;
-      } else {
-        raw = wasm.sign_evm_tx(session.mnemonic, JSON.stringify(txJson));
-      }
+      // Runs from the confirm modal's "Sign & broadcast" click, so the committee
+      // biometric inside signChainTx has valid transient activation. EVM's MPC
+      // and local signers take the same Transaction shape.
+      const raw = await signChainTx('evm', txJson,
+        () => wasm.sign_evm_tx(session.mnemonic, JSON.stringify(txJson)));
       const hash = await rpc(evmChain.rpc, 'eth_sendRawTransaction', [raw]);
       return { id: hash, url: evmChain.explorer + hash };
     }
@@ -513,7 +525,11 @@ async function prepareSolana(to, amount) {
       ['Fee', '~0.000005 SOL (network)']
     ],
     broadcast: async () => {
-      const signed = wasm.sign_solana_transfer(session.mnemonic, JSON.stringify(txJson));
+      // MPC committee (ed25519) reads `value` as string lamports; the local
+      // signer takes lamports as a number — build both, route via signChainTx.
+      const mpcTx = { to, value: String(lamports), recentBlockhash };
+      const signed = await signChainTx('solana', mpcTx,
+        () => wasm.sign_solana_transfer(session.mnemonic, JSON.stringify(txJson)));
       const sig = await rpc(SOLANA_RPC, 'sendTransaction', [signed, { encoding: 'base58' }]);
       return { id: sig, url: SOLANA_EXPLORER + sig };
     }
@@ -572,7 +588,19 @@ async function prepareBitcoin(to, amount) {
       ['Change', change ? `${formatUnits(BigInt(change), 8, 8)} BTC` : 'none']
     ],
     broadcast: async () => {
-      const hex = wasm.sign_bitcoin_tx(session.mnemonic, JSON.stringify(txJson));
+      // MPC committee (secp256k1) takes explicit inputs/outputs; omitting each
+      // UTXO's script tells Rust to derive the account's own P2WPKH scriptPubKey
+      // (self-spend). The local signer takes the higher-level txJson and does its
+      // own selection. Route both via signChainTx.
+      const outputs = [{ address: to, amount: amountSats }];
+      if (change > 0) outputs.push({ address: from, amount: change });
+      const mpcTx = {
+        UTXOs: picked.map(u => ({ txid: u.txid, vout: u.vout, amount: u.value })),
+        Outputs: outputs
+      };
+      const raw = await signChainTx('bitcoin', mpcTx,
+        () => wasm.sign_bitcoin_tx(session.mnemonic, JSON.stringify(txJson)));
+      const hex = (raw || '').replace(/^0x/, '');
       const txid = await httpText(`${BTC_API}/tx`, { method: 'POST', body: hex });
       return { id: txid.trim(), url: BTC_EXPLORER + txid.trim() };
     }
@@ -1110,19 +1138,19 @@ async function enterMpcDashboard() {
 // Remove-wallet routes to mpcForget.
 function applyMpcGuards() {
   const mpc = !!session.mpc;
-  // --- Send: committee EVM send is wired; Solana/Bitcoin still pending ---
+  // --- Send: committee send is wired for every chain via Account:signTransaction ---
   updateSendAvailability();
   // --- Settings: reveal recovery phrase is walletcore-only ---
   const reveal = $('#revealPhrase');
   if (reveal) reveal.classList.toggle('hidden', mpc);
 }
 
-// Enable/disable Send per chain. For the MPC committee, EVM works now while
-// Solana/Bitcoin are still pending Rust support, so Send is disabled with a
-// notice on those chains only. For the walletcore path (session.mpc false) all
-// chains stay enabled. Called from applyMpcGuards and onSendChainChange.
+// Enable/disable Send per chain. Committee send now works on every chain
+// (EVM/Solana/Bitcoin) through the chain-agnostic Account:signTransaction, so
+// nothing is blocked in either the MPC or walletcore path. Retained as the one
+// hook that would gate a chain if a future network lacked offline signing.
 function updateSendAvailability() {
-  const blocked = !!session.mpc && currentSendChain !== 'evm';
+  const blocked = false;
   const sendBtn = $('#sendSubmit');
   if (sendBtn) sendBtn.disabled = blocked;
   const notice = $('#sendMpcNotice');

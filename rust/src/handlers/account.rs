@@ -68,11 +68,44 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
 /// `Account:signTransaction` — build and threshold-sign an EVM transaction for
 /// the account, returning the signed raw tx as `0x`-hex. Broadcast
 /// (signAndSend) layers eth_sendRawTransaction on top once RPC is wired.
+/// Extract the local unlock secrets from a request's `Keys` array — the
+/// Password/StoreKey/Plain shares the committee signs with. Shared by every
+/// chain's signer so the extraction lives in one place.
+fn unlock_keys(params: &Value) -> Vec<(String, String)> {
+    let keys: Vec<crate::sign::KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    keys.iter()
+        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
+        .map(|k| (k.id.clone(), k.key.clone()))
+        .collect()
+}
+
+/// `Account:signTransaction` — chain-agnostic offline transaction signing. The
+/// caller passes an account `Id` and a `Transaction` object; we dispatch on the
+/// account's chain and return a broadcast-ready `raw` (EVM/BTC = `0x`-hex,
+/// Solana = base58). There is NO RPC here — every value the signer needs
+/// (nonce, blockhash, UTXOs) must be supplied in `Transaction`, which is what
+/// lets this build and run on wasm. `Account:signAndSendTransaction` layers the
+/// RPC (fee/blockhash/UTXO fetch + broadcast) on top of these same signers.
 pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    match account.kind.as_str() {
+        "ethereum" => sign_tx_evm(env, &account, params),
+        "solana" => sign_tx_solana(env, &account, params),
+        "bitcoin" => sign_tx_bitcoin(env, &account, params),
+        other => Err(ApiError::new(400, format!("signTransaction not supported for {other}"))),
+    }
+}
+
+fn sign_tx_evm(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params
         .get("Transaction")
         .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
@@ -98,17 +131,66 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
         eip1559,
     };
 
-    let keys: Vec<crate::sign::KeyDescription> = params
-        .get("Keys")
-        .and_then(|k| serde_json::from_value(k.clone()).ok())
-        .unwrap_or_default();
-    let unlock: Vec<(String, String)> = keys
-        .iter()
-        .filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain"))
-        .map(|k| (k.id.clone(), k.key.clone()))
-        .collect();
+    let unlock = unlock_keys(params);
+    let raw = crate::evm::sign_tx(env, &account.id, &unlock, &req).map_err(ApiError::internal)?;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
+}
 
-    let raw = crate::evm::sign_tx(env, account_id, &unlock, &req).map_err(ApiError::internal)?;
+fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let to_b58 = tx.get("to").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "to required"))?;
+    let lamports: u64 =
+        tx.get("value").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // Offline signing: the recent blockhash comes from the caller (no RPC here).
+    // signAndSend fetches it from the node and injects it before delegating.
+    let bh_b58 = tx
+        .get("recentBlockhash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "recentBlockhash required"))?;
+    let blockhash = b58_32(bh_b58)?;
+    let from = crate::solana::pubkey_from_b64url(&account.pubkey)
+        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+    let to = b58_32(to_b58)?;
+
+    let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
+    let unlock = unlock_keys(params);
+    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+        .map_err(ApiError::internal)?;
+    let tx_bytes = crate::solana::assemble_tx(&msg, &sig);
+    let raw = bs58::encode(&tx_bytes).into_string();
+    Ok(serde_json::json!({ "raw": raw }))
+}
+
+fn sign_tx_bitcoin(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let unlock = unlock_keys(params);
+
+    // Offline signing needs explicit inputs — auto UTXO discovery is an RPC
+    // concern that lives in signAndSend's bitcoin_send.
+    let mut utxos = Vec::new();
+    for u in tx.get("UTXOs").and_then(Value::as_array).ok_or_else(|| ApiError::new(400, "UTXOs required"))? {
+        let txid_v = decode_hex(u.get("txid").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "utxo txid"))?)?;
+        let txid: [u8; 32] = txid_v.try_into().map_err(|_| ApiError::new(400, "txid must be 32 bytes"))?;
+        let vout = u.get("vout").and_then(Value::as_u64).unwrap_or(0) as u32;
+        let amount = u.get("amount").and_then(Value::as_u64).unwrap_or(0);
+        // `script` is optional: an omitted/empty prevout script means a self-spend
+        // of the account's own coins — bitcoin::sign_transfer derives the P2WPKH
+        // scriptPubKey from the account key, so the browser needs only txid/vout/amount.
+        let script = match u.get("script").and_then(Value::as_str) {
+            Some(h) if !h.is_empty() => decode_hex(h)?,
+            _ => Vec::new(),
+        };
+        utxos.push(crate::bitcoin::Utxo { txid, vout, amount, script_pubkey: script });
+    }
+    let mut outputs = Vec::new();
+    for o in tx.get("Outputs").and_then(Value::as_array).ok_or_else(|| ApiError::new(400, "Outputs required"))? {
+        let address = o.get("address").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "output address"))?;
+        let amount = o.get("amount").and_then(Value::as_u64).unwrap_or(0);
+        outputs.push((address.to_string(), amount));
+    }
+
+    let raw = crate::bitcoin::sign_transfer(env, &account.id, &unlock, &utxos, &outputs).map_err(ApiError::internal)?;
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
 }
@@ -177,25 +259,9 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
         }
     }
 
-    let mut utxos = Vec::new();
-    for u in tx.get("UTXOs").and_then(Value::as_array).ok_or_else(|| ApiError::new(400, "UTXOs required"))? {
-        let txid_v = decode_hex(u.get("txid").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "utxo txid"))?)?;
-        let txid: [u8; 32] = txid_v.try_into().map_err(|_| ApiError::new(400, "txid must be 32 bytes"))?;
-        let vout = u.get("vout").and_then(Value::as_u64).unwrap_or(0) as u32;
-        let amount = u.get("amount").and_then(Value::as_u64).unwrap_or(0);
-        let script = decode_hex(u.get("script").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "utxo script"))?)?;
-        utxos.push(crate::bitcoin::Utxo { txid, vout, amount, script_pubkey: script });
-    }
-
-    let mut outputs = Vec::new();
-    for o in tx.get("Outputs").and_then(Value::as_array).ok_or_else(|| ApiError::new(400, "Outputs required"))? {
-        let address = o.get("address").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "output address"))?;
-        let amount = o.get("amount").and_then(Value::as_u64).unwrap_or(0);
-        outputs.push((address.to_string(), amount));
-    }
-
-    let raw = crate::bitcoin::sign_transfer(env, &account.id, &unlock, &utxos, &outputs).map_err(ApiError::internal)?;
-    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    // Explicit-UTXO path: delegate to the shared offline signer, then broadcast.
+    let signed = sign_tx_bitcoin(env, account, params)?;
+    let hex = signed["raw"].as_str().unwrap_or("").trim_start_matches("0x").to_string();
     let txid = crate::rpc::call(rpc, "sendrawtransaction", serde_json::json!([hex])).map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "txid": txid, "raw": format!("0x{hex}") }))
 }
@@ -205,32 +271,24 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
 /// sendTransaction. Returns the transaction signature.
 #[cfg(not(target_arch = "wasm32"))]
 fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
-    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
-    let to_b58 = tx.get("to").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "to required"))?;
-    let lamports: u64 = tx.get("value").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
-
-    // Recent blockhash from the node.
+    // Fetch the recent blockhash from the node, then delegate the actual signing
+    // to the shared offline signer (sign_tx_solana) so there is one Solana tx
+    // builder, not two. We inject the blockhash into a cloned Transaction.
     let bh = crate::rpc::call(rpc, "getLatestBlockhash", serde_json::json!([])).map_err(ApiError::internal)?;
     let bh_b58 = bh
         .get("value")
         .and_then(|v| v.get("blockhash"))
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(502, "no blockhash in response"))?;
-    let blockhash = b58_32(bh_b58)?;
-    let from = crate::solana::pubkey_from_b64url(&account.pubkey)
-        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
-    let to = b58_32(to_b58)?;
 
-    let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
-    let keys: Vec<crate::sign::KeyDescription> =
-        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
-    let unlock: Vec<(String, String)> =
-        keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
-        .map_err(ApiError::internal)?;
+    let mut p = params.clone();
+    p.get_mut("Transaction")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| ApiError::new(400, "Transaction required"))?
+        .insert("recentBlockhash".to_string(), Value::String(bh_b58.to_string()));
 
-    let tx_bytes = crate::solana::assemble_tx(&msg, &sig);
-    let tx_b58 = bs58::encode(&tx_bytes).into_string();
+    let signed = sign_tx_solana(env, account, &p)?;
+    let tx_b58 = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
     let signature = crate::rpc::call(rpc, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))
         .map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
