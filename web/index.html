@@ -214,6 +214,29 @@
       </div>
     </section>
 
+    <!-- ══ MPC UNLOCK (on-device committee wallet) ══════════════════════ -->
+    <section class="screen center" id="screen-mpc-unlock">
+      <div class="card narrow rise">
+        <div class="card-pad stack" style="--gap:18px">
+          <div class="stack center-text" style="--gap:12px; align-items:center">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="color:var(--iris)"><rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.6" fill="currentColor"/></svg>
+            <div>
+              <h1 class="title">Unlock your wallet</h1>
+              <p class="subtitle" style="margin:6px auto 0">Your MPC wallet is stored on this device; unlock it to sign.</p>
+            </div>
+          </div>
+          <div class="input-wrap hidden" id="mpcUnlockPwRow">
+            <input class="input" id="mpcUnlockPw" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" />
+            <button class="ghost-btn" type="button" data-toggle="mpcUnlockPw">Show</button>
+          </div>
+          <div class="err-inline" id="mpcUnlockErr"></div>
+          <button class="btn primary block" type="button" id="mpcUnlockBtn">Unlock with passkey</button>
+          <div class="divider"></div>
+          <button class="btn danger sm" type="button" id="mpcForget">Forget this wallet</button>
+        </div>
+      </div>
+    </section>
+
     <!-- ══ DASHBOARD ════════════════════════════════════════════════════ -->
     <section class="screen" id="screen-dashboard">
       <div class="dash">

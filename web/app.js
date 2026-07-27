@@ -96,6 +96,13 @@ async function boot() {
 
 // Decide the first real screen once wasm is ready.
 function route() {
+  // An on-device MPC wallet is the primary wallet — it takes priority over the
+  // walletcore vault. Present its unlock screen (passkey / password) instead of
+  // a fresh keygen or the walletcore password prompt.
+  if (localStorage.getItem(BK_MPC_LS)) {
+    prepareMpcUnlock();
+    return showScreen('mpc-unlock');
+  }
   if (localStorage.getItem(STORAGE.vault)) {
     showScreen('unlock');
     setTimeout(() => $('#pwUnlock')?.focus(), 60);
@@ -877,6 +884,13 @@ function wireStaticEvents() {
   $('#unlockForm').onsubmit = e => { e.preventDefault(); tryUnlock($('#pwUnlock').value); };
   $('#forgetFromUnlock').onclick = () => confirmRemove();
 
+  // --- MPC unlock (on-device committee wallet) ---
+  // The button handler runs WebAuthn directly in this click task (no setTimeout)
+  // so the passkey derivation keeps its transient user activation.
+  $('#mpcUnlockBtn').onclick = mpcUnlock;
+  $('#mpcForget').onclick = mpcForget;
+  $('#mpcUnlockPw').onkeydown = e => { if (e.key === 'Enter') mpcUnlock(); };
+
   // --- Dashboard: tabs ---
   $$('.tabs button').forEach(b => b.onclick = () => {
     $$('.tabs button').forEach(x => x.classList.remove('on'));
@@ -955,6 +969,144 @@ const backend = {
 // (Role B) verification only succeeds when the wallet is served from that
 // origin. Applied automatically; NOT user-overridable.
 const BK_CLIENT_ID = 'oaap-fz65wz-jaoj-b5hf-wonj-do54q5au';
+
+// localStorage key for the persisted on-device MPC wallet. We store the
+// backend's OWN encrypted backup blob (from Wallet:backup) — the committee
+// shares stay sealed inside it exactly as the backend wrote them — plus the
+// non-secret WebAuthn material (credentialId + PRF salts + mode) needed to
+// re-derive the passkey secrets at unlock. The password is NEVER stored.
+const BK_MPC_LS = 'libwallet.mpc.wallet';
+
+// Persist the current backend wallet so it survives a reload. Backs it up via
+// the backend's Wallet:backup (returns an ARRAY [{filename,data}]) and records
+// the passkey material from backend.mpc (if any). No-ops without a wallet.
+async function saveMpcWallet() {
+  if (!backend.wallet) return;
+  try {
+    const arr = await backendRequest('Wallet:backup', 'POST', { Id: backend.wallet.Id });
+    const entry = Array.isArray(arr) ? arr[0] : arr;
+    if (!entry || !entry.data) return;
+    const rec = {
+      walletId: backend.wallet.Id,
+      filename: entry.filename, data: entry.data,
+      mpc: backend.mpc ? {
+        credentialId: bufToB64url(backend.mpc.credentialId),
+        saltFirst: bufToB64url(backend.mpc.saltFirst),
+        saltSecond: backend.mpc.saltSecond ? bufToB64url(backend.mpc.saltSecond) : null,
+        mode: backend.mpc.mode,
+      } : null,
+    };
+    try { localStorage.setItem(BK_MPC_LS, JSON.stringify(rec)); } catch {}
+  } catch (e) {
+    // Persistence is best-effort; a backup failure must not break wallet create.
+    bkLog('err', 'saveMpcWallet: ' + (e.message || e));
+  }
+}
+
+// Read the persisted MPC record (or null if absent/corrupt).
+function readMpcRecord() {
+  try { return JSON.parse(localStorage.getItem(BK_MPC_LS)); }
+  catch { return null; }
+}
+
+// Prepare the MPC unlock screen for the stored wallet: password-mode wallets
+// (and legacy plain-password wallets with no passkey material) show a password
+// field; passkey-mode wallets hide it. Adjust the button copy accordingly.
+function prepareMpcUnlock() {
+  const rec = readMpcRecord();
+  const pwRow = $('#mpcUnlockPwRow');
+  const pw = $('#mpcUnlockPw');
+  const btn = $('#mpcUnlockBtn');
+  const err = $('#mpcUnlockErr');
+  if (err) err.textContent = '';
+  if (pw) pw.value = '';
+  // rec.mpc null → a plain-password wallet (no passkey); rec.mpc.mode
+  // 'password' → passkey seals share 1, a password seals share 2.
+  const needsPw = !rec || !rec.mpc || rec.mpc.mode === 'password';
+  const hasPasskey = !!(rec && rec.mpc);
+  if (pwRow) pwRow.classList.toggle('hidden', !needsPw);
+  if (pw) pw.disabled = !needsPw;
+  if (btn) btn.textContent = hasPasskey ? 'Unlock with passkey' : 'Unlock';
+}
+
+// Restore + unlock the persisted MPC wallet. Wired to #mpcUnlockBtn and runs in
+// the click task so WebAuthn keeps its transient user activation.
+async function mpcUnlock() {
+  const err = $('#mpcUnlockErr');
+  const btn = $('#mpcUnlockBtn');
+  err.textContent = '';
+  const rec = readMpcRecord();
+  if (!rec) { err.textContent = 'No stored wallet to unlock.'; return; }
+
+  // Password-mode (and plain-password) wallets require a non-empty password
+  // BEFORE we touch WebAuthn / the backend.
+  const needsPw = !rec.mpc || rec.mpc.mode === 'password';
+  const pwValue = $('#mpcUnlockPw').value || '';
+  if (needsPw && !pwValue) { err.textContent = 'Enter your password.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Unlocking…';
+  try {
+    // 1. Ensure the backend session is open.
+    if (backend.handle == null) backendOpen();
+    // 2. Restore the sealed wallet blob into the in-memory DB.
+    await backendRequest('Wallet:restore', 'POST', { files: [{ filename: rec.filename, data: rec.data }] });
+    // 3. Load the restored wallet object (carries .Keys for signing).
+    backend.wallet = await backendRequest('Wallet', 'GET', { Id: rec.walletId });
+    // 4. Rebuild the in-session unlock material from the record.
+    backend.passkey = null;
+    if (rec.mpc) {
+      backend.mpc = {
+        credentialId: new Uint8Array(b64urlToBuf(rec.mpc.credentialId)),
+        saltFirst: new Uint8Array(b64urlToBuf(rec.mpc.saltFirst)),
+        saltSecond: rec.mpc.saltSecond ? new Uint8Array(b64urlToBuf(rec.mpc.saltSecond)) : null,
+        mode: rec.mpc.mode,
+        password: (rec.mpc.mode === 'password' ? (pwValue || null) : null),
+      };
+      backend.password = null;
+      // 5. Validate the unlock now so a wrong passkey/password fails clearly:
+      //    derive the passkey secret(s) once (one biometric gesture). This is
+      //    the same derivation signMessage uses, so success proves the passkey.
+      try {
+        await passkeyDeriveTwo(
+          backend.mpc.credentialId,
+          backend.mpc.saltFirst,
+          backend.mpc.saltSecond ?? backend.mpc.saltFirst
+        );
+      } catch {
+        throw new Error('Passkey/wallet unlock failed');
+      }
+    } else {
+      // Plain-password wallet: no passkey material. Accept the password (it can
+      // only be validated by actually signing).
+      backend.mpc = null;
+      backend.password = pwValue;
+    }
+    // 6. Reset derived accounts and surface the restored wallet in the console.
+    backend.accounts = [];
+    $('#bkAccountList').innerHTML = '';
+    $('#bkCreateAccount').disabled = false;
+    refreshSignAccounts();
+    openBackendConsole();
+    const out = $('#bkRkOut') || $('#bkWalletOut');
+    if (out) { out.classList.remove('hidden'); out.innerHTML = backendWalletCardHtml(backend.wallet); }
+    toast('ok', 'Wallet unlocked', 'Your on-device MPC wallet was restored and is ready to sign.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+  } finally {
+    btn.disabled = false;
+    prepareMpcUnlock(); // restores the correct button label
+  }
+}
+
+// Forget the persisted MPC wallet and fall back to onboarding.
+function mpcForget() {
+  if (!confirm('Forget this wallet on this device? You can only restore it from its backup or recovery material.')) return;
+  localStorage.removeItem(BK_MPC_LS);
+  backend.wallet = null;
+  backend.mpc = null;
+  showScreen('onboarding');
+  goStep('choose');
+}
 
 // UTF-8 string → standard base64 (for Account:signMessage Message param).
 function b64utf8(str) {
@@ -1145,6 +1297,7 @@ async function backendRkCreate() {
       bkStatus('live', '2FA wallet created · #' + backend.handle);
       toast('ok', '2FA wallet created', 'Self-custody wallet with a server-held RemoteKey share.');
       backendListWallets();
+      await saveMpcWallet();
     } catch (e) {
       err.textContent = e.message || String(e);
       bkStatus('err', '2FA keygen failed');
@@ -1223,6 +1376,7 @@ async function backendRkCreatePasskey() {
       ? 'One passkey seals two local shares; a server-held RemoteKey is the third.'
       : 'Passkey + password + RemoteKey — three distinct factors.');
     backendListWallets();
+    await saveMpcWallet();
   } catch (e) {
     err.textContent = e.message || String(e);
     bkStatus('err', 'passkey 2FA keygen failed');
@@ -1637,6 +1791,7 @@ async function backendCreateWallet() {
         ? 'Shares sealed with your device passkey (WebAuthn PRF) — no password.'
         : 'TSS keygen ran in your browser (' + w.Curve + ' / ' + w.Protocol + ').');
     backendListWallets();
+    await saveMpcWallet();
   } catch (e) {
     err.textContent = e.message || String(e);
     bkStatus('err', usePasskey ? 'passkey/keygen failed' : 'keygen failed');
