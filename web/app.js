@@ -904,8 +904,15 @@ const backend = {
   ready:    false,
   wallet:   null,   // last created Wallet object (has .Keys for signing)
   password: null,   // share password for the created wallet (session-only)
-  accounts: []      // derived Account objects
+  accounts: [],     // derived Account objects
+  clientId: null,   // configured Sec-ClientId (Info:setWalletInfo), for RemoteKey 2FA
+  rk: {             // RemoteKey 2FA creation flow state
+    session:  null, // session id from RemoteKey:new, consumed by RemoteKey:validate
+    resource: null  // "crwsv-…" RemoteKey resource from RemoteKey:validate
+  }
 };
+
+const BK_CLIENTID_LS = 'libwallet.backend.clientId';
 
 // UTF-8 string → standard base64 (for Account:signMessage Message param).
 function b64utf8(str) {
@@ -980,6 +987,143 @@ function backendOpen() {
   loadBackendVersion();
   backendListNetworks();
   backendListWallets();
+
+  // Re-apply a Client ID persisted from a previous session, if any.
+  const savedClientId = (() => { try { return localStorage.getItem(BK_CLIENTID_LS); } catch { return null; } })();
+  if (savedClientId) {
+    $('#bkClientId').value = savedClientId;
+    backendSetClientId();
+  } else {
+    bkClientIdState(false);
+  }
+}
+
+// Reflect whether a Client ID is configured (gates the RemoteKey 2FA flow).
+function bkClientIdState(set) {
+  const pill = $('#bkClientIdState');
+  pill.className = 'bk-status' + (set ? ' live' : '');
+  $('#bkClientIdStateText').textContent = set ? 'set' : 'not set';
+  $('#bkRkSend').disabled = !set;
+}
+
+// Info:setWalletInfo {ClientId} — configure the Sec-ClientId header used by the
+// RemoteKey handlers, and persist it across reloads.
+async function backendSetClientId() {
+  const err = $('#bkClientIdErr');
+  err.textContent = '';
+  const value = $('#bkClientId').value.trim();
+  if (!value) { err.textContent = 'Enter a Client ID.'; return; }
+  const btn = $('#bkSetClientId');
+  btn.disabled = true;
+  try {
+    await backendRequest('Info:setWalletInfo', 'POST', { ClientId: value });
+    backend.clientId = value;
+    try { localStorage.setItem(BK_CLIENTID_LS, value); } catch { /* private mode — session only */ }
+    bkClientIdState(true);
+    toast('ok', 'Client ID set', 'RemoteKey 2FA can now reach the WalletSign backend.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkClientIdState(false);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Step 1 — RemoteKey:new {email|number}: start a 2FA session. Routes SMS vs
+// email on whether the value contains '@'.
+async function backendRkSend() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!backend.clientId) { err.textContent = 'Set a Client ID above first.'; return; }
+  const target = $('#bkRkTarget').value.trim();
+  if (!target) { err.textContent = 'Enter an email or phone number.'; return; }
+  const params = target.includes('@') ? { email: target } : { number: target };
+  const btn = $('#bkRkSend');
+  btn.disabled = true; btn.textContent = 'Sending…';
+  bkStatus('busy', 'RemoteKey:new…');
+  try {
+    const data = await backendRequest('RemoteKey:new', 'POST', params);
+    // The WalletSign backend owns the response shape; the session identifier is
+    // passed verbatim to validate. Be forgiving about its exact key.
+    backend.rk.session = (data && (data.session ?? data.Session)) ?? data;
+    $('#bkRkStep2').classList.remove('hidden');
+    bkStatus('live', 'code sent · #' + backend.handle);
+    toast('ok', 'Code sent', 'Enter the verification code you received.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'RemoteKey:new failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Send code';
+  }
+}
+
+// Step 2 — RemoteKey:validate {session, code}: verify the 2FA code. On success
+// the response carries {RemoteKey: "crws-…:crwsv-…"}.
+async function backendRkVerify() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!backend.rk.session) { err.textContent = 'Request a code first.'; return; }
+  const code = $('#bkRkCode').value.trim();
+  if (!code) { err.textContent = 'Enter the verification code.'; return; }
+  const btn = $('#bkRkVerify');
+  btn.disabled = true; btn.textContent = 'Verifying…';
+  bkStatus('busy', 'RemoteKey:validate…');
+  try {
+    const data = await backendRequest('RemoteKey:validate', 'POST', { session: backend.rk.session, code });
+    const resource = (data && (data.RemoteKey ?? data.remoteKey)) ?? data;
+    if (!resource) throw new Error('No RemoteKey in response.');
+    backend.rk.resource = resource;
+    $('#bkRkStep3').classList.remove('hidden');
+    bkStatus('live', '2FA verified · #' + backend.handle);
+    toast('ok', '2FA verified', 'RemoteKey issued — name your wallet and create it.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'RemoteKey:validate failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Verify';
+  }
+}
+
+// Step 3 — Wallet POST with two local Password shares + one RemoteKey share.
+async function backendRkCreate() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!backend.rk.resource) { err.textContent = 'Verify the 2FA code first.'; return; }
+  const name = $('#bkRkName').value.trim() || 'Browser 2FA wallet';
+  const pw = $('#bkRkPw').value;
+  if (pw.length < 6) { err.textContent = 'Password must be at least 6 characters.'; return; }
+  const btn = $('#bkRkCreate');
+  btn.disabled = true; btn.textContent = 'Running keygen…';
+  bkStatus('busy', 'TSS keygen (2FA)…');
+  // Defer so the button state paints before the local keygen work.
+  setTimeout(async () => {
+    try {
+      const keys = [
+        { Type: 'Password',  Key: pw },
+        { Type: 'Password',  Key: pw },
+        { Type: 'RemoteKey', Key: backend.rk.resource }
+      ];
+      const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+      backend.wallet = w;
+      backend.password = pw;
+      backend.accounts = [];
+      $('#bkAccountList').innerHTML = '';
+      $('#bkCreateAccount').disabled = false;
+      refreshSignAccounts();
+
+      const out = $('#bkRkOut');
+      out.classList.remove('hidden');
+      out.innerHTML = backendWalletCardHtml(w);
+      bkStatus('live', '2FA wallet created · #' + backend.handle);
+      toast('ok', '2FA wallet created', 'Self-custody wallet with a server-held RemoteKey share.');
+      backendListWallets();
+    } catch (e) {
+      err.textContent = e.message || String(e);
+      bkStatus('err', '2FA keygen failed');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Create wallet';
+    }
+  }, 30);
 }
 
 async function loadBackendVersion() {
@@ -1195,6 +1339,10 @@ async function backendRunRaw() {
 
 function wireBackendEvents() {
   $('#bkCreateWallet').onclick  = backendCreateWallet;
+  $('#bkSetClientId').onclick   = backendSetClientId;
+  $('#bkRkSend').onclick        = backendRkSend;
+  $('#bkRkVerify').onclick      = backendRkVerify;
+  $('#bkRkCreate').onclick      = backendRkCreate;
   $('#bkListWallets').onclick   = backendListWallets;
   $('#bkCreateAccount').onclick = backendCreateAccount;
   $('#bkSignBtn').onclick       = backendSignMessage;

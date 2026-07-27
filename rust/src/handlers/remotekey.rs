@@ -22,6 +22,7 @@ fn client_id(env: &Env) -> Option<String> {
 
 /// `RemoteKey:new` {number|email} — start a 2FA session. The backend routes
 /// SMS vs email on whether the value contains `@` (Go `remotekeyNew`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn new(env: &Env, params: &Value) -> ApiResult {
     let number = params.get("number").and_then(Value::as_str).unwrap_or("");
     let target = if number.is_empty() { params.get("email").and_then(Value::as_str).unwrap_or("") } else { number };
@@ -32,9 +33,23 @@ pub fn new(env: &Env, params: &Value) -> ApiResult {
         .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
+/// wasm twin of [`new`]: awaits the browser-Fetch `do_post`.
+#[cfg(target_arch = "wasm32")]
+pub async fn new_async(env: &Env, params: &Value) -> ApiResult {
+    let number = params.get("number").and_then(Value::as_str).unwrap_or("");
+    let target = if number.is_empty() { params.get("email").and_then(Value::as_str).unwrap_or("") } else { number };
+    if target.is_empty() {
+        return Err(ApiError::new(400, "number or email is required"));
+    }
+    crate::rest::do_post(base(params), "Crypto/WalletSign:new", &json!({ "number": target }), client_id(env).as_deref())
+        .await
+        .map_err(|e| ApiError::new(502, e.to_string()))
+}
+
 /// `RemoteKey:reshare` {key} — kick a reshare cycle for an existing RemoteKey.
 /// threshold/count are fixed (1/3); the curve is recorded server-side at issue
 /// time and must NOT be passed back (Go `remotekeyReshare`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn reshare(env: &Env, params: &Value) -> ApiResult {
     let key = params.get("key").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "key is required"))?;
     crate::rest::do_post(
@@ -46,8 +61,23 @@ pub fn reshare(env: &Env, params: &Value) -> ApiResult {
     .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
+/// wasm twin of [`reshare`]: awaits the browser-Fetch `do_post`.
+#[cfg(target_arch = "wasm32")]
+pub async fn reshare_async(env: &Env, params: &Value) -> ApiResult {
+    let key = params.get("key").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "key is required"))?;
+    crate::rest::do_post(
+        base(params),
+        "Crypto/WalletSign:reshare",
+        &json!({ "key": key, "threshold": 1, "count": 3 }),
+        client_id(env).as_deref(),
+    )
+    .await
+    .map_err(|e| ApiError::new(502, e.to_string()))
+}
+
 /// `RemoteKey:validate` {session, code} — verify the 2FA code; returns
 /// `{RemoteKey: "<crws-id>:<crwsv-id>"}` on success (Go `remotekeyValidate`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn validate(env: &Env, params: &Value) -> ApiResult {
     let session = params.get("session").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "session is required"))?;
     let code = params.get("code").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "code is required"))?;
@@ -57,5 +87,20 @@ pub fn validate(env: &Env, params: &Value) -> ApiResult {
         &json!({ "session": session, "code": code }),
         client_id(env).as_deref(),
     )
+    .map_err(|e| ApiError::new(502, e.to_string()))
+}
+
+/// wasm twin of [`validate`]: awaits the browser-Fetch `do_post`.
+#[cfg(target_arch = "wasm32")]
+pub async fn validate_async(env: &Env, params: &Value) -> ApiResult {
+    let session = params.get("session").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "session is required"))?;
+    let code = params.get("code").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "code is required"))?;
+    crate::rest::do_post(
+        base(params),
+        "Crypto/WalletSign:verify",
+        &json!({ "session": session, "code": code }),
+        client_id(env).as_deref(),
+    )
+    .await
     .map_err(|e| ApiError::new(502, e.to_string()))
 }

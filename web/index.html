@@ -342,6 +342,26 @@
             </div>
           </div>
 
+          <!-- Client ID (Info:setWalletInfo) — required for RemoteKey 2FA -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Client ID · <span class="mono">Info:setWalletInfo</span></div>
+              <span class="bk-status" id="bkClientIdState"><span class="bk-dot"></span><span id="bkClientIdStateText">not set</span></span>
+            </div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">The Client ID authenticates libwallet to the WalletSign backend
+                  (sent as the <span class="mono">Sec-ClientId</span> header). It is required before
+                  the RemoteKey 2FA flow below can reach the server.</p>
+                <div class="amount-row">
+                  <input class="input mono" id="bkClientId" placeholder="crclient-… (your app's Client ID)" style="min-width:150px" />
+                  <button class="btn primary grow" type="button" id="bkSetClientId">Set</button>
+                </div>
+                <div class="err-inline" id="bkClientIdErr"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Create wallet -->
           <div class="bk-block">
             <div class="section-head"><div class="eyebrow muted">Create a real wallet · TSS keygen</div></div>
@@ -363,6 +383,49 @@
               </div>
             </div>
             <div id="bkWalletOut" class="bk-block hidden"></div>
+          </div>
+
+          <!-- Create self-custody wallet with 2FA (RemoteKey) -->
+          <div class="bk-block">
+            <div class="section-head"><div class="eyebrow muted">Self-custody wallet with 2FA · <span class="mono">RemoteKey</span></div></div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">Creates a 1-of-3 wallet whose third share is a server-held
+                  <strong>RemoteKey</strong>, unlocked by a 2FA code sent to your email or phone. Two
+                  Password shares stay local; the RemoteKey adds recoverable 2-factor custody. Requires
+                  a Client ID above.</p>
+
+                <!-- Step 1: request a code -->
+                <div class="rk-step" data-step="1">
+                  <label class="field-label" for="bkRkTarget">1 · Email or phone</label>
+                  <div class="amount-row">
+                    <input class="input mono" id="bkRkTarget" placeholder="you@example.com or +15551234567" style="min-width:150px" />
+                    <button class="btn primary grow" type="button" id="bkRkSend">Send code</button>
+                  </div>
+                </div>
+
+                <!-- Step 2: verify the code -->
+                <div class="rk-step hidden" data-step="2" id="bkRkStep2">
+                  <label class="field-label" for="bkRkCode">2 · Verification code</label>
+                  <div class="amount-row">
+                    <input class="input mono" id="bkRkCode" placeholder="6-digit code" style="min-width:150px" />
+                    <button class="btn primary grow" type="button" id="bkRkVerify">Verify</button>
+                  </div>
+                </div>
+
+                <!-- Step 3: name + password, then create -->
+                <div class="rk-step hidden" data-step="3" id="bkRkStep3">
+                  <label class="field-label" for="bkRkName">3 · Wallet name</label>
+                  <input class="input" id="bkRkName" placeholder="My 2FA wallet" value="Browser 2FA wallet" />
+                  <label class="field-label" for="bkRkPw" style="margin-top:10px">Share password (6+ characters)</label>
+                  <input class="input mono" id="bkRkPw" type="password" autocomplete="new-password" placeholder="Encrypts the two local shares" value="correct horse battery staple" />
+                  <button class="btn primary block" type="button" id="bkRkCreate" style="margin-top:12px">Create wallet</button>
+                </div>
+
+                <div class="err-inline" id="bkRkErr"></div>
+              </div>
+            </div>
+            <div id="bkRkOut" class="bk-block hidden"></div>
           </div>
 
           <!-- Wallets list -->

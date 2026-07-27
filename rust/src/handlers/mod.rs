@@ -25,8 +25,8 @@ mod spot;
 mod nft;
 #[cfg(not(target_arch = "wasm32"))]
 mod quote;
-#[cfg(not(target_arch = "wasm32"))]
-mod remotekey;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) mod remotekey;
 mod storekey;
 #[cfg(not(target_arch = "wasm32"))]
 mod swap;

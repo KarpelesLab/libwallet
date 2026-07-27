@@ -614,6 +614,7 @@ select.input { appearance: none; cursor: pointer;
 /* ---- Utility ------------------------------------------------------------- */
 .hidden { display: none !important; }
 .mono { font-family: var(--font-mono); }
+.rk-step { display: flex; flex-direction: column; gap: 8px; }
 .center-text { text-align: center; }
 .spread { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .grow { flex: 1; }

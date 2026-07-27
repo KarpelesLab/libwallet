@@ -85,6 +85,9 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
     let out = match (req.path.as_str(), verb) {
         ("Wallet", "POST") => crate::handlers::wallet::create_async(&handle.env, &req.params).await,
         ("Wallet:multiCreate", _) => crate::handlers::wallet::multi_create_async(&handle.env, &req.params).await,
+        ("RemoteKey:new", _) => crate::handlers::remotekey::new_async(&handle.env, &req.params).await,
+        ("RemoteKey:reshare", _) => crate::handlers::remotekey::reshare_async(&handle.env, &req.params).await,
+        ("RemoteKey:validate", _) => crate::handlers::remotekey::validate_async(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
     };
     match out {
