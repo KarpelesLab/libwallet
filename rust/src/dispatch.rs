@@ -73,9 +73,22 @@ pub fn handle_request(handle: &Handle, raw: &str) -> String {
 /// wasm async entry: mirrors [`handle_request`] but is `async` so browser
 /// handlers that must `.await` network I/O (rsurl fetch, spot ceremonies)
 /// can be dispatched from the Promise-returning `libwallet_request`. For now
-/// it delegates to the synchronous router unchanged — no wasm handler awaits
-/// yet; async routes are wired in as handlers gain browser networking.
+/// it intercepts the create routes (whose RemoteKey uploads must `.await` the
+/// browser Fetch API) and delegates everything else to the synchronous router.
 #[cfg(target_arch = "wasm32")]
 pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
-    handle_request(handle, raw)
+    let req: Request = match serde_json::from_str(raw) {
+        Ok(r) => r,
+        Err(e) => return response::error(&e.to_string(), 400),
+    };
+    let verb = if req.verb.is_empty() { "GET" } else { req.verb.as_str() };
+    let out = match (req.path.as_str(), verb) {
+        ("Wallet", "POST") => crate::handlers::wallet::create_async(&handle.env, &req.params).await,
+        ("Wallet:multiCreate", _) => crate::handlers::wallet::multi_create_async(&handle.env, &req.params).await,
+        _ => return handle_request(handle, raw),
+    };
+    match out {
+        Ok(d) => response::success(d),
+        Err(e) => response::error(&e.message, e.code),
+    }
 }

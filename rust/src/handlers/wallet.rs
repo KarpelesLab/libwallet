@@ -292,6 +292,63 @@ pub fn multi_create(env: &Env, params: &Value) -> ApiResult {
     }))
 }
 
+/// Browser (wasm32) async twin of the `POST Wallet` create arm. Identical
+/// request shape and progress/broadcast behaviour; awaits the async
+/// `models::wallet::create` so RemoteKey shares can upload over the browser
+/// Fetch API. Wired in via `dispatch::handle_request_async`.
+#[cfg(target_arch = "wasm32")]
+pub async fn create_async(env: &Env, params: &Value) -> ApiResult {
+    #[derive(serde::Deserialize)]
+    struct CreateReq {
+        #[serde(rename = "Name", default)]
+        name: String,
+        #[serde(rename = "Curve", default)]
+        curve: String,
+        #[serde(rename = "Keys", default)]
+        keys: Vec<crate::sign::KeyDescription>,
+    }
+    let req: CreateReq =
+        serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
+    crate::dispatch::emit_progress(0.05); // keygen starting
+    let w = crate::models::wallet::create_async(env, &req.name, &req.curve, &req.keys)
+        .await
+        .map_err(ApiError::internal)?;
+    crate::dispatch::emit_progress(0.9); // keygen done, persisting
+    env.broadcast(&crate::response::event(
+        "wallet:created",
+        serde_json::json!({ "id": w.id, "curve": w.curve }),
+    ));
+    Ok(serde_json::to_value(w).unwrap())
+}
+
+/// Browser (wasm32) async twin of [`multi_create`]. Same shared `now` for both
+/// wallets; awaits each async `create_at`.
+#[cfg(target_arch = "wasm32")]
+pub async fn multi_create_async(env: &Env, params: &Value) -> ApiResult {
+    let name = params.get("Name").and_then(Value::as_str).unwrap_or("").to_owned();
+    let keys: Vec<crate::sign::KeyDescription> = params
+        .get("Keys")
+        .and_then(|k| serde_json::from_value(k.clone()).ok())
+        .unwrap_or_default();
+    let now = crate::now_rfc3339();
+    let secp = crate::models::wallet::create_at_async(env, &name, "secp256k1", &keys, &now)
+        .await
+        .map_err(ApiError::internal)?;
+    let ed = crate::models::wallet::create_at_async(env, &name, "ed25519", &keys, &now)
+        .await
+        .map_err(ApiError::internal)?;
+    for w in [&secp, &ed] {
+        env.broadcast(&crate::response::event(
+            "wallet:created",
+            serde_json::json!({ "id": w.id, "curve": w.curve }),
+        ));
+    }
+    Ok(serde_json::json!({
+        "secp256k1": serde_json::to_value(&secp).unwrap(),
+        "ed25519": serde_json::to_value(&ed).unwrap(),
+    }))
+}
+
 /// `Wallet:backup` {Id?} — export the wallet(s) as backup entries (including the
 /// encrypted key shares). One wallet when `Id` is given, else all (Go
 /// apiWalletBackup).

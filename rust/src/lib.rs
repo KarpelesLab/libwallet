@@ -67,7 +67,7 @@ pub mod solana_spl;
 pub mod bitcoin;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod rpc;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod rest;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod quote;
@@ -91,7 +91,7 @@ pub mod spotbroker;
 pub mod transfer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod clawdpair;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod walletsign;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reshare;

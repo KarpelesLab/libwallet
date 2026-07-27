@@ -10,6 +10,7 @@
 
 use serde_json::Value;
 use std::collections::BTreeMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use crate::{Error, Result};
@@ -46,12 +47,14 @@ pub const DEFAULT_HOST: &str = "https://www.atonline.com";
 
 /// GET `<base>/_special/rest/<path>` and return the envelope's `data` field.
 /// `base` is the scheme+host (no trailing slash); tests pass a mock server URL.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn do_get(base: &str, path: &str) -> Result<Value> {
     do_get_with_client_id(base, path, None)
 }
 
 /// Like [`do_get`] but stamps the `Sec-ClientId` header (Go `withClientID`) —
 /// used by the WalletSign helpers (`Crypto/WalletSign:keys`).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) -> Result<Value> {
     let url = format!("{base}/_special/rest/{path}");
     let mut req = rsurl::Request::new("GET", &url)
@@ -74,6 +77,7 @@ pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) ->
 /// the RemoteKey / WalletSign helpers. `client_id`, when set, is stamped as the
 /// `Sec-ClientId` header (Go `withClientID`). Auth beyond that header is the
 /// backend's concern — these endpoints gate 2FA on ClientID + rate limits.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
     let url = format!("{base}/_special/rest/{path}");
     let body = serde_json::to_vec(params)
@@ -100,6 +104,7 @@ pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) 
 /// as the `Sec-ClientId` header (Go `withClientID`). That header is the only
 /// auth these endpoints require — e.g. the `Crypto/Okx:*` swap proxy — there is
 /// no request signature. Returns the envelope's `data`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
     let json = serde_json::to_string(params).unwrap_or_else(|_| "null".into());
     let url = format!("{base}/_special/rest/{path}?_={}", go_query_escape(&json));
@@ -116,6 +121,46 @@ pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&
         .json()
         .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
     unwrap_envelope(path, resp)
+}
+
+// Browser (wasm32) twins of the REST fns above: same envelope handling, but the
+// HTTP transport is rsurl's async Fetch-backed `aio` client (browser-managed
+// timeouts; no `read_timeout`). Only the three fns the create path needs.
+#[cfg(target_arch = "wasm32")]
+pub async fn do_get(base: &str, path: &str) -> Result<Value> {
+    do_get_with_client_id(base, path, None).await
+}
+#[cfg(target_arch = "wasm32")]
+pub async fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) -> Result<Value> {
+    let url = format!("{base}/_special/rest/{path}");
+    let mut req = rsurl::aio::Request::new("GET", &url).header("Sec-Rest-Http", "false");
+    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
+        req = req.header("Sec-ClientId", id);
+    }
+    let resp = rsurl::aio::request(&req)
+        .await
+        .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?;
+    let v: Value = serde_json::from_slice(&resp.body)
+        .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
+    unwrap_envelope(path, v)
+}
+#[cfg(target_arch = "wasm32")]
+pub async fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
+    let url = format!("{base}/_special/rest/{path}");
+    let body = serde_json::to_vec(params).map_err(|e| Error::Env(format!("rest {path} encode failed: {e}")))?;
+    let mut req = rsurl::aio::Request::new("POST", &url)
+        .header("Sec-Rest-Http", "false")
+        .header("Content-Type", "application/json")
+        .with_body(body);
+    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
+        req = req.header("Sec-ClientId", id);
+    }
+    let resp = rsurl::aio::request(&req)
+        .await
+        .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?;
+    let v: Value = serde_json::from_slice(&resp.body)
+        .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
+    unwrap_envelope(path, v)
 }
 
 /// Unwrap a KLB envelope `{result, data}` — returns `data` on success, else an

@@ -269,6 +269,147 @@ pub fn create_at(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription
     Ok(wallet)
 }
 
+/// Browser (wasm32) async twin of [`create`]. Local TSS keygen is identical; the
+/// only reason this must be `async` is the RemoteKey 2FA-share upload, which on
+/// wasm uses the browser Fetch API (rsurl `aio`). Native code stays sync via the
+/// `#[cfg(not(wasm32))]` `create`/`create_at` above — this route bypasses
+/// `seal_share_full` and inlines the same crypto with an awaited HTTP transport.
+#[cfg(target_arch = "wasm32")]
+pub async fn create_async(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription]) -> Result<Wallet> {
+    create_at_async(env, name, curve, key_descs, &crate::now_rfc3339()).await
+}
+
+/// Browser async twin of [`create_at`] — see [`create`]. Reproduces the sync
+/// `create_at`'s keygen/assembly/validation verbatim; the ONLY differences are
+/// that the wdrone fleet recipients are fetched once up front (iff any RemoteKey
+/// share) and each RemoteKey share is sealed + uploaded via `.await` instead of
+/// through the sync `seal_share_full`.
+#[cfg(target_arch = "wasm32")]
+pub async fn create_at_async(env: &Env, name: &str, curve: &str, key_descs: &[KeyDescription], created: &str) -> Result<Wallet> {
+    if key_descs.len() < 3 {
+        return Err(Error::Env(format!("need at least 3 keys, got {}", key_descs.len())));
+    }
+    let threshold: usize = 1;
+    let n = key_descs.len();
+    if threshold >= n {
+        return Err(Error::Env("threshold too high".into()));
+    }
+
+    let wallet_id = Xuid::new("wlt").to_string();
+    // Party keys are the WalletKey UUIDs (Go derives the PartyID from WalletKey.Id.UUID).
+    let wk_ids: Vec<Xuid> = (0..n).map(|_| Xuid::new("wkey")).collect();
+    let party_keys: Vec<Vec<u8>> = wk_ids.iter().map(|x| x.uuid().as_bytes().to_vec()).collect();
+
+    // Keygen per curve: FROST (ed25519) or DKLs23 (secp256k1). Both yield, for
+    // each party key, that share's Go-compatible JSON, plus the group pubkey.
+    // An unspecified curve defaults to secp256k1 (matches Go apiCreateWallet,
+    // which only branches to the ed25519 path on an explicit "ed25519").
+    let (pubkey, protocol, curve_out, shares): (String, &str, &str, Vec<(Vec<u8>, String)>) =
+        match curve {
+            "ed25519" => {
+                let ks = frost_keygen_with_parties(party_keys, threshold)
+                    .map_err(|e| Error::Env(format!("frost keygen: {e}")))?;
+                let pk = b64url(&frost_group_pubkey(&ks[0].1));
+                let shares = shares_json(ks, |k| k.to_json().map_err(|e| format!("{e:?}")))?;
+                (pk, "frost", "ed25519", shares)
+            }
+            "" | "secp256k1" => {
+                let ks = crate::tss::dkls_keygen_local(party_keys, threshold)
+                    .map_err(|e| Error::Env(format!("dkls keygen: {e}")))?;
+                let pk = b64url(&crate::tss::dkls_group_pubkey(&ks[0].1).map_err(|e| Error::Env(e.to_string()))?);
+                let shares = shares_json(ks, |k| k.to_json().map_err(|e| format!("{e:?}")))?;
+                (pk, "dkls23", "secp256k1", shares)
+            }
+            other => return Err(Error::Env(format!("unsupported curve {other:?}"))),
+        };
+
+    let mut cc = Uuid::new_v4().into_bytes().to_vec();
+    cc.extend_from_slice(&Uuid::new_v4().into_bytes());
+    let chaincode = b64url(&cc);
+    let now = created.to_owned();
+
+    // Fetch the wdrone fleet recipients ONCE, only if any share is a RemoteKey.
+    let base = crate::rest::DEFAULT_HOST;
+    let cid = client_id(env);
+    let needs_remote = key_descs.iter().any(|kd| kd.kind == "RemoteKey");
+    let recipients = if needs_remote {
+        Some(crate::walletsign::fetch_decrypt_keys(base, cid.as_deref()).await?)
+    } else {
+        None
+    };
+
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(n);
+    for (i, kd) in key_descs.iter().enumerate() {
+        let uuid = wk_ids[i].uuid();
+        let uuid_bytes = uuid.as_bytes();
+        let json = shares
+            .iter()
+            .find(|(pk, _)| pk.as_slice() == uuid_bytes.as_slice())
+            .map(|(_, j)| j.clone())
+            .ok_or_else(|| Error::Env("share/party mismatch".into()))?;
+
+        let (data, key_field) = match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
+            Recipient::Encrypt(pk) => {
+                let sealed = keystore::seal(json.as_bytes(), &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+                let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
+                (sealed, pkix)
+            }
+            Recipient::Plain => (keystore::wrap_plain(json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?, String::new()),
+            Recipient::Remote => {
+                let recips = recipients.as_ref().ok_or_else(|| Error::Env("no fleet recipients".into()))?;
+                let payload = build_remote_payload(curve_out, json.as_bytes())?;
+                let sealed = keystore::seal_json(&payload, recips).map_err(|e| Error::Env(e.to_string()))?;
+                upload_remote_share_wasm(base, cid.as_deref(), &kd.key, curve_out, protocol, &sealed).await?;
+                (sealed, kd.key.clone())
+            }
+        };
+
+        wkeys.push(WalletKey {
+            id: wk_ids[i].to_string(),
+            wallet: wallet_id.clone(),
+            kind: kd.kind.clone(),
+            schema: protocol.into(),
+            key: key_field,
+            data,
+            generation: 1,
+        });
+    }
+
+    let wallet = Wallet {
+        id: wallet_id,
+        name: name.to_owned(),
+        curve: curve_out.into(),
+        protocol: protocol.into(),
+        threshold: threshold as i64,
+        generation: 0,
+        pubkey,
+        chaincode,
+        created: now.clone(),
+        modified: now,
+        keys: wkeys,
+    };
+    persist(env, &wallet)?;
+    Ok(wallet)
+}
+
+/// Upload a sealed RemoteKey share to `Crypto/WalletSign:setGeneratedKey` via the
+/// browser's async Fetch transport (rsurl `aio`). Mirrors the native
+/// [`crate::walletsign::upload_generated_key`] params; no critical-retry wrapper
+/// (the browser create path is not the reshare desync-risk path).
+#[cfg(target_arch = "wasm32")]
+async fn upload_remote_share_wasm(base: &str, client_id: Option<&str>, remote_key: &str, curve: &str, protocol: &str, data_cbor: &[u8]) -> Result<()> {
+    let mut params = serde_json::json!({
+        "data": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data_cbor),
+        "key": remote_key,
+        "curve": curve,
+    });
+    if !protocol.is_empty() {
+        params["protocol"] = serde_json::json!(protocol);
+    }
+    crate::rest::do_post(base, "Crypto/WalletSign:setGeneratedKey", &params, client_id).await?;
+    Ok(())
+}
+
 /// Create a legacy eddsatss (GG18-style Ed25519) wallet — the pre-FROST ed25519
 /// scheme. Go retired legacy keygen (only FROST is minted now), so this exists
 /// to build legacy wallets for migration/round-trip testing and to mirror the
@@ -930,6 +1071,22 @@ fn b64url(b: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 
+/// Build the per-curve RemoteKey upload payload from a raw share. Matches Go
+/// `WalletKey.encrypt`'s RemoteKey wire per curve: FROST (ed25519) seals the
+/// frost-key JSON directly; DKLs (secp256k1) seals `json.Marshal(saveBytes)` —
+/// i.e. the Save-JSON base64-std-encoded as a JSON string (Go uploads the raw
+/// `[]byte` Save() form, and cryptutil.MarshalJson turns a `[]byte` into a
+/// base64 string; the wdrone's loadShare reads it back into `[]byte`). Shared by
+/// the native (sync) `seal_share_full` and the wasm (async) create path.
+pub(crate) fn build_remote_payload(curve_out: &str, share: &[u8]) -> Result<Vec<u8>> {
+    if curve_out == "secp256k1" {
+        use base64::engine::general_purpose::STANDARD;
+        serde_json::to_vec(&STANDARD.encode(share)).map_err(|e| Error::Env(e.to_string()))
+    } else {
+        Ok(share.to_vec())
+    }
+}
+
 /// Seal a share for one KeyDescription → `(WalletKey.data, WalletKey.key)`.
 /// Encrypt/Plain are local; Remote seals to the wdrone fleet keys and uploads to
 /// the WalletSign backend (Go `WalletKey.encrypt`). Shared by create + reshare.
@@ -971,12 +1128,7 @@ pub(crate) fn seal_share_full(
             // uploads the raw `[]byte` Save() form (cryptutil.MarshalJson turns a
             // []byte into a base64 string), and the wdrone's loadShare reads it
             // back into []byte → dklstss.Load.
-            let payload: Vec<u8> = if curve_out == "secp256k1" {
-                use base64::engine::general_purpose::STANDARD;
-                serde_json::to_vec(&STANDARD.encode(share)).map_err(|e| Error::Env(e.to_string()))?
-            } else {
-                share.to_vec()
-            };
+            let payload = build_remote_payload(curve_out, share)?;
             let sealed = keystore::seal_json(&payload, &recipients).map_err(|e| Error::Env(e.to_string()))?;
             // Tenacious retry (Go `WalletKey.encrypt` switched to
             // restDoRetryCritical): this upload is the one reshare step whose
@@ -995,7 +1147,6 @@ pub(crate) fn seal_share_full(
 }
 
 /// The `walletinfo:clientId` header value (Go `withClientID`), if set.
-#[cfg(not(target_arch = "wasm32"))]
 fn client_id(env: &Env) -> Option<String> {
     env.config_get("walletinfo:clientId")
         .ok()

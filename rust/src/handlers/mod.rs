@@ -33,7 +33,7 @@ mod swap;
 mod token;
 #[cfg(not(target_arch = "wasm32"))]
 mod transaction;
-mod wallet;
+pub(crate) mod wallet;
 mod wallet_key;
 #[cfg(not(target_arch = "wasm32"))]
 mod wc;

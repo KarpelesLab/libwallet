@@ -8,15 +8,16 @@
 
 use base64::Engine;
 use bottlers::key::PublicKey;
+use serde_json::Value;
 
 use crate::{Error, Result};
 
-/// Fetch the wdrone fleet's decrypt public keys (Go `encrypt`'s RemoteKey arm:
-/// GET `Crypto/WalletSign:keys` → parse each base64url IDCard → collect the
-/// "decrypt"-purpose subkeys). These are the recipients a RemoteKey share is
-/// sealed to before upload.
-pub fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<PublicKey>> {
-    let data = crate::rest::do_get_with_client_id(base, "Crypto/WalletSign:keys", client_id)?;
+/// Parse the `Crypto/WalletSign:keys` response body (a list of base64url IDCard
+/// bottles) into the wdrone fleet's "decrypt"-purpose public keys — the
+/// recipients a RemoteKey share is sealed to before upload. Shared by the native
+/// (sync) and wasm (async) `fetch_decrypt_keys` wrappers, which differ only in
+/// how they perform the HTTP GET.
+fn parse_decrypt_keys(data: Value) -> Result<Vec<PublicKey>> {
     let ids = data.as_array().ok_or_else(|| Error::Env("WalletSign:keys did not return a list".into()))?;
     let now = now_unix();
     let mut keys = Vec::new();
@@ -41,9 +42,27 @@ pub fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<Pub
     Ok(keys)
 }
 
+/// Fetch the wdrone fleet's decrypt public keys (Go `encrypt`'s RemoteKey arm:
+/// GET `Crypto/WalletSign:keys` → parse each base64url IDCard → collect the
+/// "decrypt"-purpose subkeys). These are the recipients a RemoteKey share is
+/// sealed to before upload.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<PublicKey>> {
+    let data = crate::rest::do_get_with_client_id(base, "Crypto/WalletSign:keys", client_id)?;
+    parse_decrypt_keys(data)
+}
+
+/// Browser twin of [`fetch_decrypt_keys`]: same parsing, async Fetch-backed GET.
+#[cfg(target_arch = "wasm32")]
+pub async fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<PublicKey>> {
+    let data = crate::rest::do_get_with_client_id(base, "Crypto/WalletSign:keys", client_id).await?;
+    parse_decrypt_keys(data)
+}
+
 /// Fetch the wdrone fleet's Spot ids (Go `selectPeer`'s discovery half): GET
 /// `Crypto/WalletSign:keys` → for each signed IDCard, `k.<b64url(sha256(self))>`
 /// (the same derivation spotlib uses for a client's own target id).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_peer_spot_ids(base: &str, client_id: Option<&str>) -> Result<Vec<String>> {
     let data = crate::rest::do_get_with_client_id(base, "Crypto/WalletSign:keys", client_id)?;
     let ids = data.as_array().ok_or_else(|| Error::Env("WalletSign:keys did not return a list".into()))?;
@@ -72,6 +91,7 @@ pub fn fetch_peer_spot_ids(base: &str, client_id: Option<&str>) -> Result<Vec<St
 /// `Crypto/WalletSign:setGeneratedKey` POST). `data_cbor` is the CBOR bottle
 /// (sealed to the fleet keys); `curve`/`protocol` are the on-wire vocabulary
 /// wdrone's loadShare recognises ("ed25519"/"frost", "secp256k1"/"dkls23").
+#[cfg(not(target_arch = "wasm32"))]
 pub fn upload_generated_key(
     base: &str,
     client_id: Option<&str>,
@@ -93,8 +113,6 @@ pub fn upload_generated_key(
 }
 
 fn now_unix() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    // chrono works on both native and wasm (SystemTime::now panics on wasm32).
+    chrono::Utc::now().timestamp()
 }
