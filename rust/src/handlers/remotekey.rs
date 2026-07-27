@@ -34,7 +34,11 @@ pub fn new(env: &Env, params: &Value) -> ApiResult {
     if target.is_empty() {
         return Err(ApiError::new(400, "number or email is required"));
     }
-    crate::rest::do_post(base(params), "Crypto/WalletSign:new", &json!({ "number": target }), client_id(env).as_deref())
+    let mut body = json!({ "number": target });
+    if let Some(v) = params.get("verify").and_then(Value::as_str) {
+        body["verify"] = json!(v);
+    }
+    crate::rest::do_post(base(params), "Crypto/WalletSign:new", &body, client_id(env).as_deref())
         .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
@@ -48,9 +52,30 @@ pub async fn new_async(env: &Env, params: &Value) -> ApiResult {
     if target.is_empty() {
         return Err(ApiError::new(400, "number or email is required"));
     }
+    // `verify` selects the 2FA method: 'code' (default) or 'passkey' (closed by
+    // the passkeyAuthBegin/Finish pair instead of a one-time code).
+    let mut body = json!({ "number": target });
+    if let Some(v) = params.get("verify").and_then(Value::as_str) {
+        body["verify"] = json!(v);
+    }
     let client = env.spot_start().map_err(ApiError::internal)?;
     client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
-    crate::rest::spot_do(&client, "Crypto/WalletSign:new", "POST", &json!({ "number": target }), client_id(env).as_deref())
+    crate::rest::spot_do(&client, "Crypto/WalletSign:new", "POST", &body, client_id(env).as_deref())
+        .await
+        .map_err(|e| ApiError::new(502, e.to_string()))
+}
+
+/// Thin passthrough to a `Crypto/WalletSign:<method>` endpoint over the Spot
+/// connection — used by the browser passkey enroll/auth dance
+/// (`passkeyRegisterBegin`/`Finish`, `passkeyAuthBegin`/`Finish`), which is
+/// orchestrated in JS (WebAuthn is a browser API). The whole `params` object is
+/// forwarded verbatim; the clientId is merged in by `spot_do`. Restricted to the
+/// WalletSign object.
+#[cfg(target_arch = "wasm32")]
+pub async fn wallet_sign_proxy(env: &Env, method: &str, params: &Value) -> ApiResult {
+    let client = env.spot_start().map_err(ApiError::internal)?;
+    client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+    crate::rest::spot_do(&client, &format!("Crypto/WalletSign:{method}"), "POST", params, client_id(env).as_deref())
         .await
         .map_err(|e| ApiError::new(502, e.to_string()))
 }

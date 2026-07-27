@@ -88,6 +88,12 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         ("RemoteKey:new", _) => crate::handlers::remotekey::new_async(&handle.env, &req.params).await,
         ("RemoteKey:reshare", _) => crate::handlers::remotekey::reshare_async(&handle.env, &req.params).await,
         ("RemoteKey:validate", _) => crate::handlers::remotekey::validate_async(&handle.env, &req.params).await,
+        // Browser passkey enroll/auth dance — thin passthroughs to
+        // Crypto/WalletSign:passkey* (WebAuthn is orchestrated in JS).
+        ("RemoteKey:passkeyRegisterBegin", _) => crate::handlers::remotekey::wallet_sign_proxy(&handle.env, "passkeyRegisterBegin", &req.params).await,
+        ("RemoteKey:passkeyRegisterFinish", _) => crate::handlers::remotekey::wallet_sign_proxy(&handle.env, "passkeyRegisterFinish", &req.params).await,
+        ("RemoteKey:passkeyAuthBegin", _) => crate::handlers::remotekey::wallet_sign_proxy(&handle.env, "passkeyAuthBegin", &req.params).await,
+        ("RemoteKey:passkeyAuthFinish", _) => crate::handlers::remotekey::wallet_sign_proxy(&handle.env, "passkeyAuthFinish", &req.params).await,
         ("Wallet:initiateKeygen", _) => crate::handlers::spot_wasm::initiate_keygen_async(&handle.env, &req.params).await,
         ("Wallet:joinSign", _) => crate::handlers::spot_wasm::join_sign_async(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
