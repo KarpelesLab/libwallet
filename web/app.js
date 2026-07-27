@@ -1126,6 +1126,89 @@ async function backendRkCreate() {
   }, 30);
 }
 
+// Experimental — Wallet:initiateKeygen: leader-side distributed FROST keygen
+// over the KLB Spot network. Real multi-party ceremony; needs the live fleet and
+// a paired agent/wdrone or it times out. Peers come from Crypto/WalletSign:newAgent.
+async function backendInitiateKeygen() {
+  const err = $('#bkAkErr');
+  const out = $('#bkAkOut');
+  err.textContent = '';
+  const remote_key = $('#bkAkRemoteKey').value.trim();
+  const name = $('#bkAkName').value.trim() || 'Agent wallet';
+  const me_moniker = $('#bkAkMoniker').value.trim();
+  let peers;
+  try {
+    peers = JSON.parse($('#bkAkPeers').value);
+  } catch (e) {
+    err.textContent = 'Peers JSON: ' + (e.message || String(e));
+    return;
+  }
+  if (!remote_key) { err.textContent = 'Enter a RemoteKey.'; return; }
+  if (!Array.isArray(peers) || peers.length === 0) { err.textContent = 'Peers must be a non-empty JSON array.'; return; }
+  const btn = $('#bkAkRun');
+  btn.disabled = true; btn.textContent = 'Running keygen…';
+  bkStatus('busy', 'keygen ceremony…');
+  try {
+    const data = await backendRequest('Wallet:initiateKeygen', 'POST', {
+      remote_key, name, curve: 'ed25519', me_moniker, peers
+    });
+    out.classList.remove('hidden');
+    out.innerHTML = `
+      <div class="panel" style="padding:4px 16px">
+        <div class="kv"><span class="k">Wallet id</span><span class="v">${bkEsc(data.wlt_id || '')}</span></div>
+        <div class="kv"><span class="k">Solana</span><span class="v">${bkEsc(data.solana_address || '')}</span></div>
+        <div class="kv"><span class="k">Pubkey</span><span class="v">${bkEsc(data.pubkey || '')}</span></div>
+      </div>`;
+    bkStatus('live', 'keygen done · #' + backend.handle);
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'keygen failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Run keygen';
+  }
+}
+
+// Experimental — Wallet:joinSign: joiner-side distributed FROST signature over the
+// KLB Spot network. Same live-fleet requirement as initiateKeygen.
+async function backendJoinSign() {
+  const err = $('#bkAsErr');
+  const out = $('#bkAsOut');
+  err.textContent = '';
+  const wlt_id = $('#bkAsWallet').value.trim();
+  const remote_key = $('#bkAsRemoteKey').value.trim();
+  const digest = $('#bkAsDigest').value.trim();
+  let peers;
+  try {
+    peers = JSON.parse($('#bkAsPeers').value);
+  } catch (e) {
+    err.textContent = 'Peers JSON: ' + (e.message || String(e));
+    return;
+  }
+  if (!wlt_id) { err.textContent = 'Enter a wallet id.'; return; }
+  if (!remote_key) { err.textContent = 'Enter a RemoteKey.'; return; }
+  if (!digest) { err.textContent = 'Enter a digest.'; return; }
+  if (!Array.isArray(peers) || peers.length === 0) { err.textContent = 'Peers must be a non-empty JSON array.'; return; }
+  const btn = $('#bkAsRun');
+  btn.disabled = true; btn.textContent = 'Running sign…';
+  bkStatus('busy', 'sign ceremony…');
+  try {
+    const data = await backendRequest('Wallet:joinSign', 'POST', {
+      wlt_id, remote_key, curve: 'ed25519', digest, peers
+    });
+    out.classList.remove('hidden');
+    out.innerHTML = `
+      <div class="panel" style="padding:4px 16px">
+        <div class="kv"><span class="k">Signature</span><span class="v mono">${bkEsc(data.signature || '')}</span></div>
+      </div>`;
+    bkStatus('live', 'sign done · #' + backend.handle);
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'sign failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Run sign';
+  }
+}
+
 async function loadBackendVersion() {
   try {
     const v = await backendRequest('Info:version', 'GET');
@@ -1343,6 +1426,8 @@ function wireBackendEvents() {
   $('#bkRkSend').onclick        = backendRkSend;
   $('#bkRkVerify').onclick      = backendRkVerify;
   $('#bkRkCreate').onclick      = backendRkCreate;
+  $('#bkAkRun').onclick         = backendInitiateKeygen;
+  $('#bkAsRun').onclick         = backendJoinSign;
   $('#bkListWallets').onclick   = backendListWallets;
   $('#bkCreateAccount').onclick = backendCreateAccount;
   $('#bkSignBtn').onclick       = backendSignMessage;

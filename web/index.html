@@ -428,6 +428,50 @@
             <div id="bkRkOut" class="bk-block hidden"></div>
           </div>
 
+          <!-- Agent ceremony (experimental) — distributed FROST keygen/sign -->
+          <div class="bk-block">
+            <div class="section-head"><div class="eyebrow muted">Agent ceremony (experimental) · <span class="mono">Wallet:initiateKeygen</span> / <span class="mono">Wallet:joinSign</span></div></div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">Runs the real distributed FROST ceremony over the KLB Spot network.
+                  Requires the live fleet and a paired agent/wdrone — will time out otherwise. Params
+                  normally come from <span class="mono">Crypto/WalletSign:newAgent</span>.</p>
+
+                <!-- Form 1: leader-side keygen -->
+                <div>
+                  <div class="eyebrow muted" style="margin-bottom:8px">1 · initiateKeygen (leader)</div>
+                  <label class="field-label" for="bkAkRemoteKey">RemoteKey</label>
+                  <input class="input mono" id="bkAkRemoteKey" placeholder="crws-…:crwsv-…" />
+                  <label class="field-label" for="bkAkName" style="margin-top:10px">Wallet name</label>
+                  <input class="input" id="bkAkName" value="Agent wallet" />
+                  <label class="field-label" for="bkAkMoniker" style="margin-top:10px">My moniker</label>
+                  <input class="input" id="bkAkMoniker" placeholder="mobile" />
+                  <label class="field-label" for="bkAkPeers" style="margin-top:10px">Peers (JSON)</label>
+                  <textarea class="textarea mono" id="bkAkPeers" placeholder='[{"id":"k.&lt;spot id&gt;","moniker":"…","key":"&lt;base64url ed25519 pubkey&gt;"}, …]'></textarea>
+                  <div class="err-inline" id="bkAkErr"></div>
+                  <button class="btn primary block" type="button" id="bkAkRun" style="margin-top:12px">Run keygen</button>
+                  <div id="bkAkOut" class="bk-block hidden"></div>
+                </div>
+
+                <!-- Form 2: joiner-side sign -->
+                <div style="margin-top:8px">
+                  <div class="eyebrow muted" style="margin-bottom:8px">2 · joinSign (joiner)</div>
+                  <label class="field-label" for="bkAsWallet">Wallet id</label>
+                  <input class="input mono" id="bkAsWallet" placeholder="wlt-…" />
+                  <label class="field-label" for="bkAsRemoteKey" style="margin-top:10px">RemoteKey</label>
+                  <input class="input mono" id="bkAsRemoteKey" placeholder="crws-…:crwsv-…" />
+                  <label class="field-label" for="bkAsDigest" style="margin-top:10px">Digest</label>
+                  <input class="input mono" id="bkAsDigest" placeholder="base64 of the 32-byte digest" />
+                  <label class="field-label" for="bkAsPeers" style="margin-top:10px">Peers (JSON)</label>
+                  <textarea class="textarea mono" id="bkAsPeers" placeholder='[{"id":"k.&lt;spot id&gt;","moniker":"…","key":"&lt;base64url ed25519 pubkey&gt;"}, …]'></textarea>
+                  <div class="err-inline" id="bkAsErr"></div>
+                  <button class="btn primary block" type="button" id="bkAsRun" style="margin-top:12px">Run sign</button>
+                  <div id="bkAsOut" class="bk-block hidden"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Wallets list -->
           <div class="bk-block">
             <div class="section-head">
