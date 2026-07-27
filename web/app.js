@@ -50,7 +50,8 @@ const CHAIN_META = {
 // ---- In-memory session (cleared on lock / reload) -------------------------
 
 const session = {
-  mnemonic:  null,   // string, only while unlocked
+  mnemonic:  null,   // string, only while unlocked (walletcore path)
+  mpc:       false,  // true when the dashboard is backed by the MPC committee
   addresses: null,   // { evm, bitcoin, solana }
   balances:  {}      // chain → formatted string
 };
@@ -233,6 +234,7 @@ function tryUnlock(pw) {
 // Derive addresses and enter the dashboard for a known-good mnemonic.
 function unlockWith(mnemonic) {
   session.mnemonic = mnemonic;
+  session.mpc = false;   // walletcore path: not MPC-backed
   try {
     session.addresses = wasm.derive_addresses(mnemonic);
   } catch (err) {
@@ -241,8 +243,9 @@ function unlockWith(mnemonic) {
     return;
   }
   // A real wallet: restore all tabs (in case console mode hid them) and default
-  // back to the Accounts tab.
+  // back to the Accounts tab. Clear any MPC guards (re-enable Send, show reveal).
   setConsoleMode(false);
+  applyMpcGuards();
   $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'accounts'));
   $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'accounts'));
   renderAccounts();
@@ -252,6 +255,24 @@ function unlockWith(mnemonic) {
 }
 
 function lock() {
+  // MPC-backed session: locking returns to the MPC unlock screen (passkey /
+  // password), not the walletcore password prompt. Drop the in-session unlock
+  // material and restored wallet handles so nothing can sign until re-unlocked.
+  if (session.mpc) {
+    session.mpc = false;
+    session.mnemonic = null;
+    session.addresses = null;
+    session.balances = {};
+    backend.wallet = null;
+    backend.walletEd = null;
+    if (localStorage.getItem(BK_MPC_LS)) {
+      prepareMpcUnlock();
+      return showScreen('mpc-unlock');
+    }
+    // No stored record (e.g. persistence failed): fall back to onboarding.
+    showScreen('onboarding');
+    return goStep('choose');
+  }
   session.mnemonic = null;
   session.addresses = null;
   session.balances = {};
@@ -904,7 +925,9 @@ function wireStaticEvents() {
   // --- Dashboard: accounts ---
   $('#refreshBalances').onclick = refreshAllBalances;
   $('#revealPhrase').onclick = openReveal;
-  $('#removeWallet').onclick = () => confirmRemove();
+  // MPC-backed dashboards forget the on-device committee record (its own
+  // confirm + onboarding fallback); walletcore wallets clear the vault.
+  $('#removeWallet').onclick = () => session.mpc ? mpcForget() : confirmRemove();
 
   // Copy buttons (event delegation for dynamically-rendered addresses)
   $('#assetList').addEventListener('click', e => {
@@ -996,6 +1019,10 @@ async function saveMpcWallet() {
     const rec = {
       wallets,                                  // [{walletId,filename,data}, …] — secp first, ed second
       primaryId: backend.wallet.Id,
+      // Cache the derived on-chain addresses so unlock skips re-deriving. Set at
+      // create time (session.addresses = await deriveMpcAddresses()) before this
+      // runs; null-safe for any legacy caller that hasn't populated them.
+      addresses: session.addresses || null,
       mpc: backend.mpc ? {
         credentialId: bufToB64url(backend.mpc.credentialId),
         saltFirst: bufToB64url(backend.mpc.saltFirst),
@@ -1014,6 +1041,58 @@ async function saveMpcWallet() {
 function readMpcRecord() {
   try { return JSON.parse(localStorage.getItem(BK_MPC_LS)); }
   catch { return null; }
+}
+
+// Derive the committee's on-chain addresses (index 0) via Account:create. The
+// secp256k1 wallet yields the EVM + Bitcoin addresses; the paired ed25519 wallet
+// (if any) yields Solana. Account POST returns the created Account object with an
+// .Address field (see backendCreateAccount / backendAccountCardHtml, which read
+// a.Address). Deterministic for a given wallet + type + index.
+async function deriveMpcAddresses() {
+  const wid = backend.wallet.Id;
+  const [evm, btc] = await Promise.all([
+    backendRequest('Account', 'POST', { Name: '', Wallet: wid, Type: 'ethereum', Index: 0 }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wid, Type: 'bitcoin', Index: 0 }),
+  ]);
+  let sol = null;
+  if (backend.walletEd) sol = await backendRequest('Account', 'POST', { Name: '', Wallet: backend.walletEd.Id, Type: 'solana', Index: 0 });
+  return { evm: evm.Address, bitcoin: btc.Address, solana: sol ? sol.Address : null };
+}
+
+// Enter the REAL dashboard (Accounts/Send/Settings) backed by the MPC committee.
+// Reuses renderAccounts / refreshAllBalances by populating session.addresses —
+// from the stored record when present, else derived live.
+async function enterMpcDashboard() {
+  session.mnemonic = null;      // MPC has no single mnemonic
+  session.mpc = true;           // dashboard is backed by the MPC committee
+  session.balances = {};
+  const rec = readMpcRecord();
+  session.addresses = (rec && rec.addresses) ? rec.addresses : await deriveMpcAddresses();
+  setConsoleMode(false);        // all wallet tabs visible
+  applyMpcGuards();
+  // Default to the Accounts tab.
+  $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'accounts'));
+  $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'accounts'));
+  renderAccounts();
+  onSendChainChange();
+  showScreen('dashboard');
+  refreshAllBalances();
+}
+
+// Guard the walletcore-only affordances for an MPC-backed session, and re-enable
+// them for the walletcore path. Committee Send is a later pass, so it is disabled
+// with an inline notice; the mnemonic-reveal control is hidden (no mnemonic);
+// Remove-wallet routes to mpcForget.
+function applyMpcGuards() {
+  const mpc = !!session.mpc;
+  // --- Send: committee send isn't wired yet ---
+  const sendBtn = $('#sendSubmit');
+  if (sendBtn) sendBtn.disabled = mpc;
+  const notice = $('#sendMpcNotice');
+  if (notice) notice.classList.toggle('hidden', !mpc);
+  // --- Settings: reveal recovery phrase is walletcore-only ---
+  const reveal = $('#revealPhrase');
+  if (reveal) reveal.classList.toggle('hidden', mpc);
 }
 
 // Prepare the MPC unlock screen for the stored wallet: password-mode wallets
@@ -1101,9 +1180,9 @@ async function mpcUnlock() {
     $('#bkAccountList').innerHTML = '';
     $('#bkCreateAccount').disabled = false;
     refreshSignAccounts();
-    openBackendConsole();
-    const out = $('#bkRkOut') || $('#bkWalletOut');
-    if (out) { out.classList.remove('hidden'); out.innerHTML = backendWalletCardHtml(backend.wallet); }
+    // Land in the real MPC dashboard (Accounts/Send/Settings), not the console.
+    // Addresses come from the stored record, or are derived on the spot.
+    await enterMpcDashboard();
     toast('ok', 'Wallet unlocked', 'Your on-device MPC wallet was restored and is ready to sign.');
   } catch (e) {
     err.textContent = e.message || String(e);
@@ -1120,6 +1199,11 @@ function mpcForget() {
   backend.wallet = null;
   backend.walletEd = null;
   backend.mpc = null;
+  // Clear any live MPC dashboard session too (when forgotten from the dashboard).
+  session.mpc = false;
+  session.mnemonic = null;
+  session.addresses = null;
+  session.balances = {};
   showScreen('onboarding');
   goStep('choose');
 }
@@ -1312,13 +1396,14 @@ async function backendRkCreate() {
       $('#bkCreateAccount').disabled = false;
       refreshSignAccounts();
 
-      const out = $('#bkRkOut');
-      out.classList.remove('hidden');
-      out.innerHTML = backendWalletCardHtml(w);
       bkStatus('live', '2FA wallet created · #' + backend.handle);
       toast('ok', '2FA wallet created', 'Self-custody wallet with a server-held RemoteKey share.');
       backendListWallets();
+      // Derive addresses BEFORE the backup so the record captures them, then land
+      // in the real MPC dashboard (not the Backend console).
+      session.addresses = await deriveMpcAddresses();
       await saveMpcWallet();
+      await enterMpcDashboard();
     } catch (e) {
       err.textContent = e.message || String(e);
       bkStatus('err', '2FA keygen failed');
@@ -1394,15 +1479,16 @@ async function backendRkCreatePasskey() {
     $('#bkCreateAccount').disabled = false;
     refreshSignAccounts();
 
-    const out = $('#bkRkOut');
-    out.classList.remove('hidden');
-    out.innerHTML = backendWalletCardHtml(w);
     bkStatus('live', '2FA wallet created · #' + backend.handle);
     toast('ok', 'Passkey 2FA wallet created', noPassword
       ? 'One passkey seals two local shares; a server-held RemoteKey is the third.'
       : 'Passkey + password + RemoteKey — three distinct factors.');
     backendListWallets();
+    // Derive addresses BEFORE the backup so the record captures them, then land
+    // in the real MPC dashboard (not the Backend console).
+    session.addresses = await deriveMpcAddresses();
     await saveMpcWallet();
+    await enterMpcDashboard();
   } catch (e) {
     err.textContent = e.message || String(e);
     bkStatus('err', 'passkey 2FA keygen failed');
@@ -1813,16 +1899,17 @@ async function backendCreateWallet() {
     $('#bkCreateAccount').disabled = false;
     refreshSignAccounts();
 
-    const out = $('#bkWalletOut');
-    out.classList.remove('hidden');
-    out.innerHTML = backendWalletCardHtml(w);
     bkStatus('live', 'wallet created · #' + backend.handle);
     toast('ok', usePasskey ? 'Passkey wallet created' : 'Real wallet created',
       usePasskey
         ? 'Shares sealed with your device passkey (WebAuthn PRF) — no password.'
         : 'TSS keygen ran in your browser (' + w.Curve + ' / ' + w.Protocol + ').');
     backendListWallets();
+    // Derive addresses BEFORE the backup so the record captures them, then land
+    // in the real MPC dashboard (not the Backend console).
+    session.addresses = await deriveMpcAddresses();
     await saveMpcWallet();
+    await enterMpcDashboard();
   } catch (e) {
     err.textContent = e.message || String(e);
     bkStatus('err', usePasskey ? 'passkey/keygen failed' : 'keygen failed');
