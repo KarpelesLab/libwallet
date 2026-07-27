@@ -69,6 +69,10 @@ chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 graphitesql = { version = "0.1.6", default-features = false }
 uuid = { version = "1", features = ["js"] }
 rsurl = { version = "0.1.7", default-features = false, features = ["purecrypto-tls"] }
+# spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
+# the browser build uses its async fetch/WebSocket transport instead. Needed for
+# the distributed keygen/sign ceremonies (Phase 2).
+spotlib = { version = "0.1.1", default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

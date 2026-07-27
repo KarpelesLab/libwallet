@@ -12,11 +12,17 @@ use std::sync::Mutex;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Weak};
 use std::time::Duration;
+// The browser build's single-threaded Spot client lives in an `Rc`/`RefCell`
+// (the wasm spotlib `Client` is `!Send`) instead of native's `Arc`/`Mutex`.
+#[cfg(target_arch = "wasm32")]
+use std::cell::RefCell;
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 use crate::db::{Db, SqlValue};
 use crate::error::Result;
-// `Error` is constructed only in the native filesystem/transport paths.
-#[cfg(not(target_arch = "wasm32"))]
+// `Error` is constructed in the native filesystem/transport paths and, on wasm,
+// by the Spot client lifecycle (`spot_start`).
 use crate::error::Error;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::walletconnect::RelayTransport;
@@ -61,9 +67,14 @@ pub struct Env {
     #[cfg(not(target_arch = "wasm32"))]
     request_waiters: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<String>>>,
     /// The Spot network client (lazily started on first use), for cross-device
-    /// ceremonies + `Spot:status`. Closed on Destroy.
+    /// ceremonies + `Spot:status`. Closed on Destroy. Native shares an `Arc`
+    /// behind a `Mutex` across FFI worker threads; the single-threaded browser
+    /// build holds an `Rc` in a `RefCell` (the wasm spotlib `Client` is `!Send`,
+    /// so no atomics/locks are needed or possible).
     #[cfg(not(target_arch = "wasm32"))]
     spot: Mutex<Option<std::sync::Arc<spotlib::Client>>>,
+    #[cfg(target_arch = "wasm32")]
+    spot: RefCell<Option<Rc<spotlib::Client>>>,
     /// Active device-transfer export sessions keyed by sid (the source side of
     /// Wallet:exportToDevice — the `transfer` Spot handler resolves them).
     #[cfg(not(target_arch = "wasm32"))]
@@ -127,6 +138,8 @@ impl Env {
             request_waiters: Mutex::new(std::collections::HashMap::new()),
             #[cfg(not(target_arch = "wasm32"))]
             spot: Mutex::new(None),
+            #[cfg(target_arch = "wasm32")]
+            spot: RefCell::new(None),
             #[cfg(not(target_arch = "wasm32"))]
             transfer_sessions: Mutex::new(std::collections::HashMap::new()),
         };
@@ -311,6 +324,60 @@ impl Env {
     /// endpoints.
     pub fn wc_manager(&self) -> Option<Arc<Mutex<BoxedWcManager>>> {
         self.wc.lock().unwrap().as_ref().map(|rt| rt.manager.clone())
+    }
+}
+
+// ── Wasm-only: the Spot client lifecycle (build / read / close). Phase 2
+// groundwork so later passes can drive TSS ceremonies from the browser. The
+// wasm spotlib `Client` keeps SYNC `builder`/`build`/`close`/`target_id`
+// signatures (only `query`/`send_to`/`wait_online` are async — not used here),
+// so this mirrors the native lifecycle without any threads. Only these three
+// methods are un-gated for wasm; the rest of the native block above (approval
+// waiters, device-transfer sessions, WalletConnect) stays native-only. ────────
+#[cfg(target_arch = "wasm32")]
+impl Env {
+    /// Start (or return) the Spot client. `build()` starts the connection on
+    /// the browser event loop and returns immediately.
+    ///
+    /// Unlike native — where the `transfer` handler captures a `Weak<Env>` and
+    /// routes into `handle_transfer_query` — the browser build registers a
+    /// capture-free stub. Two reasons this is the smallest cut that compiles:
+    ///   1. Device-to-device transfer has no host confirm/cancel channel in the
+    ///      browser, so there is nothing for a real handler to do yet.
+    ///   2. spotlib's `ClientBuilder::handler` bound is `Fn + Send + Sync +
+    ///      'static` on *both* targets (the `MessageHandler` type alias is
+    ///      shared), but the wasm `Env` is `!Send + !Sync` (its `EventSink` is a
+    ///      `js_sys::Function`). A closure capturing `Weak<Env>` could therefore
+    ///      never satisfy `Send + Sync`. A capture-free stub sidesteps that; a
+    ///      later pass that needs the handler to touch `Env` would first have to
+    ///      make the wasm `Env` shareable (out of scope here).
+    /// The stub rejects so peers fail fast rather than hanging.
+    pub fn spot_start(&self) -> Result<Rc<spotlib::Client>> {
+        if let Some(c) = self.spot.borrow().as_ref() {
+            return Ok(c.clone());
+        }
+        let client = spotlib::Client::builder()
+            .meta("project", "libwallet")
+            .handler("transfer", |_msg: &spotlib::Message| {
+                Err("device transfer not supported in browser".to_string())
+            })
+            .build()
+            .map_err(|e| Error::Env(format!("spot client: {e}")))?;
+        let rc = Rc::new(client);
+        *self.spot.borrow_mut() = Some(rc.clone());
+        Ok(rc)
+    }
+
+    /// The Spot client if started (no auto-start; for read-only status).
+    pub fn spot_client_opt(&self) -> Option<Rc<spotlib::Client>> {
+        self.spot.borrow().clone()
+    }
+
+    /// Close the Spot client if running (called on Destroy).
+    pub fn spot_close(&self) {
+        if let Some(c) = self.spot.borrow_mut().take() {
+            c.close();
+        }
     }
 }
 
