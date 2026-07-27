@@ -913,6 +913,9 @@ const backend = {
 };
 
 const BK_CLIENTID_LS = 'libwallet.backend.clientId';
+// Default Client ID (AtOnline appId) — the TibaneApp app, so the WalletSign 2FA
+// email/SMS is branded as Tibane out of the box. Users can override it above.
+const BK_DEFAULT_CLIENT_ID = 'oaap-bapax4-2dgn-b2ze-oquf-bjnuzioy';
 
 // UTF-8 string → standard base64 (for Account:signMessage Message param).
 function b64utf8(str) {
@@ -988,14 +991,11 @@ function backendOpen() {
   backendListNetworks();
   backendListWallets();
 
-  // Re-apply a Client ID persisted from a previous session, if any.
+  // Apply the Client ID: a value persisted from a previous session, else the
+  // TibaneApp default (so WalletSign 2FA is Tibane-branded without setup).
   const savedClientId = (() => { try { return localStorage.getItem(BK_CLIENTID_LS); } catch { return null; } })();
-  if (savedClientId) {
-    $('#bkClientId').value = savedClientId;
-    backendSetClientId();
-  } else {
-    bkClientIdState(false);
-  }
+  $('#bkClientId').value = savedClientId || BK_DEFAULT_CLIENT_ID;
+  backendSetClientId();
 }
 
 // Reflect whether a Client ID is configured (gates the RemoteKey 2FA flow).
