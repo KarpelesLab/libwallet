@@ -30,6 +30,12 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "base64"
+version = "0.21.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
+
+[[package]]
+name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -55,7 +61,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1281ada5fe8a8c82d9a18adb26c271660b9102a1ea8740e093c6924c6374a0b5"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "ciborium",
  "purecrypto",
  "serde",
@@ -126,6 +132,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -254,7 +261,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f6d4b6119748b9b496548e330cf38c5411d6351b28711b44361c51131ab2606"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "futures",
  "num-bigint",
  "num-traits",
@@ -599,6 +606,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5bfae726bb3f672d4f4b1f29cee6c74898a35230a4c794d8292c21129107f21"
 
 [[package]]
+name = "intl"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a6f1018cc948857692683482f5f539f03a1cc29ba28abe2db8f2c2ce581f3c0"
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -616,6 +629,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "klbfw"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc4e3a8dfdf9d548df5a8d54e1a326e2fe2f285e77eeb8918bfc64ff007591e2"
+dependencies = [
+ "base64 0.21.7",
+ "chrono",
+ "form_urlencoded",
+ "intl 0.5.1",
+ "purecrypto",
+ "quick-xml",
+ "rsurl",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -625,7 +658,7 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 name = "libwallet"
 version = "0.5.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bottlers",
  "bs58",
  "chrono",
@@ -636,6 +669,7 @@ dependencies = [
  "gloo-timers",
  "graphitesql",
  "js-sys",
+ "klbfw",
  "num-bigint",
  "num-traits",
  "outscript",
@@ -819,6 +853,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "quick-xml"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -872,7 +916,7 @@ dependencies = [
  "compcol 0.6.7",
  "futures-channel",
  "futures-util",
- "intl",
+ "intl 0.4.1",
  "js-sys",
  "psl2",
  "purecrypto",
@@ -1177,7 +1221,7 @@ version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed4b1297f8a957980fbdafa27eb0b2c281813b01cd208ed322f33105bd7967b1"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "hex",
  "purecrypto",
  "serde",

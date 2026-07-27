@@ -73,6 +73,11 @@ rsurl = { version = "0.1.7", default-features = false, features = ["purecrypto-t
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).
 spotlib = { version = "0.1.1", default-features = false }
+# REST-over-Spot: klbfw's `spot` feature ships `{path,verb,params}` over an
+# authenticated spotlib connection to `@/p_api` and parses the KLB
+# `{result,data,error}` envelope — the browser's WalletSign/RemoteKey path, so
+# no HTTP Fetch, no CORS, no clientId (the Spot connection is the auth context).
+klbfw = { version = "0.1.4", default-features = false, features = ["spot"] }
 futures-channel = { version = "0.3", features = ["std"], default-features = false }
 futures-util = { version = "0.3", features = ["std"], default-features = false }
 gloo-timers = { version = "0.3", features = ["futures"] }

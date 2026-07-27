@@ -12,10 +12,15 @@ use crate::Env;
 
 use super::{ApiError, ApiResult};
 
+// Native-only REST helpers: the browser path authenticates via the Spot
+// connection (`*_async` over `spot_do`), so it needs neither a host override nor
+// the clientId header.
+#[cfg(not(target_arch = "wasm32"))]
 fn base<'a>(params: &'a Value) -> &'a str {
     params.get("Backend").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(crate::rest::DEFAULT_HOST)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn client_id(env: &Env) -> Option<String> {
     env.config_get("walletinfo:clientId").ok().flatten().and_then(|b| String::from_utf8(b).ok()).filter(|s| !s.is_empty())
 }
@@ -33,7 +38,9 @@ pub fn new(env: &Env, params: &Value) -> ApiResult {
         .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
-/// wasm twin of [`new`]: awaits the browser-Fetch `do_post`.
+/// wasm twin of [`new`]: routes the POST over the authenticated Spot connection
+/// (`spot_do` → `@/p_api`) — no HTTP host, no CORS, no clientId. Param
+/// validation runs FIRST so the pre-network 400 is returned before any Spot call.
 #[cfg(target_arch = "wasm32")]
 pub async fn new_async(env: &Env, params: &Value) -> ApiResult {
     let number = params.get("number").and_then(Value::as_str).unwrap_or("");
@@ -41,7 +48,9 @@ pub async fn new_async(env: &Env, params: &Value) -> ApiResult {
     if target.is_empty() {
         return Err(ApiError::new(400, "number or email is required"));
     }
-    crate::rest::do_post(base(params), "Crypto/WalletSign:new", &json!({ "number": target }), client_id(env).as_deref())
+    let client = env.spot_start().map_err(ApiError::internal)?;
+    client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+    crate::rest::spot_do(&client, "Crypto/WalletSign:new", "POST", &json!({ "number": target }))
         .await
         .map_err(|e| ApiError::new(502, e.to_string()))
 }
@@ -61,18 +70,16 @@ pub fn reshare(env: &Env, params: &Value) -> ApiResult {
     .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
-/// wasm twin of [`reshare`]: awaits the browser-Fetch `do_post`.
+/// wasm twin of [`reshare`]: routes the POST over the authenticated Spot
+/// connection. The key 400 check runs FIRST (before any Spot call).
 #[cfg(target_arch = "wasm32")]
 pub async fn reshare_async(env: &Env, params: &Value) -> ApiResult {
     let key = params.get("key").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "key is required"))?;
-    crate::rest::do_post(
-        base(params),
-        "Crypto/WalletSign:reshare",
-        &json!({ "key": key, "threshold": 1, "count": 3 }),
-        client_id(env).as_deref(),
-    )
-    .await
-    .map_err(|e| ApiError::new(502, e.to_string()))
+    let client = env.spot_start().map_err(ApiError::internal)?;
+    client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+    crate::rest::spot_do(&client, "Crypto/WalletSign:reshare", "POST", &json!({ "key": key, "threshold": 1, "count": 3 }))
+        .await
+        .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
 /// `RemoteKey:validate` {session, code} — verify the 2FA code; returns
@@ -90,17 +97,15 @@ pub fn validate(env: &Env, params: &Value) -> ApiResult {
     .map_err(|e| ApiError::new(502, e.to_string()))
 }
 
-/// wasm twin of [`validate`]: awaits the browser-Fetch `do_post`.
+/// wasm twin of [`validate`]: routes the POST over the authenticated Spot
+/// connection. The session/code 400 checks run FIRST (before any Spot call).
 #[cfg(target_arch = "wasm32")]
 pub async fn validate_async(env: &Env, params: &Value) -> ApiResult {
     let session = params.get("session").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "session is required"))?;
     let code = params.get("code").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| ApiError::new(400, "code is required"))?;
-    crate::rest::do_post(
-        base(params),
-        "Crypto/WalletSign:verify",
-        &json!({ "session": session, "code": code }),
-        client_id(env).as_deref(),
-    )
-    .await
-    .map_err(|e| ApiError::new(502, e.to_string()))
+    let client = env.spot_start().map_err(ApiError::internal)?;
+    client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+    crate::rest::spot_do(&client, "Crypto/WalletSign:verify", "POST", &json!({ "session": session, "code": code }))
+        .await
+        .map_err(|e| ApiError::new(502, e.to_string()))
 }

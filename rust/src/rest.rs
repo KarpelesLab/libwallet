@@ -123,44 +123,42 @@ pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&
     unwrap_envelope(path, resp)
 }
 
-// Browser (wasm32) twins of the REST fns above: same envelope handling, but the
-// HTTP transport is rsurl's async Fetch-backed `aio` client (browser-managed
-// timeouts; no `read_timeout`). Only the three fns the create path needs.
+// Browser (wasm32) REST goes over the Spot network, not HTTP Fetch: klbfw's
+// `spot` feature ships `{path,verb,params}` over the authenticated spotlib
+// connection to `@/p_api` and parses the same `{result,data,error}` envelope.
+// This removes the browser's CORS + clientId requirements — the authenticated
+// Spot connection IS the auth context.
+
+/// Adapter: drive klbfw's REST-over-Spot through our spotlib client.
 #[cfg(target_arch = "wasm32")]
-pub async fn do_get(base: &str, path: &str) -> Result<Value> {
-    do_get_with_client_id(base, path, None).await
-}
+struct SpotRest<'a>(&'a spotlib::Client);
+
 #[cfg(target_arch = "wasm32")]
-pub async fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) -> Result<Value> {
-    let url = format!("{base}/_special/rest/{path}");
-    let mut req = rsurl::aio::Request::new("GET", &url).header("Sec-Rest-Http", "false");
-    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
-        req = req.header("Sec-ClientId", id);
+impl klbfw::SpotClient for SpotRest<'_> {
+    async fn query(&self, target: &str, body: &[u8]) -> std::result::Result<Vec<u8>, String> {
+        self.0
+            .query(target, body, std::time::Duration::from_secs(30))
+            .await
+            .map_err(|e| e.to_string())
     }
-    let resp = rsurl::aio::request(&req)
-        .await
-        .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?;
-    let v: Value = serde_json::from_slice(&resp.body)
-        .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
-    unwrap_envelope(path, v)
 }
+
+/// Execute a KLB REST call over the Spot connection (klbfw `spot` feature →
+/// `@/p_api`) and return the envelope's `data`. The browser path: no HTTP host,
+/// no CORS, no clientId — the Spot connection's cryptographic identity is the
+/// auth context. `client` must already be online (call `wait_online` first).
 #[cfg(target_arch = "wasm32")]
-pub async fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
-    let url = format!("{base}/_special/rest/{path}");
-    let body = serde_json::to_vec(params).map_err(|e| Error::Env(format!("rest {path} encode failed: {e}")))?;
-    let mut req = rsurl::aio::Request::new("POST", &url)
-        .header("Sec-Rest-Http", "false")
-        .header("Content-Type", "application/json")
-        .with_body(body);
-    if let Some(id) = client_id.filter(|s| !s.is_empty()) {
-        req = req.header("Sec-ClientId", id);
-    }
-    let resp = rsurl::aio::request(&req)
+pub async fn spot_do(client: &spotlib::Client, path: &str, verb: &str, params: &Value) -> Result<Value> {
+    let resp = klbfw::spot_do_request(&SpotRest(client), path, verb, params)
         .await
-        .map_err(|e| Error::Env(format!("rest {path} request failed: {e}")))?;
-    let v: Value = serde_json::from_slice(&resp.body)
-        .map_err(|e| Error::Env(format!("rest {path} decode failed: {e}")))?;
-    unwrap_envelope(path, v)
+        .map_err(|e| Error::Env(format!("rest {path} (spot): {e}")))?;
+    match resp.result.as_str() {
+        "success" => Ok(resp.data.unwrap_or(Value::Null)),
+        _ => Err(Error::Env(format!(
+            "rest {path} (spot) error: {}",
+            resp.error.unwrap_or_else(|| "unknown error".into())
+        ))),
+    }
 }
 
 /// Unwrap a KLB envelope `{result, data}` — returns `data` on success, else an
