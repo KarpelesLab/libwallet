@@ -392,7 +392,8 @@
               <div class="form-grid">
                 <p class="subtitle">Runs a real 1-of-3 threshold (DKLs23, secp256k1) key generation
                   in this tab. The three shares are each sealed with the password you enter — an
-                  all-local committee, no server.</p>
+                  all-local committee, no server. Creating produces a multichain pair from one
+                  committee: a secp256k1 wallet (EVM&nbsp;+&nbsp;BTC) and an ed25519 wallet (Solana).</p>
                 <div>
                   <label class="field-label" for="bkWalletName">Wallet name</label>
                   <input class="input" id="bkWalletName" placeholder="My browser wallet" value="Browser TSS wallet" />
@@ -425,7 +426,8 @@
                 <p class="subtitle">Creates a 1-of-3 wallet whose third share is a server-held
                   <strong>RemoteKey</strong>, unlocked by a 2FA code sent to your email or phone. Two
                   Password shares stay local; the RemoteKey adds recoverable 2-factor custody. Requires
-                  a Client ID above.</p>
+                  a Client ID above. Creating produces a multichain pair from one committee: a secp256k1
+                  wallet (EVM&nbsp;+&nbsp;BTC) and an ed25519 wallet (Solana).</p>
 
                 <!-- Step 1: request a code -->
                 <div class="rk-step" data-step="1">

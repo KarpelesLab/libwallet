@@ -948,7 +948,8 @@ function wireStaticEvents() {
 const backend = {
   handle:   null,   // libwallet session handle (u32)
   ready:    false,
-  wallet:   null,   // last created Wallet object (has .Keys for signing)
+  wallet:   null,   // last created Wallet object (has .Keys for signing) — secp256k1 primary (EVM + BTC)
+  walletEd: null,   // paired ed25519 Wallet from the same committee (Solana); set by Wallet:multiCreate
   password: null,   // share password for the created wallet (session-only)
   passkey:  null,   // {credentialId,salt} when the wallet's shares are passkey-PRF-sealed
   mpc: null,        // {credentialId,saltFirst,mode,saltSecond,password} for a passkey-2FA committee:
@@ -983,12 +984,18 @@ const BK_MPC_LS = 'libwallet.mpc.wallet';
 async function saveMpcWallet() {
   if (!backend.wallet) return;
   try {
-    const arr = await backendRequest('Wallet:backup', 'POST', { Id: backend.wallet.Id });
-    const entry = Array.isArray(arr) ? arr[0] : arr;
-    if (!entry || !entry.data) return;
+    // Back up BOTH curves of the committee (secp256k1 primary + paired ed25519).
+    const ids = [backend.wallet.Id, backend.walletEd?.Id].filter(Boolean);
+    const wallets = [];
+    for (const id of ids) {
+      const arr = await backendRequest('Wallet:backup', 'POST', { Id: id });
+      const entry = Array.isArray(arr) ? arr[0] : arr;
+      if (entry && entry.data) wallets.push({ walletId: id, filename: entry.filename, data: entry.data });
+    }
+    if (!wallets.length) return;
     const rec = {
-      walletId: backend.wallet.Id,
-      filename: entry.filename, data: entry.data,
+      wallets,                                  // [{walletId,filename,data}, …] — secp first, ed second
+      primaryId: backend.wallet.Id,
       mpc: backend.mpc ? {
         credentialId: bufToB64url(backend.mpc.credentialId),
         saltFirst: bufToB64url(backend.mpc.saltFirst),
@@ -1048,10 +1055,18 @@ async function mpcUnlock() {
   try {
     // 1. Ensure the backend session is open.
     if (backend.handle == null) backendOpen();
-    // 2. Restore the sealed wallet blob into the in-memory DB.
-    await backendRequest('Wallet:restore', 'POST', { files: [{ filename: rec.filename, data: rec.data }] });
-    // 3. Load the restored wallet object (carries .Keys for signing).
-    backend.wallet = await backendRequest('Wallet', 'GET', { Id: rec.walletId });
+    // 2. Restore the sealed wallet blob(s) into the in-memory DB. Newer records
+    //    hold BOTH curves in rec.wallets; older single-wallet records carry a
+    //    top-level walletId/filename/data (backward compat).
+    const wallets = rec.wallets || (rec.walletId ? [{ walletId: rec.walletId, filename: rec.filename, data: rec.data }] : []);
+    const primaryId = rec.primaryId || rec.walletId;
+    for (const wj of wallets) {
+      await backendRequest('Wallet:restore', 'POST', { files: [{ filename: wj.filename, data: wj.data }] });
+    }
+    // 3. Load both restored wallet objects (each carries .Keys for signing).
+    backend.wallet = await backendRequest('Wallet', 'GET', { Id: primaryId });
+    const otherId = wallets.map(w => w.walletId).find(id => id && id !== primaryId);
+    backend.walletEd = otherId ? await backendRequest('Wallet', 'GET', { Id: otherId }) : null;
     // 4. Rebuild the in-session unlock material from the record.
     backend.passkey = null;
     if (rec.mpc) {
@@ -1103,6 +1118,7 @@ function mpcForget() {
   if (!confirm('Forget this wallet on this device? You can only restore it from its backup or recovery material.')) return;
   localStorage.removeItem(BK_MPC_LS);
   backend.wallet = null;
+  backend.walletEd = null;
   backend.mpc = null;
   showScreen('onboarding');
   goStep('choose');
@@ -1283,8 +1299,13 @@ async function backendRkCreate() {
         { Type: 'Password',  Key: pw },
         { Type: 'RemoteKey', Key: backend.rk.resource }
       ];
-      const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+      // multiCreate builds a PAIR of committees (secp256k1 + ed25519) from the
+      // SAME key shares — one committee, two curves (EVM/BTC + Solana).
+      const pair = await backendRequest('Wallet:multiCreate', 'POST', { Name: name, Keys: keys });
+      const w = pair.secp256k1 ?? pair.Secp256k1;
+      const wEd = pair.ed25519 ?? pair.Ed25519;
       backend.wallet = w;
+      backend.walletEd = wEd || null;
       backend.password = pw;
       backend.accounts = [];
       $('#bkAccountList').innerHTML = '';
@@ -1350,8 +1371,13 @@ async function backendRkCreatePasskey() {
       { Type: 'Password',  Key: share2Key },
       { Type: 'RemoteKey', Key: backend.rk.resource }
     ];
-    const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+    // multiCreate builds a PAIR of committees (secp256k1 + ed25519) from the
+    // SAME key shares — one committee, two curves (EVM/BTC + Solana).
+    const pair = await backendRequest('Wallet:multiCreate', 'POST', { Name: name, Keys: keys });
+    const w = pair.secp256k1 ?? pair.Secp256k1;
+    const wEd = pair.ed25519 ?? pair.Ed25519;
     backend.wallet = w;
+    backend.walletEd = wEd || null;
     backend.password = null;
     backend.passkey = null;
     // Keep the credential, salt(s) and (for the default) the password so signing
@@ -1773,8 +1799,13 @@ async function backendCreateWallet() {
       { Type: 'Password', Key: shareSecret },
       { Type: 'Password', Key: shareSecret },
     ];
-    const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+    // multiCreate builds a PAIR of committees (secp256k1 + ed25519) from the
+    // SAME key shares — one committee, two curves (EVM/BTC + Solana).
+    const pair = await backendRequest('Wallet:multiCreate', 'POST', { Name: name, Keys: keys });
+    const w = pair.secp256k1 ?? pair.Secp256k1;
+    const wEd = pair.ed25519 ?? pair.Ed25519;
     backend.wallet = w;
+    backend.walletEd = wEd || null;
     backend.password = usePasskey ? null : pw;
     backend.passkey = passkey;
     backend.accounts = [];
