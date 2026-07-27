@@ -329,15 +329,17 @@ pub async fn create_at_async(env: &Env, name: &str, curve: &str, key_descs: &[Ke
     let now = created.to_owned();
 
     // Fetch the wdrone fleet recipients ONCE, only if any share is a RemoteKey.
-    // The browser rides the authenticated Spot connection (no HTTP host / CORS /
-    // clientId): start + wait it once, then reuse the same client for the
-    // recipients fetch AND every share upload below.
+    // The browser rides the authenticated Spot connection (no HTTP host / CORS):
+    // start + wait it once, then reuse the same client (and clientId, which
+    // rides the params over Spot) for the recipients fetch AND every share
+    // upload below.
     let needs_remote = key_descs.iter().any(|kd| kd.kind == "RemoteKey");
     let spot = if needs_remote {
         let c = env.spot_start().map_err(|e| Error::Env(e.to_string()))?;
         c.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| Error::Env(format!("spot not online: {e}")))?;
-        let recips = crate::walletsign::fetch_decrypt_keys(&c).await?;
-        Some((c, recips))
+        let cid = client_id(env);
+        let recips = crate::walletsign::fetch_decrypt_keys(&c, cid.as_deref()).await?;
+        Some((c, recips, cid))
     } else {
         None
     };
@@ -360,10 +362,10 @@ pub async fn create_at_async(env: &Env, name: &str, curve: &str, key_descs: &[Ke
             }
             Recipient::Plain => (keystore::wrap_plain(json.as_bytes()).map_err(|e| Error::Env(e.to_string()))?, String::new()),
             Recipient::Remote => {
-                let (client, recips) = spot.as_ref().ok_or_else(|| Error::Env("no fleet recipients".into()))?;
+                let (client, recips, cid) = spot.as_ref().ok_or_else(|| Error::Env("no fleet recipients".into()))?;
                 let payload = build_remote_payload(curve_out, json.as_bytes())?;
                 let sealed = keystore::seal_json(&payload, recips).map_err(|e| Error::Env(e.to_string()))?;
-                upload_remote_share_wasm(client, &kd.key, curve_out, protocol, &sealed).await?;
+                upload_remote_share_wasm(client, cid.as_deref(), &kd.key, curve_out, protocol, &sealed).await?;
                 (sealed, kd.key.clone())
             }
         };
@@ -402,7 +404,7 @@ pub async fn create_at_async(env: &Env, name: &str, curve: &str, key_descs: &[Ke
 /// critical-retry wrapper (the browser create path is not the reshare
 /// desync-risk path). `client` must already be online.
 #[cfg(target_arch = "wasm32")]
-async fn upload_remote_share_wasm(client: &spotlib::Client, remote_key: &str, curve: &str, protocol: &str, data_cbor: &[u8]) -> Result<()> {
+async fn upload_remote_share_wasm(client: &spotlib::Client, client_id: Option<&str>, remote_key: &str, curve: &str, protocol: &str, data_cbor: &[u8]) -> Result<()> {
     let mut params = serde_json::json!({
         "data": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data_cbor),
         "key": remote_key,
@@ -411,7 +413,7 @@ async fn upload_remote_share_wasm(client: &spotlib::Client, remote_key: &str, cu
     if !protocol.is_empty() {
         params["protocol"] = serde_json::json!(protocol);
     }
-    crate::rest::spot_do(client, "Crypto/WalletSign:setGeneratedKey", "POST", &params).await?;
+    crate::rest::spot_do(client, "Crypto/WalletSign:setGeneratedKey", "POST", &params, client_id).await?;
     Ok(())
 }
 
@@ -831,13 +833,15 @@ pub async fn persist_agent_keygen_async(
     let share_json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
 
     // Seal the FROST share to the wdrone fleet recipients + upload it, both over
-    // the authenticated Spot connection (start + wait once, then reuse).
+    // the authenticated Spot connection (start + wait once, then reuse). The
+    // clientId rides the params over Spot.
     let client = env.spot_start().map_err(|e| Error::Env(e.to_string()))?;
     client.wait_online(std::time::Duration::from_secs(15)).await.map_err(|e| Error::Env(format!("spot not online: {e}")))?;
-    let recipients = crate::walletsign::fetch_decrypt_keys(&client).await?;
+    let cid = client_id(env);
+    let recipients = crate::walletsign::fetch_decrypt_keys(&client, cid.as_deref()).await?;
     let payload = build_remote_payload("ed25519", share_json.as_bytes())?;
     let sealed = keystore::seal_json(&payload, &recipients).map_err(|e| Error::Env(e.to_string()))?;
-    upload_remote_share_wasm(&client, remote_key, "ed25519", "frost", &sealed).await?;
+    upload_remote_share_wasm(&client, cid.as_deref(), remote_key, "ed25519", "frost", &sealed).await?;
     let (data, key_field) = (sealed, remote_key.to_string());
 
     let now = crate::now_rfc3339();
@@ -1203,9 +1207,10 @@ pub(crate) fn seal_share_full(
     }
 }
 
-/// The `walletinfo:clientId` header value (Go `withClientID`), if set. Native
-/// only — the browser authenticates via the Spot connection, not this header.
-#[cfg(not(target_arch = "wasm32"))]
+/// The configured `walletinfo:clientId`, if set. Native sends it as the
+/// `Sec-ClientId` header (Go `withClientID`); the browser (over Spot) merges it
+/// into the request params as `client_id` — either way it selects the
+/// WalletSign 2FA email/SMS branding server-side.
 fn client_id(env: &Env) -> Option<String> {
     env.config_get("walletinfo:clientId")
         .ok()

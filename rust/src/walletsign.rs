@@ -54,9 +54,10 @@ pub fn fetch_decrypt_keys(base: &str, client_id: Option<&str>) -> Result<Vec<Pub
 
 /// Browser twin of [`fetch_decrypt_keys`]: same parsing, but the GET rides the
 /// authenticated Spot connection (`spot_do` → `@/p_api`), not HTTP Fetch.
+/// `client_id` travels in the params (over Spot there is no `Sec-ClientId`).
 #[cfg(target_arch = "wasm32")]
-pub async fn fetch_decrypt_keys(client: &spotlib::Client) -> Result<Vec<PublicKey>> {
-    let data = crate::rest::spot_do(client, "Crypto/WalletSign:keys", "GET", &serde_json::Value::Null).await?;
+pub async fn fetch_decrypt_keys(client: &spotlib::Client, client_id: Option<&str>) -> Result<Vec<PublicKey>> {
+    let data = crate::rest::spot_do(client, "Crypto/WalletSign:keys", "GET", &serde_json::Value::Null, client_id).await?;
     parse_decrypt_keys(data)
 }
 

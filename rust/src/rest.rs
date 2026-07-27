@@ -126,8 +126,10 @@ pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&
 // Browser (wasm32) REST goes over the Spot network, not HTTP Fetch: klbfw's
 // `spot` feature ships `{path,verb,params}` over the authenticated spotlib
 // connection to `@/p_api` and parses the same `{result,data,error}` envelope.
-// This removes the browser's CORS + clientId requirements — the authenticated
-// Spot connection IS the auth context.
+// This removes the browser's CORS requirement (no HTTP host / origin). The
+// clientId is still meaningful — it selects the WalletSign email/SMS branding —
+// but over Spot there is no `Sec-ClientId` header, so it travels as a
+// `client_id` field merged into the request params instead.
 
 /// Adapter: drive klbfw's REST-over-Spot through our spotlib client.
 #[cfg(target_arch = "wasm32")]
@@ -145,11 +147,29 @@ impl klbfw::SpotClient for SpotRest<'_> {
 
 /// Execute a KLB REST call over the Spot connection (klbfw `spot` feature →
 /// `@/p_api`) and return the envelope's `data`. The browser path: no HTTP host,
-/// no CORS, no clientId — the Spot connection's cryptographic identity is the
-/// auth context. `client` must already be online (call `wait_online` first).
+/// no CORS. `client` must already be online (call `wait_online` first).
+///
+/// `client_id`, when set, is merged into the request params as `client_id` (the
+/// HTTP path sent it as the `Sec-ClientId` header; `@/p_api` has no headers, so
+/// it rides the params) — the backend uses it e.g. to brand WalletSign 2FA
+/// email/SMS. Requires `params` to be a JSON object or null.
 #[cfg(target_arch = "wasm32")]
-pub async fn spot_do(client: &spotlib::Client, path: &str, verb: &str, params: &Value) -> Result<Value> {
-    let resp = klbfw::spot_do_request(&SpotRest(client), path, verb, params)
+pub async fn spot_do(client: &spotlib::Client, path: &str, verb: &str, params: &Value, client_id: Option<&str>) -> Result<Value> {
+    let merged;
+    let param_ref = match client_id.filter(|s| !s.is_empty()) {
+        Some(id) => {
+            let mut obj = match params {
+                Value::Object(m) => m.clone(),
+                Value::Null => serde_json::Map::new(),
+                _ => return Err(Error::Env(format!("rest {path} (spot): cannot attach client_id to non-object params"))),
+            };
+            obj.insert("client_id".to_string(), Value::String(id.to_string()));
+            merged = Value::Object(obj);
+            &merged
+        }
+        None => params,
+    };
+    let resp = klbfw::spot_do_request(&SpotRest(client), path, verb, param_ref)
         .await
         .map_err(|e| Error::Env(format!("rest {path} (spot): {e}")))?;
     match resp.result.as_str() {
