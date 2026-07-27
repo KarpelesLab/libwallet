@@ -1126,6 +1126,33 @@ async function backendRkCreate() {
   }, 30);
 }
 
+// Spot:status — start the in-browser spotlib client and report whether it has
+// connected to the KLB Spot relay. Sync backend call; the connection completes
+// on the browser event loop, so a first check may read offline — check again.
+async function backendSpotStatus() {
+  const err = $('#bkSpotErr');
+  const out = $('#bkSpotOut');
+  const pill = $('#bkSpotStateText');
+  err.textContent = '';
+  const btn = $('#bkSpotStatus');
+  btn.disabled = true; btn.textContent = 'Checking…';
+  try {
+    const s = await backendRequest('Spot:status', 'GET');
+    const online = !!s.online;
+    pill.textContent = online ? 'online' : 'connecting…';
+    out.classList.remove('hidden');
+    out.innerHTML = `
+      <div class="kv"><span class="k">Online</span><span class="v">${online ? 'yes' : 'not yet'}</span></div>
+      <div class="kv"><span class="k">Target id</span><span class="v mono">${bkEsc(s.target_id || '')}</span></div>
+      <div class="kv"><span class="k">Connections</span><span class="v">${(s.connections && s.connections.online) || 0} / ${(s.connections && s.connections.total) || 0}</span></div>`;
+  } catch (e) {
+    pill.textContent = 'error';
+    err.textContent = e.message || String(e);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Check Spot status';
+  }
+}
+
 // Experimental — Wallet:initiateKeygen: leader-side distributed FROST keygen
 // over the KLB Spot network. Real multi-party ceremony; needs the live fleet and
 // a paired agent/wdrone or it times out. Peers come from Crypto/WalletSign:newAgent.
@@ -1426,6 +1453,7 @@ function wireBackendEvents() {
   $('#bkRkSend').onclick        = backendRkSend;
   $('#bkRkVerify').onclick      = backendRkVerify;
   $('#bkRkCreate').onclick      = backendRkCreate;
+  $('#bkSpotStatus').onclick    = backendSpotStatus;
   $('#bkAkRun').onclick         = backendInitiateKeygen;
   $('#bkAsRun').onclick         = backendJoinSign;
   $('#bkListWallets').onclick   = backendListWallets;

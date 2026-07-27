@@ -311,6 +311,10 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Lifecycle:update" => lifecycle::update(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Spot:status" => spot::status(&handle.env),
+        // Browser: the Spot client + its status are fully sync on wasm
+        // (spot_start/connection_count/target_id), so this rides the sync router.
+        #[cfg(target_arch = "wasm32")]
+        "Spot:status" => spot_wasm::status(&handle.env),
         #[cfg(not(target_arch = "wasm32"))]
         "Wallet:exportToDevice" => spot::export_to_device(&handle.env, "", params),
         #[cfg(not(target_arch = "wasm32"))]

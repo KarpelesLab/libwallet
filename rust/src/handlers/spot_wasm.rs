@@ -12,6 +12,20 @@ use crate::Env;
 
 use super::{ApiError, ApiResult};
 
+/// `Spot:status` (wasm) — start the Spot client if needed and report its
+/// connection state. Sync (spot_start/connection_count/target_id are all sync on
+/// wasm); mirrors [`crate::handlers::spot::status`]. Lets the browser confirm the
+/// spotlib client actually comes online before running a ceremony.
+pub fn status(env: &Env) -> ApiResult {
+    let c = env.spot_start().map_err(ApiError::internal)?;
+    let (total, online) = c.connection_count();
+    Ok(json!({
+        "online": online > 0,
+        "target_id": c.target_id(),
+        "connections": { "total": total, "online": online },
+    }))
+}
+
 /// Parse the `peers` array into [`JoinPeer`]s (shared by both handlers).
 fn parse_peers(params: &Value) -> Vec<JoinPeer> {
     params

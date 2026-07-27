@@ -428,6 +428,26 @@
             <div id="bkRkOut" class="bk-block hidden"></div>
           </div>
 
+          <!-- Spot network status — verify the in-browser spotlib client connects -->
+          <div class="bk-block">
+            <div class="section-head">
+              <div class="eyebrow muted">Spot network · <span class="mono">Spot:status</span></div>
+              <span class="bk-status" id="bkSpotState"><span class="bk-dot"></span><span id="bkSpotStateText">unknown</span></span>
+            </div>
+            <div class="asset" data-chain="evm">
+              <div class="form-grid">
+                <p class="subtitle">Starts the in-browser spotlib client and reports whether it has
+                  connected to the KLB Spot relay. The agent ceremonies below run over this
+                  connection — confirm it is online first (it may take a moment after the first check).</p>
+                <div class="amount-row">
+                  <button class="btn primary grow" type="button" id="bkSpotStatus">Check Spot status</button>
+                </div>
+                <div class="err-inline" id="bkSpotErr"></div>
+                <div id="bkSpotOut" class="panel hidden" style="padding:4px 16px"></div>
+              </div>
+            </div>
+          </div>
+
           <!-- Agent ceremony (experimental) — distributed FROST keygen/sign -->
           <div class="bk-block">
             <div class="section-head"><div class="eyebrow muted">Agent ceremony (experimental) · <span class="mono">Wallet:initiateKeygen</span> / <span class="mono">Wallet:joinSign</span></div></div>
