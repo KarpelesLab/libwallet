@@ -96,6 +96,9 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         ("RemoteKey:passkeyAuthFinish", _) => crate::handlers::remotekey::wallet_sign_proxy(&handle.env, "passkeyAuthFinish", &req.params).await,
         ("Wallet:initiateKeygen", _) => crate::handlers::spot_wasm::initiate_keygen_async(&handle.env, &req.params).await,
         ("Wallet:joinSign", _) => crate::handlers::spot_wasm::join_sign_async(&handle.env, &req.params).await,
+        // Chain reads/broadcast run in Rust over rpc::call_async (browser Fetch),
+        // resolving endpoints via the Network model — the JS never names a URL.
+        ("Account:balance", _) => crate::handlers::account::balance_impl(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
     };
     match out {

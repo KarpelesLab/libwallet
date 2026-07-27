@@ -51,7 +51,13 @@ tsslib = "0.2.6"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 graphitesql = "0.1.6"
 ethrpc-rs = "0.3.0"
-rsurl = "0.1.5"
+# tokio-rt supplies rsurl::aio::TokioRuntime so the async `aio` client (used by
+# rpc::call_async) runs on native too — one code path shared with wasm, and
+# locally testable. The blocking `rsurl::Request` API stays available as before.
+rsurl = { version = "0.1.7", features = ["tokio-rt"] }
+# The FFI's sync worker threads drive the shared async handlers via crate::rt's
+# block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 tungstenite = "0.20"
 spotlib = "0.1.0"
 
@@ -85,6 +91,8 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
+# Drives the async `rpc::call_async` (rsurl::aio TokioRuntime) in native tests.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
 
 [profile.release]
 opt-level = 3

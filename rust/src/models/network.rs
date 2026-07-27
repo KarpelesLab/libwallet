@@ -104,10 +104,11 @@ impl Network {
     /// `Network.getRPC`):
     /// - an explicit, non-"auto" `rpc` is used as-is (all types);
     /// - Bitcoin family always routes through modchain (URL + API key + chain);
-    /// - Solana falls back to the Helius devnet/mainnet endpoint;
-    /// - EVM with `rpc == "" | "auto"` needs the live chain-info RPC picker
-    ///   (freshness-aware, not ported) — returns an error so the caller supplies
-    ///   an explicit RPC.
+    /// - Ethereum mainnet (evm chain 1) routes through modchain (our node);
+    /// - other EVM chains resolve via the chain registry / an explicit RPC (the
+    ///   Go getRPC live picker), which is not yet ported — returns an error so
+    ///   the caller supplies an explicit RPC;
+    /// - Solana falls back to the Helius devnet/mainnet endpoint.
     pub fn resolved_rpc(&self) -> Result<String> {
         let explicit = !self.rpc.is_empty() && self.rpc != "auto";
         match self.kind.as_str() {
@@ -121,6 +122,12 @@ impl Network {
                 _ => HELIUS_MAINNET.to_owned(),
             }),
             "evm" if explicit => Ok(self.rpc.clone()),
+            // Only Ethereum mainnet routes through modchain; other EVM chains use
+            // the chaindb (registry) picker, not yet ported.
+            "evm" if self.chain_id == "1" => Ok(format!(
+                "https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{}/rpc",
+                self.chain_id
+            )),
             "evm" => Err(crate::Error::Env(
                 "auto EVM RPC selection is not ported; supply an explicit RPC".into(),
             )),

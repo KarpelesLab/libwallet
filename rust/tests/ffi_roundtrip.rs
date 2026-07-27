@@ -3001,9 +3001,18 @@ fn network_resolve_rpc_via_ffi() {
     assert!(rpc.starts_with("https://rpc.modchain.net/api/"), "{rpc}");
     assert!(rpc.ends_with("/bitcoin/rpc"), "{rpc}");
 
-    // Auto EVM is not resolvable locally -> error.
+    // Ethereum mainnet (evm.1) resolves through modchain (our node).
     let ev = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"evm.1"}}"#);
-    assert_eq!(ev["result"], "error");
+    assert_eq!(ev["result"], "success", "{ev}");
+    let ev_rpc = ev["data"]["rpc"].as_str().unwrap();
+    assert!(
+        ev_rpc.starts_with("https://rpc.modchain.net/api/") && ev_rpc.ends_with("/1/rpc"),
+        "{ev_rpc}"
+    );
+
+    // A non-Ethereum EVM chain (evm.137) still needs the chaindb picker -> error.
+    let poly = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"evm.137"}}"#);
+    assert_eq!(poly["result"], "error", "{poly}");
     LibwalletDestroy(h);
 }
 

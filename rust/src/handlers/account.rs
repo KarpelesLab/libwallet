@@ -316,11 +316,13 @@ fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
         .ok_or_else(|| ApiError::new(400, format!("bad base58 32-byte value: {s}")))
 }
 
-/// `Account:balance` — the account's native balance via the node RPC. For an
-/// ethereum account this is eth_getBalance (wei); solana uses getBalance
-/// (lamports). Returned as a decimal string.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn balance(env: &Env, params: &Value) -> ApiResult {
+/// `Account:balance` — the account's native balance via the node RPC. One async
+/// implementation shared by native (driven through `crate::rt::block_on`) and
+/// the browser (awaited in `handle_request_async`), so the logic is identical on
+/// both. ethereum = eth_getBalance (wei); solana = getBalance (lamports, minus
+/// the rent-exempt reserve); bitcoin = modchain_assets NATIVE sum (satoshi).
+/// Returned as a decimal string. Chain I/O goes through `rpc::call_async`.
+pub async fn balance_impl(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
         .get("Id")
         .and_then(Value::as_str)
@@ -328,13 +330,22 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
-    let rpc = resolve_rpc(env, params, &account.kind)?;
-    let rpc = rpc.as_str();
+    let url = resolve_rpc(env, params, &account.kind)?;
 
     let bal = match account.kind.as_str() {
-        "ethereum" => crate::rpc::eth_get_balance(rpc, &account.address).map_err(ApiError::internal)?,
+        "ethereum" => {
+            let hex = crate::rpc::call_async(&url, "eth_getBalance", serde_json::json!([account.address, "latest"]))
+                .await
+                .map_err(ApiError::internal)?;
+            let hex = hex.as_str().ok_or_else(|| ApiError::new(502, "balance not a string"))?;
+            let stripped = hex.strip_prefix("0x").unwrap_or(hex);
+            num_bigint::BigInt::parse_bytes(stripped.as_bytes(), 16)
+                .ok_or_else(|| ApiError::new(502, format!("bad balance hex {hex}")))?
+                .to_string()
+        }
         "solana" => {
-            let res = crate::rpc::call(rpc, "getBalance", serde_json::json!([account.address]))
+            let res = crate::rpc::call_async(&url, "getBalance", serde_json::json!([account.address]))
+                .await
                 .map_err(ApiError::internal)?;
             let raw = res
                 .get("value")
@@ -343,7 +354,8 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
             // Subtract the rent-exempt minimum so the reported balance is what
             // the user can actually spend (matching Go nativeBalance). RPC
             // failure falls back to the canonical 0-byte system-account reserve.
-            let rent = crate::rpc::call(rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
+            let rent = crate::rpc::call_async(&url, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
+                .await
                 .ok()
                 .and_then(|v| v.as_u64())
                 .unwrap_or(890_880);
@@ -354,13 +366,20 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
             // account has one; fall back to the single address. Matches Go
             // bitcoinBalance, which passes the xpub to modchain_assets.
             let lookup = account.xpub().unwrap_or_else(|_| account.address.clone());
-            crate::bitcoin::native_balance_satoshi(rpc, &lookup)
-                .map_err(ApiError::internal)?
-                .to_string()
+            let raw = crate::rpc::call_async(&url, "modchain_assets", serde_json::json!([lookup]))
+                .await
+                .map_err(ApiError::internal)?;
+            crate::bitcoin::parse_native_balance(&raw).map_err(ApiError::internal)?.to_string()
         }
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
+}
+
+/// Native `Account:balance`: drive the shared async impl on the FFI worker.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn balance(env: &Env, params: &Value) -> ApiResult {
+    crate::rt::block_on(balance_impl(env, params))
 }
 
 /// `Account:maxSendable` — the maximum native amount an EVM account can send:
@@ -710,28 +729,41 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
 }
 
 /// The RPC URL for a request touching an account of `account_kind`: the `RPC`
-/// param wins; otherwise fall back to the current network's resolved RPC (Go
-/// resolves RPC from the network — this covers Solana/Bitcoin, which have
-/// endpoint defaults, without the host passing a URL). Errors when neither is
-/// available or the current network's type doesn't match the account.
+/// param wins; otherwise resolve it from the Network model (Go resolves RPC from
+/// the network). The current network `@` is used when its type matches the
+/// account's chain; otherwise we fall back to the seeded DEFAULT network for
+/// that chain (evm→1, solana→mainnet, bitcoin→bitcoin). The browser is
+/// multi-chain — it has no single `@` that matches every account — so it always
+/// takes the default-network path; native keeps its current-network behaviour
+/// when `@` matches. Either way the endpoint comes from `Network::resolved_rpc`,
+/// the one resolver, never a client-side URL.
 fn resolve_rpc(env: &Env, params: &Value, account_kind: &str) -> Result<String, ApiError> {
     if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
         return Ok(url.to_owned());
     }
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "RPC endpoint required (no current network)"))?;
     // account kind (ethereum/solana/bitcoin) -> network type (evm/solana/bitcoin).
     let want = match account_kind {
         "ethereum" => "evm",
         other => other,
     };
-    if net.kind != want {
-        return Err(ApiError::new(
-            400,
-            format!("current network is {} but account is {account_kind}; pass RPC", net.kind),
-        ));
-    }
+    // Prefer the current network iff it matches this account's chain.
+    let current = crate::models::network::fetch(env, "@")
+        .map_err(ApiError::internal)?
+        .filter(|n| n.kind == want);
+    let net = match current {
+        Some(n) => n,
+        None => {
+            let default_chain = match want {
+                "evm" => "1",
+                "solana" => "mainnet",
+                "bitcoin" => "bitcoin",
+                other => return Err(ApiError::new(400, format!("no default network for {other}"))),
+            };
+            crate::models::network::fetch(env, &format!("{want}.{default_chain}"))
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(400, format!("no seeded network for {want}")))?
+        }
+    };
     net.resolved_rpc().map_err(ApiError::internal)
 }
 
@@ -807,5 +839,72 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             Ok(serde_json::to_value(a).unwrap())
         }
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Account"))),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod balance_tests {
+    use super::*;
+    use crate::sign::KeyDescription;
+    use crate::Env;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn pw(p: &str) -> KeyDescription {
+        KeyDescription { kind: "Password".into(), key: p.into(), id: String::new() }
+    }
+
+    /// One-shot mock JSON-RPC server returning `result_json`.
+    fn mock_rpc(result_json: String) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#);
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    // Proves the shared async balance runs through native block_on end to end:
+    // block_on → balance_impl → resolve_rpc (RPC override) → call_async →
+    // parse_native_balance. Bitcoin's modchain_assets NATIVE sum.
+    #[test]
+    fn bitcoin_balance_via_block_on() {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+
+        let url = mock_rpc(r#"{"assets":[{"asset":"NATIVE","balance":"0.00080000"}]}"#.to_string());
+        let out = balance(&env, &serde_json::json!({ "Id": a.id, "RPC": url })).unwrap();
+        assert_eq!(out["balance"], serde_json::json!("80000"));
+        assert_eq!(out["address"], serde_json::json!(a.address));
+    }
+
+    // EVM balance decodes the hex wei into a decimal string.
+    #[test]
+    fn ethereum_balance_via_block_on() {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "ETH", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+
+        // 0xde0b6b3a7640000 = 1e18 wei = 1 ETH.
+        let url = mock_rpc(r#""0xde0b6b3a7640000""#.to_string());
+        let out = balance(&env, &serde_json::json!({ "Id": a.id, "RPC": url })).unwrap();
+        assert_eq!(out["balance"], serde_json::json!("1000000000000000000"));
     }
 }

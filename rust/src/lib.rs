@@ -65,7 +65,10 @@ pub mod eip712;
 pub mod solana_spl;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod bitcoin;
-#[cfg(not(target_arch = "wasm32"))]
+// rpc: the blocking JSON-RPC `call` is native-only, but the async `call_async`
+// (rsurl::aio) is shared — the browser uses it for chain RPC, so the module is
+// compiled on wasm too (its blocking items are individually gated).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod rpc;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod rest;
@@ -111,6 +114,10 @@ pub mod names;
 pub mod contract;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod tss;
+// Native async driver: block_on for the FFI's sync worker threads. wasm awaits
+// the same futures on the JS event loop, so this has no browser counterpart.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod rt;
 // Request dispatch — the offline handler surface compiles for wasm; the
 // networking handlers/route-arms inside are gated native-only.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

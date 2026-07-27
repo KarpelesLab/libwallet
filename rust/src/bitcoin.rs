@@ -321,11 +321,10 @@ pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u
     Ok((total, fee, max))
 }
 
-/// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
-/// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
-    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([lookup]))?;
+/// Sum the NATIVE unspent balance (satoshi) from a decoded `modchain_assets`
+/// response. RPC-free half of [`native_balance_satoshi`], shared with the async
+/// (browser) balance path which fetches `raw` via `rpc::call_async`.
+pub fn parse_native_balance(raw: &serde_json::Value) -> Result<u64> {
     let assets = raw
         .get("assets")
         .and_then(|a| a.as_array())
@@ -342,6 +341,14 @@ pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
         }
     }
     Ok(total)
+}
+
+/// Sum the NATIVE unspent balance (in satoshi) reported by `modchain_assets`
+/// for `lookup` (an address or xpub). Port of Go `Network.bitcoinBalance`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
+    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([lookup]))?;
+    parse_native_balance(&raw)
 }
 
 impl DiscoveredUtxo {
