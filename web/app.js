@@ -232,7 +232,7 @@ function tryUnlock(pw) {
 }
 
 // Derive addresses and enter the dashboard for a known-good mnemonic.
-function unlockWith(mnemonic) {
+async function unlockWith(mnemonic) {
   session.mnemonic = mnemonic;
   session.mpc = false;   // walletcore path: not MPC-backed
   try {
@@ -242,6 +242,10 @@ function unlockWith(mnemonic) {
     toast('error', 'Derivation failed', err.message || String(err));
     return;
   }
+  // Address-only model accounts so balances/preview run through libwallet
+  // (Account:balance / Transaction:simulate) with no client-side chain RPC.
+  backendOpen();
+  session.accounts = await ensureViewAccounts(session.addresses);
   // A real wallet: restore all tabs (in case console mode hid them) and default
   // back to the Accounts tab. Clear any MPC guards (re-enable Send, show reveal).
   setConsoleMode(false);
@@ -262,6 +266,7 @@ function lock() {
     session.mpc = false;
     session.mnemonic = null;
     session.addresses = null;
+    session.accounts = null;
     session.balances = {};
     backend.wallet = null;
     backend.walletEd = null;
@@ -275,6 +280,7 @@ function lock() {
   }
   session.mnemonic = null;
   session.addresses = null;
+  session.accounts = null;
   session.balances = {};
   showScreen('unlock');
   setTimeout(() => $('#pwUnlock')?.focus(), 60);
@@ -328,42 +334,43 @@ function setBalance(chain, text, isLoading) {
   node.innerHTML = `<span class="amt">${text}</span><span class="sym"> ${SYMBOL[chain]}</span>`;
 }
 
+// Chain balances now come from libwallet (Account:balance → rpc::call_async in
+// Rust, endpoint resolved from the Network model) — the browser makes no chain
+// RPC of its own. Both wallet types resolve through model accounts: the MPC
+// wallet's committee accounts, or address-only view accounts for the walletcore
+// path (see ensureViewAccounts). session.accounts maps chain → {id, address}.
 async function refreshAllBalances() {
-  if (!session.addresses) return;
+  if (!session.accounts) return;
   ['evm', 'bitcoin', 'solana'].forEach(c => setBalance(c, null, true));
-  await Promise.allSettled([
-    fetchEvmBalance(),
-    fetchBtcBalance(),
-    fetchSolBalance()
-  ]);
+  await Promise.allSettled(['evm', 'bitcoin', 'solana'].map(fetchChainBalance));
 }
 
-async function fetchEvmBalance() {
+async function fetchChainBalance(chain) {
+  const acct = session.accounts[chain];
+  if (!acct) { setBalance(chain, 'unavailable'); return; }
   try {
-    const hex = await rpc(evmChain.rpc, 'eth_getBalance', [session.addresses.evm, 'latest']);
-    const wei = BigInt(hex);
-    session.balances.evm = wei;
-    setBalance('evm', formatUnits(wei, DECIMALS.evm, 6));
-  } catch { setBalance('evm', 'unavailable'); }
+    const r = await backendRequest('Account:balance', 'POST', { Id: acct.id });
+    const raw = BigInt(r.balance ?? r.Balance ?? '0');
+    session.balances[chain] = raw;
+    setBalance(chain, formatUnits(raw, DECIMALS[chain], 6));
+  } catch { setBalance(chain, 'unavailable'); }
 }
 
-async function fetchSolBalance() {
-  try {
-    const res = await rpc(SOLANA_RPC, 'getBalance', [session.addresses.solana]);
-    const lamports = BigInt(res.value ?? res);
-    session.balances.solana = lamports;
-    setBalance('solana', formatUnits(lamports, DECIMALS.solana, 6));
-  } catch { setBalance('solana', 'unavailable'); }
-}
-
-async function fetchBtcBalance() {
-  try {
-    const info = await httpJson(`${BTC_API}/address/${session.addresses.bitcoin}`);
-    const c = info.chain_stats || {};
-    const sats = BigInt(c.funded_txo_sum || 0) - BigInt(c.spent_txo_sum || 0);
-    session.balances.bitcoin = sats;
-    setBalance('bitcoin', formatUnits(sats, DECIMALS.bitcoin, 8));
-  } catch { setBalance('bitcoin', 'unavailable'); }
+// Create address-only (view) model accounts for a set of derived addresses so
+// balance/simulate/send-preview go through the Rust handlers. Returns the
+// chain → {id, address} map. Used by the walletcore (mnemonic) path; the MPC
+// path already has committee accounts from deriveMpcAddresses.
+async function ensureViewAccounts(addresses) {
+  const out = {};
+  for (const [chain, type] of [['evm', 'ethereum'], ['bitcoin', 'bitcoin'], ['solana', 'solana']]) {
+    const addr = addresses[chain];
+    if (!addr) continue;
+    try {
+      const a = await backendRequest('Account:createView', 'POST', { Type: type, Address: addr });
+      out[chain] = { id: a.Id, address: a.Address ?? addr };
+    } catch (e) { bkLog('err', `createView ${chain}: ${e.message || e}`); }
+  }
+  return out;
 }
 
 // ============================================================================
@@ -1104,6 +1111,10 @@ async function deriveMpcAddresses() {
     bitcoin: { id: btc.Id, address: btc.Address },
     solana:  sol ? { id: sol.Id, address: sol.Address } : null,
   };
+  // session.accounts is the unified chain → {id, address} map used by balance
+  // and preview (same shape for both wallet types); for MPC it is the committee
+  // accounts, so balance/preview and committee send share the same account Ids.
+  session.accounts = session.mpcAccounts;
   return { evm: evm.Address, bitcoin: btc.Address, solana: sol ? sol.Address : null };
 }
 
