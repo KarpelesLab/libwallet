@@ -6,7 +6,6 @@
 
 use std::fmt;
 use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,10 +30,17 @@ impl fmt::Display for ParseTimeIdError {
 impl std::error::Error for ParseTimeIdError {}
 
 impl TimeId {
-    /// A TimeId for the current instant (Index = 0), like `NewTimeId`.
+    /// A TimeId for the current instant (Index = 0), like `NewTimeId`. Uses
+    /// chrono (not `std::time::SystemTime`) so the clock works on wasm too —
+    /// `SystemTime::now()` panics on `wasm32-unknown-unknown`.
     pub fn now() -> TimeId {
-        let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-        TimeId { type_: String::new(), unix: d.as_secs(), nano: d.subsec_nanos(), index: 0 }
+        let now = chrono::Utc::now();
+        TimeId {
+            type_: String::new(),
+            unix: now.timestamp().max(0) as u64,
+            nano: now.timestamp_subsec_nanos(),
+            index: 0,
+        }
     }
 
     /// 16-byte big-endian encoding: `Unix(u64) | Nano(u32) | Index(u32)`.

@@ -110,14 +110,21 @@ pub fn libwallet_init() -> Result<u32, JsValue> {
     Ok(id)
 }
 
-/// Dispatch a JSON request against the session and return the JSON response —
-/// the exact request/response contract of the native `LibwalletRequest`.
+/// Dispatch a JSON request against the session and resolve with the JSON
+/// response — the async analogue of the native `LibwalletRequest`. Returns a
+/// JS `Promise<string>`: browser handlers (RemoteKey upload, spot
+/// ceremonies) drive async I/O, while offline handlers resolve immediately.
+/// The request/response contract is identical to the native FFI.
 #[wasm_bindgen]
-pub fn libwallet_request(handle: u32, request_json: &str) -> String {
-    match HANDLES.with(|h| h.borrow().get(&handle).cloned()) {
-        Some(h) => dispatch::handle_request(&h, request_json),
-        None => r#"{"result":"error","error":"invalid handle","code":500}"#.to_string(),
-    }
+pub fn libwallet_request(handle: u32, request_json: String) -> js_sys::Promise {
+    let h = HANDLES.with(|m| m.borrow().get(&handle).cloned());
+    wasm_bindgen_futures::future_to_promise(async move {
+        let out = match h {
+            Some(h) => dispatch::handle_request_async(&h, &request_json).await,
+            None => r#"{"result":"error","error":"invalid handle","code":500}"#.to_string(),
+        };
+        Ok(JsValue::from_str(&out))
+    })
 }
 
 /// Register (or, with a null `cb`, this is a no-op) a host event callback: the

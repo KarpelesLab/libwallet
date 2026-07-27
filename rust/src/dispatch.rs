@@ -69,3 +69,13 @@ pub fn handle_request(handle: &Handle, raw: &str) -> String {
         Err(e) => response::error(&e.message, e.code),
     }
 }
+
+/// wasm async entry: mirrors [`handle_request`] but is `async` so browser
+/// handlers that must `.await` network I/O (rsurl fetch, spot ceremonies)
+/// can be dispatched from the Promise-returning `libwallet_request`. For now
+/// it delegates to the synchronous router unchanged — no wasm handler awaits
+/// yet; async routes are wired in as handlers gain browser networking.
+#[cfg(target_arch = "wasm32")]
+pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
+    handle_request(handle, raw)
+}

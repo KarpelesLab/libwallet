@@ -647,6 +647,7 @@ dependencies = [
  "tungstenite",
  "uuid",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "xuid-rs",
 ]
 

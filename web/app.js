@@ -934,14 +934,14 @@ function bkLog(kind, msg) {
   while (log.childElementCount > 200) log.removeChild(log.firstChild);
 }
 
-// Core call: serialise {path,verb,params}, dispatch synchronously, parse the
+// Core call: serialise {path,verb,params}, dispatch (async), parse the
 // envelope. Logs both sides to the tape. Throws on an error envelope.
-function backendRequest(path, verb = 'GET', params) {
+async function backendRequest(path, verb = 'GET', params) {
   if (backend.handle == null) throw new Error('Backend session not initialised.');
   const reqObj = { path, verb };
   if (params !== undefined) reqObj.params = params;
   bkLog('req', `${verb} ${path}`);
-  const raw = wasm.libwallet_request(backend.handle, JSON.stringify(reqObj));
+  const raw = await wasm.libwallet_request(backend.handle, JSON.stringify(reqObj));
   let env;
   try { env = JSON.parse(raw); }
   catch { bkLog('err', 'unparseable response'); throw new Error('Backend returned invalid JSON.'); }
@@ -982,9 +982,9 @@ function backendOpen() {
   backendListWallets();
 }
 
-function loadBackendVersion() {
+async function loadBackendVersion() {
   try {
-    const v = backendRequest('Info:version', 'GET');
+    const v = await backendRequest('Info:version', 'GET');
     const rows = [
       ['version', v.version || '(dev build — untagged)'],
       ['gitTag', v.gitTag || '—'],
@@ -999,9 +999,9 @@ function loadBackendVersion() {
   }
 }
 
-function backendListNetworks() {
+async function backendListNetworks() {
   try {
-    const nets = backendRequest('Network', 'GET') || [];
+    const nets = await backendRequest('Network', 'GET') || [];
     $('#bkNetworks').textContent = nets.length
       ? nets.map(n => `${(n.Type || '').padEnd(8)} ${(n.ChainId || '').padEnd(14)} ${n.Name || ''}  ${n.CurrencySymbol || ''}${n.TestNet ? '  · testnet' : ''}`).join('\n')
       : '(no networks)';
@@ -1010,10 +1010,10 @@ function backendListNetworks() {
   }
 }
 
-function backendListWallets() {
+async function backendListWallets() {
   const list = $('#bkWalletList');
   try {
-    const wallets = backendRequest('Wallet', 'GET') || [];
+    const wallets = await backendRequest('Wallet', 'GET') || [];
     if (!wallets.length) { list.innerHTML = `<p class="subtitle">No wallets yet — generate one above.</p>`; return; }
     list.innerHTML = wallets.map(w => backendWalletCardHtml(w)).join('');
   } catch (e) {
@@ -1049,7 +1049,7 @@ function backendCreateWallet() {
   btn.disabled = true; btn.textContent = 'Running keygen…';
   bkStatus('busy', 'TSS keygen…');
   // Defer so the button state paints before the (synchronous) keygen blocks.
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
       // A modern TSS wallet is inherently multi-party: the backend mandates a
       // ≥3-share committee (threshold hardcoded to 1 → 1-of-3). We build three
@@ -1060,7 +1060,7 @@ function backendCreateWallet() {
         { Type: 'Password', Key: pw },
         { Type: 'Password', Key: pw }
       ];
-      const w = backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+      const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
       backend.wallet = w;
       backend.password = pw;
       backend.accounts = [];
@@ -1083,14 +1083,14 @@ function backendCreateWallet() {
   }, 30);
 }
 
-function backendCreateAccount() {
+async function backendCreateAccount() {
   const err = $('#bkAccountErr');
   err.textContent = '';
   if (!backend.wallet) { err.textContent = 'Create a wallet first.'; return; }
   const type = $('#bkAccountType').value;
   const index = backend.accounts.filter(a => a.Type === type).length;
   try {
-    const a = backendRequest('Account', 'POST', {
+    const a = await backendRequest('Account', 'POST', {
       Name: '', Wallet: backend.wallet.Id, Type: type, Index: index
     });
     backend.accounts.push(a);
@@ -1157,9 +1157,9 @@ function backendSignMessage() {
   const btn = $('#bkSignBtn');
   btn.disabled = true; btn.textContent = 'Signing…';
   bkStatus('busy', 'TSS sign…');
-  setTimeout(() => {
+  setTimeout(async () => {
     try {
-      const res = backendRequest(`Account/${accountId}:signMessage`, 'POST', {
+      const res = await backendRequest(`Account/${accountId}:signMessage`, 'POST', {
         Message: b64utf8(message), Keys: keys
       });
       const out = $('#bkSignOut');
@@ -1180,13 +1180,13 @@ function backendSignMessage() {
   }, 30);
 }
 
-function backendRunRaw() {
+async function backendRunRaw() {
   const out = $('#bkRawOut');
   let reqObj;
   try { reqObj = JSON.parse($('#bkRawReq').value); }
   catch (e) { out.textContent = '// invalid JSON: ' + e.message; return; }
   try {
-    const data = backendRequest(reqObj.path, reqObj.verb || 'GET', reqObj.params);
+    const data = await backendRequest(reqObj.path, reqObj.verb || 'GET', reqObj.params);
     out.textContent = JSON.stringify(data, null, 2);
   } catch (e) {
     out.textContent = '// error ' + (e.code ? '(' + e.code + ') ' : '') + (e.message || String(e));
