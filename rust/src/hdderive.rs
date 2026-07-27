@@ -9,6 +9,7 @@
 use num_bigint::{BigInt, Sign};
 use purecrypto::ec::secp256k1::{AffinePoint, ProjectivePoint, Scalar};
 use purecrypto::hash::keccak256;
+use purecrypto::hash::sha256;
 use purecrypto::hash::HmacSha512;
 
 /// The secp256k1 group order n.
@@ -265,6 +266,112 @@ pub fn derive_pub_tweak(
     Ok((pk, tweak))
 }
 
+// ── ed25519 (FROST) non-hardened HD derivation ──────────────────────────────
+//
+// Pubkey-only counterpart to tsslib `frosttss::hd::Key::derive_child`. Bit-for-
+// bit port of that scheme so the accumulated additive `tweak` this returns
+// verifies a FROST threshold signature under the derived child pubkey (see
+// `tss::frost_sign_local_tweaked`). Reference: tsslib-rs
+// `src/frosttss/hd.rs` (`derive_chain_code`, `derive_step`, `derive_child`) and
+// `src/frost/mod.rs` (`scalar_from_be_mod_l`).
+
+use purecrypto::ec::edwards25519::hazmat::{EdwardsPoint as EdPoint, Scalar as EdScalar};
+
+const ED_CHAINCODE_DOMAIN: &[u8] = b"FROST-Ed25519-chaincode-v1";
+const ED_DERIVATION_DOMAIN: &[u8] = b"FROST-Ed25519-HD-v1";
+
+/// Reduce a big-endian integer into an ed25519 scalar mod L. Mirrors tsslib
+/// `frost::scalar_from_be_mod_l`: big-endian -> little-endian into a 64-byte
+/// buffer, then wide mod-L reduction.
+fn ed_scalar_from_be_mod_l(be: &[u8]) -> EdScalar {
+    let mut le = [0u8; 64];
+    for (i, &byte) in be.iter().rev().enumerate() {
+        if i >= 64 {
+            break;
+        }
+        le[i] = byte;
+    }
+    EdScalar::from_bytes_mod_order(&le)
+}
+
+/// A scalar (< L) as exactly 32 big-endian bytes. `EdScalar::to_bytes` yields
+/// the canonical little-endian (RFC 8032) encoding, so reverse it.
+fn ed_scalar_to_be_32(s: &EdScalar) -> [u8; 32] {
+    let mut b = s.to_bytes();
+    b.reverse();
+    b
+}
+
+/// The canonical 32-byte master chain code for a group public key:
+/// `SHA-256(domain || compress(pub))`. Matches tsslib `derive_chain_code`.
+fn ed_derive_chain_code(group_pub: &EdPoint) -> [u8; 32] {
+    let mut data = Vec::with_capacity(ED_CHAINCODE_DOMAIN.len() + 32);
+    data.extend_from_slice(ED_CHAINCODE_DOMAIN);
+    data.extend_from_slice(&group_pub.compress());
+    sha256(&data)
+}
+
+/// One HMAC-SHA512 derivation step (mirrors tsslib `derive_step`):
+/// `I = HMAC(parent_cc, domain || compress(parent_pub) || index_be32)`;
+/// `IL = I[..32] mod L` (step tweak), `child_cc = I[32..]`. Rejects `IL ≡ 0`.
+fn ed_derive_step(
+    parent_cc: &[u8; 32],
+    parent_pub: &EdPoint,
+    index: u32,
+) -> Result<(EdScalar, [u8; 32]), DeriveError> {
+    let i = HmacSha512::new(parent_cc)
+        .chain(ED_DERIVATION_DOMAIN)
+        .chain(&parent_pub.compress())
+        .chain(&index.to_be_bytes())
+        .finalize();
+    let il = ed_scalar_from_be_mod_l(&i[..32]);
+    if bool::from(il.ct_eq(&EdScalar::ZERO)) {
+        return Err(DeriveError(format!(
+            "derived IL ≡ 0 mod L at index {index} (retry with a different index)"
+        )));
+    }
+    let mut child_cc = [0u8; 32];
+    child_cc.copy_from_slice(&i[32..]);
+    Ok((il, child_cc))
+}
+
+/// Non-hardened FROST(Ed25519) HD derivation from a group public key — the
+/// pubkey-only counterpart to tsslib's `frosttss::hd::Key::derive_child`, used to
+/// derive a child account's address (at create time, without the shares). Same
+/// math, so the returned `tweak` verifies a FROST signature under `child_pub`
+/// (see `tss::frost_sign_local_tweaked`). Rejects hardened indices.
+/// Returns `(tweak_be_32, child_pub_compressed_32)`.
+pub fn ed25519_derive_pub_tweak(
+    group_pub: &[u8; 32],
+    path: &[u32],
+) -> Result<([u8; 32], [u8; 32]), DeriveError> {
+    for &idx in path {
+        if idx >= 0x8000_0000 {
+            return Err(DeriveError(format!(
+                "hardened index {idx} is not supported in threshold ed25519 derivation"
+            )));
+        }
+    }
+    let mut cur_pub =
+        EdPoint::decompress(group_pub).ok_or_else(|| DeriveError("bad group public key: not a valid compressed ed25519 point".into()))?;
+    let mut cur_cc = ed_derive_chain_code(&cur_pub);
+    let mut acc = EdScalar::ZERO;
+    let identity = EdPoint::identity();
+    for &idx in path {
+        let (il, child_cc) = ed_derive_step(&cur_cc, &cur_pub, idx)?;
+        let next = cur_pub.add(&EdPoint::mul_base(&il));
+        if bool::from(next.ct_eq(&identity)) {
+            return Err(DeriveError(format!(
+                "derivation at index {idx} produced the identity point"
+            )));
+        }
+        cur_cc = child_cc;
+        cur_pub = next;
+        acc = acc.add(&il);
+    }
+    Ok((ed_scalar_to_be_32(&acc), cur_pub.compress()))
+}
+
 /// The EIP-55 checksummed Ethereum address for a compressed secp256k1 pubkey.
 pub fn evm_address(compressed_pub: &[u8]) -> Result<String, DeriveError> {
     let point = AffinePoint::from_sec1(compressed_pub)
@@ -357,6 +464,34 @@ mod tests {
         let child = derive_pub(&parent, &cc, &[0]).unwrap();
         let got: String = child.iter().map(|b| format!("{b:02x}")).collect();
         assert_eq!(got, "02fc9e5af0ac8d9b3cecfe2a888e2117ba3d089d8585886c9c826b6b22a98d12ea");
+    }
+
+    #[test]
+    fn ed25519_derive_pub_tweak_basics() {
+        // Use a real prime-order ed25519 group key (pubkey of a random secret).
+        let sk = purecrypto::ec::Ed25519PrivateKey::from_bytes([7u8; 32]);
+        let group_pub: [u8; 32] = sk.public_key().to_bytes().try_into().unwrap();
+
+        // Empty path: zero tweak, pubkey unchanged.
+        let (tw0, child0) = ed25519_derive_pub_tweak(&group_pub, &[]).unwrap();
+        assert_eq!(tw0, [0u8; 32]);
+        assert_eq!(child0, group_pub);
+
+        // child_pub == group_pub + tweak·G (the additive-tweak invariant).
+        let path = [44u32, 501, 0, 0, 7];
+        let (tweak, child_pub) = ed25519_derive_pub_tweak(&group_pub, &path).unwrap();
+        let p = EdPoint::decompress(&group_pub).unwrap();
+        let expect = p.add(&EdPoint::mul_base(&ed_scalar_from_be_mod_l(&tweak))).compress();
+        assert_eq!(child_pub, expect);
+        assert_ne!(child_pub, group_pub);
+
+        // Deterministic.
+        let again = ed25519_derive_pub_tweak(&group_pub, &path).unwrap();
+        assert_eq!((tweak, child_pub), again);
+
+        // Hardened index rejected; bad point rejected.
+        assert!(ed25519_derive_pub_tweak(&group_pub, &[0x8000_0000]).is_err());
+        assert!(ed25519_derive_pub_tweak(&[0xffu8; 32], &[0]).is_err());
     }
 
     #[test]

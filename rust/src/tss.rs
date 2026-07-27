@@ -507,6 +507,59 @@ pub fn frost_sign_local(
     Ok(first.signature.clone())
 }
 
+/// Like [`frost_sign_local`] but applies a BIP32 non-hardened key-derivation
+/// `tweak` (big-endian, from [`crate::hdderive::ed25519_derive_pub_tweak`]) via
+/// `Key::new_signing_with_tweak`, so the signature verifies under the derived
+/// child pubkey (`group_pub + tweak·G`). All signers absorb the same additive
+/// tweak; the Key's own chain code is not used here.
+pub fn frost_sign_local_tweaked(
+    committee: &[(PartyId, Key)],
+    threshold: usize,
+    msg: &[u8],
+    tweak: &[u8; 32],
+) -> Result<Vec<u8>, TssError> {
+    if committee.len() < threshold + 1 {
+        return Err(TssError(format!(
+            "committee size {} < threshold+1 ({})",
+            committee.len(),
+            threshold + 1
+        )));
+    }
+    // Reconstruct the additive ed25519 scalar from its big-endian encoding
+    // (matches hdderive's accumulated `tweak`, which is < L).
+    let tw = tsslib::frost::scalar_from_be_mod_l(tweak);
+    let ids: Vec<PartyId> = committee.iter().map(|(p, _)| p.clone()).collect();
+    let sorted = PartyId::sort(ids, 0);
+    let hubs = LocalHub::wired(sorted.len());
+
+    let signings: Vec<_> = (0..sorted.len())
+        .map(|i| {
+            let key = committee
+                .iter()
+                .find(|(p, _)| p.cmp_key(&sorted[i]) == std::cmp::Ordering::Equal)
+                .map(|(_, k)| k)
+                .ok_or_else(|| TssError("committee key missing".into()))?;
+            let broker: Arc<dyn MessageBroker + Send + Sync> = hubs[i].clone();
+            let params = Parameters::new(sorted.clone(), &sorted[i], threshold, broker);
+            key.new_signing_with_tweak(msg.to_vec(), params, Some(tw.clone()))
+                .map_err(|e| TssError(format!("signing start: {e:?}")))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let sigs: Vec<SignatureData> = signings
+        .iter()
+        .map(|s| s.wait().map_err(|e| TssError(format!("signing: {e:?}"))))
+        .collect::<Result<_, _>>()?;
+
+    let first = &sigs[0];
+    for s in &sigs[1..] {
+        if s.signature != first.signature {
+            return Err(TssError("signers disagreed on the signature".into()));
+        }
+    }
+    Ok(first.signature.clone())
+}
+
 #[cfg(test)]
 mod legacy_tests {
     use super::*;
@@ -540,5 +593,56 @@ mod legacy_tests {
         let committee2 = vec![shares[0].clone(), shares[2].clone()];
         let sig2 = eddsa_sign_local(&committee2, 1, msg).expect("sign2");
         assert!(ed25519_verify(&pk, msg, &sig2.try_into().unwrap()), "second subset must also verify");
+    }
+
+    /// The correctness crux of the ed25519 HD-derivation refactor: the tweak
+    /// hdderive computes from the group pubkey ONLY (address-time, no shares)
+    /// must equal the additive tweak FROST signing applies, so a threshold
+    /// signature verifies under the DERIVED child pubkey.
+    #[test]
+    fn frost_hd_derivation_roundtrip() {
+        let shares = frost_keygen_local(3, 1).expect("keygen");
+        assert_eq!(shares.len(), 3);
+        let group_pub = frost_group_pubkey(&shares[0].1);
+
+        // Empty path: zero tweak, child_pub == group_pub.
+        let (tw0, child0) = crate::hdderive::ed25519_derive_pub_tweak(&group_pub, &[]).unwrap();
+        assert_eq!(tw0, [0u8; 32], "empty path must give a zero tweak");
+        assert_eq!(child0, group_pub, "empty path must return the group pubkey");
+
+        // Hardened index is rejected.
+        assert!(crate::hdderive::ed25519_derive_pub_tweak(&group_pub, &[0x8000_0000]).is_err());
+
+        // Non-hardened path (Solana-style m/44/501/0/0/7): derive the child
+        // address + tweak, then sign with the same tweak and verify under the
+        // derived child pubkey.
+        let path = [44u32, 501, 0, 0, 7];
+        let (tweak, child_pub) =
+            crate::hdderive::ed25519_derive_pub_tweak(&group_pub, &path).unwrap();
+        assert_ne!(child_pub, group_pub, "a real path must move the pubkey");
+
+        let msg = b"frost hd derivation roundtrip";
+        let committee: Vec<_> = shares[..2].to_vec();
+        let sig = frost_sign_local_tweaked(&committee, 1, msg, &tweak).expect("tweaked sign");
+        assert_eq!(sig.len(), 64);
+        let sig64: [u8; 64] = sig.try_into().unwrap();
+        assert!(
+            ed25519_verify(&child_pub, msg, &sig64),
+            "signature MUST verify under the DERIVED child pubkey"
+        );
+        // Sanity: it must NOT verify under the parent group key.
+        assert!(
+            !ed25519_verify(&group_pub, msg, &sig64),
+            "derived-key signature must not verify under the parent key"
+        );
+
+        // A different signing subset produces an equally valid signature.
+        let committee2 = vec![shares[0].clone(), shares[2].clone()];
+        let sig_b = frost_sign_local_tweaked(&committee2, 1, msg, &tweak).expect("tweaked sign 2");
+        let sig_b64: [u8; 64] = sig_b.try_into().unwrap();
+        assert!(
+            ed25519_verify(&child_pub, msg, &sig_b64),
+            "second subset must also verify under the child pubkey"
+        );
     }
 }
