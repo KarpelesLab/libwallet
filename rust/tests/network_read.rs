@@ -72,7 +72,7 @@ fn ephemeral_evm_uses_chain_registry() {
     assert_eq!(j["Type"], "evm");
     assert_eq!(j["ChainId"], "1");
     assert_eq!(j["TxHistoryProvider"], "modchain");
-    assert_eq!(j["ResolvedBlockExplorer"], "https://etherscan.io");
+    assert_eq!(j["ResolvedBlockExplorer"], "https://www.blockexplorer.com/ethereum");
     // EVM_Info comes from the ethrpc-rs chain registry.
     assert_eq!(j["EVM_Info"]["name"], "Ethereum Mainnet");
     assert_eq!(j["EVM_Info"]["nativeCurrency"]["symbol"], "ETH");
@@ -162,7 +162,7 @@ fn ephemeral_solana_and_bitcoin() {
 
     let btc = network::fetch(&env, "bitcoin.bitcoin").unwrap().unwrap().to_json();
     assert_eq!(btc["TxHistoryProvider"], "");
-    assert_eq!(btc["ResolvedBlockExplorer"], "");
+    assert_eq!(btc["ResolvedBlockExplorer"], "https://www.blockexplorer.com/bitcoin");
 }
 
 #[test]

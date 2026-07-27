@@ -9,7 +9,6 @@
 
 use std::net::IpAddr;
 
-#[cfg(not(target_arch = "wasm32"))]
 use ethrpc_rs::chains;
 use serde_json::{json, Map, Value};
 use xuid::Xuid;
@@ -60,44 +59,36 @@ impl Network {
         if !self.block_explorer.is_empty() && self.block_explorer != "auto" {
             return self.block_explorer.clone();
         }
+        // blockexplorer.com is ours and keys chains by the same name libwallet
+        // uses: /<chain>/tx/<id> + /<chain>/address/<addr>. Bitcoin-family uses
+        // the chain_id directly ("bitcoin"/"litecoin"/…). For EVM only Ethereum
+        // mainnet routes there (/ethereum); other EVM chains keep the chaindb's
+        // own explorer.
         match self.kind.as_str() {
             "solana" => "https://explorer.solana.com".to_owned(),
+            "bitcoin" => format!("https://www.blockexplorer.com/{}", self.chain_id),
+            "evm" if self.chain_id == "1" => "https://www.blockexplorer.com/ethereum".to_owned(),
             "evm" => self.evm_explorer().unwrap_or_default(),
             _ => String::new(),
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    // EVM chain metadata comes from ethrpc's built-in chain registry — pure data
+    // (names, explorers, native currency) that now compiles on wasm too (ethrpc
+    // ≥0.3.1 dropped tokio), so these resolve identically on native and in the
+    // browser. No per-target fallbacks.
     fn chain_info(&self) -> Option<&'static chains::ChainInfo> {
         parse_chain_id(&self.chain_id).and_then(chains::get)
     }
 
-    // EVM native-currency metadata comes from ethrpc's built-in chain registry
-    // on native; the browser has no such registry, so it falls back to the
-    // Network row's stored fields (seeded at network creation).
-    #[cfg(not(target_arch = "wasm32"))]
     fn evm_native_symbol(&self) -> Option<String> {
         self.chain_info().and_then(|i| i.native_currency.as_ref()).map(|c| c.symbol.clone())
     }
-    #[cfg(target_arch = "wasm32")]
-    fn evm_native_symbol(&self) -> Option<String> {
-        (!self.currency_symbol.is_empty()).then(|| self.currency_symbol.clone())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
     fn evm_native_decimals(&self) -> Option<i64> {
         self.chain_info().and_then(|i| i.native_currency.as_ref()).map(|c| c.decimals as i64)
     }
-    #[cfg(target_arch = "wasm32")]
-    fn evm_native_decimals(&self) -> Option<i64> {
-        None // native_decimals() falls back to 18
-    }
-    #[cfg(not(target_arch = "wasm32"))]
     fn evm_explorer(&self) -> Option<String> {
         self.chain_info().and_then(|i| i.explorer_url()).map(str::to_owned)
-    }
-    #[cfg(target_arch = "wasm32")]
-    fn evm_explorer(&self) -> Option<String> {
-        (!self.block_explorer.is_empty()).then(|| self.block_explorer.clone())
     }
 
     /// The RPC URL to dial for this network (port of the static cases of Go
@@ -322,9 +313,8 @@ impl Network {
         }
         // EVM: fill from the chain registry when the chain is known; an unknown
         // id leaves the network as-is (Go ignores the GetChainInfo error). The
-        // ethrpc chain registry is native-only — the browser keeps the row's
-        // stored fields as-is.
-        #[cfg(not(target_arch = "wasm32"))]
+        // registry is pure data and now compiles on wasm too, so the browser
+        // gets the same name/symbol/explorer as native.
         {
             let info = match self.chain_info() {
                 Some(i) => i,
@@ -366,7 +356,6 @@ impl Network {
         m.insert("Created".into(), json!(self.created));
         m.insert("Updated".into(), json!(self.updated));
         m.insert("TxHistoryProvider".into(), json!(self.tx_history_provider()));
-        #[cfg(not(target_arch = "wasm32"))]
         if self.kind == "evm" {
             let info = self.chain_info().map(chain_info_json).unwrap_or(Value::Null);
             m.insert("EVM_Info".into(), info);
@@ -713,7 +702,6 @@ fn row_to_network(row: &[SqlValue]) -> Network {
 /// Build the EVM_Info object from a chain registry entry. ChainInfo only
 /// derives Deserialize in ethrpc-rs, so we assemble the JSON from its public
 /// fields (the subset the host uses: name, native currency, explorers).
-#[cfg(not(target_arch = "wasm32"))]
 fn chain_info_json(i: &chains::ChainInfo) -> Value {
     let native = i
         .native_currency

@@ -45,12 +45,16 @@ xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
 bottlers = "0"
 tsslib = "0.2.6"
+# ethrpc-rs ≥0.3.1 dropped its direct tokio dep, so the chain registry
+# (ethrpc_rs::chains — pure data: names, explorers, native currency) builds on
+# wasm. default-features off drops the ABI helpers we don't use. This is what
+# lets EVM network metadata resolve the same way on native and in the browser.
+ethrpc-rs = { version = "0.3.1", default-features = false }
 
-# Native-only dependencies — networking (ethrpc pulls tokio), TSS, and the app
-# layers that still depend on them. Being migrated to the browser incrementally.
+# Native-only dependencies — TSS and the app layers that still depend on them.
+# Being migrated to the browser incrementally.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 graphitesql = "0.1.6"
-ethrpc-rs = "0.3.0"
 # tokio-rt supplies rsurl::aio::TokioRuntime so the async `aio` client (used by
 # rpc::call_async) runs on native too — one code path shared with wasm, and
 # locally testable. The blocking `rsurl::Request` API stays available as before.
