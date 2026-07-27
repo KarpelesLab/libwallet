@@ -22,6 +22,8 @@ mod request;
 mod simulate;
 #[cfg(not(target_arch = "wasm32"))]
 mod spot;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod spot_wasm;
 mod nft;
 #[cfg(not(target_arch = "wasm32"))]
 mod quote;

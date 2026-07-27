@@ -88,6 +88,8 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         ("RemoteKey:new", _) => crate::handlers::remotekey::new_async(&handle.env, &req.params).await,
         ("RemoteKey:reshare", _) => crate::handlers::remotekey::reshare_async(&handle.env, &req.params).await,
         ("RemoteKey:validate", _) => crate::handlers::remotekey::validate_async(&handle.env, &req.params).await,
+        ("Wallet:initiateKeygen", _) => crate::handlers::spot_wasm::initiate_keygen_async(&handle.env, &req.params).await,
+        ("Wallet:joinSign", _) => crate::handlers::spot_wasm::join_sign_async(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
     };
     match out {

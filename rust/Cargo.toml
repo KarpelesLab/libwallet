@@ -73,6 +73,9 @@ rsurl = { version = "0.1.7", default-features = false, features = ["purecrypto-t
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).
 spotlib = { version = "0.1.1", default-features = false }
+futures-channel = { version = "0.3", features = ["std"], default-features = false }
+futures-util = { version = "0.3", features = ["std"], default-features = false }
+gloo-timers = { version = "0.3", features = ["futures"] }
 
 [dev-dependencies]
 tempfile = "3"

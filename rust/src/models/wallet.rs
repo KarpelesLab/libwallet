@@ -809,6 +809,57 @@ pub fn persist_agent_keygen(
     Ok(wallet_id)
 }
 
+/// Browser (wasm32) async twin of [`persist_agent_keygen`]. Identical wallet /
+/// WalletKey assembly; the ONLY difference is the single RemoteKey share is
+/// sealed to the fleet recipients and uploaded over the browser Fetch transport
+/// (`.await`) instead of through the sync `seal_share_full` critical-retry path.
+#[cfg(target_arch = "wasm32")]
+pub async fn persist_agent_keygen_async(
+    env: &Env,
+    name: &str,
+    pubkey_b64url: &str,
+    remote_key: &str,
+    share: &Key,
+) -> Result<String> {
+    let wallet_id = Xuid::new("wlt").to_string();
+    let wk_id = Xuid::new("wkey");
+    let share_json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+
+    // Seal the FROST share to the wdrone fleet recipients + upload it (async).
+    let base = crate::rest::DEFAULT_HOST;
+    let cid = client_id(env);
+    let recipients = crate::walletsign::fetch_decrypt_keys(base, cid.as_deref()).await?;
+    let payload = build_remote_payload("ed25519", share_json.as_bytes())?;
+    let sealed = keystore::seal_json(&payload, &recipients).map_err(|e| Error::Env(e.to_string()))?;
+    upload_remote_share_wasm(base, cid.as_deref(), remote_key, "ed25519", "frost", &sealed).await?;
+    let (data, key_field) = (sealed, remote_key.to_string());
+
+    let now = crate::now_rfc3339();
+    let wallet = Wallet {
+        id: wallet_id.clone(),
+        name: name.to_owned(),
+        curve: "ed25519".into(),
+        protocol: "frost".into(),
+        threshold: 1,
+        generation: 1,
+        pubkey: pubkey_b64url.to_owned(),
+        chaincode: String::new(),
+        created: now.clone(),
+        modified: now,
+        keys: vec![WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet_id.clone(),
+            kind: "RemoteKey".into(),
+            schema: "frost".into(),
+            key: key_field,
+            data,
+            generation: 1,
+        }],
+    };
+    persist(env, &wallet)?;
+    Ok(wallet_id)
+}
+
 /// Seal a share payload to a KeyDescription recipient, returning `(sealed data,
 /// Key field)`. Encrypt → bottle + PKIX pubkey; Plain → unencrypted bottle;
 /// Remote → error (needs the backend).

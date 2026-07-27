@@ -93,8 +93,12 @@ pub mod transfer;
 pub mod clawdpair;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod walletsign;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub mod reshare_common;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod reshare;
+#[cfg(target_arch = "wasm32")]
+mod reshare_wasm;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod curated;
 #[cfg(not(target_arch = "wasm32"))]

@@ -22,6 +22,12 @@ use tsslib::tss::{BrokerResult, JsonMessage, MessageBroker, MessageReceiver, Par
 use crate::sign::KeyDescription;
 use crate::{Env, Error, Result};
 
+// The transport-free committee helpers live in `reshare_common` so the browser
+// (wasm32) ceremonies can reuse them (this module is native-only). Re-exported
+// here so `crate::reshare::{JoinPeer, sid_from_remote_key, ...}` paths — and the
+// tests below via `super::*` — keep resolving unchanged.
+pub use crate::reshare_common::{build_party_ids, open_local_share, sid_from_remote_key, JoinPeer};
+
 /// Per-operation router: local (in-process) brokers + remote (Spot) wdrone
 /// peers, keyed by tss `PartyId.id` (Go `tssHub`).
 pub struct Hub {
@@ -825,20 +831,6 @@ pub fn reshare_dkls(
     Ok(())
 }
 
-/// Open a locally-held (Plain/Password/StoreKey) FROST share to its JSON.
-#[allow(clippy::ptr_arg)]
-fn open_local_share(wk: &crate::models::wallet::WalletKey, material: &str) -> Result<String> {
-    let xid: xuid::Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
-    let uuid = xid.uuid().as_bytes().to_vec();
-    let json = if wk.kind == "Plain" {
-        crate::keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
-    } else {
-        let k = crate::models::wallet::resolve_unlock_key(&wk.kind, material, &uuid)?;
-        crate::keystore::open(&wk.data, [k]).map_err(|e| Error::Env(e.to_string()))?
-    };
-    String::from_utf8(json).map_err(|e| Error::Env(e.to_string()))
-}
-
 // ── ClawdWallet Stage-1 multi-device keygen (Wallet:initiateKeygen) ──────────
 //
 // Port of wltwallet/join.go. The mobile is the keygen LEADER: it builds the
@@ -850,66 +842,6 @@ fn open_local_share(wk: &crate::models::wallet::WalletKey, material: &str) -> Re
 // lives on other devices / the backend, so the full ceremony is exercised in the
 // field, not in this repo's tests; the transport it rides on is proven by the
 // reshare + walletsign-routing tests.
-
-/// One committee member as described on the wire (Go `joinPeer`).
-pub struct JoinPeer {
-    pub spot_id: String,
-    pub moniker: String,
-    /// base64url(raw Ed25519 pubkey) — becomes the tss `PartyId.key`.
-    pub key: String,
-}
-
-/// Extract the walletsign session id (`crwsv-*`) from a `<crws>:<crwsv>`
-/// RemoteKey (Go `sidFromRemoteKey`). initiateKeygen/joinSign use the crwsv
-/// suffix (unlike reshare, which uses the whole string).
-pub fn sid_from_remote_key(rk: &str) -> &str {
-    match rk.find(':') {
-        Some(i) => &rk[i + 1..],
-        None => rk,
-    }
-}
-
-/// Build the sorted committee from the peer list + locate the local party (Go
-/// `buildPartyIDs`). `PartyId.key` = base64url-decoded Ed25519 pubkey (all
-/// parties must agree so SortedPartyIDs matches); id/moniker carry the moniker.
-fn build_party_ids<'a>(
-    peers: &'a [JoinPeer],
-    me_spot: &str,
-    me_moniker: &str,
-) -> Result<(Vec<PartyId>, std::collections::HashMap<String, &'a JoinPeer>, usize)> {
-    use base64::Engine;
-    if peers.len() < 2 {
-        return Err(Error::Env(format!("initiateKeygen: need at least 2 peers, got {}", peers.len())));
-    }
-    let mut ids = Vec::with_capacity(peers.len());
-    let mut by_moniker = std::collections::HashMap::new();
-    for p in peers {
-        if p.moniker.is_empty() {
-            return Err(Error::Env("initiateKeygen: peer with empty moniker".into()));
-        }
-        if by_moniker.insert(p.moniker.clone(), p).is_some() {
-            return Err(Error::Env(format!("initiateKeygen: duplicate moniker {}", p.moniker)));
-        }
-        let key = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(&p.key)
-            .or_else(|_| base64::engine::general_purpose::STANDARD.decode(&p.key))
-            .map_err(|_| Error::Env(format!("initiateKeygen: peer {} has an invalid base64 key", p.moniker)))?;
-        if key.is_empty() {
-            return Err(Error::Env(format!("initiateKeygen: peer {} has empty key bytes", p.moniker)));
-        }
-        ids.push(PartyId::new(p.moniker.clone(), p.moniker.clone(), key));
-    }
-    let sorted = PartyId::sort(ids, 0);
-    let mut me_idx = None;
-    if !me_moniker.is_empty() {
-        me_idx = sorted.iter().position(|id| id.moniker == me_moniker);
-    }
-    if me_idx.is_none() && !me_spot.is_empty() {
-        me_idx = sorted.iter().position(|id| by_moniker.get(&id.moniker).map(|p| p.spot_id.as_str()) == Some(me_spot));
-    }
-    let me_idx = me_idx.ok_or_else(|| Error::Env(format!("initiateKeygen: caller not in peer list (spot={me_spot} moniker={me_moniker})")))?;
-    Ok((sorted, by_moniker, me_idx))
-}
 
 /// `Wallet:initiateKeygen` — the leader-side FROST keygen ceremony. Returns
 /// `(wallet_id, solana_address, pubkey_b64url)`.
