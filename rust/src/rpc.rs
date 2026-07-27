@@ -54,7 +54,7 @@ pub fn call(url: &str, method: &str, params: Value) -> Result<Value> {
 pub async fn call_async(url: &str, method: &str, params: Value) -> Result<Value> {
     let req = rsurl::aio::Request::new("POST", url)
         .header("Content-Type", "application/json")
-        .with_body(encode_body(method, &params)?);
+        .body(encode_body(method, &params)?);
     let resp = aio_send(&req)
         .await
         .map_err(|e| Error::Env(format!("rpc {method} request failed: {e}")))?;

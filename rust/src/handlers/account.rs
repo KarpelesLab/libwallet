@@ -207,20 +207,150 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
-    let rpc_url = resolve_rpc(env, params, &account.kind)?;
-    let rpc_url = rpc_url.as_str();
 
     match account.kind.as_str() {
-        "ethereum" => {
-            let signed = sign_transaction(env, params)?;
-            let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
-            let hash = crate::rpc::eth_send_raw_transaction(rpc_url, raw).map_err(ApiError::internal)?;
-            Ok(serde_json::json!({ "hash": hash, "raw": raw }))
+        // EVM + Solana go through the shared async impl (block_on here, awaited on
+        // wasm) so the browser drives them with no client-side RPC.
+        "ethereum" | "solana" => crate::rt::block_on(sign_and_send_impl(env, params)),
+        // Bitcoin auto-send still uses the sync builder (async twin pending).
+        "bitcoin" => {
+            let rpc_url = resolve_rpc(env, params, &account.kind)?;
+            bitcoin_send(env, &rpc_url, &account, params)
         }
-        "solana" => solana_send(env, rpc_url, &account, params),
-        "bitcoin" => bitcoin_send(env, rpc_url, &account, params),
         other => Err(ApiError::new(400, format!("signAndSend not supported for {other}"))),
     }
+}
+
+/// `Account:signAndSendTransaction` — sign the tx and broadcast it via the node
+/// RPC, returning the tx id. One async implementation shared by native
+/// (`block_on`) and the browser (awaited in `handle_request_async`); chain I/O
+/// runs over `rpc::call_async` and the endpoint is resolved from the Network
+/// model, never named by the client. Currently covers ethereum + solana; bitcoin
+/// auto-send stays on the native sync path until its builder is made async.
+pub async fn sign_and_send_impl(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params
+        .get("Id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let account = crate::models::account::fetch(env, account_id)
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    let url = resolve_rpc(env, params, &account.kind)?;
+
+    match account.kind.as_str() {
+        "ethereum" => evm_send_async(env, &account, &url, params).await,
+        "solana" => solana_send_async(env, &account, &url, params).await,
+        other => Err(ApiError::new(400, format!("signAndSend (async) not supported for {other}"))),
+    }
+}
+
+/// Decode an `0x`-hex quantity into a u64 (JSON-RPC returns hex strings).
+fn u64_from_hex(s: &str) -> u64 {
+    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
+}
+
+/// EVM signAndSend: fill in any tx fields the caller didn't supply (chainId,
+/// nonce, gas, EIP-1559 fees) from the node, sign offline via `sign_tx_evm`,
+/// then broadcast. A field already present in `Transaction` is kept as-is, so a
+/// fully-specified tx makes no read calls (native/Dart behaviour) while the
+/// browser can pass just {to, value} and let Rust fetch the rest.
+async fn evm_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+    let mut p = params.clone();
+    {
+        let tx = p
+            .get_mut("Transaction")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+
+        if !tx.contains_key("chainId") {
+            let cid = crate::rpc::call_async(url, "eth_chainId", serde_json::json!([]))
+                .await
+                .map_err(ApiError::internal)?;
+            tx.insert("chainId".into(), serde_json::json!(u64_from_hex(cid.as_str().unwrap_or("0x1"))));
+        }
+        if !tx.contains_key("nonce") {
+            let n = crate::rpc::call_async(url, "eth_getTransactionCount", serde_json::json!([account.address, "pending"]))
+                .await
+                .map_err(ApiError::internal)?;
+            tx.insert("nonce".into(), serde_json::json!(u64_from_hex(n.as_str().unwrap_or("0x0"))));
+        }
+        if !tx.contains_key("gas") {
+            let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_owned();
+            let value_dec = tx.get("value").and_then(Value::as_str).unwrap_or("0");
+            let value_hex = format!("0x{:x}", value_dec.parse::<u128>().unwrap_or(0));
+            let est = crate::rpc::call_async(
+                url,
+                "eth_estimateGas",
+                serde_json::json!([{ "from": account.address, "to": to, "value": value_hex }]),
+            )
+            .await
+            .ok()
+            .and_then(|g| g.as_str().map(u64_from_hex))
+            .unwrap_or(21000);
+            tx.insert("gas".into(), serde_json::json!(est));
+        }
+        // Fees: prefer EIP-1559 (baseFee×2 + tip); fall back to legacy gasPrice.
+        if !tx.contains_key("maxFeePerGas") && !tx.contains_key("gasPrice") {
+            let base = crate::rpc::call_async(url, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
+                .await
+                .ok()
+                .and_then(|b| b.get("baseFeePerGas").and_then(Value::as_str).map(|s| u128::from(u64_from_hex(s))));
+            match base {
+                Some(base_fee) => {
+                    let tip = crate::rpc::call_async(url, "eth_maxPriorityFeePerGas", serde_json::json!([]))
+                        .await
+                        .ok()
+                        .and_then(|t| t.as_str().map(u64_from_hex))
+                        .unwrap_or(1_000_000_000) as u128; // 1 gwei
+                    let max_fee = base_fee * 2 + tip;
+                    tx.insert("maxFeePerGas".into(), serde_json::json!(max_fee.to_string()));
+                    tx.insert("maxPriorityFeePerGas".into(), serde_json::json!(tip.to_string()));
+                    tx.insert("type".into(), serde_json::json!(2));
+                }
+                None => {
+                    let gp = crate::rpc::call_async(url, "eth_gasPrice", serde_json::json!([]))
+                        .await
+                        .ok()
+                        .and_then(|g| g.as_str().map(u64_from_hex))
+                        .unwrap_or(0);
+                    tx.insert("gasPrice".into(), serde_json::json!(gp.to_string()));
+                }
+            }
+        }
+    }
+
+    let signed = sign_tx_evm(env, account, &p)?;
+    let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
+    let hash = crate::rpc::call_async(url, "eth_sendRawTransaction", serde_json::json!([raw]))
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "hash": hash, "raw": raw }))
+}
+
+/// Solana signAndSend: fetch the recent blockhash, delegate signing to the
+/// shared offline `sign_tx_solana`, then broadcast. Async twin of `solana_send`.
+async fn solana_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+    let bh = crate::rpc::call_async(url, "getLatestBlockhash", serde_json::json!([]))
+        .await
+        .map_err(ApiError::internal)?;
+    let bh_b58 = bh
+        .get("value")
+        .and_then(|v| v.get("blockhash"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(502, "no blockhash in response"))?;
+
+    let mut p = params.clone();
+    p.get_mut("Transaction")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| ApiError::new(400, "Transaction required"))?
+        .insert("recentBlockhash".to_string(), Value::String(bh_b58.to_string()));
+
+    let signed = sign_tx_solana(env, account, &p)?;
+    let tx_b58 = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
+    let signature = crate::rpc::call_async(url, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
 }
 
 /// Build, DKLs-sign, and broadcast a Bitcoin P2PKH transfer. UTXOs and outputs
@@ -270,29 +400,6 @@ fn bitcoin_send(env: &Env, rpc: &str, account: &crate::models::account::Account,
 /// blockhash, serialize the transfer, sign, assemble, base58-encode, and
 /// sendTransaction. Returns the transaction signature.
 #[cfg(not(target_arch = "wasm32"))]
-fn solana_send(env: &Env, rpc: &str, account: &crate::models::account::Account, params: &Value) -> ApiResult {
-    // Fetch the recent blockhash from the node, then delegate the actual signing
-    // to the shared offline signer (sign_tx_solana) so there is one Solana tx
-    // builder, not two. We inject the blockhash into a cloned Transaction.
-    let bh = crate::rpc::call(rpc, "getLatestBlockhash", serde_json::json!([])).map_err(ApiError::internal)?;
-    let bh_b58 = bh
-        .get("value")
-        .and_then(|v| v.get("blockhash"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(502, "no blockhash in response"))?;
-
-    let mut p = params.clone();
-    p.get_mut("Transaction")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| ApiError::new(400, "Transaction required"))?
-        .insert("recentBlockhash".to_string(), Value::String(bh_b58.to_string()));
-
-    let signed = sign_tx_solana(env, account, &p)?;
-    let tx_b58 = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
-    let signature = crate::rpc::call(rpc, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))
-        .map_err(ApiError::internal)?;
-    Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
-}
 
 /// `Account:setCurrent` — mark an account as the active one.
 pub fn set_current(env: &Env, params: &Value) -> ApiResult {
@@ -906,5 +1013,79 @@ mod balance_tests {
         let url = mock_rpc(r#""0xde0b6b3a7640000""#.to_string());
         let out = balance(&env, &serde_json::json!({ "Id": a.id, "RPC": url })).unwrap();
         assert_eq!(out["balance"], serde_json::json!("1000000000000000000"));
+    }
+
+    /// Multi-request mock JSON-RPC server: accepts connections in a loop and
+    /// replies to each with the result mapped from the request's `method`
+    /// (substring match). Each `call_async` opens a fresh `Connection: close`
+    /// socket, so several sequential calls hit this one server.
+    fn mock_rpc_dispatch(routes: &'static [(&'static str, &'static str)]) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let mut s = match conn {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                let mut buf = [0u8; 4096];
+                let n = s.read(&mut buf).unwrap_or(0);
+                let reqtxt = String::from_utf8_lossy(&buf[..n]);
+                let result = routes
+                    .iter()
+                    .find(|(m, _)| reqtxt.contains(&format!("\"method\":\"{m}\"")))
+                    .map(|(_, r)| *r)
+                    .unwrap_or("null");
+                let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result}}}"#);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    // EVM signAndSend end to end through native block_on: autofill chainId /
+    // nonce / gas / EIP-1559 fees from the node, sign offline, broadcast. Proves
+    // the browser can pass just {to, value} and Rust does the rest.
+    #[test]
+    fn ethereum_sign_and_send_autofills_and_broadcasts() {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "ETH", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+
+        let url = mock_rpc_dispatch(&[
+            ("eth_chainId", r#""0x1""#),
+            ("eth_getTransactionCount", r#""0x0""#),
+            ("eth_estimateGas", r#""0x5208""#),
+            ("eth_getBlockByNumber", r#"{"baseFeePerGas":"0x7"}"#),
+            ("eth_maxPriorityFeePerGas", r#""0x3b9aca00""#),
+            ("eth_sendRawTransaction", r#""0xabc123""#),
+        ]);
+        let keys: Vec<_> = w
+            .keys
+            .iter()
+            .zip(["passwordone", "passwordtwo", "passwordthree"])
+            .map(|(k, p)| serde_json::json!({ "Type": "Password", "Id": k.id, "Key": p }))
+            .collect();
+
+        let out = sign_and_send_transaction(
+            &env,
+            &serde_json::json!({
+                "Id": a.id,
+                "RPC": url,
+                "Keys": keys,
+                "Transaction": { "to": "0x000000000000000000000000000000000000dead", "value": "1000" }
+            }),
+        )
+        .unwrap();
+        assert_eq!(out["hash"], serde_json::json!("0xabc123"));
+        assert!(out["raw"].as_str().unwrap().starts_with("0x02"), "EIP-1559 typed tx: {out}");
     }
 }

@@ -96,8 +96,11 @@ fn resolved_rpc_by_type() {
     let dev = network::fetch(&env, "solana.devnet").unwrap().unwrap();
     assert!(dev.resolved_rpc().unwrap().contains("devnet.helius-rpc.com"));
 
-    // EVM without an explicit RPC needs the live picker — errors.
-    assert!(network::fetch(&env, "evm.1").unwrap().unwrap().resolved_rpc().is_err());
+    // Ethereum mainnet (evm.1) routes through modchain (our node).
+    let eth = network::fetch(&env, "evm.1").unwrap().unwrap().resolved_rpc().unwrap();
+    assert!(eth.starts_with("https://rpc.modchain.net/api/") && eth.ends_with("/1/rpc"), "{eth}");
+    // A non-Ethereum EVM chain still needs the live picker — errors.
+    assert!(network::fetch(&env, "evm.137").unwrap().unwrap().resolved_rpc().is_err());
 }
 
 #[test]

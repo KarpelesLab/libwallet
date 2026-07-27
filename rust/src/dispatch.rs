@@ -99,6 +99,7 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         // Chain reads/broadcast run in Rust over rpc::call_async (browser Fetch),
         // resolving endpoints via the Network model — the JS never names a URL.
         ("Account:balance", _) => crate::handlers::account::balance_impl(&handle.env, &req.params).await,
+        ("Account:signAndSendTransaction", _) => crate::handlers::account::sign_and_send_impl(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
     };
     match out {

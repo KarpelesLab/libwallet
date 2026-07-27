@@ -54,7 +54,7 @@ ethrpc-rs = "0.3.0"
 # tokio-rt supplies rsurl::aio::TokioRuntime so the async `aio` client (used by
 # rpc::call_async) runs on native too — one code path shared with wasm, and
 # locally testable. The blocking `rsurl::Request` API stays available as before.
-rsurl = { version = "0.1.7", features = ["tokio-rt"] }
+rsurl = { version = "0.1.8", features = ["tokio-rt"] }
 # The FFI's sync worker threads drive the shared async handlers via crate::rt's
 # block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
@@ -74,7 +74,7 @@ serde-wasm-bindgen = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 graphitesql = { version = "0.1.6", default-features = false }
 uuid = { version = "1", features = ["js"] }
-rsurl = { version = "0.1.7", default-features = false, features = ["purecrypto-tls"] }
+rsurl = { version = "0.1.8", default-features = false, features = ["purecrypto-tls"] }
 # spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).

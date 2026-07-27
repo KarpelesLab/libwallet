@@ -264,13 +264,10 @@ pub struct DiscoveredUtxo {
     pub script: String,
 }
 
-/// List the account's spendable NATIVE UTXOs from `modchain_assets(xpub)` (Go
-/// `fetchBitcoinUTXOs`). Skips entries modchain marked spent. Amounts decode via
-/// the BtcAmount rules. Does not apply the in-memory just-spent tracker (that
-/// lands with the auto-input tx builder).
-#[cfg(not(target_arch = "wasm32"))]
-pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
-    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([xpub]))?;
+/// Parse spendable NATIVE UTXOs from a decoded `modchain_assets` response
+/// (RPC-free half of [`list_utxos`], shared with the async browser path). Skips
+/// entries modchain marked spent; amounts decode via the BtcAmount rules.
+pub fn parse_native_utxos(raw: &serde_json::Value) -> Result<Vec<DiscoveredUtxo>> {
     let assets = raw
         .get("assets")
         .and_then(|a| a.as_array())
@@ -305,6 +302,15 @@ pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
         }
     }
     Ok(out)
+}
+
+/// List the account's spendable NATIVE UTXOs from `modchain_assets(xpub)` (Go
+/// `fetchBitcoinUTXOs`). Does not apply the in-memory just-spent tracker (that
+/// lands with the auto-input tx builder).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
+    let raw = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([xpub]))?;
+    parse_native_utxos(&raw)
 }
 
 /// The maximum sendable satoshi for `xpub`: sum all UTXOs and subtract the fee
