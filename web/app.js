@@ -23,20 +23,19 @@ const STORAGE = {
   settings: 'libwallet.settings.v1' // non-secret: custom EVM chain config
 };
 
-// Default EVM network. Overridable from the Settings tab.
+// Default EVM network (display + explorer link). Chain RPC is resolved in Rust
+// from the Network model, so no node URL is baked into the client; the Settings
+// `rpc` field is retained but no longer drives any request.
 const DEFAULT_EVM = {
   name:     'Ethereum',
   chainId:  1,
-  rpc:      'https://ethereum-rpc.publicnode.com',
+  rpc:      '',
   explorer: 'https://etherscan.io/tx/'
 };
 
-const SOLANA_RPC       = 'https://api.mainnet-beta.solana.com';
 const SOLANA_EXPLORER  = 'https://explorer.solana.com/tx/';
-const BTC_API          = 'https://mempool.space/api';
 const BTC_EXPLORER     = 'https://mempool.space/tx/';
 
-const RPC_TIMEOUT_MS = 15000;
 
 const DECIMALS = { evm: 18, bitcoin: 8, solana: 9 };
 const SYMBOL   = { evm: 'ETH', bitcoin: 'BTC', solana: 'SOL' };
@@ -436,11 +435,7 @@ async function onSendSubmit() {
   const btn = $('#sendSubmit');
   btn.disabled = true; btn.textContent = 'Preparing…';
   try {
-    let prepared;
-    if (session.mpc)                         prepared = await prepareMpc(currentSendChain, to, amount);
-    else if (currentSendChain === 'evm')     prepared = await prepareEvm(to, amount);
-    else if (currentSendChain === 'solana')  prepared = await prepareSolana(to, amount);
-    else                                     prepared = await prepareBitcoin(to, amount);
+    const prepared = await prepareSend(currentSendChain, to, amount);
     confirmSend(prepared);
   } catch (e) {
     err.textContent = e.message || String(e);
@@ -451,42 +446,23 @@ async function onSendSubmit() {
 
 // --- EVM prepare -----------------------------------------------------------
 
-// The ONE signer for every chain. Callers build the per-chain Transaction and
-// pass a local-sign thunk; the MPC-vs-local routing (which account, which
-// curve's committee, the biometric) lives here alone — no prepare* branches on
-// session.mpc. For an MPC session it signs the committee via the chain-agnostic
-// Account:signTransaction; otherwise it runs the local mnemonic signer. Must be
-// called from a click handler so the committee biometric has transient
-// activation. Returns the raw signed tx (0x-hex for EVM/BTC, base58 for Solana).
-async function signChainTx(chain, mpcTx, localSign) {
-  if (!session.mpc) return localSign();
-  const acct = session.mpcAccounts[chain];
-  if (!acct) throw new Error(`No MPC account for ${chain}.`);
-  const wallet = chain === 'solana' ? backend.walletEd : backend.wallet;
-  const keys = await mpcCommitteeKeys(wallet);   // biometric, in the caller's click
-  const r = await backendRequest('Account:signTransaction', 'POST', {
-    Id: acct.id, Transaction: mpcTx, Keys: keys
-  });
-  return r.raw ?? r.Raw;
+// The unlock Keys for a wallet's account: the committee shares for an MPC wallet
+// (derived via biometric/password), or the single seed key for a walletcore
+// mnemonic wallet (session.wcKey unlocks its one sealed share). This is the ONLY
+// difference between the two wallet types on the send path.
+async function signingKeys(wallet) {
+  if (session.mpc) return mpcCommitteeKeys(wallet);
+  return (wallet.Keys || [])
+    .filter(k => k.Type === 'Password')
+    .map(k => ({ Type: 'Password', Id: k.Id, Key: session.wcKey }));
 }
 
-function validateSendAddress(chain, to) {
-  if (chain === 'evm' && !/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('That is not a valid EVM address.');
-  if (chain === 'solana' && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) throw new Error('That is not a valid Solana address.');
-}
-
-function explorerUrl(chain, id) {
-  if (chain === 'evm') return evmChain.explorer + id;
-  if (chain === 'solana') return SOLANA_EXPLORER + id;
-  return BTC_EXPLORER + id;
-}
-
-// MPC send: libwallet builds, signs (committee), and broadcasts via
-// Account:signAndSendTransaction — the browser only supplies recipient + amount
-// and the committee Keys (biometric in the confirm click). No client-side chain
-// RPC: nonce/gas/EIP-1559 fees (EVM), blockhash (Solana), and UTXO discovery
-// (Bitcoin) all happen in Rust. Preview is a best-effort Transaction:simulate.
-async function prepareMpc(chain, to, amount) {
+// Send: libwallet builds, signs, and broadcasts via Account:signAndSendTransaction
+// — the browser only supplies recipient + amount and the wallet's unlock Keys. No
+// client-side chain RPC: nonce/gas/EIP-1559 fees (EVM), blockhash (Solana), and
+// UTXO discovery (Bitcoin) all happen in Rust. Agnostic to committee vs.
+// walletcore. Preview is a best-effort Transaction:simulate.
+async function prepareSend(chain, to, amount) {
   validateSendAddress(chain, to);
   const acct = session.accounts?.[chain];
   if (!acct) throw new Error(`No account for ${chain}.`);
@@ -517,186 +493,16 @@ async function prepareMpc(chain, to, amount) {
   return {
     chain, to, amount, rows,
     broadcast: async () => {
-      // Runs in the confirm-modal click so the committee biometric inside
-      // mpcCommitteeKeys has transient activation.
+      // Runs in the confirm-modal click so any committee biometric inside
+      // signingKeys has transient activation.
       const wallet = chain === 'solana' ? backend.walletEd : backend.wallet;
-      const keys = await mpcCommitteeKeys(wallet);
+      const keys = await signingKeys(wallet);
       const r = await backendRequest('Account:signAndSendTransaction', 'POST', {
         Id: acct.id, Transaction: mpcTx, Keys: keys,
       });
       const id = r.hash ?? r.txid ?? r.signature ?? r.Hash ?? r.Txid ?? r.Signature;
       return { id, url: explorerUrl(chain, id) };
     },
-  };
-}
-
-async function prepareEvm(to, amount) {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('That is not a valid EVM address.');
-  const from = session.addresses.evm;
-  const value = toBaseUnits(amount, DECIMALS.evm);
-
-  const [nonceHex, chainIdHex] = await Promise.all([
-    rpc(evmChain.rpc, 'eth_getTransactionCount', [from, 'pending']),
-    rpc(evmChain.rpc, 'eth_chainId', [])
-  ]);
-  const chainId = Number(BigInt(chainIdHex));
-  const nonce = Number(BigInt(nonceHex));
-
-  // Gas estimate (fallback 21000 for plain value transfers).
-  let gas = 21000n;
-  try {
-    const g = await rpc(evmChain.rpc, 'eth_estimateGas',
-      [{ from, to, value: '0x' + value.toString(16) }]);
-    gas = BigInt(g);
-  } catch { /* keep default */ }
-
-  // Prefer EIP-1559: baseFee (from latest block) + priority tip. Fall back to legacy gasPrice.
-  let fee;
-  try {
-    const [block, tipHex] = await Promise.all([
-      rpc(evmChain.rpc, 'eth_getBlockByNumber', ['latest', false]),
-      rpc(evmChain.rpc, 'eth_maxPriorityFeePerGas', []).catch(() => '0x3b9aca00') // 1 gwei
-    ]);
-    const baseFee = BigInt(block.baseFeePerGas);
-    const tip = BigInt(tipHex);
-    const maxFee = baseFee * 2n + tip;
-    fee = { type: '1559', maxFeePerGas: maxFee.toString(), maxPriorityFeePerGas: tip.toString(), perGas: maxFee };
-  } catch {
-    const gp = BigInt(await rpc(evmChain.rpc, 'eth_gasPrice', []));
-    fee = { type: 'legacy', gasPrice: gp.toString(), perGas: gp };
-  }
-
-  const feeWei = fee.perGas * gas;
-  const txJson = {
-    chainId, nonce, gas: Number(gas), to,
-    value: value.toString(), data: '0x'
-  };
-  if (fee.type === '1559') {
-    txJson.maxFeePerGas = fee.maxFeePerGas;
-    txJson.maxPriorityFeePerGas = fee.maxPriorityFeePerGas;
-  } else {
-    txJson.gasPrice = fee.gasPrice;
-  }
-
-  return {
-    chain: 'evm', to, amount,
-    rows: [
-      ['Network', `${evmChain.name} (chain ${chainId})`],
-      ['Amount', `${amount} ETH`],
-      ['To', short(to, 12, 10)],
-      ['Est. network fee', `${formatUnits(feeWei, 18, 8)} ETH`],
-      ['Gas limit', String(gas)]
-    ],
-    broadcast: async () => {
-      // Runs from the confirm modal's "Sign & broadcast" click, so the committee
-      // biometric inside signChainTx has valid transient activation. EVM's MPC
-      // and local signers take the same Transaction shape.
-      const raw = await signChainTx('evm', txJson,
-        () => wasm.sign_evm_tx(session.mnemonic, JSON.stringify(txJson)));
-      const hash = await rpc(evmChain.rpc, 'eth_sendRawTransaction', [raw]);
-      return { id: hash, url: evmChain.explorer + hash };
-    }
-  };
-}
-
-// --- Solana prepare --------------------------------------------------------
-
-async function prepareSolana(to, amount) {
-  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) throw new Error('That is not a valid Solana address.');
-  const lamports = toBaseUnits(amount, DECIMALS.solana);
-  const res = await rpc(SOLANA_RPC, 'getLatestBlockhash', [{ commitment: 'finalized' }]);
-  const recentBlockhash = res.value?.blockhash || res.blockhash;
-  if (!recentBlockhash) throw new Error('Could not fetch a recent blockhash.');
-
-  const txJson = { to, lamports: Number(lamports), recentBlockhash };
-  return {
-    chain: 'solana', to, amount,
-    rows: [
-      ['Network', 'Solana mainnet-beta'],
-      ['Amount', `${amount} SOL`],
-      ['To', short(to, 10, 8)],
-      ['Fee', '~0.000005 SOL (network)']
-    ],
-    broadcast: async () => {
-      // MPC committee (ed25519) reads `value` as string lamports; the local
-      // signer takes lamports as a number — build both, route via signChainTx.
-      const mpcTx = { to, value: String(lamports), recentBlockhash };
-      const signed = await signChainTx('solana', mpcTx,
-        () => wasm.sign_solana_transfer(session.mnemonic, JSON.stringify(txJson)));
-      const sig = await rpc(SOLANA_RPC, 'sendTransaction', [signed, { encoding: 'base58' }]);
-      return { id: sig, url: SOLANA_EXPLORER + sig };
-    }
-  };
-}
-
-// --- Bitcoin prepare -------------------------------------------------------
-
-async function prepareBitcoin(to, amount) {
-  const from = session.addresses.bitcoin;
-  const amountSats = Number(toBaseUnits(amount, DECIMALS.bitcoin));
-  if (amountSats <= 0) throw new Error('Enter a valid amount.');
-
-  const [utxos, fees] = await Promise.all([
-    httpJson(`${BTC_API}/address/${from}/utxo`),
-    httpJson(`${BTC_API}/v1/fees/recommended`)
-  ]);
-  if (!Array.isArray(utxos) || utxos.length === 0) throw new Error('No spendable UTXOs at this address.');
-
-  const feeRate = Math.max(1, Number(fees.halfHourFee || fees.hourFee || 1)); // sat/vB
-  // Greedy selection over confirmed-first, largest-first UTXOs.
-  const sorted = [...utxos].sort((a, b) => b.value - a.value);
-  const DUST = 546;
-  // vsize estimate for P2WPKH: ~68 vB/input, ~31 vB/output, ~11 vB overhead.
-  const estFee = (nIn, nOut) => Math.ceil(feeRate * (nIn * 68 + nOut * 31 + 11));
-
-  let picked = [], sum = 0, feeSats = 0, change = 0;
-  for (const u of sorted) {
-    picked.push(u); sum += u.value;
-    feeSats = estFee(picked.length, 2);           // assume a change output
-    change = sum - amountSats - feeSats;
-    if (change >= 0) break;
-  }
-  if (change < 0) throw new Error('Insufficient funds after fees.');
-  // If change would be dust, fold it into the fee and drop the change output.
-  if (change < DUST) {
-    feeSats = estFee(picked.length, 1);
-    change = sum - amountSats - feeSats;
-    if (change < 0) throw new Error('Insufficient funds after fees.');
-    change = 0;
-  }
-
-  const txJson = {
-    utxos: picked.map(u => ({ txid: u.txid, vout: u.vout, value: u.value })),
-    to, amountSats, feeSats, changeAddress: from
-  };
-
-  return {
-    chain: 'bitcoin', to, amount,
-    rows: [
-      ['Network', 'Bitcoin mainnet'],
-      ['Amount', `${formatUnits(BigInt(amountSats), 8, 8)} BTC`],
-      ['To', short(to, 10, 8)],
-      ['Network fee', `${formatUnits(BigInt(feeSats), 8, 8)} BTC (${feeRate} sat/vB)`],
-      ['Inputs', `${picked.length} UTXO${picked.length > 1 ? 's' : ''}`],
-      ['Change', change ? `${formatUnits(BigInt(change), 8, 8)} BTC` : 'none']
-    ],
-    broadcast: async () => {
-      // MPC committee (secp256k1) takes explicit inputs/outputs; omitting each
-      // UTXO's script tells Rust to derive the account's own P2WPKH scriptPubKey
-      // (self-spend). The local signer takes the higher-level txJson and does its
-      // own selection. Route both via signChainTx.
-      const outputs = [{ address: to, amount: amountSats }];
-      if (change > 0) outputs.push({ address: from, amount: change });
-      const mpcTx = {
-        UTXOs: picked.map(u => ({ txid: u.txid, vout: u.vout, amount: u.value })),
-        Outputs: outputs
-      };
-      const raw = await signChainTx('bitcoin', mpcTx,
-        () => wasm.sign_bitcoin_tx(session.mnemonic, JSON.stringify(txJson)));
-      const hex = (raw || '').replace(/^0x/, '');
-      const txid = await httpText(`${BTC_API}/tx`, { method: 'POST', body: hex });
-      return { id: txid.trim(), url: BTC_EXPLORER + txid.trim() };
-    }
   };
 }
 
@@ -827,63 +633,6 @@ function formatUnits(units, decimals, maxFrac = 8) {
   let frac = (v % base).toString().padStart(decimals, '0').slice(0, maxFrac).replace(/0+$/, '');
   const out = frac ? `${whole}.${frac}` : `${whole}`;
   return neg ? '-' + out : out;
-}
-
-// ============================================================================
-// Network helpers
-// ============================================================================
-
-function withTimeout(ms) {
-  const c = new AbortController();
-  const t = setTimeout(() => c.abort(), ms);
-  return { signal: c.signal, done: () => clearTimeout(t) };
-}
-
-// JSON-RPC 2.0 POST. Returns `result` or throws with the RPC error message.
-async function rpc(url, method, params) {
-  const to = withTimeout(RPC_TIMEOUT_MS);
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-      signal: to.signal
-    });
-    if (!r.ok) throw new Error(`RPC HTTP ${r.status}`);
-    const j = await r.json();
-    if (j.error) throw new Error(j.error.message || 'RPC error');
-    return j.result;
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Network timed out.');
-    throw e;
-  } finally { to.done(); }
-}
-
-// REST GET → JSON (mempool.space).
-async function httpJson(url) {
-  const to = withTimeout(RPC_TIMEOUT_MS);
-  try {
-    const r = await fetch(url, { signal: to.signal });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Network timed out.');
-    throw e;
-  } finally { to.done(); }
-}
-
-// REST request → text (mempool.space broadcast / raw responses).
-async function httpText(url, opts = {}) {
-  const to = withTimeout(RPC_TIMEOUT_MS);
-  try {
-    const r = await fetch(url, { ...opts, signal: to.signal });
-    const text = await r.text();
-    if (!r.ok) throw new Error(text || `HTTP ${r.status}`);
-    return text;
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Network timed out.');
-    throw e;
-  } finally { to.done(); }
 }
 
 // ============================================================================
