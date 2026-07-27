@@ -44,7 +44,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
 bottlers = "0"
-tsslib = "0.2.5"
+tsslib = "0.2.6"
 
 # Native-only dependencies — networking (ethrpc pulls tokio), TSS, and the app
 # layers that still depend on them. Being migrated to the browser incrementally.
