@@ -937,11 +937,15 @@ const backend = {
   wallet:   null,   // last created Wallet object (has .Keys for signing)
   password: null,   // share password for the created wallet (session-only)
   passkey:  null,   // {credentialId,salt} when the wallet's shares are passkey-PRF-sealed
+  mpc: null,        // {credentialId,saltFirst,mode,saltSecond,password} for a passkey-2FA committee:
+                    //   mode 'password' → [Password(prf.first), Password(password), RemoteKey]
+                    //   mode 'passkey'  → [Password(prf.first), Password(prf.second), RemoteKey] (no password)
   accounts: [],     // derived Account objects
   clientId: null,   // configured Sec-ClientId (Info:setWalletInfo), for RemoteKey 2FA
   rk: {             // RemoteKey 2FA creation flow state
     session:  null, // session id from RemoteKey:new, consumed by RemoteKey:validate
-    resource: null  // "crwsv-…" RemoteKey resource from RemoteKey:validate
+    resource: null, // "crwsv-…" RemoteKey resource from RemoteKey:validate
+    passkeyCredId: null // rawId of the passkey enrolled against this RemoteKey (reused for dual-PRF create)
   }
 };
 
@@ -1150,6 +1154,83 @@ async function backendRkCreate() {
   }, 30);
 }
 
+// Step 3 (passkey) — build a three-factor committee sealed by ONE passkey plus
+// the verified RemoteKey. DEFAULT (three distinct factors):
+//   [Password(prf.first), Password(<entered password>), RemoteKey(resource)]
+// OPT-OUT ("No password", #bkRkNoPassword checked, weaker):
+//   [Password(prf.first), Password(prf.second), RemoteKey(resource)]
+// where prf.first/second come from one biometric (two distinct PRF salts). The
+// RemoteKey (from the 2FA verify) authorizes the server-held share. All WebAuthn
+// runs directly in this click task (no setTimeout).
+async function backendRkCreatePasskey() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!passkeyAvailable()) { err.textContent = 'Passkeys are unavailable in this browser.'; return; }
+  if (!backend.rk.resource) { err.textContent = 'Verify the 2FA first.'; return; }
+  const name = $('#bkRkName').value.trim() || 'Browser 2FA wallet';
+  const noPassword = !!($('#bkRkNoPassword') && $('#bkRkNoPassword').checked);
+  const pw = $('#bkRkPw').value;
+  if (!noPassword && pw.length < 6) { err.textContent = 'Password must be at least 6 characters (or check “No password”).'; return; }
+  const btn = $('#bkRkCreatePasskey');
+  btn.disabled = true; btn.textContent = 'Waiting for passkey…';
+  bkStatus('busy', 'passkey keygen (2FA)…');
+  try {
+    // Reuse the passkey enrolled against this RemoteKey; if the user never
+    // enrolled one, register a fresh PRF-capable passkey now.
+    let credId = backend.rk.passkeyCredId;
+    if (!credId) credId = await passkeyRegisterLocal(name);
+    // Share 1 is always the passkey's prf.first (one biometric gesture).
+    const saltFirst = bkRandBytes(32);
+    let secret1Hex, secret2Hex, saltSecond = null;
+    if (noPassword) {
+      // Weaker: both local shares from the same passkey, two distinct salts.
+      saltSecond = bkRandBytes(32);
+      ({ secret1Hex, secret2Hex } = await passkeyDeriveTwo(credId, saltFirst, saltSecond));
+    } else {
+      // Default: passkey seals share 1, the entered password seals share 2.
+      ({ secret1Hex } = await passkeyDeriveTwo(credId, saltFirst, saltFirst));
+    }
+    btn.textContent = 'Running keygen…'; bkStatus('busy', 'TSS keygen (2FA)…');
+    const share2Key = noPassword ? secret2Hex : pw;
+    const keys = [
+      { Type: 'Password',  Key: secret1Hex },
+      { Type: 'Password',  Key: share2Key },
+      { Type: 'RemoteKey', Key: backend.rk.resource }
+    ];
+    const w = await backendRequest('Wallet', 'POST', { Name: name, Curve: 'secp256k1', Keys: keys });
+    backend.wallet = w;
+    backend.password = null;
+    backend.passkey = null;
+    // Keep the credential, salt(s) and (for the default) the password so signing
+    // can re-derive both local-share secrets.
+    backend.mpc = {
+      credentialId: credId,
+      saltFirst,
+      mode: noPassword ? 'passkey' : 'password',
+      saltSecond: noPassword ? saltSecond : null,
+      password: noPassword ? null : pw
+    };
+    backend.accounts = [];
+    $('#bkAccountList').innerHTML = '';
+    $('#bkCreateAccount').disabled = false;
+    refreshSignAccounts();
+
+    const out = $('#bkRkOut');
+    out.classList.remove('hidden');
+    out.innerHTML = backendWalletCardHtml(w);
+    bkStatus('live', '2FA wallet created · #' + backend.handle);
+    toast('ok', 'Passkey 2FA wallet created', noPassword
+      ? 'One passkey seals two local shares; a server-held RemoteKey is the third.'
+      : 'Passkey + password + RemoteKey — three distinct factors.');
+    backendListWallets();
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'passkey 2FA keygen failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Create with passkey (2 shares + RemoteKey)';
+  }
+}
+
 // Passkey verify — a drop-in for the code path (steps 1+2) at the SAME target.
 // RemoteKey:new{verify:'passkey'} → passkeyAuthBegin → credentials.get →
 // passkeyAuthFinish → the same {RemoteKey:"crws-…:crwsv-…"} resource. All the
@@ -1216,6 +1297,9 @@ async function backendRkEnrollPasskey() {
       attestationObject: bufToB64url(cred.response.attestationObject),
       transports: cred.response.getTransports?.()
     });
+    // Remember this credential so "Create with passkey" can reuse the SAME
+    // (PRF-capable) passkey to seal the two local shares.
+    backend.rk.passkeyCredId = new Uint8Array(cred.rawId);
     bkStatus('live', 'passkey enrolled · #' + backend.handle);
     toast('ok', 'Passkey enrolled', 'Next time verify with your device, no code.');
   } catch (e) {
@@ -1475,6 +1559,36 @@ async function passkeyDerive(credentialId, salt) {
   return bkBufToHex(prf);
 }
 
+// Derive TWO PRF secrets from one credential in a single user-verification
+// gesture (prf.eval {first, second}). Returns { secret1Hex, secret2Hex }.
+async function passkeyDeriveTwo(credentialId, salt1, salt2) {
+  const asr = await navigator.credentials.get({ publicKey: {
+    challenge: bkRandBytes(32),
+    allowCredentials: [{ type: 'public-key', id: credentialId }],
+    userVerification: 'required',
+    timeout: 60000,
+    extensions: { prf: { eval: { first: salt1, second: salt2 } } },
+  }});
+  const r = asr.getClientExtensionResults()?.prf?.results;
+  if (!r?.first || !r?.second) throw new Error('Passkey did not return two PRF secrets (unsupported here).');
+  return { secret1Hex: bkBufToHex(r.first), secret2Hex: bkBufToHex(r.second) };
+}
+// Register a passkey with PRF enabled and return its rawId (Uint8Array). Used
+// when the user hasn't enrolled one for the RemoteKey yet.
+async function passkeyRegisterLocal(name) {
+  const cred = await navigator.credentials.create({ publicKey: {
+    rp: { name: PASSKEY_RP_NAME, id: location.hostname },
+    user: { id: bkRandBytes(16), name: name || 'wallet', displayName: name || 'wallet' },
+    challenge: bkRandBytes(32),
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -8 }],
+    authenticatorSelection: { userVerification: 'required', residentKey: 'preferred' },
+    timeout: 60000, extensions: { prf: {} },
+  }});
+  const ext = cred.getClientExtensionResults();
+  if (!ext.prf || ext.prf.enabled === false) throw new Error('This device/browser has no passkey PRF support.');
+  return new Uint8Array(cred.rawId);
+}
+
 async function backendCreateWallet() {
   const name = $('#bkWalletName').value.trim() || 'Browser TSS wallet';
   const usePasskey = !!($('#bkPasskey') && $('#bkPasskey').checked);
@@ -1595,26 +1709,51 @@ async function backendSignMessage() {
   if (!accountId) { err.textContent = 'Choose an account to sign with.'; return; }
   if (!message) { err.textContent = 'Enter a message.'; return; }
   if (!backend.wallet) { err.textContent = 'Create a wallet first.'; return; }
-  if (!backend.passkey && !backend.password) { err.textContent = 'No unlock material for this wallet in this session.'; return; }
+  if (!backend.mpc && !backend.passkey && !backend.password) { err.textContent = 'No unlock material for this wallet in this session.'; return; }
 
   const btn = $('#bkSignBtn');
   btn.disabled = true;
   try {
-    // Re-derive the share secret: the passkey PRF (biometric gesture, in this
-    // click task) for a passkey wallet, else the create-time password.
-    let secret;
-    if (backend.passkey) {
+    // Reconstruct the signing committee's Password shares. Three unlock modes,
+    // each producing the same-shaped `keys` array; a single signMessage call runs
+    // afterwards. All WebAuthn happens in this click task (transient activation).
+    let keys;
+    const pwShares = (backend.wallet.Keys || []).filter(k => k.Type === 'Password');
+    if (backend.mpc) {
+      // Passkey-2FA committee: two local Password shares mapped IN ORDER to
+      // [share1secret, share2secret]. Share 1 is always the passkey's prf.first;
+      // share 2 is the passkey's prf.second (mode 'passkey') or the stored
+      // password (mode 'password'). The committee was created as
+      // [Password(prf.first), Password(share2), RemoteKey] and Wallet:create
+      // preserves Keys order, so index 0→share1, 1→share2. The `?? share1secret`
+      // guard handles wallets with more/fewer than two Password shares. (If a
+      // future backend ever reorders Keys, tag shares to bind them here.)
       btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
-      secret = await passkeyDerive(backend.passkey.credentialId, backend.passkey.salt);
+      let share1secret, share2secret;
+      if (backend.mpc.mode === 'passkey') {
+        // Both secrets from one biometric (two distinct PRF salts).
+        const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltSecond);
+        share1secret = r.secret1Hex; share2secret = r.secret2Hex;
+      } else {
+        // Passkey unlocks share 1; the stored password unlocks share 2.
+        const r = await passkeyDeriveTwo(backend.mpc.credentialId, backend.mpc.saltFirst, backend.mpc.saltFirst);
+        share1secret = r.secret1Hex; share2secret = backend.mpc.password;
+      }
+      const order = [share1secret, share2secret];
+      keys = pwShares.map((k, i) => ({ Type: 'Password', Id: k.Id, Key: order[i] ?? share1secret }));
     } else {
-      secret = backend.password;
+      // Single-secret wallet: the passkey PRF (biometric) or the create-time
+      // password unlocks every Password share with the same secret.
+      let secret;
+      if (backend.passkey) {
+        btn.textContent = 'Waiting for passkey…'; bkStatus('busy', 'passkey…');
+        secret = await passkeyDerive(backend.passkey.credentialId, backend.passkey.salt);
+      } else {
+        secret = backend.password;
+      }
+      keys = pwShares.map(k => ({ Type: 'Password', Id: k.Id, Key: secret }));
     }
     btn.textContent = 'Signing…'; bkStatus('busy', 'TSS sign…');
-    // Reconstruct the signing committee from the wallet's sealed shares, each
-    // unlocked with that secret (keyed by the share's WalletKey Id).
-    const keys = (backend.wallet.Keys || [])
-      .filter(k => k.Type === 'Password')
-      .map(k => ({ Type: 'Password', Id: k.Id, Key: secret }));
     const res = await backendRequest(`Account/${accountId}:signMessage`, 'POST', {
       Message: b64utf8(message), Keys: keys
     });
@@ -1626,7 +1765,7 @@ async function backendSignMessage() {
         <div class="kv"><span class="k">Signature</span><span class="v" style="max-width:100%">${bkEsc(res.signature || JSON.stringify(res))}</span></div>
       </div>`;
     bkStatus('live', 'signed · #' + backend.handle);
-    toast('ok', 'Message signed', backend.passkey ? 'TSS signature unlocked with your device passkey.' : 'Real EIP-191 TSS signature produced in-browser.');
+    toast('ok', 'Message signed', (backend.passkey || backend.mpc) ? 'TSS signature unlocked with your device passkey.' : 'Real EIP-191 TSS signature produced in-browser.');
   } catch (e) {
     err.textContent = e.message || String(e);
     bkStatus('err', 'sign failed');
@@ -1653,6 +1792,7 @@ function wireBackendEvents() {
   $('#bkRkSend').onclick        = backendRkSend;
   $('#bkRkVerify').onclick      = backendRkVerify;
   $('#bkRkCreate').onclick      = backendRkCreate;
+  $('#bkRkCreatePasskey').onclick = backendRkCreatePasskey;
   $('#bkRkPasskeyVerify').onclick = backendRkPasskeyVerify;
   $('#bkRkEnroll').onclick      = backendRkEnrollPasskey;
   $('#bkSpotStatus').onclick    = backendSpotStatus;
@@ -1678,9 +1818,10 @@ function wireBackendEvents() {
 
   // RemoteKey passkey affordances: disable + note when WebAuthn is unavailable.
   if (!passkeyAvailable()) {
-    const pv = $('#bkRkPasskeyVerify'), en = $('#bkRkEnroll'), note = $('#bkRkPasskeyAvail');
+    const pv = $('#bkRkPasskeyVerify'), en = $('#bkRkEnroll'), cp = $('#bkRkCreatePasskey'), note = $('#bkRkPasskeyAvail');
     if (pv) pv.disabled = true;
     if (en) en.disabled = true;
+    if (cp) cp.disabled = true;
     if (note) note.textContent = '(passkeys unavailable)';
   }
 

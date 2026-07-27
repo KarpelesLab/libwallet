@@ -431,7 +431,13 @@
                   <input class="input" id="bkRkName" placeholder="My 2FA wallet" value="Browser 2FA wallet" />
                   <label class="field-label" for="bkRkPw" style="margin-top:10px">Share password (6+ characters)</label>
                   <input class="input mono" id="bkRkPw" type="password" autocomplete="new-password" placeholder="Encrypts the two local shares" value="correct horse battery staple" />
-                  <button class="btn primary block" type="button" id="bkRkCreate" style="margin-top:12px">Create wallet</button>
+                  <button class="btn primary block" type="button" id="bkRkCreatePasskey" style="margin-top:12px">Create with passkey + password + RemoteKey</button>
+                  <label style="display:flex;align-items:center;gap:8px;margin-top:8px" for="bkRkNoPassword">
+                    <input type="checkbox" id="bkRkNoPassword" />
+                    <span class="subtitle" style="margin:0">No password (at my own risk)</span>
+                  </label>
+                  <p class="subtitle" style="margin-top:6px">Default seals three distinct factors: a passkey (share 1), your password above (share 2) and the RemoteKey (share 3). Checking “No password” instead uses two passkey-derived shares (weaker — one lost, non-synced passkey drops you below threshold).</p>
+                  <button class="btn block" type="button" id="bkRkCreate" style="margin-top:12px">Create wallet</button>
                   <button class="btn block" type="button" id="bkRkEnroll" style="margin-top:10px">Enroll a passkey (skip the code next time)</button>
                   <p class="subtitle" style="margin-top:6px">Binds a device passkey to this verified RemoteKey, so next
                     time you can verify with your device instead of a code.</p>
