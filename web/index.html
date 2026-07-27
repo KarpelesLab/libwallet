@@ -309,32 +309,10 @@
 
         <!-- Settings pane -->
         <div class="tabpane" data-pane="settings">
-          <div class="eyebrow muted" style="margin-bottom:12px">EVM network</div>
-          <div class="asset" data-chain="evm">
+          <div class="eyebrow muted" style="margin-bottom:12px">Networks</div>
+          <div class="asset">
             <div class="form-grid">
-              <p class="subtitle">Point the EVM tab at any chain by editing its RPC endpoint and chain ID. Defaults to Ethereum mainnet.</p>
-              <div>
-                <label class="field-label" for="setChainName">Network name</label>
-                <input class="input" id="setChainName" placeholder="Ethereum" />
-              </div>
-              <div class="amount-row">
-                <div class="grow">
-                  <label class="field-label" for="setChainId">Chain ID</label>
-                  <input class="input mono" id="setChainId" inputmode="numeric" placeholder="1" />
-                </div>
-              </div>
-              <div>
-                <label class="field-label" for="setRpc">RPC endpoint</label>
-                <input class="input mono" id="setRpc" spellcheck="false" placeholder="https://ethereum-rpc.publicnode.com" />
-              </div>
-              <div>
-                <label class="field-label" for="setExplorer">Explorer tx URL prefix</label>
-                <input class="input mono" id="setExplorer" spellcheck="false" placeholder="https://etherscan.io/tx/" />
-              </div>
-              <div class="btn-row">
-                <button class="btn ghost" type="button" id="resetChain">Reset to Ethereum</button>
-                <button class="btn primary grow" type="button" id="saveChain">Save network</button>
-              </div>
+              <p class="subtitle">Network configuration — RPC endpoints, chain IDs and block explorers — is managed by libwallet's Network model and resolved on-device. There is nothing to configure here.</p>
             </div>
           </div>
           <p class="foot" style="margin-top:20px" id="verLine">libwallet · self-custodial · client-side only</p>

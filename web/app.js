@@ -23,20 +23,9 @@ const STORAGE = {
   settings: 'libwallet.settings.v1' // non-secret: custom EVM chain config
 };
 
-// Default EVM network (display + explorer link). Chain RPC is resolved in Rust
-// from the Network model, so no node URL is baked into the client; the Settings
-// `rpc` field is retained but no longer drives any request.
-const DEFAULT_EVM = {
-  name:     'Ethereum',
-  chainId:  1,
-  rpc:      '',
-  explorer: 'https://etherscan.io/tx/'
-};
-
-const SOLANA_EXPLORER  = 'https://explorer.solana.com/tx/';
-const BTC_EXPLORER     = 'https://mempool.space/tx/';
-
-
+// Network config (RPC endpoints, chain ids, block explorers) lives entirely in
+// libwallet's Network model — nothing is baked into the client. Explorer bases
+// are loaded from the model at unlock (loadChainMeta → chainExplorers).
 const DECIMALS = { evm: 18, bitcoin: 8, solana: 9 };
 const SYMBOL   = { evm: 'ETH', bitcoin: 'BTC', solana: 'SOL' };
 
@@ -56,7 +45,7 @@ const session = {
 };
 
 let wasm = null;         // the loaded module namespace
-let evmChain = { ...DEFAULT_EVM };
+let chainExplorers = {}; // chain → block-explorer base URL (from the Network model)
 let onboardDraft = { mnemonic: null, words: 12 }; // holds phrase before password set
 
 // ---- Tiny DOM helpers ------------------------------------------------------
@@ -80,7 +69,6 @@ boot();
 
 async function boot() {
   wireStaticEvents();
-  loadSettings();
   try {
     // Dynamic import → catchable if pkg/ is missing during local preview.
     const mod = await import('./pkg/libwallet.js');
@@ -246,6 +234,7 @@ async function unlockWith(mnemonic) {
   // Account:balance / signAndSendTransaction / Transaction:simulate. The seed is
   // its single key; nothing here does client-side chain RPC.
   backendOpen();
+  await loadChainMeta();
   session.accounts = await importWalletcoreWallet(mnemonic);
   session.addresses = {
     evm: session.accounts.evm.address,
@@ -450,6 +439,28 @@ async function onSendSubmit() {
 // (derived via biometric/password), or the single seed key for a walletcore
 // mnemonic wallet (session.wcKey unlocks its one sealed share). This is the ONLY
 // difference between the two wallet types on the send path.
+function validateSendAddress(chain, to) {
+  if (chain === 'evm' && !/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('That is not a valid EVM address.');
+  if (chain === 'solana' && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(to)) throw new Error('That is not a valid Solana address.');
+}
+
+// Load per-chain block-explorer bases from the Network model (no explorer URLs
+// baked into the client). Call once the wasm session is open.
+async function loadChainMeta() {
+  const ids = { evm: 'evm.1', solana: 'solana.mainnet', bitcoin: 'bitcoin.bitcoin' };
+  for (const [chain, id] of Object.entries(ids)) {
+    try {
+      const n = await backendRequest('Network', 'GET', { Id: id });
+      chainExplorers[chain] = (n.ResolvedBlockExplorer || '').replace(/\/+$/, '');
+    } catch { chainExplorers[chain] = ''; }
+  }
+}
+
+function explorerUrl(chain, id) {
+  const base = chainExplorers[chain] || '';
+  return base ? `${base}/tx/${id}` : '';
+}
+
 async function signingKeys(wallet) {
   if (session.mpc) return mpcCommitteeKeys(wallet);
   return (wallet.Keys || [])
@@ -657,38 +668,6 @@ async function copyText(text, btn, restore) {
   }
 }
 
-// ============================================================================
-// Settings (EVM chain config)
-// ============================================================================
-
-function loadSettings() {
-  try {
-    const raw = localStorage.getItem(STORAGE.settings);
-    if (raw) evmChain = { ...DEFAULT_EVM, ...JSON.parse(raw) };
-  } catch { evmChain = { ...DEFAULT_EVM }; }
-  fillSettingsForm();
-}
-
-function fillSettingsForm() {
-  $('#setChainName').value = evmChain.name;
-  $('#setChainId').value   = evmChain.chainId;
-  $('#setRpc').value       = evmChain.rpc;
-  $('#setExplorer').value  = evmChain.explorer;
-}
-
-function saveChain() {
-  const next = {
-    name:     $('#setChainName').value.trim() || 'EVM',
-    chainId:  Number($('#setChainId').value.trim()) || 1,
-    rpc:      $('#setRpc').value.trim(),
-    explorer: $('#setExplorer').value.trim() || DEFAULT_EVM.explorer
-  };
-  if (!/^https?:\/\//.test(next.rpc)) { toast('error', 'Invalid RPC', 'Enter a full https:// endpoint.'); return; }
-  evmChain = next;
-  localStorage.setItem(STORAGE.settings, JSON.stringify(next));
-  toast('ok', 'Network saved', `${next.name} · chain ${next.chainId}`);
-  if (session.addresses) { onSendChainChange(); refreshAllBalances(); }
-}
 
 // ============================================================================
 // Password strength (advisory only)
@@ -821,10 +800,6 @@ function wireStaticEvents() {
   $('#sendChain').onchange = onSendChainChange;
   $('#sendMax').onclick = fillMax;
   $('#sendSubmit').onclick = onSendSubmit;
-
-  // --- Settings ---
-  $('#saveChain').onclick = saveChain;
-  $('#resetChain').onclick = () => { evmChain = { ...DEFAULT_EVM }; localStorage.removeItem(STORAGE.settings); fillSettingsForm(); toast('ok', 'Reset', 'EVM network set back to Ethereum mainnet.'); };
 
   // --- Modal dismiss ---
   $('#modalScrim').addEventListener('click', e => {
@@ -965,6 +940,7 @@ async function enterMpcDashboard() {
   // send needs), which the cached record does not carry. Prefer the cached
   // addresses for render when present (identical values, saves nothing now but
   // keeps the fast-path contract), else use the freshly derived ones.
+  await loadChainMeta();
   const derived = await deriveMpcAddresses();
   session.addresses = (rec && rec.addresses) ? rec.addresses : derived;
   setConsoleMode(false);        // all wallet tabs visible
