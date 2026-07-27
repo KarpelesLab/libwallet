@@ -828,7 +828,9 @@ pub fn sign_raw_tx(
 }
 
 fn il_to_tweak(il: &serde_json::Value) -> Result<[u8; 32]> {
-    let dec = il.as_str().ok_or_else(|| Error::Env("account has no IL tweak".into()))?;
+    // Null/absent IL = null derivation: the account IS the group key, so the
+    // tweak is zero (child at tweak 0 == the group key).
+    let Some(dec) = il.as_str() else { return Ok([0u8; 32]) };
     let n = BigInt::parse_bytes(dec.as_bytes(), 10).ok_or_else(|| Error::Env("bad IL".into()))?;
     Ok(pad32(&n.to_bytes_be().1))
 }

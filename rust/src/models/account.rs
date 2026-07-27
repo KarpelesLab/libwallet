@@ -101,10 +101,34 @@ pub fn for_wallet(env: &Env, wallet_id: &str) -> Result<Vec<Account>> {
     Ok(rows.iter().map(|r| row_to_account(r)).collect())
 }
 
-/// Create an account for `wallet_id`. Currently the ed25519/Solana path: the
-/// account is the wallet's group pubkey directly (path "m"), base58-encoded.
-/// Sets the new account as current, matching Go CreateAccount.
+/// Create an account for `wallet_id` with **null derivation**: the account IS
+/// the wallet's direct group key for its network (no HD child). Its address is
+/// the group key's address (evm/bitcoin/base58-solana), `path` is empty, and
+/// `il` is Null — so signing uses the untweaked group key. Sets the new account
+/// as current, matching Go CreateAccount. Use [`create_derived`] for the legacy
+/// explicit-derivation path (imported / secondary addresses).
 pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> Result<Account> {
+    create_impl(env, wallet_id, name, typ, index, None)
+}
+
+/// Create an account with an **explicit (legacy) HD derivation** `path`
+/// (e.g. `"m/44/60/0/0"`): the address is the derived child key and `il` stores
+/// the accumulated derivation tweak so signing verifies under the child key
+/// (secp via `derive_pub_tweak` + `dkls_sign_*_tweaked`, ed25519 via
+/// `ed25519_derive_pub_tweak` + `frost_sign_local_tweaked`). This is the path
+/// used for imported legacy accounts and secondary addresses.
+pub fn create_derived(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64, path: &str) -> Result<Account> {
+    create_impl(env, wallet_id, name, typ, index, Some(path))
+}
+
+fn create_impl(
+    env: &Env,
+    wallet_id: &str,
+    name: &str,
+    typ: &str,
+    index: i64,
+    explicit_path: Option<&str>,
+) -> Result<Account> {
     let wallet = crate::models::wallet::fetch(env, wallet_id)?
         .ok_or_else(|| Error::Env("wallet not found".into()))?;
 
@@ -113,55 +137,95 @@ pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> 
         return Err(Error::Env("index must be non-negative".into()));
     }
 
+    // Parse an explicit derivation path into non-hardened indices, if any. With
+    // no path (`None`) the account uses null derivation (the direct group key).
+    let path_indices: Option<Vec<u32>> = match explicit_path {
+        Some(p) => Some(crate::hdderive::parse_bip32_path(p).map_err(|e| Error::Env(e.to_string()))?),
+        None => None,
+    };
+
     // Derive (curve, path, account pubkey b64url, address, uri, IL) per chain.
     // IL is the HD-derivation tweak (Σ IL_i mod n), stored so signing can pass
-    // it to sign_with_tweak; Null for chains that don't derive (solana).
+    // it to sign_with_tweak; Null when the account is the direct group key.
     let (curve_out, path, pubkey_b64, address, uri, il): (String, String, String, String, String, Value) =
         match typ {
             "solana" => {
                 if wallet.curve != "ed25519" {
                     return Err(Error::Env(format!("solana account requires ed25519 wallet, got {}", wallet.curve)));
                 }
-                // The wallet pubkey IS the account key; base58 gives the address.
                 let pb = b64url_decode(&wallet.pubkey)?;
                 if pb.len() != 32 {
                     return Err(Error::Env("ed25519 wallet pubkey is not 32 bytes".into()));
                 }
-                let addr = bs58::encode(&pb).into_string();
-                ("ed25519".into(), "m".into(), wallet.pubkey.clone(), addr.clone(), format!("solana:{addr}"), Value::Null)
+                let group: [u8; 32] = pb.clone().try_into().unwrap();
+                match &path_indices {
+                    Some(indices) if !indices.is_empty() => {
+                        // Explicit ed25519 (SLIP-0010-style additive) derivation.
+                        let (tweak, child) = crate::hdderive::ed25519_derive_pub_tweak(&group, indices)
+                            .map_err(|e| Error::Env(e.to_string()))?;
+                        let addr = bs58::encode(&child).into_string();
+                        let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
+                        ("ed25519".into(), explicit_path.unwrap().to_owned(), b64url(&child), addr.clone(), format!("solana:{addr}"), Value::String(il))
+                    }
+                    _ => {
+                        // Null derivation: the group pubkey IS the account key.
+                        let addr = bs58::encode(&pb).into_string();
+                        ("ed25519".into(), "m".into(), wallet.pubkey.clone(), addr.clone(), format!("solana:{addr}"), Value::Null)
+                    }
+                }
             }
             "ethereum" => {
                 if wallet.curve != "secp256k1" {
                     return Err(Error::Env(format!("ethereum account requires secp256k1 wallet, got {}", wallet.curve)));
                 }
-                // BIP32 non-hardened public derivation at m/44/60/0/{index}.
                 let pb = b64url_decode(&wallet.pubkey)?;
-                let cc = b64url_decode(&wallet.chaincode)?;
-                let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, &[44, 60, 0, index as u32])
-                    .map_err(|e| Error::Env(e.to_string()))?;
-                let addr = crate::hdderive::evm_address(&child).map_err(|e| Error::Env(e.to_string()))?;
-                let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
-                ("secp256k1".into(), format!("m/44/60/0/{index}"), b64url(&child), addr.clone(), format!("ethereum:{addr}"), Value::String(il))
+                match &path_indices {
+                    Some(indices) if !indices.is_empty() => {
+                        // Explicit BIP32 non-hardened public derivation.
+                        let cc = b64url_decode(&wallet.chaincode)?;
+                        let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, indices)
+                            .map_err(|e| Error::Env(e.to_string()))?;
+                        let addr = crate::hdderive::evm_address(&child).map_err(|e| Error::Env(e.to_string()))?;
+                        let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
+                        ("secp256k1".into(), explicit_path.unwrap().to_owned(), b64url(&child), addr.clone(), format!("ethereum:{addr}"), Value::String(il))
+                    }
+                    _ => {
+                        // Null derivation: the secp group key's own EVM address.
+                        let addr = crate::hdderive::evm_address(&pb).map_err(|e| Error::Env(e.to_string()))?;
+                        ("secp256k1".into(), String::new(), wallet.pubkey.clone(), addr.clone(), format!("ethereum:{addr}"), Value::Null)
+                    }
+                }
             }
             "bitcoin" => {
                 if wallet.curve != "secp256k1" {
                     return Err(Error::Env(format!("bitcoin account requires secp256k1 wallet, got {}", wallet.curve)));
                 }
-                // BIP32 non-hardened derivation at m/44/0/0/{index}, then P2PKH.
                 let pb = b64url_decode(&wallet.pubkey)?;
-                let cc = b64url_decode(&wallet.chaincode)?;
-                let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, &[44, 0, 0, index as u32])
-                    .map_err(|e| Error::Env(e.to_string()))?;
-                // Display address for the current network (Go
-                // `UpdateAddressForNetwork`): on a bitcoin-family network it is
-                // the first receive address (m/0/0) in that chain's format
-                // (e.g. monacoin → "mona1…" P2WPKH). Off a bitcoin network we
-                // keep the mainnet-BTC P2PKH fallback.
-                let h160 = outscript::hash::hash160(&child);
-                let addr = bitcoin_current_address(env, &child, &cc)
-                    .unwrap_or_else(|| outscript::address::encode_base58_addr(0x00, &h160));
-                let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
-                ("secp256k1".into(), format!("m/44/0/0/{index}"), b64url(&child), addr.clone(), format!("bitcoin:{addr}"), Value::String(il))
+                match &path_indices {
+                    Some(indices) if !indices.is_empty() => {
+                        // Explicit BIP32 non-hardened derivation, then the display
+                        // address for the current network (Go
+                        // `UpdateAddressForNetwork`): on a bitcoin-family network
+                        // the first receive address (m/0/0) in that chain's format;
+                        // otherwise the mainnet-BTC P2PKH fallback.
+                        let cc = b64url_decode(&wallet.chaincode)?;
+                        let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, indices)
+                            .map_err(|e| Error::Env(e.to_string()))?;
+                        let h160 = outscript::hash::hash160(&child);
+                        let addr = bitcoin_current_address(env, &child, &cc)
+                            .unwrap_or_else(|| outscript::address::encode_base58_addr(0x00, &h160));
+                        let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
+                        ("secp256k1".into(), explicit_path.unwrap().to_owned(), b64url(&child), addr.clone(), format!("bitcoin:{addr}"), Value::String(il))
+                    }
+                    _ => {
+                        // Null derivation: the group key's own BTC address. On a
+                        // bitcoin-family network use that chain's format for the
+                        // group key directly; otherwise mainnet-BTC P2PKH.
+                        let addr = bitcoin_direct_address(env, &pb)
+                            .unwrap_or_else(|| outscript::address::encode_base58_addr(0x00, &outscript::hash::hash160(&pb)));
+                        ("secp256k1".into(), String::new(), wallet.pubkey.clone(), addr.clone(), format!("bitcoin:{addr}"), Value::Null)
+                    }
+                }
             }
             other => return Err(Error::Env(format!("unsupported account type {other}"))),
         };
@@ -330,6 +394,19 @@ fn bitcoin_current_address(env: &Env, pubkey: &[u8], chaincode: &[u8]) -> Option
     }
     let child = crate::hdderive::derive_pub(pubkey, chaincode, &[0, 0]).ok()?;
     crate::bitcoin::hd_address(&child, &net.chain_id).ok()
+}
+
+/// The bitcoin display address for a **direct** (null-derivation) key: the group
+/// pubkey encoded for the current network with no further HD child derivation.
+/// `None` when no bitcoin network is selected, so the caller keeps its P2PKH
+/// fallback. `pubkey` is the 33-byte compressed group key.
+fn bitcoin_direct_address(env: &Env, pubkey: &[u8]) -> Option<String> {
+    let net = crate::models::network::fetch(env, "@").ok().flatten()?;
+    if net.kind != "bitcoin" {
+        return None;
+    }
+    let pk: [u8; 33] = pubkey.try_into().ok()?;
+    crate::bitcoin::hd_address(&pk, &net.chain_id).ok()
 }
 
 /// Update mutable account fields (Go `Account.ApiUpdate`): only `Name` is

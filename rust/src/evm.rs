@@ -177,9 +177,12 @@ fn parse_dec(s: &str) -> Result<BigInt> {
     BigInt::parse_bytes(s.as_bytes(), 10).ok_or_else(|| Error::Env(format!("bad decimal amount {s:?}")))
 }
 
-/// The account IL (stored as a decimal JSON string) as a 32-byte tweak.
+/// The account IL (stored as a decimal JSON string) as a 32-byte tweak. A
+/// Null/absent IL means the account uses null derivation — it IS the group key
+/// — so the tweak is the zero tweak (child at tweak 0 == the group key), and
+/// signing verifies under `evm_address(group_pub)`.
 fn il_to_tweak(il: &serde_json::Value) -> Result<[u8; 32]> {
-    let dec = il.as_str().ok_or_else(|| Error::Env("account has no IL tweak".into()))?;
+    let Some(dec) = il.as_str() else { return Ok([0u8; 32]) };
     let n = BigInt::parse_bytes(dec.as_bytes(), 10).ok_or_else(|| Error::Env("bad IL".into()))?;
     let (_, mut b) = n.to_bytes_be();
     while b.len() < 32 {

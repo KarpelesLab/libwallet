@@ -1628,6 +1628,34 @@ pub fn sign_frost_local(
     }
     let threshold = wallet.threshold.max(0) as usize;
 
+    let committee = frost_committee(&wallet, unlock)?;
+    let sig = frost_sign_local(&committee, threshold, msg).map_err(|e| Error::Env(e.to_string()))?;
+
+    // Defense in depth: the produced signature must verify under the stored key.
+    let pk: [u8; 32] = b64url_decode(&wallet.pubkey)?
+        .try_into()
+        .map_err(|_| Error::Env("stored pubkey is not 32 bytes".into()))?;
+    let sig64: [u8; 64] =
+        sig.clone().try_into().map_err(|_| Error::Env("signature is not 64 bytes".into()))?;
+    if !ed25519_verify(&pk, msg, &sig64) {
+        return Err(Error::Env("produced signature failed verification".into()));
+    }
+    Ok(sig)
+}
+
+fn hex_bytes(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Load and decrypt a FROST signing committee `(PartyId, Key)` from a wallet's
+/// `unlock` creds (each `(walletkey_id, password)`). Shared by `sign_frost_local`
+/// (untweaked group-key signing) and callers that need `frost_sign_local_tweaked`
+/// for an explicit-derivation account's IL. Each party id / decrypt salt derives
+/// from the WalletKey UUID, as in keygen.
+pub fn frost_committee(
+    wallet: &Wallet,
+    unlock: &[(String, String)],
+) -> Result<Vec<(PartyId, Key)>> {
     let mut committee: Vec<(PartyId, Key)> = Vec::with_capacity(unlock.len());
     for (wk_id, password) in unlock {
         let wk = wallet
@@ -1653,23 +1681,7 @@ pub fn sign_frost_local(
         let pid = PartyId::new(hex_bytes(&uuid_bytes), "", uuid_bytes.clone());
         committee.push((pid, key));
     }
-
-    let sig = frost_sign_local(&committee, threshold, msg).map_err(|e| Error::Env(e.to_string()))?;
-
-    // Defense in depth: the produced signature must verify under the stored key.
-    let pk: [u8; 32] = b64url_decode(&wallet.pubkey)?
-        .try_into()
-        .map_err(|_| Error::Env("stored pubkey is not 32 bytes".into()))?;
-    let sig64: [u8; 64] =
-        sig.clone().try_into().map_err(|_| Error::Env("signature is not 64 bytes".into()))?;
-    if !ed25519_verify(&pk, msg, &sig64) {
-        return Err(Error::Env("produced signature failed verification".into()));
-    }
-    Ok(sig)
-}
-
-fn hex_bytes(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+    Ok(committee)
 }
 
 /// Sign a 32-byte digest with a secp256k1/DKLs23 wallet, returning the ECDSA
