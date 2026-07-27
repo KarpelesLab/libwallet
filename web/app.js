@@ -1115,6 +1115,82 @@ async function backendRkCreate() {
   }, 30);
 }
 
+// Passkey verify — a drop-in for the code path (steps 1+2) at the SAME target.
+// RemoteKey:new{verify:'passkey'} → passkeyAuthBegin → credentials.get →
+// passkeyAuthFinish → the same {RemoteKey:"crws-…:crwsv-…"} resource. All the
+// WebAuthn calls run directly in this click task (user activation, no setTimeout).
+async function backendRkPasskeyVerify() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!passkeyAvailable()) { err.textContent = 'Passkeys are unavailable in this browser.'; return; }
+  if (!backend.clientId) { err.textContent = 'Set a Client ID above first.'; return; }
+  const target = $('#bkRkTarget').value.trim();
+  if (!target) { err.textContent = 'Enter an email or phone number.'; return; }
+  const btn = $('#bkRkPasskeyVerify');
+  btn.disabled = true; btn.textContent = 'Waiting for passkey…';
+  bkStatus('busy', 'passkey verify…');
+  try {
+    const params = target.includes('@') ? { email: target } : { number: target };
+    params.verify = 'passkey';
+    const s = await backendRequest('RemoteKey:new', 'POST', params);
+    const session = (s && (s.session ?? s.Session)) ?? s;
+    backend.rk.session = session;
+
+    const beginData = await backendRequest('RemoteKey:passkeyAuthBegin', 'POST', { session });
+    const asr = await navigator.credentials.get({ publicKey: decodeRequestOptions(beginData.publicKey ?? beginData) });
+
+    const fin = await backendRequest('RemoteKey:passkeyAuthFinish', 'POST', {
+      session, id: asr.id,
+      clientDataJSON: bufToB64url(asr.response.clientDataJSON),
+      authenticatorData: bufToB64url(asr.response.authenticatorData),
+      signature: bufToB64url(asr.response.signature),
+      userHandle: asr.response.userHandle ? bufToB64url(asr.response.userHandle) : undefined
+    });
+    const resource = (fin && (fin.RemoteKey ?? fin.remoteKey)) ?? fin;
+    if (!resource) throw new Error('No RemoteKey in response.');
+    backend.rk.resource = resource;
+
+    $('#bkRkStep3').classList.remove('hidden');   // skip the code step
+    bkStatus('live', '2FA verified · #' + backend.handle);
+    toast('ok', 'Verified with passkey', 'RemoteKey issued — name your wallet and create it.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'passkey verify failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Use passkey';
+  }
+}
+
+// Enroll a passkey for a just-verified RemoteKey (crwsv from a code verify), so
+// future logins can skip the code. RemoteKey:passkeyRegisterBegin →
+// credentials.create → passkeyRegisterFinish. Runs in the click task.
+async function backendRkEnrollPasskey() {
+  const err = $('#bkRkErr');
+  err.textContent = '';
+  if (!passkeyAvailable()) { err.textContent = 'Passkeys are unavailable in this browser.'; return; }
+  if (!backend.rk.resource) { err.textContent = 'Verify by code once first, then enroll a passkey.'; return; }
+  const btn = $('#bkRkEnroll');
+  btn.disabled = true; btn.textContent = 'Waiting for passkey…';
+  bkStatus('busy', 'passkey enroll…');
+  try {
+    const beginData = await backendRequest('RemoteKey:passkeyRegisterBegin', 'POST', { key: backend.rk.resource });
+    const cred = await navigator.credentials.create({ publicKey: decodeCreationOptions(beginData.publicKey ?? beginData) });
+    await backendRequest('RemoteKey:passkeyRegisterFinish', 'POST', {
+      key: backend.rk.resource, id: cred.id,
+      clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+      attestationObject: bufToB64url(cred.response.attestationObject),
+      transports: cred.response.getTransports?.()
+    });
+    bkStatus('live', 'passkey enrolled · #' + backend.handle);
+    toast('ok', 'Passkey enrolled', 'Next time verify with your device, no code.');
+  } catch (e) {
+    err.textContent = e.message || String(e);
+    bkStatus('err', 'passkey enroll failed');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Enroll a passkey (skip the code next time)';
+  }
+}
+
 // Spot:status — start the in-browser spotlib client and report whether it has
 // connected to the KLB Spot relay. Sync backend call; the connection completes
 // on the browser event loop, so a first check may read offline — check again.
@@ -1296,6 +1372,37 @@ function passkeyAvailable() {
 }
 function bkRandBytes(n) { const b = new Uint8Array(n); crypto.getRandomValues(b); return b; }
 function bkBufToHex(buf) { return [...new Uint8Array(buf)].map(x => x.toString(16).padStart(2, '0')).join(''); }
+
+// --- WebAuthn base64url codec + server-JSON option marshalling -------------
+// The RemoteKey passkey proxies exchange WebAuthn options/responses as JSON with
+// binary fields base64url-encoded; navigator.credentials wants ArrayBuffers.
+function b64urlToBuf(s) {
+  s = String(s).replace(/-/g, '+').replace(/_/g, '/');
+  const pad = s.length % 4 ? '='.repeat(4 - (s.length % 4)) : '';
+  const bin = atob(s + pad);
+  const b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  return b.buffer;
+}
+function bufToB64url(buf) {
+  const b = new Uint8Array(buf); let s = '';
+  for (const x of b) s += String.fromCharCode(x);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+// Turn the server's *JSON* options into real WebAuthn options (ArrayBuffers).
+// Prefer the native parsers when present; else decode the known binary fields.
+function decodeCreationOptions(o) {
+  if (window.PublicKeyCredential?.parseCreationOptionsFromJSON) return PublicKeyCredential.parseCreationOptionsFromJSON(o);
+  const opts = { ...o, challenge: b64urlToBuf(o.challenge), user: { ...o.user, id: b64urlToBuf(o.user.id) } };
+  if (Array.isArray(o.excludeCredentials)) opts.excludeCredentials = o.excludeCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+  return opts;
+}
+function decodeRequestOptions(o) {
+  if (window.PublicKeyCredential?.parseRequestOptionsFromJSON) return PublicKeyCredential.parseRequestOptionsFromJSON(o);
+  const opts = { ...o, challenge: b64urlToBuf(o.challenge) };
+  if (Array.isArray(o.allowCredentials)) opts.allowCredentials = o.allowCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+  return opts;
+}
 
 // Register a new passkey with PRF enabled, then derive its secret for a fresh
 // salt. Returns {credentialId:Uint8Array, salt:Uint8Array, secretHex}. Throws if
@@ -1511,6 +1618,8 @@ function wireBackendEvents() {
   $('#bkRkSend').onclick        = backendRkSend;
   $('#bkRkVerify').onclick      = backendRkVerify;
   $('#bkRkCreate').onclick      = backendRkCreate;
+  $('#bkRkPasskeyVerify').onclick = backendRkPasskeyVerify;
+  $('#bkRkEnroll').onclick      = backendRkEnrollPasskey;
   $('#bkSpotStatus').onclick    = backendSpotStatus;
   $('#bkAkRun').onclick         = backendInitiateKeygen;
   $('#bkAsRun').onclick         = backendJoinSign;
@@ -1530,6 +1639,14 @@ function wireBackendEvents() {
     } else {
       pk.onchange = () => { $('#bkWalletPw').disabled = pk.checked; };
     }
+  }
+
+  // RemoteKey passkey affordances: disable + note when WebAuthn is unavailable.
+  if (!passkeyAvailable()) {
+    const pv = $('#bkRkPasskeyVerify'), en = $('#bkRkEnroll'), note = $('#bkRkPasskeyAvail');
+    if (pv) pv.disabled = true;
+    if (en) en.disabled = true;
+    if (note) note.textContent = '(passkeys unavailable)';
   }
 
   // Delegated copy for dynamically-rendered addresses in the backend pane.

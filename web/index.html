@@ -406,7 +406,10 @@
                   <div class="amount-row">
                     <input class="input mono" id="bkRkTarget" placeholder="you@example.com or +15551234567" style="min-width:150px" />
                     <button class="btn primary grow" type="button" id="bkRkSend">Send code</button>
+                    <button class="btn grow" type="button" id="bkRkPasskeyVerify">Use passkey</button>
                   </div>
+                  <p class="subtitle" style="margin-top:6px">Already enrolled a passkey for this address? Verify with your
+                    device instead of a code. <span id="bkRkPasskeyAvail" class="mono"></span></p>
                 </div>
 
                 <!-- Step 2: verify the code -->
@@ -425,6 +428,9 @@
                   <label class="field-label" for="bkRkPw" style="margin-top:10px">Share password (6+ characters)</label>
                   <input class="input mono" id="bkRkPw" type="password" autocomplete="new-password" placeholder="Encrypts the two local shares" value="correct horse battery staple" />
                   <button class="btn primary block" type="button" id="bkRkCreate" style="margin-top:12px">Create wallet</button>
+                  <button class="btn block" type="button" id="bkRkEnroll" style="margin-top:10px">Enroll a passkey (skip the code next time)</button>
+                  <p class="subtitle" style="margin-top:6px">Binds a device passkey to this verified RemoteKey, so next
+                    time you can verify with your device instead of a code.</p>
                 </div>
 
                 <div class="err-inline" id="bkRkErr"></div>

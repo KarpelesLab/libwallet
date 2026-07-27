@@ -6,7 +6,7 @@ physical passkey can serve both.
 | Role | Where it runs | Server work | Status |
 |---|---|---|---|
 | **A. Device-share seal** (encrypt a local MPC share) | 100% client (browser) | **none** | ✅ implemented |
-| **B. Fleet-auth 2FA** (authorize RemoteKey / co-sign) | client + server | **required** | ⏳ to build (this doc) |
+| **B. Fleet-auth 2FA** (authorize RemoteKey / co-sign) | client + server | **implemented** | ✅ server (`Crypto/WalletSign:passkey*`) + browser wiring |
 
 The wallet is MPC: a wallet is a ≥3-share committee. Role A hardens the **device
 share**; role B hardens the **RemoteKey (fleet) share**. Together they give a
@@ -60,34 +60,43 @@ new endpoints should follow the same convention.
 **Registration** (bind a passkey to the AtOnline account / RemoteKey), once per
 device:
 
-- `Crypto/WalletSign:passkeyRegisterBegin` → returns server‑built
-  `PublicKeyCredentialCreationOptions`:
-  `{ challenge, rp:{id,name}, user:{id,name,displayName},
-     pubKeyCredParams:[{alg:-7},{alg:-257}], excludeCredentials:[…already
-     registered…], authenticatorSelection:{ userVerification:"required",
-     residentKey:"preferred" }, timeout, extensions:{ prf:{} } }`.
-  Include `extensions.prf` so the **same** credential also works for Role A.
-- `Crypto/WalletSign:passkeyRegisterFinish` ← the browser's
-  `credential.response` (`clientDataJSON`, `attestationObject`). Server verifies
-  the attestation and **stores the credential** (see data model). Returns
-  `{credential_id}` / status.
+**As implemented** (confirm live shapes with `klbfw describe Crypto/WalletSign`):
 
-**Authentication** (the 2FA step), each time a fleet op needs authorization:
+- `Crypto/WalletSign:new|sign|reshare {…, verify:'code'|'passkey'}` → `{session,
+  format}` (`format` is `'all-digits'` for a code, `'passkey'` for a WebAuthn
+  assertion). With `verify:'passkey'` no code is sent — the session is closed by
+  the passkeyAuth pair instead. Note `sign` and `reshare` are gated too, so a
+  passkey can authorize **co-sign / reshare**, not just creation.
+- `Crypto/WalletSign:passkeyRegisterBegin {key}` → `PublicKeyCredentialCreation
+  Options` (binary fields base64url; `pubKeyCredParams` ES256 `-7` / EdDSA `-8`
+  only — the COSE algs the server verifies; `extensions.prf` requested so the
+  **same** credential also does Role A). `key` must be a `crws-…:crwsv-…` from a
+  **succeeded** verification, or a bare `crws-…` when authenticated as the owner
+  — so a passkey never grants more authority than the code it replaces. Bound to
+  the wallet's Number within its Realm (keeps working for later RemoteKeys of the
+  same address).
+- `Crypto/WalletSign:passkeyRegisterFinish {key, id, clientDataJSON,
+  attestationObject, transports?, name?}` → `{credential_id,
+  Crypto_WalletSign_Webauthn__, status}`.
+- `Crypto/WalletSign:passkeyAuthBegin {session}` → `PublicKeyCredentialRequest
+  Options` (binary base64url); challenge single-use and **bound to `$session`**,
+  so an assertion for one operation can't approve another.
+- `Crypto/WalletSign:passkeyAuthFinish {session, id, clientDataJSON,
+  authenticatorData, signature, userHandle?}` → returns exactly what `:verify`
+  returns — `{RemoteKey:'crws-…:crwsv-…'}` — so `:pull` / `:setGeneratedKey` /
+  `:checkKey` downstream are unchanged.
+- `Crypto/WalletSign/Webauthn` (GET/DELETE) — list / revoke enrolled credentials.
 
-- `Crypto/WalletSign:passkeyAuthBegin {rk_session?}` → server‑built
-  `PublicKeyCredentialRequestOptions`:
-  `{ challenge, rpId, allowCredentials:[{type:"public-key", id, transports}],
-     userVerification:"required", timeout }`.
-- `Crypto/WalletSign:passkeyAuthFinish` ← `assertion.response`
-  (`clientDataJSON`, `authenticatorData`, `signature`, `userHandle`). Server
-  verifies the assertion and, on success, returns the **same
-  `{RemoteKey:"crws-…:crwsv-…"}`** shape `WalletSign:verify` returns today (so
-  the client flow is unchanged downstream), or a short‑lived authorization token
-  the subsequent `setGeneratedKey`/`reshare` call presents.
+**Browser wiring (libwallet):** WebAuthn is orchestrated in JS; the browser
+reaches these over Spot through thin libwallet proxies: `RemoteKey:new` forwards
+`verify`, and `RemoteKey:passkeyRegisterBegin/Finish` + `passkeyAuthBegin/Finish`
+pass through to `Crypto/WalletSign:passkey*` (clientId merged by `spot_do`). The
+web RemoteKey panel offers "Use passkey" (verify) and "Enroll a passkey" (after a
+first code verification).
 
-> Simplest integration: make `passkeyAuthBegin/Finish` a drop-in alternative to
-> `WalletSign:new`/`verify`. The wallet's RemoteKey creation flow then offers
-> "verify with passkey" instead of "enter the code".
+> The passkey path is a drop-in alternative to the code: bootstrap once with a
+> code (which yields the `crws-…:crwsv-…` needed to enroll), then verify with the
+> device thereafter.
 
 ### Server verification (WebAuthn L2/L3)
 
