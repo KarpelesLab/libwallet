@@ -97,9 +97,12 @@ fn resolved_rpc_by_type() {
     let dev = network::fetch(&env, "solana.devnet").unwrap().unwrap();
     assert!(dev.resolved_rpc().unwrap().contains("devnet.helius-rpc.com"));
 
-    // Ethereum mainnet (evm.1) routes through modchain (our node).
+    // Ethereum mainnet (evm.1) routes through modchain (our node), addressed by
+    // chain NAME — /ethereum/rpc. The numeric form (/1/rpc) 404s.
     let eth = network::fetch(&env, "evm.1").unwrap().unwrap().resolved_rpc().unwrap();
-    assert!(eth.starts_with("https://rpc.modchain.net/api/") && eth.ends_with("/1/rpc"), "{eth}");
+    assert!(eth.starts_with("https://rpc.modchain.net/api/"), "{eth}");
+    assert!(eth.ends_with("/ethereum/rpc"), "{eth}");
+    assert!(!eth.contains("/1/rpc"), "{eth}");
     // A non-Ethereum EVM chain still needs the live picker — errors.
     assert!(network::fetch(&env, "evm.137").unwrap().unwrap().resolved_rpc().is_err());
 }

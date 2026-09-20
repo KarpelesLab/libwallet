@@ -2396,9 +2396,10 @@ fn invalid_handle_errors() {
 }
 
 #[test]
-fn balance_without_rpc_or_network_errors_cleanly() {
-    // With no RPC param and no current network selected, balance resolution
-    // fails with a clear 400 rather than panicking.
+fn balance_against_an_unreachable_node_errors_cleanly() {
+    // An unreachable node must surface a clean error rather than panicking.
+    // (Resolution failure itself is covered by network_resolve_rpc_via_ffi,
+    // which asserts evm.137 has no locally resolvable endpoint.)
     let h = new_env();
     let w = request(
         h,
@@ -2413,12 +2414,14 @@ fn balance_without_rpc_or_network_errors_cleanly() {
         &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#),
     );
     let account_id = a["data"]["Id"].as_str().unwrap().to_string();
-    // No current network is set, and evm-auto isn't locally resolvable.
+    // A closed port, so the call fails in transport without leaving the machine.
     let bal = request(
         h,
-        &format!(r#"{{"path":"Account:balance","params":{{"Id":"{account_id}"}}}}"#),
+        &format!(
+            r#"{{"path":"Account:balance","params":{{"Id":"{account_id}","RPC":"http://127.0.0.1:1"}}}}"#
+        ),
     );
-    // evm-auto isn't locally resolvable -> a clean error (not a panic/crash).
+    // -> a clean error (not a panic/crash).
     assert_eq!(bal["result"], "error", "{bal}");
     assert!(bal["error"].as_str().unwrap().to_lowercase().contains("rpc"), "{bal}");
     LibwalletDestroy(h);
@@ -3005,10 +3008,8 @@ fn network_resolve_rpc_via_ffi() {
     let ev = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"evm.1"}}"#);
     assert_eq!(ev["result"], "success", "{ev}");
     let ev_rpc = ev["data"]["rpc"].as_str().unwrap();
-    assert!(
-        ev_rpc.starts_with("https://rpc.modchain.net/api/") && ev_rpc.ends_with("/1/rpc"),
-        "{ev_rpc}"
-    );
+    assert!(ev_rpc.starts_with("https://rpc.modchain.net/api/"), "{ev_rpc}");
+    assert!(ev_rpc.ends_with("/ethereum/rpc"), "{ev_rpc}");
 
     // A non-Ethereum EVM chain (evm.137) still needs the chaindb picker -> error.
     let poly = request(h, r#"{"path":"Network:resolveRPC","params":{"Id":"evm.137"}}"#);

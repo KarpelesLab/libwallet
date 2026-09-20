@@ -116,10 +116,14 @@ impl Network {
             "evm" if explicit => Ok(self.rpc.clone()),
             // Only Ethereum mainnet routes through modchain; other EVM chains use
             // the chaindb (registry) picker, not yet ported.
-            "evm" if self.chain_id == "1" => Ok(format!(
-                "https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{}/rpc",
-                self.chain_id
-            )),
+            //
+            // modchain keys its path by chain NAME, never the numeric chain id:
+            // /api/<key>/ethereum/rpc serves, /api/<key>/1/rpc answers 404 "file
+            // does not exist". Bitcoin-family passes through unchanged because
+            // its chain_id ("bitcoin", "litecoin", …) is already that name.
+            "evm" if self.chain_id == "1" => {
+                Ok(format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/ethereum/rpc"))
+            }
             "evm" => Err(crate::Error::Env(
                 "auto EVM RPC selection is not ported; supply an explicit RPC".into(),
             )),
