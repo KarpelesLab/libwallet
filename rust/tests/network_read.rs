@@ -90,10 +90,12 @@ fn resolved_rpc_by_type() {
     assert!(rpc.starts_with("https://rpc.modchain.net/api/"), "{rpc}");
     assert!(rpc.ends_with("/bitcoin/rpc"), "{rpc}");
 
-    // Solana mainnet without an explicit RPC routes through modchain; devnet
-    // still falls back to Helius.
+    // Solana mainnet without an explicit RPC routes through modchain, addressed
+    // by chain name like the others; devnet still falls back to Helius.
     let sol = network::fetch(&env, "solana.mainnet").unwrap().unwrap();
-    assert_eq!(sol.resolved_rpc().unwrap(), "https://rpc.modchain.net/chain/solana/rpc");
+    let sol_rpc = sol.resolved_rpc().unwrap();
+    assert!(sol_rpc.starts_with("https://rpc.modchain.net/api/"), "{sol_rpc}");
+    assert!(sol_rpc.ends_with("/solana/rpc"), "{sol_rpc}");
     let dev = network::fetch(&env, "solana.devnet").unwrap().unwrap();
     assert!(dev.resolved_rpc().unwrap().contains("devnet.helius-rpc.com"));
 

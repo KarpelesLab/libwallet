@@ -18,10 +18,16 @@ use crate::{Env, Result, SqlValue};
 /// modchain API key (public build constant, matching Go `wltnet.ModChainApiKey`).
 /// Bitcoin-family chains route all RPC through modchain with this key.
 const MODCHAIN_API_KEY: &str = "crapi-nx4p6j-ifez-cjli-p5wj-uml43cte";
-/// Solana endpoints (public build constants). Mainnet routes through modchain,
-/// like Bitcoin-family and Ethereum mainnet do; devnet keeps Helius.
-const MODCHAIN_SOLANA: &str = "https://rpc.modchain.net/chain/solana/rpc";
+/// Solana devnet still comes from Helius (public build constant); mainnet goes
+/// through modchain like Bitcoin-family and Ethereum mainnet.
 const HELIUS_DEVNET: &str = "https://trudie-xvrnf4-fast-devnet.helius-rpc.com";
+
+/// modchain's JSON-RPC endpoint for `chain`, which is addressed by NAME —
+/// `/api/<key>/<chain>/rpc`, e.g. `ethereum`, `bitcoin`, `solana`. Never a
+/// numeric chain id: `/api/<key>/1/rpc` answers 404 "file does not exist".
+fn modchain_rpc(chain: &str) -> String {
+    format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{chain}/rpc")
+}
 
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Network" ("Id" text, "Type" text, "ChainId" text, "Name" text, "RPC" text, "CurrencySymbol" text, "CurrencyDecimals" integer, "BlockExplorer" text, "TestNet" numeric, "Priority" integer, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
 CREATE UNIQUE INDEX IF NOT EXISTS "Network_typeChain" ON "Network" ("Type", "ChainId");"#;
@@ -101,29 +107,23 @@ impl Network {
     ///   Go getRPC live picker), which is not yet ported — returns an error so
     ///   the caller supplies an explicit RPC;
     /// - Solana falls back to modchain (mainnet) or the Helius devnet endpoint.
+    ///
+    /// Every modchain endpoint is addressed by chain name — see [`modchain_rpc`].
     pub fn resolved_rpc(&self) -> Result<String> {
         let explicit = !self.rpc.is_empty() && self.rpc != "auto";
         match self.kind.as_str() {
-            "bitcoin" => Ok(format!(
-                "https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{}/rpc",
-                self.chain_id
-            )),
+            // Bitcoin-family chain ids ("bitcoin", "litecoin", …) are already
+            // the name modchain wants.
+            "bitcoin" => Ok(modchain_rpc(&self.chain_id)),
             "solana" if explicit => Ok(self.rpc.clone()),
             "solana" => Ok(match self.chain_id.as_str() {
                 "devnet" => HELIUS_DEVNET.to_owned(),
-                _ => MODCHAIN_SOLANA.to_owned(),
+                _ => modchain_rpc("solana"),
             }),
             "evm" if explicit => Ok(self.rpc.clone()),
             // Only Ethereum mainnet routes through modchain; other EVM chains use
             // the chaindb (registry) picker, not yet ported.
-            //
-            // modchain keys its path by chain NAME, never the numeric chain id:
-            // /api/<key>/ethereum/rpc serves, /api/<key>/1/rpc answers 404 "file
-            // does not exist". Bitcoin-family passes through unchanged because
-            // its chain_id ("bitcoin", "litecoin", …) is already that name.
-            "evm" if self.chain_id == "1" => {
-                Ok(format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/ethereum/rpc"))
-            }
+            "evm" if self.chain_id == "1" => Ok(modchain_rpc("ethereum")),
             "evm" => Err(crate::Error::Env(
                 "auto EVM RPC selection is not ported; supply an explicit RPC".into(),
             )),
