@@ -40,6 +40,9 @@ bs58 = "0.5"
 # those crates compiling — which is exactly what broke CI once the lockfile
 # stopped being committed.
 purecrypto = "0.9"
+# BIP-39 requires the mnemonic AND the passphrase to be UTF-8 NFKD before they
+# reach PBKDF2. Pure Rust, builds on wasm.
+unicode-normalization = "0.1.25"
 # 0.2.5 adds DerSignature::from_rs_low_s, which is how an external signer
 # (our TSS committee) hands back an ECDSA signature.
 outscript = "0.2.5"

@@ -86,9 +86,20 @@ pub fn entropy_to_mnemonic(entropy: &[u8]) -> Result<String> {
 }
 
 /// The BIP-39 seed for a mnemonic + optional passphrase:
-/// `PBKDF2-HMAC-SHA512(mnemonic, "mnemonic"+passphrase, 2048, 64)` (go-bip39
-/// `NewSeed`). The mnemonic must already be the canonical space-joined form.
+/// `PBKDF2-HMAC-SHA512(NFKD(mnemonic), "mnemonic"+NFKD(passphrase), 2048, 64)`
+/// (go-bip39 `NewSeed`). The mnemonic must already be the canonical
+/// space-joined form.
+///
+/// BIP-39 requires both inputs to be UTF-8 **NFKD**, and it matters: without
+/// it, "café" typed NFC and the same word typed NFD are different wallets, and
+/// half-width `ﾊﾟｽﾜｰﾄﾞ` differs from full-width `パスワード` — NFKD is exactly
+/// what folds those together. Skipping it would make any non-ASCII passphrase
+/// unrestorable in a spec-compliant wallet (and theirs unrestorable here).
+/// ASCII is unaffected: NFKD leaves it byte-identical.
 pub fn mnemonic_to_seed(mnemonic: &str, passphrase: &str) -> [u8; 64] {
+    use unicode_normalization::UnicodeNormalization;
+    let mnemonic: String = mnemonic.nfkd().collect();
+    let passphrase: String = passphrase.nfkd().collect();
     let salt = format!("mnemonic{passphrase}");
     let mut seed = [0u8; 64];
     purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha512>(

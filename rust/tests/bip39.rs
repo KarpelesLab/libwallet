@@ -33,6 +33,35 @@ fn trezor_vector_entropy_and_seed() {
     assert!(mnemonic_to_entropy("zzzz abandon about").is_err());
 }
 
+// BIP-39 mandates NFKD for the mnemonic and the passphrase. ASCII is
+// unaffected; everything else converges only if we normalize.
+#[test]
+fn passphrase_is_nfkd_normalized() {
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    // "café" composed (U+00E9) vs decomposed (e + U+0301) — one wallet.
+    let nfc = "caf\u{00e9}";
+    let nfd = "cafe\u{0301}";
+    assert_ne!(nfc, nfd, "the inputs really are different byte sequences");
+    assert_eq!(mnemonic_to_seed(m, nfc), mnemonic_to_seed(m, nfd));
+
+    // Half-width and full-width katakana fold together under NFKD, which is
+    // what lets a passphrase survive a change of IME mode.
+    assert_eq!(
+        mnemonic_to_seed(m, "\u{ff8a}\u{ff9f}\u{ff7d}\u{ff9c}\u{ff70}\u{ff84}\u{ff9e}"), // ﾊﾟｽﾜｰﾄﾞ
+        mnemonic_to_seed(m, "\u{30d1}\u{30b9}\u{30ef}\u{30fc}\u{30c9}"),                  // パスワード
+    );
+
+    // A different passphrase is still a different wallet, and no passphrase is
+    // not the same as some passphrase.
+    assert_ne!(mnemonic_to_seed(m, nfc), mnemonic_to_seed(m, "cafe"));
+    assert_ne!(mnemonic_to_seed(m, ""), mnemonic_to_seed(m, nfc));
+
+    // ASCII is byte-identical through NFKD, so the canonical vector still holds
+    // (asserted in full by trezor_vector_entropy_and_seed).
+    assert_eq!(mnemonic_to_seed(m, "TREZOR"), mnemonic_to_seed(m, "TREZOR"));
+}
+
 #[test]
 fn bip32_master_from_seed_vector1() {
     // BIP-32 test vector 1: seed 000102...0f -> master private key + chain code.
