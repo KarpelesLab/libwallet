@@ -358,7 +358,6 @@ async fn solana_send_async(env: &Env, account: &crate::models::account::Account,
 
 /// Build, DKLs-sign, and broadcast a Bitcoin P2PKH transfer. UTXOs and outputs
 /// are supplied in the request (auto-discovery via modchain lands next).
-#[cfg(not(target_arch = "wasm32"))]
 /// Bitcoin signAndSend (async twin of the old sync path): auto-input
 /// {To, Amount} discovers the account's UTXOs via modchain_assets over
 /// call_async, builds+signs through the shared offline core, and broadcasts;

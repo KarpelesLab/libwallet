@@ -2,7 +2,9 @@
 //! object CRUD registration becomes an arm here. As packages are ported their
 //! handlers are added and this match grows toward the ~107 Go endpoints.
 
-mod account;
+// pub(crate): the wasm async dispatcher (dispatch::handle_request_async) calls
+// account::balance_impl / sign_and_send_impl directly, not through route().
+pub(crate) mod account;
 #[cfg(not(target_arch = "wasm32"))]
 mod asset;
 #[cfg(not(target_arch = "wasm32"))]
