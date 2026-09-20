@@ -535,6 +535,57 @@ select.input { appearance: none; cursor: pointer;
 
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 4px; }
 
+/* ---- Passphrase peek ----------------------------------------------------- */
+/* Live addresses + balances shown while a BIP-39 passphrase is typed. Compact
+   sibling of .asset: same chain colours, one line per chain. */
+.tag-opt {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--text-faint);
+  border: 1px solid var(--line); border-radius: var(--r-chip);
+  padding: 2px 6px; margin-left: 7px; vertical-align: 1px;
+}
+.note { color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
+.note strong { color: var(--text); font-weight: 600; }
+
+.peek {
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg-elev); overflow: hidden;
+  animation: fade 0.25s var(--ease) both;
+}
+.peek-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 13px; border-bottom: 1px solid var(--line);
+}
+.peek-head .t {
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+.peek-head .s { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); }
+.peek-head .s.live { color: var(--ok); }
+.peek-head .s.warn { color: var(--warn); }
+
+.peek-row { display: flex; align-items: center; gap: 9px; padding: 8px 13px; }
+.peek-row + .peek-row { border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent); }
+.peek-row[data-chain="evm"]     { --chain: var(--eth); }
+.peek-row[data-chain="bitcoin"] { --chain: var(--btc); }
+.peek-row[data-chain="solana"]  { --chain: var(--sol); }
+.peek-row .chain-badge { width: 21px; height: 21px; border-radius: 6px; font-size: 11px; }
+.peek-addr {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.peek-bal {
+  flex: none;
+  font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+/* Addresses are final as soon as they're derived; only the balance column is
+   still in flight, so only it — never the whole panel — reads as pending. */
+.peek-bal.dim { color: var(--text-faint); }
+.peek-bal .sym { color: var(--text-faint); font-size: 11px; margin-left: 3px; }
+.peek-note { padding: 9px 13px; color: var(--text-faint); font-size: 12px; }
+
 /* Send form */
 .form-grid { display: flex; flex-direction: column; gap: 16px; }
 .amount-row { display: flex; gap: 10px; align-items: stretch; }

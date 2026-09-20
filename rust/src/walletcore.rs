@@ -10,6 +10,12 @@
 //! web wallet holds one mnemonic. secp256k1 signing (EVM, BTC) and the tx
 //! encoders come from `outscript`; ed25519 (Solana) and the vault AEAD from
 //! `purecrypto`.
+//!
+//! Every seed-consuming entry point takes the BIP-39 `passphrase` (the "25th
+//! word") alongside the mnemonic — `""` for none. It is part of the seed, not
+//! of the phrase: a different passphrase over the same mnemonic is a different
+//! wallet with different addresses, so derivation and signing must always be
+//! handed the same one or the signature won't match the displayed address.
 
 use num_bigint::BigInt;
 use serde::Deserialize;
@@ -132,8 +138,9 @@ pub struct Addresses {
     pub solana: String,
 }
 
-pub fn derive_addresses(mnemonic: &str) -> R<Addresses> {
-    let seed = bip39::mnemonic_to_seed(mnemonic, "");
+/// The three chain addresses for `mnemonic` under `passphrase` (`""` = none).
+pub fn derive_addresses(mnemonic: &str, passphrase: &str) -> R<Addresses> {
+    let seed = bip39::mnemonic_to_seed(mnemonic, passphrase);
 
     let evm_pub = hdderive::derive_pubkey_for_path(&seed, "secp256k1", EVM_PATH).map_err(|e| e.to_string())?;
     let evm = hdderive::evm_address(&evm_pub).map_err(|e| e.to_string())?;
@@ -206,8 +213,8 @@ fn secp_key(seed: &[u8], path: &str) -> R<SecpPrivateKey> {
 
 /// EIP-191 `personal_sign`: sign `message` with the EVM key, returning the
 /// 0x-prefixed 65-byte `R ‖ S ‖ V` (V ∈ {27,28}) signature ecrecover expects.
-pub fn sign_evm_personal(mnemonic: &str, message: &str) -> R<String> {
-    let seed = bip39::mnemonic_to_seed(mnemonic, "");
+pub fn sign_evm_personal(mnemonic: &str, passphrase: &str, message: &str) -> R<String> {
+    let seed = bip39::mnemonic_to_seed(mnemonic, passphrase);
     let key = secp_key(&seed, EVM_PATH)?;
     let mut full = format!("\x19Ethereum Signed Message:\n{}", message.len()).into_bytes();
     full.extend_from_slice(message.as_bytes());
@@ -241,9 +248,9 @@ struct EvmTxJson {
 /// Sign an EVM transfer/transaction. `tx_json` carries decimal-wei amounts and
 /// 0x-hex calldata; EIP-1559 when `maxFeePerGas` is present, else legacy.
 /// Returns the 0x-hex raw signed transaction ready for `eth_sendRawTransaction`.
-pub fn sign_evm_tx(mnemonic: &str, tx_json: &str) -> R<String> {
+pub fn sign_evm_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String> {
     let p: EvmTxJson = serde_json::from_str(tx_json).map_err(|e| format!("bad EVM tx json: {e}"))?;
-    let seed = bip39::mnemonic_to_seed(mnemonic, "");
+    let seed = bip39::mnemonic_to_seed(mnemonic, passphrase);
     let key = secp_key(&seed, EVM_PATH)?;
 
     let eip1559 = p.max_fee.is_some();
@@ -280,9 +287,9 @@ struct SolTxJson {
 
 /// Sign a native SOL transfer. Returns the base58-encoded signed transaction
 /// for `sendTransaction` (base58 encoding).
-pub fn sign_solana_transfer(mnemonic: &str, tx_json: &str) -> R<String> {
+pub fn sign_solana_transfer(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String> {
     let p: SolTxJson = serde_json::from_str(tx_json).map_err(|e| format!("bad Solana tx json: {e}"))?;
-    let seed = bip39::mnemonic_to_seed(mnemonic, "");
+    let seed = bip39::mnemonic_to_seed(mnemonic, passphrase);
     let priv_bytes = hdderive::derive_privkey_from_seed(&seed, "ed25519", SOL_PATH).map_err(|e| e.to_string())?;
     let key = Ed25519PrivateKey::from_bytes(priv_bytes);
 
@@ -318,12 +325,12 @@ struct BtcTxJson {
 /// Sign a P2WPKH Bitcoin transaction spending the provided UTXOs (all belonging
 /// to the wallet's single key) to `to`, with change back to `changeAddress`.
 /// Returns the raw signed tx as hex for broadcast.
-pub fn sign_bitcoin_tx(mnemonic: &str, tx_json: &str) -> R<String> {
+pub fn sign_bitcoin_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String> {
     let p: BtcTxJson = serde_json::from_str(tx_json).map_err(|e| format!("bad Bitcoin tx json: {e}"))?;
     if p.utxos.is_empty() {
         return Err("no UTXOs provided".into());
     }
-    let seed = bip39::mnemonic_to_seed(mnemonic, "");
+    let seed = bip39::mnemonic_to_seed(mnemonic, passphrase);
     let key = secp_key(&seed, BTC_PATH)?;
 
     // Every UTXO is the wallet's own P2WPKH output, so the prev scriptPubKey
@@ -389,13 +396,31 @@ mod tests {
 
     #[test]
     fn addresses_match_known_vectors() {
-        let a = derive_addresses(M).unwrap();
+        let a = derive_addresses(M, "").unwrap();
         // Standard BIP-44 m/44'/60'/0'/0/0 address for this mnemonic (MetaMask vector).
         assert_eq!(a.evm, "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
         // P2WPKH m/84'/0'/0'/0/0 (BIP-84 test vector).
         assert_eq!(a.bitcoin, "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu");
         // Solana address is a base58 ed25519 pubkey (44 chars typical).
         assert!(a.solana.len() >= 32 && a.solana.len() <= 44);
+    }
+
+    // The BIP-39 passphrase is part of the seed, so it yields a wholly different
+    // wallet — and derivation and signing must agree on it, or the web wallet
+    // would show one address and sign with another's key.
+    #[test]
+    fn passphrase_derives_a_different_wallet_and_signs_for_it() {
+        let plain = derive_addresses(M, "").unwrap();
+        let hidden = derive_addresses(M, "TREZOR").unwrap();
+        assert_ne!(plain.evm, hidden.evm);
+        assert_ne!(plain.bitcoin, hidden.bitcoin);
+        assert_ne!(plain.solana, hidden.solana);
+        // An empty passphrase is exactly "no passphrase".
+        assert_eq!(derive_addresses(M, "").unwrap().evm, plain.evm);
+
+        let sig = sign_evm_personal(M, "TREZOR", "hello world").unwrap();
+        let recovered = crate::evm::personal_ec_recover(b"hello world", &from_hex(&sig).unwrap()).unwrap();
+        assert_eq!(recovered, hidden.evm);
     }
 
     #[test]
@@ -410,8 +435,8 @@ mod tests {
 
     #[test]
     fn evm_personal_sign_recovers_to_address() {
-        let a = derive_addresses(M).unwrap();
-        let sig = sign_evm_personal(M, "hello world").unwrap();
+        let a = derive_addresses(M, "").unwrap();
+        let sig = sign_evm_personal(M, "", "hello world").unwrap();
         let sig_bytes = from_hex(&sig).unwrap();
         let recovered = crate::evm::personal_ec_recover(b"hello world", &sig_bytes).unwrap();
         assert_eq!(recovered, a.evm);
@@ -419,9 +444,9 @@ mod tests {
 
     #[test]
     fn evm_tx_recovers_to_sender() {
-        let a = derive_addresses(M).unwrap();
+        let a = derive_addresses(M, "").unwrap();
         let tx = r#"{"chainId":1,"nonce":0,"maxFeePerGas":"30000000000","maxPriorityFeePerGas":"1000000000","gas":21000,"to":"0x0000000000000000000000000000000000000001","value":"1000000000000000","data":"0x"}"#;
-        let raw = sign_evm_tx(M, tx).unwrap();
+        let raw = sign_evm_tx(M, "", tx).unwrap();
         let raw_bytes = from_hex(&raw).unwrap();
         let sender = crate::evm::recover_sender(&raw_bytes).unwrap();
         assert_eq!(sender, a.evm);
@@ -430,7 +455,7 @@ mod tests {
     #[test]
     fn solana_transfer_signs_and_verifies() {
         let tx = r#"{"to":"11111111111111111111111111111112","lamports":1000000,"recentBlockhash":"11111111111111111111111111111111"}"#;
-        let signed = sign_solana_transfer(M, tx).unwrap();
+        let signed = sign_solana_transfer(M, "", tx).unwrap();
         let raw = bs58::decode(&signed).into_vec().unwrap();
         // shortvec(1) + 64-byte sig + message; verify the sig over the message.
         let msg = crate::solana::tx_message(&raw).expect("message");
@@ -444,14 +469,14 @@ mod tests {
     #[test]
     fn bitcoin_tx_signs() {
         // One 100k-sat P2WPKH utxo on the wallet's own address, send 40k, fee 1k.
-        let a = derive_addresses(M).unwrap();
+        let a = derive_addresses(M, "").unwrap();
         let tx = format!(
             r#"{{"utxos":[{{"txid":"{}","vout":0,"value":100000}}],"to":"{}","amountSats":40000,"feeSats":1000,"changeAddress":"{}"}}"#,
             "0".repeat(64),
             a.bitcoin,
             a.bitcoin
         );
-        let hex = sign_bitcoin_tx(M, &tx).unwrap();
+        let hex = sign_bitcoin_tx(M, "", &tx).unwrap();
         assert!(!hex.is_empty());
         // Version 2, little-endian, is the first 4 bytes.
         assert!(hex.starts_with("02000000"));

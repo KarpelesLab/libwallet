@@ -145,7 +145,7 @@
           <div class="stack" style="--gap:8px">
             <div class="eyebrow">Import · recovery phrase</div>
             <h1 class="title">Enter your phrase</h1>
-            <p class="subtitle">Type or paste your 12 or 24 words in order, separated by spaces.</p>
+            <p class="subtitle">Type or paste your 12 or 24 words in order, separated by spaces. If your wallet uses a BIP-39 passphrase you'll enter it on the next step.</p>
           </div>
           <div>
             <label class="field-label" for="importPhrase">Recovery phrase</label>
@@ -181,8 +181,25 @@
           <div>
             <label class="field-label" for="pwConfirm">Confirm password</label>
             <input class="input" id="pwConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" />
-            <div class="err-inline" id="pwErr"></div>
           </div>
+
+          <div class="divider"></div>
+
+          <div class="stack" style="--gap:10px">
+            <label class="field-label" for="passphraseNew">BIP-39 passphrase <span class="tag-opt">optional</span></label>
+            <div class="input-wrap">
+              <input class="input" id="passphraseNew" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Leave blank for none" />
+              <button class="ghost-btn" type="button" data-toggle="passphraseNew">Show</button>
+            </div>
+            <div class="input-wrap hidden" id="passphraseConfirmRow">
+              <input class="input" id="passphraseConfirm" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Confirm passphrase" />
+              <button class="ghost-btn" type="button" data-toggle="passphraseConfirm">Show</button>
+            </div>
+            <p class="note">A passphrase is a 25th word mixed into your seed. It is <strong>never stored</strong> — you type it at every unlock, and the recovery phrase alone will not bring these funds back.</p>
+            <div class="peek hidden" id="setupPeek"></div>
+          </div>
+
+          <div class="err-inline" id="pwErr"></div>
           <button class="btn primary block" type="button" id="finishSetup">Create wallet</button>
         </div>
       </div>
@@ -197,7 +214,7 @@
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" style="color:var(--iris)"><rect x="4" y="10" width="16" height="11" rx="2.5" stroke="currentColor" stroke-width="1.6"/><path d="M8 10V7a4 4 0 018 0v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15.5" r="1.6" fill="currentColor"/></svg>
             <div>
               <h1 class="title">Welcome back</h1>
-              <p class="subtitle" style="margin:6px auto 0">Enter your password to unlock this wallet.</p>
+              <p class="subtitle" style="margin:6px auto 0">Enter your password to unlock this wallet. Add your passphrase only if you set one.</p>
             </div>
           </div>
           <form id="unlockForm" class="stack" style="--gap:12px">
@@ -205,6 +222,11 @@
               <input class="input" id="pwUnlock" type="password" autocomplete="current-password" placeholder="Password" autofocus />
               <button class="ghost-btn" type="button" data-toggle="pwUnlock">Show</button>
             </div>
+            <div class="input-wrap">
+              <input class="input" id="passphraseUnlock" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Passphrase (optional)" aria-label="BIP-39 passphrase" />
+              <button class="ghost-btn" type="button" data-toggle="passphraseUnlock">Show</button>
+            </div>
+            <div class="peek hidden" id="unlockPeek"></div>
             <div class="err-inline" id="unlockErr"></div>
             <button class="btn primary block" type="submit">Unlock</button>
           </form>

@@ -10,10 +10,14 @@
 // instead of a hard module-load failure. No part of the crypto is stubbed here.
 //
 // Security invariants:
-//   - The plaintext mnemonic lives ONLY in the `session.mnemonic` variable and
-//     never touches localStorage.
+//   - The plaintext mnemonic lives only in the `session.mnemonic` variable and,
+//     while the unlock screen previews a passphrase, in `peek.vaultMnemonic`
+//     (dropped the moment the wallet unlocks). Neither touches localStorage.
 //   - The password is never stored; it is used transiently for encrypt/decrypt.
 //   - localStorage holds only the encrypted vault blob and non-secret settings.
+//   - The BIP-39 passphrase is NOT in the vault, encrypted or otherwise: it is
+//     a second factor, typed at each unlock, so a stolen vault + password still
+//     doesn't reconstruct the seed. It lives in `session.passphrase` only.
 // ============================================================================
 
 // ---- Configuration (easy to change) ---------------------------------------
@@ -39,6 +43,7 @@ const CHAIN_META = {
 
 const session = {
   mnemonic:  null,   // string, only while unlocked (walletcore path)
+  passphrase: null,  // BIP-39 passphrase for this session; never persisted
   mpc:       false,  // true when the dashboard is backed by the MPC committee
   addresses: null,   // { evm, bitcoin, solana }
   balances:  {}      // chain → formatted string
@@ -46,7 +51,7 @@ const session = {
 
 let wasm = null;         // the loaded module namespace
 let chainExplorers = {}; // chain → block-explorer base URL (from the Network model)
-let onboardDraft = { mnemonic: null, words: 12 }; // holds phrase before password set
+let onboardDraft = { mnemonic: null, words: 12, source: null }; // phrase + origin ('create'|'import') before the password step
 
 // ---- Tiny DOM helpers ------------------------------------------------------
 
@@ -141,6 +146,15 @@ function openBackendConsole() {
 function goStep(step) {
   $$('#screen-onboarding [data-step]').forEach(c => c.classList.toggle('hidden', c.dataset.step !== step));
   if (step === 'create') renderSeed();
+  if (step === 'password') resetPassphraseSetup();
+}
+
+// The passphrase is never stored, so there is nothing to check a typo against
+// later: start from empty on every entry and make a non-empty one be confirmed.
+function resetPassphraseSetup() {
+  $('#passphraseNew').value = $('#passphraseConfirm').value = '';
+  $('#passphraseConfirmRow').classList.add('hidden');
+  peekHide($('#setupPeek'));
 }
 
 // ============================================================================
@@ -175,14 +189,22 @@ function renderSeed() {
 function finishSetup() {
   const pw = $('#pwNew').value;
   const confirm = $('#pwConfirm').value;
+  const passphrase = $('#passphraseNew').value;
   const errEl = $('#pwErr');
   errEl.textContent = '';
 
   if (pw.length < 8) { errEl.textContent = 'Use at least 8 characters.'; return; }
   if (pw !== confirm) { errEl.textContent = 'Passwords do not match.'; return; }
+  // A mistyped passphrase doesn't fail — it opens a different, empty wallet —
+  // and nothing on this device can detect that later. Confirm it now.
+  if (passphrase && passphrase !== $('#passphraseConfirm').value) {
+    errEl.textContent = 'Passphrases do not match.'; return;
+  }
   if (!onboardDraft.mnemonic) { errEl.textContent = 'No phrase to save — start over.'; return; }
 
   try {
+    // The vault holds the phrase alone. Keeping the passphrase out of it is the
+    // point of having one: this device never stores the whole seed.
     const blob = wasm.encrypt_blob(onboardDraft.mnemonic, pw);
     localStorage.setItem(STORAGE.vault, blob);
   } catch (err) {
@@ -192,17 +214,22 @@ function finishSetup() {
 
   // Move straight into an unlocked session; wipe the draft.
   const mnemonic = onboardDraft.mnemonic;
-  onboardDraft = { mnemonic: null, words: 12 };
+  onboardDraft = { mnemonic: null, words: 12, source: null };
   $('#pwNew').value = $('#pwConfirm').value = '';
-  unlockWith(mnemonic);
-  toast('ok', 'Wallet created', 'Your phrase is encrypted and stored on this device.');
+  resetPassphraseSetup();
+  unlockWith(mnemonic, passphrase);
+  toast('ok', 'Wallet created', passphrase
+    ? 'Your phrase is encrypted on this device — your passphrase is not. You will be asked for it at every unlock.'
+    : 'Your phrase is encrypted and stored on this device.');
 }
 
 // ============================================================================
 // Unlock / lock
 // ============================================================================
 
-function tryUnlock(pw) {
+// The password unwraps the vault; the passphrase (which nothing here can
+// validate — every value is a valid wallet) rides along into the session.
+function tryUnlock(pw, passphrase) {
   const errEl = $('#unlockErr');
   errEl.textContent = '';
   const blob = localStorage.getItem(STORAGE.vault);
@@ -215,17 +242,25 @@ function tryUnlock(pw) {
     return;
   }
   $('#pwUnlock').value = '';
-  unlockWith(mnemonic);
+  $('#passphraseUnlock').value = '';
+  peekHide($('#unlockPeek'));
+  peekForgetVault();
+  unlockWith(mnemonic, passphrase);
 }
 
 // Derive addresses and enter the dashboard for a known-good mnemonic.
-async function unlockWith(mnemonic) {
+// `passphrase` is the BIP-39 passphrase ('' = none) and must reach every later
+// derivation and signature, or the wallet would sign with a key that doesn't
+// belong to the address it shows.
+async function unlockWith(mnemonic, passphrase = '') {
   session.mnemonic = mnemonic;
+  session.passphrase = passphrase;
   session.mpc = false;   // walletcore path: not MPC-backed
   try {
-    session.addresses = wasm.derive_addresses(mnemonic);
+    session.addresses = wasm.derive_addresses(mnemonic, passphrase);
   } catch (err) {
     session.mnemonic = null;
+    session.passphrase = null;
     toast('error', 'Derivation failed', err.message || String(err));
     return;
   }
@@ -235,7 +270,7 @@ async function unlockWith(mnemonic) {
   // its single key; nothing here does client-side chain RPC.
   backendOpen();
   await loadChainMeta();
-  session.accounts = await importWalletcoreWallet(mnemonic);
+  session.accounts = await importWalletcoreWallet(mnemonic, passphrase);
   session.addresses = {
     evm: session.accounts.evm.address,
     bitcoin: session.accounts.bitcoin.address,
@@ -260,6 +295,7 @@ function lock() {
   if (session.mpc) {
     session.mpc = false;
     session.mnemonic = null;
+    session.passphrase = null;
     session.addresses = null;
     session.accounts = null;
     session.balances = {};
@@ -274,6 +310,7 @@ function lock() {
     return goStep('choose');
   }
   session.mnemonic = null;
+  session.passphrase = null;
   session.addresses = null;
   session.accounts = null;
   session.wcKey = null;
@@ -287,6 +324,8 @@ function lock() {
 function removeWallet() {
   localStorage.removeItem(STORAGE.vault);
   session.mnemonic = null;
+  session.passphrase = null;
+  peekForgetVault();
   session.addresses = null;
   closeModal();
   route();
@@ -360,7 +399,9 @@ async function fetchChainBalance(chain) {
 // the seed as its single key. Returns the chain → {id, address} account map.
 // session.wcKey is the in-memory seal password that unlocks the seed at sign
 // time (never persisted; the encrypted mnemonic vault stays the reload source).
-async function importWalletcoreWallet(mnemonic) {
+// The passphrase is sealed into the share alongside the entropy, so the model's
+// accounts derive — and sign — for exactly the addresses the UI displayed.
+async function importWalletcoreWallet(mnemonic, passphrase = '') {
   if (!session.wcKey) {
     const b = crypto.getRandomValues(new Uint8Array(32));
     session.wcKey = Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
@@ -368,9 +409,9 @@ async function importWalletcoreWallet(mnemonic) {
   const pw = session.wcKey;
   const [wSecp, wEd] = [
     await backendRequest('Wallet:importMnemonic', 'POST',
-      { Name: 'walletcore', Curve: 'secp256k1', Mnemonic: mnemonic, Keys: [{ Type: 'Password', Key: pw }] }),
+      { Name: 'walletcore', Curve: 'secp256k1', Mnemonic: mnemonic, Passphrase: passphrase, Keys: [{ Type: 'Password', Key: pw }] }),
     await backendRequest('Wallet:importMnemonic', 'POST',
-      { Name: 'walletcore', Curve: 'ed25519', Mnemonic: mnemonic, Keys: [{ Type: 'Password', Key: pw }] }),
+      { Name: 'walletcore', Curve: 'ed25519', Mnemonic: mnemonic, Passphrase: passphrase, Keys: [{ Type: 'Password', Key: pw }] }),
   ];
   backend.wallet = wSecp;
   backend.walletEd = wEd;
@@ -384,6 +425,154 @@ async function importWalletcoreWallet(mnemonic) {
     bitcoin: { id: btc.Id, address: btc.Address },
     solana:  { id: sol.Id, address: sol.Address },
   };
+}
+
+// ============================================================================
+// Passphrase peek — live addresses + balances while the passphrase is typed
+// ============================================================================
+//
+// A BIP-39 passphrase never fails: a typo silently derives a DIFFERENT wallet,
+// and a wrong wallet looks exactly like a right one you haven't funded yet. The
+// only honest confirmation is the money, so while the passphrase is being typed
+// we derive its addresses locally (wasm, no network) and look up their
+// balances — the user recognises their own funds before committing.
+//
+// Two limits are deliberate:
+//   - Nothing is queried until typing settles. Every balance lookup tells our
+//     RPC provider that someone is asking about that address, so the prefixes
+//     of a passphrase must never each become a query.
+//   - Nothing happens while the passphrase box is empty: with no passphrase
+//     there is nothing to disambiguate, and the vault's 210k-round KDF isn't
+//     worth spending on a preview nobody asked for.
+
+const PEEK_DEBOUNCE_MS = 450;
+const PEEK_CHAINS = ['evm', 'bitcoin', 'solana'];
+
+const peek = {
+  timer: null,
+  seq: 0,              // stamps each attempt; a stale result is dropped
+  views: new Map(),    // "chain:address" → Promise<view-account id>
+  vaultPw: null,       // memoised vault unwrap: editing the passphrase must not
+  vaultMnemonic: null  // re-run PBKDF2 for a password that hasn't changed
+};
+
+// Unwrap the vault for `pw`, memoised. Returns null when the password is wrong
+// or absent — which is not an error here, just "nothing to preview yet".
+function peekVaultMnemonic(pw) {
+  if (peek.vaultPw === pw) return peek.vaultMnemonic;
+  const blob = localStorage.getItem(STORAGE.vault);
+  let m = null;
+  if (blob && pw) { try { m = wasm.decrypt_blob(blob, pw); } catch { m = null; } }
+  peek.vaultPw = pw;
+  peek.vaultMnemonic = m;
+  return m;
+}
+
+// Drop the memoised plaintext (on unlock, or when the vault goes away).
+function peekForgetVault() {
+  peek.vaultPw = null;
+  peek.vaultMnemonic = null;
+}
+
+function peekHide(root) {
+  clearTimeout(peek.timer);
+  peek.seq++;                  // invalidate anything already in flight
+  root.classList.add('hidden');
+  root.innerHTML = '';
+}
+
+function peekShow(root, html) {
+  root.innerHTML = html;
+  root.classList.remove('hidden');
+}
+
+// Addresses are known the moment the passphrase is derived; only the balance
+// column is still pending, so only it reads as pending.
+function peekRender(root, addresses) {
+  const rows = PEEK_CHAINS.map(chain => {
+    const addr = addresses[chain];
+    return `<div class="peek-row" data-chain="${chain}">
+        <span class="chain-badge">${CHAIN_META[chain].badge}</span>
+        <span class="peek-addr" title="${addr}">${short(addr, 10, 8)}</span>
+        <span class="peek-bal dim" data-peek="${chain}">…</span>
+      </div>`;
+  }).join('');
+  peekShow(root, `<div class="peek-head">
+      <span class="t">This passphrase opens</span>
+      <span class="s" data-peek-state>checking…</span>
+    </div>${rows}`);
+}
+
+function peekState(root, text, cls) {
+  const n = root.querySelector('[data-peek-state]');
+  if (n) { n.className = 's' + (cls ? ' ' + cls : ''); n.textContent = text; }
+}
+
+function peekBal(root, chain, text, dim, sym = true) {
+  const n = root.querySelector(`[data-peek="${chain}"]`);
+  if (!n) return;
+  n.className = 'peek-bal' + (dim ? ' dim' : '');
+  n.innerHTML = sym ? `${text}<span class="sym"> ${SYMBOL[chain]}</span>` : text;
+}
+
+// A watch-only account is all Account:balance needs — no wallet, no key
+// material — so a preview costs one row in the in-memory DB and nothing else.
+// Cached per address so the same passphrase typed twice doesn't create a second.
+function peekViewAccount(chain, address) {
+  const key = `${chain}:${address}`;
+  let p = peek.views.get(key);
+  if (!p) {
+    p = backendRequest('Account:createView', 'POST',
+      { Type: chain === 'evm' ? 'ethereum' : chain, Address: address })
+      .then(a => a.Id)
+      .catch(err => { peek.views.delete(key); throw err; });
+    peek.views.set(key, p);
+  }
+  return p;
+}
+
+async function peekBalances(root, seq, addresses) {
+  let funded = 0, failed = 0;
+  await Promise.allSettled(PEEK_CHAINS.map(async chain => {
+    try {
+      const id = await peekViewAccount(chain, addresses[chain]);
+      const r = await backendRequest('Account:balance', 'POST', { Id: id });
+      if (seq !== peek.seq) return;             // the user has typed on since
+      const raw = BigInt(r.balance ?? r.Balance ?? '0');
+      if (raw > 0n) funded++;
+      peekBal(root, chain, formatUnits(raw, DECIMALS[chain], 6), raw === 0n);
+    } catch {
+      failed++;
+      if (seq === peek.seq) peekBal(root, chain, 'unavailable', true, false);
+    }
+  }));
+  if (seq !== peek.seq) return;
+  if (funded) peekState(root, 'funds found', 'live');
+  else if (failed === PEEK_CHAINS.length) peekState(root, 'no connection', 'warn');
+  else peekState(root, 'empty wallet', 'warn');
+}
+
+// Schedule a peek of `passphrase` into `root`. `mnemonicFor` yields the phrase
+// (the onboarding draft, or the vault unwrapped with whatever password is
+// typed) and may return null when it isn't available yet — `pending` says so.
+function peekUpdate(root, passphrase, mnemonicFor, pending) {
+  clearTimeout(peek.timer);
+  const seq = ++peek.seq;
+  if (!passphrase) return peekHide(root);
+  peek.timer = setTimeout(() => {
+    if (seq !== peek.seq) return;
+    const mnemonic = mnemonicFor();
+    if (!mnemonic) return peekShow(root, `<div class="peek-note">${pending}</div>`);
+    let addresses;
+    try {
+      addresses = wasm.derive_addresses(mnemonic, passphrase);
+    } catch (err) {
+      return peekShow(root, `<div class="peek-note">Could not derive: ${bkEsc(err.message || String(err))}</div>`);
+    }
+    peekRender(root, addresses);
+    backendOpen();
+    peekBalances(root, seq, addresses);
+  }, PEEK_DEBOUNCE_MS);
 }
 
 // ============================================================================
@@ -585,10 +774,16 @@ function showRevealed(phrase) {
   const words = phrase.trim().split(/\s+/);
   const grid = words.map((w, i) =>
     `<div class="seed-word"><span class="n">${i + 1}</span><span class="w">${w}</span></div>`).join('');
+  // With a passphrase in play these words restore a different wallet on their
+  // own, so back up the pair or the backup is worthless.
+  const ppNote = session.passphrase
+    ? `<div class="panel warn" style="font-size:12.5px">This wallet also uses a <strong>BIP-39 passphrase</strong>, which is not shown here and is stored nowhere. These words alone restore a different, empty wallet — you need both.</div>`
+    : '';
   openModal(`
     <div class="card-pad stack" style="--gap:16px">
       <div class="eyebrow">Recovery phrase</div>
       <div class="panel warn" style="font-size:12.5px">Anyone with these words controls your funds. Never share or type them into a website.</div>
+      ${ppNote}
       <div class="seed-grid">${grid}</div>
       <div class="btn-row">
         <button class="btn ghost grow" type="button" id="revealCopy">Copy phrase</button>
@@ -707,6 +902,7 @@ function wireStaticEvents() {
   $$('#screen-onboarding [data-go]').forEach(b => b.onclick = () => {
     const go = b.dataset.go;
     onboardDraft.mnemonic = null; // fresh phrase each time create is entered
+    onboardDraft.source = go;     // 'import' earns the balance peek; 'create' can have no funds yet
     goStep(go);
     if (go === 'import') setTimeout(() => $('#importPhrase').focus(), 60);
   });
@@ -754,6 +950,19 @@ function wireStaticEvents() {
   $('#finishSetup').onclick = finishSetup;
   $('#pwConfirm').onkeydown = e => { if (e.key === 'Enter') finishSetup(); };
 
+  // --- Password step: optional BIP-39 passphrase ---
+  // On an import the peek is the whole point (it tells you whether this is the
+  // passphrase your funds are under); on a fresh wallet there is nothing to
+  // find, so it stays out of the way.
+  $('#passphraseNew').oninput = () => {
+    const pp = $('#passphraseNew').value;
+    $('#passphraseConfirmRow').classList.toggle('hidden', !pp);
+    if (onboardDraft.source === 'import') {
+      peekUpdate($('#setupPeek'), pp, () => onboardDraft.mnemonic, 'No phrase to preview.');
+    }
+  };
+  $('#passphraseConfirm').onkeydown = e => { if (e.key === 'Enter') finishSetup(); };
+
   // Show/hide password toggles
   $$('[data-toggle]').forEach(b => b.onclick = () => {
     const input = $('#' + b.dataset.toggle);
@@ -763,7 +972,18 @@ function wireStaticEvents() {
   });
 
   // --- Unlock ---
-  $('#unlockForm').onsubmit = e => { e.preventDefault(); tryUnlock($('#pwUnlock').value); };
+  $('#unlockForm').onsubmit = e => {
+    e.preventDefault();
+    tryUnlock($('#pwUnlock').value, $('#passphraseUnlock').value);
+  };
+  // Live preview: the passphrase drives it, and the password is only consulted
+  // (an expensive unwrap) once there is a passphrase worth previewing.
+  const unlockPeek = () => peekUpdate(
+    $('#unlockPeek'), $('#passphraseUnlock').value,
+    () => peekVaultMnemonic($('#pwUnlock').value),
+    'Enter your password to preview this passphrase.');
+  $('#passphraseUnlock').oninput = unlockPeek;
+  $('#pwUnlock').oninput = () => { if ($('#passphraseUnlock').value) unlockPeek(); };
   $('#forgetFromUnlock').onclick = () => confirmRemove();
 
   // --- MPC unlock (on-device committee wallet) ---
@@ -933,6 +1153,7 @@ async function deriveMpcAddresses() {
 // from the stored record when present, else derived live.
 async function enterMpcDashboard() {
   session.mnemonic = null;      // MPC has no single mnemonic
+  session.passphrase = null;    // (nor a BIP-39 passphrase)
   session.mpc = true;           // dashboard is backed by the MPC committee
   session.balances = {};
   const rec = readMpcRecord();
@@ -1086,6 +1307,7 @@ function mpcForget() {
   // Clear any live MPC dashboard session too (when forgotten from the dashboard).
   session.mpc = false;
   session.mnemonic = null;
+  session.passphrase = null;
   session.addresses = null;
   session.balances = {};
   showScreen('onboarding');

@@ -24,10 +24,11 @@ pub fn validate_mnemonic(mnemonic: &str) -> bool {
 }
 
 /// Derive the EVM / Bitcoin / Solana addresses, returned as a JS object
-/// `{ evm, bitcoin, solana }`.
+/// `{ evm, bitcoin, solana }`. `passphrase` is the BIP-39 passphrase (the "25th
+/// word"); pass `""` for none.
 #[wasm_bindgen]
-pub fn derive_addresses(mnemonic: &str) -> Result<JsValue, JsValue> {
-    let a = walletcore::derive_addresses(mnemonic).map_err(js_err)?;
+pub fn derive_addresses(mnemonic: &str, passphrase: &str) -> Result<JsValue, JsValue> {
+    let a = walletcore::derive_addresses(mnemonic, passphrase).map_err(js_err)?;
     serde_wasm_bindgen::to_value(&a).map_err(|e| js_err(e.to_string()))
 }
 
@@ -43,28 +44,29 @@ pub fn decrypt_blob(blob: &str, password: &str) -> Result<String, JsValue> {
     walletcore::decrypt(blob, password).map_err(js_err)
 }
 
-/// EIP-191 personal_sign; returns the 0x-hex 65-byte signature.
+/// EIP-191 personal_sign; returns the 0x-hex 65-byte signature. `passphrase`
+/// must be the same one the signing address was derived with.
 #[wasm_bindgen]
-pub fn sign_evm_personal(mnemonic: &str, message: &str) -> Result<String, JsValue> {
-    walletcore::sign_evm_personal(mnemonic, message).map_err(js_err)
+pub fn sign_evm_personal(mnemonic: &str, passphrase: &str, message: &str) -> Result<String, JsValue> {
+    walletcore::sign_evm_personal(mnemonic, passphrase, message).map_err(js_err)
 }
 
 /// Sign an EVM transaction (`tx_json` = the JSON object). Returns 0x-hex raw tx.
 #[wasm_bindgen]
-pub fn sign_evm_tx(mnemonic: &str, tx_json: &str) -> Result<String, JsValue> {
-    walletcore::sign_evm_tx(mnemonic, tx_json).map_err(js_err)
+pub fn sign_evm_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> Result<String, JsValue> {
+    walletcore::sign_evm_tx(mnemonic, passphrase, tx_json).map_err(js_err)
 }
 
 /// Sign a native SOL transfer. Returns the base58 signed transaction.
 #[wasm_bindgen]
-pub fn sign_solana_transfer(mnemonic: &str, tx_json: &str) -> Result<String, JsValue> {
-    walletcore::sign_solana_transfer(mnemonic, tx_json).map_err(js_err)
+pub fn sign_solana_transfer(mnemonic: &str, passphrase: &str, tx_json: &str) -> Result<String, JsValue> {
+    walletcore::sign_solana_transfer(mnemonic, passphrase, tx_json).map_err(js_err)
 }
 
 /// Sign a P2WPKH Bitcoin transaction. Returns the raw signed tx as hex.
 #[wasm_bindgen]
-pub fn sign_bitcoin_tx(mnemonic: &str, tx_json: &str) -> Result<String, JsValue> {
-    walletcore::sign_bitcoin_tx(mnemonic, tx_json).map_err(js_err)
+pub fn sign_bitcoin_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> Result<String, JsValue> {
+    walletcore::sign_bitcoin_tx(mnemonic, passphrase, tx_json).map_err(js_err)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

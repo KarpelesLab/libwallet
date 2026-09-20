@@ -18,8 +18,9 @@ use crate::{Env, Result, SqlValue};
 /// modchain API key (public build constant, matching Go `wltnet.ModChainApiKey`).
 /// Bitcoin-family chains route all RPC through modchain with this key.
 const MODCHAIN_API_KEY: &str = "crapi-nx4p6j-ifez-cjli-p5wj-uml43cte";
-/// Solana Helius endpoints, matching Go getRPC (public build constants).
-const HELIUS_MAINNET: &str = "https://kristi-cykm4t-fast-mainnet.helius-rpc.com";
+/// Solana endpoints (public build constants). Mainnet routes through modchain,
+/// like Bitcoin-family and Ethereum mainnet do; devnet keeps Helius.
+const MODCHAIN_SOLANA: &str = "https://rpc.modchain.net/chain/solana/rpc";
 const HELIUS_DEVNET: &str = "https://trudie-xvrnf4-fast-devnet.helius-rpc.com";
 
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Network" ("Id" text, "Type" text, "ChainId" text, "Name" text, "RPC" text, "CurrencySymbol" text, "CurrencyDecimals" integer, "BlockExplorer" text, "TestNet" numeric, "Priority" integer, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
@@ -99,7 +100,7 @@ impl Network {
     /// - other EVM chains resolve via the chain registry / an explicit RPC (the
     ///   Go getRPC live picker), which is not yet ported — returns an error so
     ///   the caller supplies an explicit RPC;
-    /// - Solana falls back to the Helius devnet/mainnet endpoint.
+    /// - Solana falls back to modchain (mainnet) or the Helius devnet endpoint.
     pub fn resolved_rpc(&self) -> Result<String> {
         let explicit = !self.rpc.is_empty() && self.rpc != "auto";
         match self.kind.as_str() {
@@ -110,7 +111,7 @@ impl Network {
             "solana" if explicit => Ok(self.rpc.clone()),
             "solana" => Ok(match self.chain_id.as_str() {
                 "devnet" => HELIUS_DEVNET.to_owned(),
-                _ => HELIUS_MAINNET.to_owned(),
+                _ => MODCHAIN_SOLANA.to_owned(),
             }),
             "evm" if explicit => Ok(self.rpc.clone()),
             // Only Ethereum mainnet routes through modchain; other EVM chains use
