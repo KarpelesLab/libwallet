@@ -51,7 +51,7 @@ const session = {
 
 let wasm = null;         // the loaded module namespace
 let chainExplorers = {}; // chain → block-explorer base URL (from the Network model)
-let onboardDraft = { mnemonic: null, words: 12, source: null }; // phrase + origin ('create'|'import') before the password step
+let onboardDraft = { mnemonic: null, passphrase: '', words: 12 }; // phrase + passphrase, held until the password step
 
 // ---- Tiny DOM helpers ------------------------------------------------------
 
@@ -145,16 +145,22 @@ function openBackendConsole() {
 // Onboarding is a multi-step card flow inside one screen.
 function goStep(step) {
   $$('#screen-onboarding [data-step]').forEach(c => c.classList.toggle('hidden', c.dataset.step !== step));
-  if (step === 'create') renderSeed();
-  if (step === 'password') resetPassphraseSetup();
+  if (step === 'create') { renderSeed(); resetCreatePassphrase(); }
+  if (step === 'import') resetImportPassphrase();
 }
 
 // The passphrase is never stored, so there is nothing to check a typo against
-// later: start from empty on every entry and make a non-empty one be confirmed.
-function resetPassphraseSetup() {
-  $('#passphraseNew').value = $('#passphraseConfirm').value = '';
-  $('#passphraseConfirmRow').classList.add('hidden');
-  peekHide($('#setupPeek'));
+// later. On a new wallet the only defence is typing it twice; on an import the
+// balance peek is the better one — you recognise your own funds.
+function resetCreatePassphrase() {
+  $('#createPassphrase').value = $('#createPassphraseConfirm').value = '';
+  $('#createPassphraseConfirmRow').classList.add('hidden');
+  $('#createErr').textContent = '';
+}
+
+function resetImportPassphrase() {
+  $('#importPassphrase').value = '';
+  peekHide($('#importPeek'));
 }
 
 // ============================================================================
@@ -189,17 +195,12 @@ function renderSeed() {
 function finishSetup() {
   const pw = $('#pwNew').value;
   const confirm = $('#pwConfirm').value;
-  const passphrase = $('#passphraseNew').value;
+  const passphrase = onboardDraft.passphrase || ''; // settled on the create/import step
   const errEl = $('#pwErr');
   errEl.textContent = '';
 
   if (pw.length < 8) { errEl.textContent = 'Use at least 8 characters.'; return; }
   if (pw !== confirm) { errEl.textContent = 'Passwords do not match.'; return; }
-  // A mistyped passphrase doesn't fail — it opens a different, empty wallet —
-  // and nothing on this device can detect that later. Confirm it now.
-  if (passphrase && passphrase !== $('#passphraseConfirm').value) {
-    errEl.textContent = 'Passphrases do not match.'; return;
-  }
   if (!onboardDraft.mnemonic) { errEl.textContent = 'No phrase to save — start over.'; return; }
 
   try {
@@ -214,9 +215,8 @@ function finishSetup() {
 
   // Move straight into an unlocked session; wipe the draft.
   const mnemonic = onboardDraft.mnemonic;
-  onboardDraft = { mnemonic: null, words: 12, source: null };
+  onboardDraft = { mnemonic: null, passphrase: '', words: 12 };
   $('#pwNew').value = $('#pwConfirm').value = '';
-  resetPassphraseSetup();
   unlockWith(mnemonic, passphrase);
   toast('ok', 'Wallet created', passphrase
     ? 'Your phrase is encrypted on this device — your passphrase is not. You will be asked for it at every unlock.'
@@ -902,7 +902,6 @@ function wireStaticEvents() {
   $$('#screen-onboarding [data-go]').forEach(b => b.onclick = () => {
     const go = b.dataset.go;
     onboardDraft.mnemonic = null; // fresh phrase each time create is entered
-    onboardDraft.source = go;     // 'import' earns the balance peek; 'create' can have no funds yet
     goStep(go);
     if (go === 'import') setTimeout(() => $('#importPhrase').focus(), 60);
   });
@@ -930,11 +929,41 @@ function wireStaticEvents() {
   $('#copySeed').onclick  = () => copyText(onboardDraft.mnemonic || '', $('#copySeed'), 'Copy phrase');
   $('#regenSeed').onclick = () => { onboardDraft.mnemonic = null; renderSeed(); };
   $('#savedConfirm').onchange = e => $('#createContinue').disabled = !e.target.checked;
-  $('#createContinue').onclick = () => goStep('password');
+
+  // A new wallet has no funds to recognise, so a mistyped passphrase can't be
+  // caught by a balance — the only defence is typing it twice.
+  $('#createPassphrase').oninput = () => {
+    $('#createPassphraseConfirmRow').classList.toggle('hidden', !$('#createPassphrase').value);
+    $('#createErr').textContent = '';
+  };
+  $('#createContinue').onclick = () => {
+    const pp = $('#createPassphrase').value;
+    if (pp && pp !== $('#createPassphraseConfirm').value) {
+      $('#createErr').textContent = 'Passphrases do not match.';
+      return;
+    }
+    onboardDraft.passphrase = pp;
+    goStep('password');
+  };
 
   // --- Import ---
+  // The phrase as libwallet wants it: single-spaced and lowercase.
+  const importPhraseValue = () =>
+    $('#importPhrase').value.trim().replace(/\s+/g, ' ').toLowerCase();
+
+  // Peek as soon as there is a valid phrase AND a passphrase to disambiguate.
+  const importPeek = () => peekUpdate(
+    $('#importPeek'), $('#importPassphrase').value,
+    () => {
+      const phrase = importPhraseValue();
+      try { return wasm.validate_mnemonic(phrase) ? phrase : null; } catch { return null; }
+    },
+    'Enter a valid recovery phrase to preview this passphrase.');
+  $('#importPassphrase').oninput = importPeek;
+  $('#importPhrase').oninput = () => { if ($('#importPassphrase').value) importPeek(); };
+
   $('#importContinue').onclick = () => {
-    const phrase = $('#importPhrase').value.trim().replace(/\s+/g, ' ').toLowerCase();
+    const phrase = importPhraseValue();
     const err = $('#importErr');
     err.textContent = '';
     if (!phrase) { err.textContent = 'Enter your recovery phrase.'; return; }
@@ -942,6 +971,7 @@ function wireStaticEvents() {
     try { ok = wasm.validate_mnemonic(phrase); } catch (e) { err.textContent = e.message || String(e); return; }
     if (!ok) { err.textContent = 'That phrase is not a valid BIP-39 mnemonic.'; return; }
     onboardDraft.mnemonic = phrase;
+    onboardDraft.passphrase = $('#importPassphrase').value;
     goStep('password');
   };
 
@@ -949,19 +979,6 @@ function wireStaticEvents() {
   $('#pwNew').oninput = e => renderStrength(e.target.value);
   $('#finishSetup').onclick = finishSetup;
   $('#pwConfirm').onkeydown = e => { if (e.key === 'Enter') finishSetup(); };
-
-  // --- Password step: optional BIP-39 passphrase ---
-  // On an import the peek is the whole point (it tells you whether this is the
-  // passphrase your funds are under); on a fresh wallet there is nothing to
-  // find, so it stays out of the way.
-  $('#passphraseNew').oninput = () => {
-    const pp = $('#passphraseNew').value;
-    $('#passphraseConfirmRow').classList.toggle('hidden', !pp);
-    if (onboardDraft.source === 'import') {
-      peekUpdate($('#setupPeek'), pp, () => onboardDraft.mnemonic, 'No phrase to preview.');
-    }
-  };
-  $('#passphraseConfirm').onkeydown = e => { if (e.key === 'Enter') finishSetup(); };
 
   // Show/hide password toggles
   $$('[data-toggle]').forEach(b => b.onclick = () => {

@@ -126,6 +126,22 @@
             <button class="btn ghost sm grow" type="button" id="regenSeed">Regenerate</button>
           </div>
 
+          <div class="divider"></div>
+
+          <div class="stack" style="--gap:10px">
+            <label class="field-label" for="createPassphrase">BIP-39 passphrase <span class="tag-opt">optional</span></label>
+            <div class="input-wrap">
+              <input class="input" id="createPassphrase" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Leave blank for none" />
+              <button class="ghost-btn" type="button" data-toggle="createPassphrase">Show</button>
+            </div>
+            <div class="input-wrap hidden" id="createPassphraseConfirmRow">
+              <input class="input" id="createPassphraseConfirm" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Confirm passphrase" />
+              <button class="ghost-btn" type="button" data-toggle="createPassphraseConfirm">Show</button>
+            </div>
+            <p class="note">A 25th word mixed into your seed, changing which wallet these words open. It is <strong>never stored</strong> — you type it at every unlock, and the words above alone will not bring the funds back. Leave it blank if you're unsure.</p>
+            <div class="err-inline" id="createErr"></div>
+          </div>
+
           <label class="check">
             <input type="checkbox" id="savedConfirm" />
             <span class="box"><svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
@@ -145,12 +161,21 @@
           <div class="stack" style="--gap:8px">
             <div class="eyebrow">Import · recovery phrase</div>
             <h1 class="title">Enter your phrase</h1>
-            <p class="subtitle">Type or paste your 12 or 24 words in order, separated by spaces. If your wallet uses a BIP-39 passphrase you'll enter it on the next step.</p>
+            <p class="subtitle">Type or paste your 12 or 24 words in order, separated by spaces.</p>
           </div>
           <div>
             <label class="field-label" for="importPhrase">Recovery phrase</label>
             <textarea class="textarea mono" id="importPhrase" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="witch collapse practice feed shame open despair creek road again ice least"></textarea>
             <div class="err-inline" id="importErr"></div>
+          </div>
+          <div>
+            <label class="field-label" for="importPassphrase">BIP-39 passphrase <span class="tag-opt">optional</span></label>
+            <div class="input-wrap">
+              <input class="input" id="importPassphrase" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Leave blank for none" />
+              <button class="ghost-btn" type="button" data-toggle="importPassphrase">Show</button>
+            </div>
+            <p class="note">Only if your wallet uses one. A different passphrase opens a different wallet — the balances below tell you which one you've typed.</p>
+            <div class="peek hidden" id="importPeek"></div>
           </div>
           <div class="btn-row">
             <button class="btn subtle" type="button" data-back="choose">Back</button>
@@ -181,22 +206,6 @@
           <div>
             <label class="field-label" for="pwConfirm">Confirm password</label>
             <input class="input" id="pwConfirm" type="password" autocomplete="new-password" placeholder="Repeat password" />
-          </div>
-
-          <div class="divider"></div>
-
-          <div class="stack" style="--gap:10px">
-            <label class="field-label" for="passphraseNew">BIP-39 passphrase <span class="tag-opt">optional</span></label>
-            <div class="input-wrap">
-              <input class="input" id="passphraseNew" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Leave blank for none" />
-              <button class="ghost-btn" type="button" data-toggle="passphraseNew">Show</button>
-            </div>
-            <div class="input-wrap hidden" id="passphraseConfirmRow">
-              <input class="input" id="passphraseConfirm" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Confirm passphrase" />
-              <button class="ghost-btn" type="button" data-toggle="passphraseConfirm">Show</button>
-            </div>
-            <p class="note">A passphrase is a 25th word mixed into your seed. It is <strong>never stored</strong> — you type it at every unlock, and the recovery phrase alone will not bring these funds back.</p>
-            <div class="peek hidden" id="setupPeek"></div>
           </div>
 
           <div class="err-inline" id="pwErr"></div>
