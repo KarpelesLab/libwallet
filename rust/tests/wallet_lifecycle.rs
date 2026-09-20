@@ -53,7 +53,7 @@ fn local_wallet_generate_encrypt_then_sign() {
 
 #[test]
 fn wrong_password_cannot_unlock_a_share() {
-    let shares = frost_keygen_local(2, 0).unwrap();
+    let shares = frost_keygen_local(3, 1).unwrap(); // 2-of-3
     let salt = [9u8; 16];
     let recipient = keystore::password_to_ed25519("the password", &salt).unwrap();
     let json = shares[0].1.to_json().unwrap();

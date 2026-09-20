@@ -148,7 +148,7 @@ fn dkls_import_key_produces_valid_group_pubkey() {
 
 #[test]
 fn frost_key_json_roundtrips() {
-    let shares = frost_keygen_local(2, 0).unwrap(); // 1-of-2 (single-sig-like)
+    let shares = frost_keygen_local(3, 1).unwrap(); // 2-of-3
     let json = shares[0].1.to_json().unwrap();
     let reloaded = libwallet::tss::Key::from_json(&json).unwrap();
     assert_eq!(reloaded.group_public_key, shares[0].1.group_public_key);

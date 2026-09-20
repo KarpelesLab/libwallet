@@ -3,11 +3,20 @@
 //! outscript, and signs it with the wallet's DKLs shares under the account's HD
 //! tweak. Each signature is self-verified as valid ECDSA under the derived key.
 
+use std::cell::RefCell;
+
 use num_bigint::{BigInt, Sign};
 use outscript::btctx::{BtcTx, BtcTxInput, BtcTxSign, Signer};
-use outscript::crypto::secp256k1::SecpPublicKey;
+use outscript::crypto::SignerError;
+use outscript::crypto::secp256k1::{DerSignature, SecpPublicKey};
 
 use crate::{Env, Error, Result};
+
+/// outscript 0.2 reports a structured `outscript::Error` where it used to hand
+/// back a `String`, so the conversion into our own error needs a step.
+fn oserr(e: outscript::Error) -> Error {
+    Error::Env(e.to_string())
+}
 
 /// Serialize a BIP-32 extended **public** key (`xpub…`) from a compressed
 /// secp256k1 pubkey + 32-byte chain code, as Go `Account.Xpub` does via
@@ -509,6 +518,18 @@ fn append_varint(buf: &mut Vec<u8>, n: u64) {
 struct TssSigner<'a> {
     pubkey: SecpPublicKey,
     sign_digest: Box<dyn Fn(&[u8; 32]) -> std::result::Result<(Vec<u8>, Vec<u8>), String> + 'a>,
+    /// Why this signer last refused. outscript's `SignerError` is a unit struct
+    /// carrying no message, so without this a threshold-verification failure
+    /// would reach the caller as a bare "signer failed" — see [`sign_failed`].
+    last_error: RefCell<Option<String>>,
+}
+
+impl<'a> TssSigner<'a> {
+    /// Record `msg` and refuse.
+    fn fail(&self, msg: String) -> SignerError {
+        *self.last_error.borrow_mut() = Some(msg);
+        SignerError
+    }
 }
 
 impl<'a> Signer for TssSigner<'a> {
@@ -516,15 +537,32 @@ impl<'a> Signer for TssSigner<'a> {
         SecpPublicKey::from_sec1(&self.pubkey.serialize_compressed()).ok()
     }
 
-    fn sign_ecdsa_der(&self, digest: &[u8; 32]) -> std::result::Result<Vec<u8>, String> {
-        let (r, s) = (self.sign_digest)(digest)?;
+    fn sign_ecdsa_der(&self, digest: &[u8; 32]) -> std::result::Result<DerSignature, SignerError> {
+        let (r, s) = (self.sign_digest)(digest).map_err(|e| self.fail(e))?;
         let r32 = pad32(&r);
         let s32 = pad32(&s);
         if !self.pubkey.verify(digest, &r32, &s32) {
-            return Err("threshold signature failed to verify under the derived key".into());
+            return Err(self.fail("threshold signature failed to verify under the derived key".into()));
         }
-        Ok(der_encode(&r32, &s32))
+        // outscript owns the DER encoding as of 0.2.5 (`der_encode` here was its
+        // twin). The trait's contract is a low-S signature; tsslib normalizes it
+        // for both DKLs and GG18 and every sign_digest closure re-applies
+        // normalize_low_s, so the low-S step is a no-op — it just keeps the
+        // guarantee enforced at the boundary rather than assumed.
+        DerSignature::from_rs_low_s(&r32, &s32).map_err(|e| self.fail(format!("DER encode: {e}")))
     }
+}
+
+/// Turn a `BtcTx::sign` failure back into the signer's own diagnosis: outscript
+/// reports every refusal as `Error::Signer`, so recover the message the
+/// [`TssSigner`] recorded and fall back to the generic mapping otherwise.
+fn sign_failed(signers: &[TssSigner], e: outscript::Error) -> Error {
+    for s in signers {
+        if let Some(msg) = s.last_error.borrow().clone() {
+            return Error::Env(msg);
+        }
+    }
+    oserr(e)
 }
 
 /// Build and DKLs-sign a transaction spending `utxos` to `outputs` (each
@@ -558,6 +596,7 @@ pub fn sign_transfer(
 
     let signer = TssSigner {
         pubkey,
+        last_error: RefCell::new(None),
         sign_digest: Box::new(move |digest: &[u8; 32]| {
             let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wallet_id, unlock, &tweak, digest)
                 .map_err(|e| e.to_string())?;
@@ -577,14 +616,14 @@ pub fn sign_transfer(
         });
     }
     for (address, sats) in outputs {
-        tx.add_output(address, *sats).map_err(Error::Env)?;
+        tx.add_output(address, *sats).map_err(oserr)?;
     }
 
     // The account's own P2WPKH scriptPubKey, derived once for self-spend inputs
     // (UTXOs with an empty script). Same construction as build_and_sign_auto.
     let p2wpkh_script = {
         let pk = SecpPublicKey::from_sec1(&pub_bytes).map_err(|e| Error::Env(format!("{e:?}")))?;
-        outscript::script::Script::new(pk).out("p2wpkh").map_err(Error::Env)?.bytes().to_vec()
+        outscript::script::Script::new(pk).out("p2wpkh").map_err(oserr)?.bytes().to_vec()
     };
     let signs: Vec<BtcTxSign> = utxos
         .iter()
@@ -596,7 +635,7 @@ pub fn sign_transfer(
             }
         })
         .collect();
-    tx.sign(&signs).map_err(Error::Env)?;
+    tx.sign(&signs).map_err(|e| sign_failed(std::slice::from_ref(&signer), e))?;
     Ok(tx.to_bytes())
 }
 
@@ -742,6 +781,7 @@ pub fn build_and_sign_from_utxos(
             let tweak = p.tweak;
             Ok(TssSigner {
                 pubkey,
+                last_error: RefCell::new(None),
                 sign_digest: Box::new(move |digest: &[u8; 32]| {
                     let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest)
                         .map_err(|e| e.to_string())?;
@@ -763,7 +803,7 @@ pub fn build_and_sign_from_utxos(
             witnesses: Vec::new(),
         });
     }
-    tx.add_output(recipient, want_sats).map_err(Error::Env)?;
+    tx.add_output(recipient, want_sats).map_err(oserr)?;
     if change > 546 {
         let change_addr = {
             let idx = next_change_index(all);
@@ -771,7 +811,7 @@ pub fn build_and_sign_from_utxos(
                 .map_err(|e| Error::Env(e.to_string()))?;
             hd_address(&child, chain_id)?
         };
-        tx.add_output(&change_addr, change).map_err(Error::Env)?;
+        tx.add_output(&change_addr, change).map_err(oserr)?;
     }
 
     // 5. Sign every input under its own key + scheme.
@@ -783,7 +823,7 @@ pub fn build_and_sign_from_utxos(
                 SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?,
             )
             .out(&p.scheme)
-            .map_err(Error::Env)?
+            .map_err(oserr)?
             .bytes()
             .to_vec();
             let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
@@ -791,7 +831,7 @@ pub fn build_and_sign_from_utxos(
             Ok(s)
         })
         .collect::<Result<_>>()?;
-    tx.sign(&signs).map_err(Error::Env)?;
+    tx.sign(&signs).map_err(|e| sign_failed(&signers, e))?;
     Ok(tx.to_bytes())
 }
 
@@ -810,7 +850,7 @@ pub fn sign_raw_tx(
     raw_tx: &[u8],
 ) -> Result<Vec<u8>> {
     use base64::Engine;
-    let mut btx = BtcTx::from_bytes(raw_tx).map_err(Error::Env)?;
+    let mut btx = BtcTx::from_bytes(raw_tx).map_err(oserr)?;
     if btx.inputs.is_empty() {
         return Err(Error::Env("tx has no inputs".into()));
     }
@@ -859,6 +899,7 @@ pub fn sign_raw_tx(
             let tweak = p.tweak;
             Ok(TssSigner {
                 pubkey,
+                last_error: RefCell::new(None),
                 sign_digest: Box::new(move |digest: &[u8; 32]| {
                     let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest).map_err(|e| e.to_string())?;
                     let (s, _) = normalize_low_s(s, v);
@@ -873,13 +914,13 @@ pub fn sign_raw_tx(
         .zip(&signers)
         .map(|(p, signer)| {
             let prev_script = outscript::script::Script::new(SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?)
-                .out(&p.scheme).map_err(Error::Env)?.bytes().to_vec();
+                .out(&p.scheme).map_err(oserr)?.bytes().to_vec();
             let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
             s.sighash = sighash;
             Ok(s)
         })
         .collect::<Result<_>>()?;
-    btx.sign(&signs).map_err(Error::Env)?;
+    btx.sign(&signs).map_err(|e| sign_failed(&signers, e))?;
     Ok(btx.to_bytes())
 }
 
@@ -911,35 +952,6 @@ fn normalize_low_s(s: Vec<u8>, v: u8) -> (Vec<u8>, u8) {
     } else {
         (s, v)
     }
-}
-
-/// DER-encode an ECDSA (r, s) pair.
-fn der_encode(r: &[u8; 32], s: &[u8; 32]) -> Vec<u8> {
-    let r = der_int(r);
-    let s = der_int(s);
-    let mut out = Vec::with_capacity(2 + r.len() + s.len());
-    out.push(0x30);
-    out.push((r.len() + s.len()) as u8);
-    out.extend_from_slice(&r);
-    out.extend_from_slice(&s);
-    out
-}
-
-fn der_int(b: &[u8]) -> Vec<u8> {
-    let mut i = 0;
-    while i + 1 < b.len() && b[i] == 0 {
-        i += 1;
-    }
-    let mag = &b[i..];
-    let mut v = vec![0x02];
-    if mag[0] & 0x80 != 0 {
-        v.push((mag.len() + 1) as u8);
-        v.push(0x00);
-    } else {
-        v.push(mag.len() as u8);
-    }
-    v.extend_from_slice(mag);
-    v
 }
 
 #[cfg(test)]

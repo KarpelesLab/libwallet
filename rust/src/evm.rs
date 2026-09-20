@@ -15,6 +15,12 @@ use purecrypto::hash::keccak256;
 use crate::models::{account, wallet};
 use crate::{Env, Error, Result};
 
+/// outscript 0.2 reports a structured `outscript::Error` where it used to hand
+/// back a `String`, so the conversion into our own error needs a step.
+fn oserr(e: outscript::Error) -> Error {
+    Error::Env(e.to_string())
+}
+
 /// An EVM transaction request (amounts as decimal-wei strings so the public API
 /// stays free of BigInt). `eip1559` selects the type-2 dynamic-fee format;
 /// otherwise a legacy EIP-155 tx is built. For legacy, `max_fee` is the gas
@@ -57,7 +63,7 @@ pub fn sign_tx(
         ..Default::default()
     };
 
-    let sign_bytes = tx.sign_bytes().map_err(Error::Env)?;
+    let sign_bytes = tx.sign_bytes().map_err(oserr)?;
     let digest = keccak256(&sign_bytes);
     let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
     let (s, v) = normalize_low_s(s, v);
@@ -72,7 +78,7 @@ pub fn sign_tx(
         BigInt::from(req.chain_id * 2 + 35 + v as u64)
     };
 
-    tx.to_bytes().map_err(Error::Env)
+    tx.to_bytes().map_err(oserr)
 }
 
 /// EIP-191 `personal_sign`: sign `message` under the EVM prefix
@@ -144,8 +150,8 @@ pub fn personal_sign_digest(message: &[u8]) -> [u8; 32] {
 
 /// Recover the 0x-address that signed a serialized EVM transaction.
 pub fn recover_sender(raw: &[u8]) -> Result<String> {
-    let tx = EvmTx::from_bytes(raw).map_err(Error::Env)?;
-    tx.sender_address().map_err(Error::Env)
+    let tx = EvmTx::from_bytes(raw).map_err(oserr)?;
+    tx.sender_address().map_err(oserr)
 }
 
 /// Recover the EIP-55 signer address from an EIP-191 personal-sign `message`

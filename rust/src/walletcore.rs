@@ -273,8 +273,8 @@ pub fn sign_evm_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String>
         tx_type: if eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy },
         ..Default::default()
     };
-    tx.sign(&key)?;
-    Ok(format!("0x{}", to_hex(&tx.to_bytes()?)))
+    tx.sign(&key).map_err(|e| e.to_string())?;
+    Ok(format!("0x{}", to_hex(&tx.to_bytes().map_err(|e| e.to_string())?)))
 }
 
 #[derive(Deserialize)]
@@ -359,10 +359,10 @@ pub fn sign_bitcoin_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<Str
             witnesses: Vec::new(),
         });
     }
-    tx.add_output(&p.to, p.amount)?;
+    tx.add_output(&p.to, p.amount).map_err(|e| e.to_string())?;
     let change = total - spend;
     if change > DUST_SATS {
-        tx.add_output(&p.change, change)?;
+        tx.add_output(&p.change, change).map_err(|e| e.to_string())?;
     }
 
     // One key signs every input; each carries the same reconstructed scriptPubKey.
@@ -371,7 +371,7 @@ pub fn sign_bitcoin_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<Str
         .iter()
         .map(|u| BtcTxSign::new(&key, "p2wpkh").amount(u.value).prev_script(script_pubkey.clone()))
         .collect();
-    tx.sign(&signs)?;
+    tx.sign(&signs).map_err(|e| e.to_string())?;
     Ok(to_hex(&tx.to_bytes()))
 }
 
