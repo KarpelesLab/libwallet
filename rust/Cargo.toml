@@ -28,12 +28,19 @@ num-bigint = "0.4"
 num-traits = "0.2"
 base64 = "0.22"
 bs58 = "0.5"
-# purecrypto ≥0.6.28 has a wasm32 OsRng backend (routes to a host-supplied
+# purecrypto has a wasm32 OsRng backend (routes to a host-supplied
 # `purecrypto.random_get` import — the web build wires it to
 # crypto.getRandomValues), so the default features (incl. tls/quic) compile for
 # wasm and no dependency patching is needed.
-purecrypto = "0.6.28"
-outscript = "0.1.2"
+#
+# 0.9 is the floor for the whole KLB stack: bottlers, tsslib, outscript, rsurl,
+# spotlib/spotproto and klbfw all require ^0.9, and purecrypto types cross those
+# crate boundaries (bottlers' PrivateKey holds purecrypto keys). A lower floor
+# here resolves a SECOND purecrypto into the graph and the mismatched types stop
+# those crates compiling — which is exactly what broke CI once the lockfile
+# stopped being committed.
+purecrypto = "0.9"
+outscript = "0.2.4"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # graphitesql (pure-Rust SQLite) is declared per-target: native uses the default
 # std + filesystem VFS; the browser drops `std` (default-features = false) so its
@@ -43,8 +50,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # keystore — pure Rust, compile for wasm (uuid gets its `js` rng below).
 xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
-bottlers = "0"
-tsslib = "0.2.6"
+bottlers = "0.1.4"
+tsslib = "0.2.8"
 # ethrpc-rs ≥0.3.1 dropped its direct tokio dep, so the chain registry
 # (ethrpc_rs::chains — pure data: names, explorers, native currency) builds on
 # wasm. default-features off drops the ABI helpers we don't use. This is what
@@ -54,16 +61,16 @@ ethrpc-rs = { version = "0.3.1", default-features = false }
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-graphitesql = "0.1.6"
+graphitesql = "0.1.7"
 # tokio-rt supplies rsurl::aio::TokioRuntime so the async `aio` client (used by
 # rpc::call_async) runs on native too — one code path shared with wasm, and
 # locally testable. The blocking `rsurl::Request` API stays available as before.
-rsurl = { version = "0.1.8", features = ["tokio-rt"] }
+rsurl = { version = "0.1.15", features = ["tokio-rt"] }
 # The FFI's sync worker threads drive the shared async handlers via crate::rt's
 # block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 tungstenite = "0.20"
-spotlib = "0.1.0"
+spotlib = "0.1.2"
 
 # Browser (wasm32) only — the wasm-bindgen boundary. Entropy comes from
 # purecrypto's wasm OsRng (host import), so no getrandom js backend is needed.
@@ -76,18 +83,18 @@ console_error_panic_hook = "0.1"
 js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
-graphitesql = { version = "0.1.6", default-features = false }
+graphitesql = { version = "0.1.7", default-features = false }
 uuid = { version = "1", features = ["js"] }
-rsurl = { version = "0.1.8", default-features = false, features = ["purecrypto-tls"] }
+rsurl = { version = "0.1.15", default-features = false, features = ["purecrypto-tls"] }
 # spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).
-spotlib = { version = "0.1.1", default-features = false }
+spotlib = { version = "0.1.2", default-features = false }
 # REST-over-Spot: klbfw's `spot` feature ships `{path,verb,params}` over an
 # authenticated spotlib connection to `@/p_api` and parses the KLB
 # `{result,data,error}` envelope — the browser's WalletSign/RemoteKey path, so
 # no HTTP Fetch, no CORS, no clientId (the Spot connection is the auth context).
-klbfw = { version = "0.1.4", default-features = false, features = ["spot"] }
+klbfw = { version = "0.1.5", default-features = false, features = ["spot"] }
 futures-channel = { version = "0.3", features = ["std"], default-features = false }
 futures-util = { version = "0.3", features = ["std"], default-features = false }
 gloo-timers = { version = "0.3", features = ["futures"] }

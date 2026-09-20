@@ -9,6 +9,12 @@ use outscript::crypto::secp256k1::SecpPublicKey;
 
 use crate::{Env, Error, Result};
 
+/// outscript 0.2 reports a structured `outscript::Error` where it used to hand
+/// back a `String`, so the conversion into our own error needs a step.
+fn oserr(e: outscript::Error) -> Error {
+    Error::Env(e.to_string())
+}
+
 /// Serialize a BIP-32 extended **public** key (`xpub…`) from a compressed
 /// secp256k1 pubkey + 32-byte chain code, as Go `Account.Xpub` does via
 /// `ecckd.FromPublicKey`: mainnet version, depth 0, zero parent fingerprint and
@@ -577,14 +583,14 @@ pub fn sign_transfer(
         });
     }
     for (address, sats) in outputs {
-        tx.add_output(address, *sats).map_err(Error::Env)?;
+        tx.add_output(address, *sats).map_err(oserr)?;
     }
 
     // The account's own P2WPKH scriptPubKey, derived once for self-spend inputs
     // (UTXOs with an empty script). Same construction as build_and_sign_auto.
     let p2wpkh_script = {
         let pk = SecpPublicKey::from_sec1(&pub_bytes).map_err(|e| Error::Env(format!("{e:?}")))?;
-        outscript::script::Script::new(pk).out("p2wpkh").map_err(Error::Env)?.bytes().to_vec()
+        outscript::script::Script::new(pk).out("p2wpkh").map_err(oserr)?.bytes().to_vec()
     };
     let signs: Vec<BtcTxSign> = utxos
         .iter()
@@ -596,7 +602,7 @@ pub fn sign_transfer(
             }
         })
         .collect();
-    tx.sign(&signs).map_err(Error::Env)?;
+    tx.sign(&signs).map_err(oserr)?;
     Ok(tx.to_bytes())
 }
 
@@ -763,7 +769,7 @@ pub fn build_and_sign_from_utxos(
             witnesses: Vec::new(),
         });
     }
-    tx.add_output(recipient, want_sats).map_err(Error::Env)?;
+    tx.add_output(recipient, want_sats).map_err(oserr)?;
     if change > 546 {
         let change_addr = {
             let idx = next_change_index(all);
@@ -771,7 +777,7 @@ pub fn build_and_sign_from_utxos(
                 .map_err(|e| Error::Env(e.to_string()))?;
             hd_address(&child, chain_id)?
         };
-        tx.add_output(&change_addr, change).map_err(Error::Env)?;
+        tx.add_output(&change_addr, change).map_err(oserr)?;
     }
 
     // 5. Sign every input under its own key + scheme.
@@ -783,7 +789,7 @@ pub fn build_and_sign_from_utxos(
                 SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?,
             )
             .out(&p.scheme)
-            .map_err(Error::Env)?
+            .map_err(oserr)?
             .bytes()
             .to_vec();
             let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
@@ -791,7 +797,7 @@ pub fn build_and_sign_from_utxos(
             Ok(s)
         })
         .collect::<Result<_>>()?;
-    tx.sign(&signs).map_err(Error::Env)?;
+    tx.sign(&signs).map_err(oserr)?;
     Ok(tx.to_bytes())
 }
 
@@ -810,7 +816,7 @@ pub fn sign_raw_tx(
     raw_tx: &[u8],
 ) -> Result<Vec<u8>> {
     use base64::Engine;
-    let mut btx = BtcTx::from_bytes(raw_tx).map_err(Error::Env)?;
+    let mut btx = BtcTx::from_bytes(raw_tx).map_err(oserr)?;
     if btx.inputs.is_empty() {
         return Err(Error::Env("tx has no inputs".into()));
     }
@@ -873,13 +879,13 @@ pub fn sign_raw_tx(
         .zip(&signers)
         .map(|(p, signer)| {
             let prev_script = outscript::script::Script::new(SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("{e:?}")))?)
-                .out(&p.scheme).map_err(Error::Env)?.bytes().to_vec();
+                .out(&p.scheme).map_err(oserr)?.bytes().to_vec();
             let mut s = BtcTxSign::new(signer, &p.scheme).amount(p.amount).prev_script(prev_script);
             s.sighash = sighash;
             Ok(s)
         })
         .collect::<Result<_>>()?;
-    btx.sign(&signs).map_err(Error::Env)?;
+    btx.sign(&signs).map_err(oserr)?;
     Ok(btx.to_bytes())
 }
 
