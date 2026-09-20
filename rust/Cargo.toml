@@ -58,7 +58,7 @@ tsslib = "0.2.8"
 # (ethrpc_rs::chains — pure data: names, explorers, native currency) builds on
 # wasm. default-features off drops the ABI helpers we don't use. This is what
 # lets EVM network metadata resolve the same way on native and in the browser.
-ethrpc-rs = { version = "0.3.1", default-features = false }
+ethrpc-rs = { version = "0.3.2", default-features = false }
 
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.
@@ -67,7 +67,12 @@ graphitesql = "0.1.7"
 # tokio-rt supplies rsurl::aio::TokioRuntime so the async `aio` client (used by
 # rpc::call_async) runs on native too — one code path shared with wasm, and
 # locally testable. The blocking `rsurl::Request` API stays available as before.
-rsurl = { version = "0.1.15", features = ["tokio-rt"] }
+# `json` is ours to declare: rpc.rs/rest.rs call Response::json() on the blocking
+# client. It used to arrive by feature unification through ethrpc-rs, which made
+# rsurl non-optional with features = ["json"]; ethrpc-rs 0.3.2 gates its RPC
+# client behind a feature (so `chains` builds on wasm), and with
+# default-features = false that unification is gone.
+rsurl = { version = "0.1.15", features = ["tokio-rt", "json"] }
 # The FFI's sync worker threads drive the shared async handlers via crate::rt's
 # block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
