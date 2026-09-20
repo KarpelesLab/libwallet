@@ -737,16 +737,45 @@ void main() {
       }
     });
 
-    test('mpurse_sendAsset still returns "not implemented"', () async {
-      try {
-        await client.web3.request(
-          origin: 'https://example.org',
-          query: {'method': 'mpurse_sendAsset', 'params': []},
-        );
-        fail('should have thrown');
-      } on LibwalletException catch (e) {
-        expect(e.message, contains('not implemented'));
+    // DIVERGENCE FROM GO: Go's handler returns "not implemented" and leaves
+    // Counterparty composition to the dApp. The Rust port composes the send
+    // server-side (rust/src/counterparty.rs), so the method validates its
+    // parameters instead. Composing needs a live Counterparty node, so what is
+    // exercised here is that parameter contract — every check below runs before
+    // any connected-account lookup or network call.
+    test('mpurse_sendAsset validates its parameters', () async {
+      Future<void> expectRejected(List<Object> params, Matcher message) async {
+        try {
+          await client.web3.request(
+            origin: 'https://example.org',
+            query: {'method': 'mpurse_sendAsset', 'params': params},
+          );
+          fail('should have thrown');
+        } on LibwalletException catch (e) {
+          expect(e.message, message);
+        }
       }
+
+      await expectRejected([], contains('requires one object param'));
+      await expectRejected(
+        [<String, Object>{}],
+        contains("'to' is required"),
+      );
+      await expectRejected(
+        [
+          <String, Object>{'to': 'MHyMkTGUmKgunuDZzYNSVgnFTbYhQCiKSv'},
+        ],
+        contains("'asset' is required"),
+      );
+      await expectRejected(
+        [
+          <String, Object>{
+            'to': 'MHyMkTGUmKgunuDZzYNSVgnFTbYhQCiKSv',
+            'asset': 'XMP',
+          },
+        ],
+        contains("'amount' must be a non-negative integer quantity"),
+      );
     });
 
     test('mpurse_signMessage surfaces a typed MpurseSignMessageRequest', () async {
