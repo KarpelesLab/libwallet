@@ -1,4 +1,13 @@
-## Unreleased
+## 0.5.0
+
+- **Native backend rewritten in Rust.** The bundled `liblibwallet` is now
+  built from the Rust crate under `rust/` instead of Go. It keeps the same C
+  ABI (`LibwalletInit`/`Request`/`SetEventCallback`/`ShowDebug`/`Destroy`/
+  `Free`), the same JSON request/response shapes, and the same on-disk
+  database and key-share formats, so no Dart-side changes are needed for
+  this part. Release assets keep their `liblibwallet-<os>-<arch>` names.
+- **BIP-39 passphrase support** for mnemonic wallets; the mnemonic and
+  passphrase are NFKD-normalized as the standard requires.
 
 - **BREAKING: `Web3Api.request` renames `url` → `origin`.** The parameter
   is now the authoritative `scheme://host` of the *requesting frame*, not
@@ -18,8 +27,6 @@
   sub-frame whose origin differs from the top document, so an embedded
   ad/tracker iframe cannot enumerate the connected account even if the
   host injects into all frames.
-## 0.4.78
-
 - **Registered ERC-20 tokens now appear in `Asset:list` with live
   balances.** EVM tokens added via `Token:create` / `Token:discoverToken`
   (or auto-registered by a swap) previously produced a Token row but never
