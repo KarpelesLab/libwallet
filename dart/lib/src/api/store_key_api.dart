@@ -17,6 +17,10 @@ class StoreKeyApi {
   }
 
   /// Derive a public key from a password and wallet key ID.
+  ///
+  /// The backend answers `{"Public_Key": ...}` (base64url PKIX). Throws if the
+  /// key is missing rather than returning '', which would silently fail every
+  /// recipient comparison and reject correct passwords.
   Future<String> derivePassword({
     required String password,
     required String walletKeyId,
@@ -26,7 +30,12 @@ class StoreKeyApi {
       'WalletKeyId': walletKeyId,
     });
     if (data is String) return data;
-    return (data as Map<String, dynamic>)['public'] as String? ?? '';
+    final map = data as Map<String, dynamic>;
+    final pub = map['Public_Key'] ?? map['public'];
+    if (pub is! String || pub.isEmpty) {
+      throw StateError('StoreKey:derivePassword returned no Public_Key');
+    }
+    return pub;
   }
 }
 

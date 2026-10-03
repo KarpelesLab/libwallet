@@ -186,6 +186,21 @@ void main() {
       expect(keypair.privateKey, isNotEmpty);
       expect(keypair.publicKey, isNotEmpty);
     });
+
+    test('derivePassword returns the Public_Key, deterministically', () async {
+      // Any wkey-prefixed xuid works as a salt; the key id is the only input
+      // besides the password, so the same pair must derive the same pubkey.
+      const wkeyId = 'wkey-aaaaaa-bbbb-cccc-dddd-eeeeeeee';
+      final a = await client.storeKeys.derivePassword(
+          password: 'passwordone', walletKeyId: wkeyId);
+      final b = await client.storeKeys.derivePassword(
+          password: 'passwordone', walletKeyId: wkeyId);
+      final other = await client.storeKeys.derivePassword(
+          password: 'passwordtwo', walletKeyId: wkeyId);
+      expect(a, isNotEmpty);
+      expect(a, equals(b));
+      expect(other, isNot(equals(a)));
+    });
   });
 
   // ── Name resolution (ENS / SNS) ───────────────────────────────────────
