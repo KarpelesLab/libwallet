@@ -62,6 +62,12 @@ tsslib = "0.2.8"
 # wasm. default-features off drops the ABI helpers we don't use. This is what
 # lets EVM network metadata resolve the same way on native and in the browser.
 ethrpc-rs = { version = "0.3.2", default-features = false }
+# Air-gapped signer interop (src/airgap): the UR registry types are CBOR with
+# tags and text (ciborium is already in-tree via bottlers), and BBQr's `Z`
+# parts are raw deflate within a 1 KiB window — compcol's deflate encoder can
+# cap the match distance to exactly that (already in-tree via purecrypto).
+ciborium = "0.2"
+compcol = { version = "0.6", default-features = false, features = ["deflate"] }
 
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.

@@ -65,6 +65,10 @@ pub mod eip712;
 pub mod solana_spl;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod bitcoin;
+// Air-gapped signer interop (BC-UR / BBQr payloads, PSBT + eth/sol sign
+// requests): pure codecs + DB, builds everywhere.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub mod airgap;
 // rpc: the blocking JSON-RPC `call` is native-only, but the async `call_async`
 // (rsurl::aio) is shared — the browser uses it for chain RPC, so the module is
 // compiled on wasm too (its blocking items are individually gated).
