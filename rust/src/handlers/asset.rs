@@ -8,10 +8,10 @@ use crate::Env;
 use super::{ApiError, ApiResult};
 
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
-    // Optional fiat conversion: when Currency is supplied, populate each asset's
+    // Optional fiat conversion: when Currency (or _convert) is supplied, populate each asset's
     // fiat_* fields from the quote table (best-effort — a missing quote leaves
     // them unset rather than failing the read).
-    let currency = params.get("Currency").and_then(Value::as_str);
+    let currency = super::fiat_currency(params);
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {
             Some(id) => match crate::models::asset::fetch(env, id).map_err(ApiError::internal)? {

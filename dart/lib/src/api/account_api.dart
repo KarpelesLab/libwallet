@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import '../client/transport.dart';
 import '../models/account.dart';
+import '../models/asset.dart';
 import '../models/signed_message.dart';
 
 /// Account CRUD and management.
@@ -132,6 +133,21 @@ class AccountApi {
     if (network != null) params['Network'] = network;
     final data = await _conn.request('Account/$id:nextAddress', 'POST', params);
     return NextAddress.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// The account's live native-currency asset (ETH/SOL/BTC/TRX) on the
+  /// current network: the balance fetched from the chain, keyed
+  /// `<type>.<chainId>.NATIVE`. Computed, not persisted, so [Asset.id] is
+  /// empty. Pass [convert] (USD, EUR, GBP, JPY) to populate the fiat fields.
+  ///
+  /// Errors when the current network's chain doesn't match the account type.
+  /// `assets.list()` already includes this entry for the current account;
+  /// use this to read one specific account's native balance.
+  Future<Asset> nativeAsset(String id, {String? convert}) async {
+    final data = await _conn.request('Account/$id:nativeAsset', 'POST', {
+      if (convert != null) 'Currency': convert,
+    });
+    return Asset.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
   /// Sign an arbitrary message with the account's TSS key.

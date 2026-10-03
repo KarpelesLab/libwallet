@@ -92,12 +92,40 @@ pub fn list(env: &Env) -> Result<Vec<Asset>> {
     let sql = format!(r#"SELECT {COLS} FROM "Asset" ORDER BY "Key" ASC"#);
     let rows = env.query(&sql, Vec::new())?;
     let mut assets: Vec<Asset> = rows.iter().map(|r| row_to_asset(r)).collect();
+    // The live native-currency asset (SOL/ETH/BTC/TRX) for the current
+    // account on the current network, first in the list like Go's
+    // `computeAssets`. Skipped if a persisted row already carries its key.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(native) = current_native_asset(env) {
+        if !assets.iter().any(|a| a.key == native.key) {
+            assets.insert(0, native);
+        }
+    }
     // Registered ERC-20 (TRC-20) tokens on the current EVM (Tron) network, with live balances
     // (port of the EVM leg Go `computeAssets` gained in wltbase/asset.go).
     // Appended after the persisted rows; best-effort, so a missing current
     // network/account or an unresolvable RPC simply contributes nothing.
     assets.extend(registered_erc20_assets(env));
     Ok(assets)
+}
+
+/// The current account's native asset on the current network (port of the
+/// native leg of Go `computeAssets`). Best-effort like the token leg: no
+/// current network/account, a chain mismatch, a watch-only "N/A" address or
+/// an RPC failure yields `None` rather than failing the whole list.
+#[cfg(not(target_arch = "wasm32"))]
+fn current_native_asset(env: &Env) -> Option<Asset> {
+    let net = crate::models::network::fetch(env, "@").ok()??;
+    let account_kind = match net.kind.as_str() {
+        "evm" => "ethereum",
+        other => other,
+    };
+    let account = crate::models::account::current(env).ok()??;
+    if account.kind != account_kind || account.address.is_empty() || account.address == "N/A" {
+        return None;
+    }
+    let rpc = net.resolved_rpc().ok()?;
+    net.native_asset(&rpc, &account.address).ok()
 }
 
 /// The current EVM network's registered ERC-20 tokens as live-balance assets

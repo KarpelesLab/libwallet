@@ -933,7 +933,7 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
     let rpc = resolve_rpc(env, params, &account.kind)?;
 
     let mut asset = net.native_asset(&rpc, &account.address).map_err(ApiError::internal)?;
-    if let Some(cur) = params.get("Currency").and_then(Value::as_str) {
+    if let Some(cur) = super::fiat_currency(params) {
         let _ = asset.convert_to(env, cur);
     }
     Ok(serde_json::to_value(asset).unwrap())

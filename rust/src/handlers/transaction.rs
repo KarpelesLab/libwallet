@@ -14,7 +14,7 @@ use super::{ApiError, ApiResult};
 
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
     // Optional best-effort fiat conversion when Currency is supplied.
-    let currency = params.get("Currency").and_then(Value::as_str);
+    let currency = super::fiat_currency(params);
     match verb {
         "GET" => match params.get("Id").and_then(Value::as_str) {
             Some(id) => match crate::models::transaction::fetch(env, id).map_err(ApiError::internal)? {

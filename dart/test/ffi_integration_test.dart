@@ -398,6 +398,16 @@ void main() {
         }
       });
 
+      test('Account nativeAsset', () async {
+        try {
+          final native = await client.accounts.nativeAsset(account.id);
+          expect(native.isNative, isTrue);
+          expect(native.key, endsWith('.NATIVE'));
+        } on LibwalletException {
+          // Same upstream-RPC tolerance as Asset:list (eth_getBalance).
+        }
+      });
+
       // ── Transaction ─────────────────────────────────────────────────
 
       test('Transaction list (empty for new account)', () async {

@@ -289,6 +289,23 @@ void main() {
           updated: DateTime.parse('2024-01-01T00:00:00Z'),
         );
 
+    test('fromJson accepts the empty timestamps of computed assets', () {
+      // Live (non-persisted) assets — Account:nativeAsset, the native and
+      // ERC-20 entries of Asset:list — serialize Created/Updated as "".
+      final a = Asset.fromJson({
+        'key': 'solana.mainnet.NATIVE',
+        'name': 'Solana',
+        'symbol': 'SOL',
+        'amount': {'v': '1500000000', 'e': 9, 'f': 1.5},
+        'type': 'fungible',
+        'network': 'solana.mainnet',
+        'Created': '',
+        'Updated': '',
+      });
+      expect(a.isNative, isTrue);
+      expect(a.symbol, 'SOL');
+    });
+
     test('isNative is true for the .NATIVE suffix', () {
       // The Asset.type field is "fungible" for BOTH native and tokens,
       // so hosts can't branch on it. The .NATIVE suffix on Asset.key

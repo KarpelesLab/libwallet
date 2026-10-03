@@ -128,8 +128,9 @@ fn evm_env_with_current(rpc: &str, owner: &str) -> Env {
 #[test]
 fn asset_list_includes_registered_erc20_with_live_balance() {
     let owner = "0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf";
-    // One eth_call balanceOf → 1_000_000 base units (1 USDC at 6 decimals).
-    let rpc = mock_rpc(vec![abi_uint(1_000_000)]);
+    // eth_getBalance for the native leg (1 ETH), then one eth_call balanceOf
+    // → 1_000_000 base units (1 USDC at 6 decimals).
+    let rpc = mock_rpc(vec![r#""0xde0b6b3a7640000""#.into(), abi_uint(1_000_000)]);
     let env = evm_env_with_current(&rpc, owner);
 
     let created = token::create(
@@ -159,13 +160,32 @@ fn asset_list_includes_registered_erc20_with_live_balance() {
     let amt = serde_json::to_value(&erc20.amount).unwrap();
     assert_eq!(amt["v"], "1000000");
     assert_eq!(amt["e"], 6);
+
+    // The live native asset leads the list (Go computeAssets order).
+    let native = &assets[0];
+    assert_eq!(native.key, "evm.1.NATIVE");
+    assert_eq!(native.symbol, "ETH");
+    assert_eq!(native.network, network::network_id_for("evm", "1"));
+    let amt = serde_json::to_value(&native.amount).unwrap();
+    assert_eq!(amt["v"], "1000000000000000000");
+    assert_eq!(amt["e"], 18);
+}
+
+#[test]
+fn asset_list_skips_native_when_rpc_fails() {
+    // No mock responses: every RPC call fails, so the list degrades to the
+    // persisted rows instead of erroring.
+    let rpc = mock_rpc(vec![]);
+    let env = evm_env_with_current(&rpc, "0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf");
+    let assets = asset::list(&env).unwrap();
+    assert!(assets.iter().all(|a| !a.is_native()), "{assets:?}");
 }
 
 #[test]
 fn asset_list_includes_zero_balance_token() {
     // A token the user explicitly registered shows as "0" rather than vanishing.
     let owner = "0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf";
-    let rpc = mock_rpc(vec![abi_uint(0)]);
+    let rpc = mock_rpc(vec![r#""0x0""#.into(), abi_uint(0)]);
     let env = evm_env_with_current(&rpc, owner);
 
     let created = token::create(

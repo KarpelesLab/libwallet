@@ -116,12 +116,14 @@ class Asset {
               ? FiatQuote.fromJson(json['FiatQuote'])
               : null,
       info: json['info'] as Map<String, dynamic>?,
-      created: DateTime.parse(
-          json['Created'] as String? ?? DateTime.now().toIso8601String()),
-      updated: DateTime.parse(
-          json['Updated'] as String? ?? DateTime.now().toIso8601String()),
+      // Computed (non-persisted) assets carry empty timestamps.
+      created: _parseTime(json['Created']),
+      updated: _parseTime(json['Updated']),
     );
   }
+
+  static DateTime _parseTime(Object? v) =>
+      (v is String ? DateTime.tryParse(v) : null) ?? DateTime.now();
 }
 
 /// Price quote data from CoinMarketCap or similar.

@@ -91,6 +91,16 @@ impl ApiError {
 
 pub type ApiResult = Result<Value, ApiError>;
 
+/// The fiat currency a read asked to be priced in: `Currency`, or `_convert`
+/// (the Go-era name the Dart client still sends).
+pub(crate) fn fiat_currency(params: &Value) -> Option<&str> {
+    params
+        .get("Currency")
+        .or_else(|| params.get("_convert"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+}
+
 /// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"/"tron"): the
 /// `RPC` param wins; else the current network `@` when it matches; else the
 /// seeded DEFAULT network for that chain (evm→1, solana→mainnet, bitcoin→
