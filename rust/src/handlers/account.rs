@@ -109,7 +109,18 @@ fn sign_tx_evm(env: &Env, account: &crate::models::account::Account, params: &Va
     let tx = params
         .get("Transaction")
         .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let req = evm_request_from_tx(tx)?;
 
+    let unlock = unlock_keys(params);
+    let raw = crate::evm::sign_tx(env, &account.id, &unlock, &req).map_err(ApiError::internal)?;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
+}
+
+/// The `Transaction` object of an EVM request ({nonce, gas, gasPrice |
+/// maxFeePerGas + maxPriorityFeePerGas, to, value, data, chainId, type}) as
+/// an `EvmTxRequest`. Shared by the TSS signer and the air-gap request builder.
+pub(crate) fn evm_request_from_tx(tx: &Value) -> Result<crate::evm::EvmTxRequest, ApiError> {
     let eip1559 =
         tx.get("type").and_then(Value::as_u64) == Some(2) || tx.get("maxFeePerGas").is_some();
     let max_fee = if eip1559 { tx.get("maxFeePerGas") } else { tx.get("gasPrice") }
@@ -130,11 +141,7 @@ fn sign_tx_evm(env: &Env, account: &crate::models::account::Account, params: &Va
         chain_id: tx.get("chainId").and_then(Value::as_u64).unwrap_or(1),
         eip1559,
     };
-
-    let unlock = unlock_keys(params);
-    let raw = crate::evm::sign_tx(env, &account.id, &unlock, &req).map_err(ApiError::internal)?;
-    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
+    Ok(req)
 }
 
 fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
@@ -253,7 +260,7 @@ fn u64_from_hex(s: &str) -> u64 {
 /// Autofill an EVM `Transaction` from the node (chainId, nonce, gas, EIP-1559
 /// fees) for any field the caller omitted, returning the params with a fully
 /// populated `Transaction`. Shared by estimate (preview) and send (sign).
-async fn evm_fill(account: &crate::models::account::Account, url: &str, params: &Value) -> Result<Value, ApiError> {
+pub(crate) async fn evm_fill(account: &crate::models::account::Account, url: &str, params: &Value) -> Result<Value, ApiError> {
     let mut p = params.clone();
     {
         let tx = p

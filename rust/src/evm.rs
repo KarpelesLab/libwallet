@@ -50,7 +50,20 @@ pub fn sign_tx(
         .ok_or_else(|| Error::Env("account not found".into()))?;
     let tweak = il_to_tweak(&acct.il)?;
 
-    let mut tx = EvmTx {
+    let tx = build_unsigned(req)?;
+    let sign_bytes = tx.sign_bytes().map_err(oserr)?;
+    let digest = keccak256(&sign_bytes);
+    let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, &digest)?;
+    let (s, v) = normalize_low_s(s, v);
+    attach_signature(tx, &r, &s, v)
+}
+
+/// The unsigned transaction for `req` (legacy EIP-155 or EIP-1559). Its
+/// `sign_bytes()` is the signing preimage: for legacy the EIP-155 RLP, for
+/// type-2 `0x02 || rlp(...)` — exactly what an external signer's
+/// `eth-sign-request` carries as sign-data.
+pub fn build_unsigned(req: &EvmTxRequest) -> Result<EvmTx> {
+    Ok(EvmTx {
         nonce: req.nonce,
         gas: req.gas,
         gas_fee_cap: parse_dec(&req.max_fee)?,
@@ -61,23 +74,21 @@ pub fn sign_tx(
         chain_id: req.chain_id,
         tx_type: if req.eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy },
         ..Default::default()
-    };
+    })
+}
 
-    let sign_bytes = tx.sign_bytes().map_err(oserr)?;
-    let digest = keccak256(&sign_bytes);
-    let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, &digest)?;
-    let (s, v) = normalize_low_s(s, v);
-
+/// Attach an ECDSA signature (`r`, low-`s`, recovery `parity` 0/1) to an
+/// unsigned tx and serialize it. Legacy EIP-155: v = chain_id*2 + 35 + parity;
+/// EIP-1559: v = parity.
+pub fn attach_signature(mut tx: EvmTx, r: &[u8], s: &[u8], parity: u8) -> Result<Vec<u8>> {
     tx.signed = true;
-    tx.r = BigInt::from_bytes_be(Sign::Plus, &r);
-    tx.s = BigInt::from_bytes_be(Sign::Plus, &s);
-    // Legacy EIP-155: v = chain_id*2 + 35 + parity. EIP-1559: v = parity.
-    tx.y = if req.eip1559 {
-        BigInt::from(v as u64)
+    tx.r = BigInt::from_bytes_be(Sign::Plus, r);
+    tx.s = BigInt::from_bytes_be(Sign::Plus, s);
+    tx.y = if tx.tx_type == EvmTxType::Eip1559 {
+        BigInt::from(parity as u64)
     } else {
-        BigInt::from(req.chain_id * 2 + 35 + v as u64)
+        BigInt::from(tx.chain_id * 2 + 35 + parity as u64)
     };
-
     tx.to_bytes().map_err(oserr)
 }
 

@@ -128,7 +128,7 @@ pub fn hd_address(pubkey_compressed: &[u8; 33], chain_id: &str) -> Result<String
 
 /// Encode `pubkey` as the address of a given `script_type` (e.g. "p2wpkh",
 /// "p2sh:p2wpkh", "p2pkh") on the outscript `network` tag.
-fn address_for(pubkey_compressed: &[u8; 33], script_type: &str, network: &str) -> Result<String> {
+pub(crate) fn address_for(pubkey_compressed: &[u8; 33], script_type: &str, network: &str) -> Result<String> {
     let pk = SecpPublicKey::from_sec1(pubkey_compressed)
         .map_err(|e| Error::Env(format!("bad pubkey: {e:?}")))?;
     outscript::script::Script::new(pk)
@@ -368,11 +368,11 @@ pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
 
 impl DiscoveredUtxo {
     /// The HD chain (0=receive, 1=change) from the UTXO's path.
-    fn chain(&self) -> u32 {
+    pub(crate) fn chain(&self) -> u32 {
         self.path.split('/').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
     }
     /// The HD child index from the UTXO's path (last segment).
-    fn child_index(&self) -> u32 {
+    pub(crate) fn child_index(&self) -> u32 {
         self.path.rsplit('/').next().and_then(|s| s.parse().ok()).unwrap_or(0)
     }
     /// Per-input virtual size (Go `bitcoinTxo.vsize`) for fee estimation.
@@ -387,13 +387,13 @@ impl DiscoveredUtxo {
 
 /// Estimated vsize of a tx with `ins` inputs and `outs` outputs (Go
 /// `estimateMixedTxVSize`): 11 overhead + 31/output + per-input vsize.
-fn estimate_vsize(ins: &[DiscoveredUtxo], outs: u64) -> u64 {
+pub(crate) fn estimate_vsize(ins: &[DiscoveredUtxo], outs: u64) -> u64 {
     11 + outs * 31 + ins.iter().map(|u| u.vsize()).sum::<u64>()
 }
 
 /// Greedy largest-first coin selection (Go `selectUTXOs`): add UTXOs until the
 /// total covers `want_sats` + the size-based fee. Returns (selected, total_in).
-fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64) -> Result<(Vec<DiscoveredUtxo>, u64)> {
+pub(crate) fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64) -> Result<(Vec<DiscoveredUtxo>, u64)> {
     let mut sorted = all.to_vec();
     sorted.sort_by(|a, b| b.amount_sats.cmp(&a.amount_sats)); // largest first
     let mut total: u64 = 0;
@@ -410,7 +410,7 @@ fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64) -> Result
 }
 
 /// The next change (m/1) index (Go `nextChangeIndex`): highest used m/1 index +1.
-fn next_change_index(all: &[DiscoveredUtxo]) -> u32 {
+pub(crate) fn next_change_index(all: &[DiscoveredUtxo]) -> u32 {
     let mut max: i64 = -1;
     for u in all {
         if u.chain() == 1 {
@@ -642,7 +642,7 @@ pub fn sign_transfer(
 
 /// Parse a `"<txid>:<vout>"` ref into (32-byte big-endian display txid, vout).
 /// outscript reverses to wire order itself, so we keep display order here.
-fn parse_txo_ref(ref_: &str) -> Result<([u8; 32], u32)> {
+pub(crate) fn parse_txo_ref(ref_: &str) -> Result<([u8; 32], u32)> {
     let (txid_hex, vout_s) = ref_
         .split_once(':')
         .ok_or_else(|| Error::Env(format!("invalid txo ref {ref_}")))?;

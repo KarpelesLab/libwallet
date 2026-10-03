@@ -256,7 +256,7 @@ fn seed_secp_node(seed: &[u8], path: &str) -> Result<([u8; 33], [u8; 32])> {
 
 /// Insert a freshly built account row and make it the current account (Go
 /// CreateAccount saves then setCurrent).
-fn persist(env: &Env, account: &Account) -> Result<()> {
+pub(crate) fn persist(env: &Env, account: &Account) -> Result<()> {
     let il_json = serde_json::to_string(&account.il).unwrap_or_else(|_| "null".into());
     env.exec(
         &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),

@@ -5,6 +5,7 @@
 // pub(crate): the wasm async dispatcher (dispatch::handle_request_async) calls
 // account::balance_impl / sign_and_send_impl directly, not through route().
 pub(crate) mod account;
+mod airgap;
 #[cfg(not(target_arch = "wasm32"))]
 mod asset;
 #[cfg(not(target_arch = "wasm32"))]
@@ -308,6 +309,21 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         #[cfg(not(target_arch = "wasm32"))]
         "Account:allAddresses" => account::all_addresses(&handle.env, params),
         "Account:addressFormats" => account::address_formats(&handle.env, params),
+        // Air-gapped signer interop (QR payload strings; see handlers/airgap.rs).
+        "Airgap:decoderNew" => airgap::decoder_new(&handle.env, params),
+        "Airgap:decoderFeed" => airgap::decoder_feed(&handle.env, params),
+        "Airgap:decoderStatus" => airgap::decoder_status(&handle.env, params),
+        "Airgap:decoderDelete" => airgap::decoder_delete(&handle.env, params),
+        "Airgap:decode" => airgap::decode(&handle.env, params),
+        "Airgap:encode" => airgap::encode(&handle.env, params),
+        "Airgap:parseKeys" => airgap::parse_keys(&handle.env, params),
+        "Airgap:importKeys" => airgap::import_keys(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Airgap:signRequest" => airgap::sign_request(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Airgap:submitSignature" => airgap::submit_signature(&handle.env, params),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Airgap:pending" => airgap::pending(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Network:testRPC" => network::test_rpc(&handle.env, params),

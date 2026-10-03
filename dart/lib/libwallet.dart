@@ -109,6 +109,16 @@ export 'src/models/swap_quote.dart'
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;
+export 'src/api/airgap_api.dart'
+    show
+        AirgapApi,
+        AirgapDecoder,
+        AirgapProgress,
+        AirgapKey,
+        AirgapExport,
+        AirgapImportResult,
+        AirgapSignRequest,
+        AirgapSignedTransaction;
 
 // Events
 export 'src/events/events.dart'

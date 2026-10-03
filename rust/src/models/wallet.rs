@@ -1105,7 +1105,7 @@ pub fn delete(env: &Env, id: &str) -> Result<()> {
     .map(|_| ())
 }
 
-fn persist(env: &Env, w: &Wallet) -> Result<()> {
+pub(crate) fn persist(env: &Env, w: &Wallet) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "Wallet" ({WALLET_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#),
         vec![
@@ -1551,6 +1551,9 @@ pub fn sign_ed25519_for_account(
     msg: &[u8],
 ) -> Result<Vec<u8>> {
     let wallet = fetch(env, &account.wallet)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.protocol == "airgap" {
+        return Err(Error::Env("this account's keys live on an air-gapped signer: use Airgap:signRequest / Airgap:submitSignature".into()));
+    }
     if wallet.curve == "ed25519" && wallet.is_mnemonic() {
         return sign_ed25519_mnemonic(&wallet, unlock, &account.path, &account.pubkey, msg);
     }
@@ -1783,6 +1786,9 @@ pub fn dkls_sign_digest_at(
     digest: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, u8)> {
     let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.protocol == "airgap" {
+        return Err(Error::Env("this account's keys live on an air-gapped signer: use Airgap:signRequest / Airgap:submitSignature".into()));
+    }
     // Legacy ecdsatss wallets (Protocol="gg18", or empty on a secp256k1 wallet)
     // sign through the GG18 path with the account's IL tweak (tsslib 0.2.5's
     // new_with_kdd). Modern secp wallets are Protocol="dkls23".

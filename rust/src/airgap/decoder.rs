@@ -61,8 +61,11 @@ pub enum Payload {
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
     pub kind: Option<Kind>,
-    /// Distinct frames received so far.
+    /// Payload fragments recovered so far (UR: decoded fragments, which lags
+    /// the frame count until fountain mixes resolve; BBQr: distinct parts).
     pub received: usize,
+    /// Distinct frames fed so far.
+    pub frames: usize,
     /// Frames needed (UR: fragment count — a fountain decoder may need a few
     /// more than this when early frames were missed; BBQr: part count). 0 until
     /// the first frame is parsed.
@@ -153,6 +156,7 @@ impl Context {
         let mut prog = Progress {
             kind: self.kind,
             received: frames.len(),
+            frames: frames.len(),
             expected: 0,
             percent: 0,
             complete: false,
@@ -171,7 +175,7 @@ impl Context {
                 prog.ur_type = dec.ur_type().map(str::to_owned);
                 // Single-part URs report 1/1; multi-part the fragment count.
                 prog.expected = dec.fragment_count().max(if frames.is_empty() { 0 } else { 1 });
-                prog.received = if dec.fragment_count() > 0 { dec.received_fragment_count().max(frames.len().min(dec.fragment_count())) } else { frames.len() };
+                prog.received = if dec.fragment_count() > 0 { dec.received_fragment_count().min(dec.fragment_count()) } else { frames.len() };
                 prog.complete = done;
                 prog.percent = pct(prog.received, prog.expected, done);
                 if done {
@@ -313,7 +317,7 @@ mod tests {
             }
             last = Some(prog);
             let dup = ctx.feed(p).unwrap();
-            assert_eq!(dup.received, ctx.frames.len());
+            assert_eq!(dup.frames, ctx.frames.len());
         }
         let last = last.unwrap();
         assert!(last.complete);

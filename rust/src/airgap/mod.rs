@@ -31,14 +31,17 @@ pub mod cbor;
 pub mod decoder;
 pub mod import;
 pub mod registry;
+// Sign requests need the blocking RPC client + runtime: native only.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sign;
 
 use crate::{Error, Result};
 
 /// How a payload is cut into QR frames.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Transport {
     /// BC-UR (`ur:…`), fountain-coded when it does not fit one frame.
+    #[default]
     Ur,
     /// BBQr (`B$…`), fixed numbered parts.
     Bbqr,
@@ -194,11 +197,11 @@ pub fn bbqr_join(parts: &[String]) -> Result<(outscript::bbqr::FileType, Vec<u8>
 }
 
 /// Hex helpers shared by the airgap modules.
-pub(crate) fn hex(b: &[u8]) -> String {
+pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-pub(crate) fn unhex(s: &str) -> Result<Vec<u8>> {
+pub fn unhex(s: &str) -> Result<Vec<u8>> {
     let s = s.trim();
     let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
     if s.len() % 2 != 0 {
