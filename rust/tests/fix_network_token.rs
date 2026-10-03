@@ -20,8 +20,9 @@ fn fresh_env_seeds_builtin_networks() {
     let env = env();
     let list = network::list(&env).unwrap();
 
-    // Exactly the Go MakeDefaultNetworks set: 5 EVM + 4 bitcoin-family + 1 solana.
-    assert_eq!(list.len(), 10, "expected 10 seeded networks");
+    // The Go MakeDefaultNetworks set (5 EVM + 4 bitcoin-family + 1 solana) plus
+    // Tron mainnet.
+    assert_eq!(list.len(), 11, "expected 11 seeded networks");
 
     // Ordered by Priority DESC, so the first entry is Ethereum mainnet (prio 100)
     // and it must carry a resolved name + currency symbol (Dart asserts both).
@@ -43,6 +44,7 @@ fn fresh_env_seeds_builtin_networks() {
         ("bitcoin", "litecoin"),
         ("bitcoin", "dogecoin"),
         ("solana", "mainnet"),
+        ("tron", "mainnet"),
     ];
     for (kind, chain) in expected {
         let id = network::network_id_for(kind, chain);
@@ -63,7 +65,7 @@ fn seed_is_idempotent() {
     network::init(&env).unwrap();
     network::make_default_networks(&env).unwrap();
     assert_eq!(network::list(&env).unwrap().len(), first);
-    assert_eq!(first, 10);
+    assert_eq!(first, 11);
 }
 
 #[test]

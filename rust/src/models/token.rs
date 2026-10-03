@@ -152,8 +152,8 @@ fn row_to_token(row: &[SqlValue]) -> Token {
 
 /// Validate + normalize a token (port of Go `token.validate`): the network must
 /// exist and support tokens, the address is normalized per chain (EVM checksum
-/// case / Solana base58 round-trip), the type defaults to the chain canonical
-/// ("erc20" / "spl-token"), display metadata is sanitised and decimals bounded.
+/// case / Solana base58 round-trip / Tron `T...`), the type defaults to the
+/// chain canonical ("erc20" / "spl-token" / "trc20"), display metadata is sanitised and decimals bounded.
 pub fn validate(env: &Env, t: &mut Token) -> Result<()> {
     if t.network.is_empty() {
         return Err(crate::Error::Env("Network is required".into()));
@@ -174,6 +174,12 @@ pub fn validate(env: &Env, t: &mut Token) -> Result<()> {
             t.address = normalize_solana_address(&t.address)?;
             if t.kind.is_empty() {
                 t.kind = "spl-token".to_owned();
+            }
+        }
+        "tron" => {
+            t.address = crate::tron::normalize_address(&t.address)?;
+            if t.kind.is_empty() {
+                t.kind = "trc20".to_owned();
             }
         }
         other => {

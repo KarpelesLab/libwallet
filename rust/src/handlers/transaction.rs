@@ -1,8 +1,7 @@
 //! Transaction object endpoints — read surface (fetch/list) plus the EVM
 //! `Transaction:signAndSend` path (build → RPC-backfill nonce/gas/fee → DKLs
-//! sign → broadcast → persist). Solana/Bitcoin signAndSend for the Transaction
-//! object follows; those chains are already fully covered by
-//! `Account:signAndSendTransaction`.
+//! sign → broadcast → persist), plus the Solana, Bitcoin and Tron paths, which
+//! reuse the same chain modules `Account:signAndSendTransaction` does.
 
 use base64::Engine as _;
 use num_bigint::BigInt;
@@ -94,7 +93,7 @@ pub fn validate(_env: &Env, params: &Value) -> ApiResult {
                 return Err(ApiError::new(400, "asset is required"));
             }
         }
-        "solana_transfer" | "solana_spl_transfer" => {
+        "solana_transfer" | "solana_spl_transfer" | "tron_transfer" => {
             if !amount_positive() {
                 return Err(ApiError::new(400, "invalid amount"));
             }
@@ -109,6 +108,17 @@ pub fn validate(_env: &Env, params: &Value) -> ApiResult {
             }
             if s("to").is_empty() {
                 return Err(ApiError::new(400, "recipient (To) is required for erc20_transfer"));
+            }
+        }
+        "trc20_transfer" => {
+            if !amount_positive() {
+                return Err(ApiError::new(400, "invalid amount"));
+            }
+            if s("asset").is_empty() {
+                return Err(ApiError::new(400, "asset is required for trc20_transfer"));
+            }
+            if s("to").is_empty() {
+                return Err(ApiError::new(400, "recipient (To) is required for trc20_transfer"));
             }
         }
         "bitcoin_transfer" => {
@@ -197,6 +207,7 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
         "evm" => {}
         "solana" => return sign_and_send_solana(env, tx, params, &account, &net, &rpc),
         "bitcoin" => return sign_and_send_bitcoin(env, tx, params, &account, &net, &rpc),
+        "tron" => return sign_and_send_tron(env, tx, params, &account, &net, &rpc),
         other => {
             return Err(ApiError::new(
                 501,
@@ -308,7 +319,7 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
         format: format.to_string(),
         raw: base64::engine::general_purpose::STANDARD.encode(&raw),
         hash: hash.clone(),
-        url: tx_url(&net, &hash),
+        url: net.transaction_url(&hash),
         network: net.id.clone(),
         amount: amount_significand(tx.get("amount")).map(|v| crate::Amount::new_raw(v, 0)),
         value: Some(crate::Amount::new_raw(value, 0)),
@@ -415,7 +426,7 @@ fn sign_and_send_solana(
         format: String::new(),
         raw: base64::engine::general_purpose::STANDARD.encode(&raw),
         hash: hash.clone(),
-        url: tx_url(net, &hash),
+        url: net.transaction_url(&hash),
         network: net.id.clone(),
         // On MAX, persist the resolved concrete lamports (Go rewrites tx.Amount
         // in place) rather than round-tripping the {"v":"MAX"} sentinel.
@@ -629,7 +640,7 @@ fn sign_and_send_solana_spl(
         format: String::new(),
         raw: base64::engine::general_purpose::STANDARD.encode(&raw),
         hash: hash.clone(),
-        url: tx_url(net, &hash),
+        url: net.transaction_url(&hash),
         network: net.id.clone(),
         // Persist the transferred amount in the token's own base units/decimals.
         amount: Some(crate::Amount::new_raw(amount_bi, token.decimals)),
@@ -710,9 +721,102 @@ fn sign_and_send_bitcoin(
         format: String::new(),
         raw: base64::engine::general_purpose::STANDARD.encode(&raw),
         hash: hash.clone(),
-        url: tx_url(net, &hash),
+        url: net.transaction_url(&hash),
         network: net.id.clone(),
         amount: tx_amount_field(tx.get("amount")),
+        value: None,
+        data: String::new(),
+        created: crate::now_rfc3339(),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
+    };
+    crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
+    Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// Tron `Transaction:signAndSend`: a TRX transfer, or a TRC-20 transfer when
+/// the asset resolves to a registered token (the same resolution as Solana's
+/// SPL routing). The amount is in base units (sun / token units); MAX resolves
+/// for TRX to the balance less the bandwidth and new-account fees. `feeLimit`
+/// (sun) caps a TRC-20 transfer's energy burn. Built and signed locally,
+/// anchored on the node's current block, broadcast via `broadcasthex`.
+fn sign_and_send_tron(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    net: &crate::models::network::Network,
+    rpc: &str,
+) -> ApiResult {
+    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
+    let asset = tx.get("asset").and_then(Value::as_str).unwrap_or("");
+    let to = tx
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "to is required"))?;
+    let amount_is_max = tx
+        .get("amount")
+        .and_then(|v| serde_json::from_value::<crate::Amount>(v.clone()).ok())
+        .map(|a| a.is_max())
+        .unwrap_or(false);
+
+    let token = resolve_token_asset(env, net, asset)?;
+    let (transfer, amount) = match &token {
+        Some(token) => {
+            if token.kind != "trc20" {
+                return Err(ApiError::new(400, format!("token type {} cannot be sent on tron", token.kind)));
+            }
+            if amount_is_max {
+                return Err(ApiError::new(400, "MAX amount is not supported for TRC-20 sends"));
+            }
+            let units = amount_significand(tx.get("amount")).ok_or_else(|| ApiError::new(400, "amount is required"))?;
+            let amount: u128 = units.to_string().parse().map_err(|_| ApiError::new(400, "amount out of range"))?;
+            let fee_limit = tx.get("feeLimit").and_then(Value::as_u64).unwrap_or(crate::tron::DEFAULT_TRC20_FEE_LIMIT);
+            let transfer = crate::tron::Transfer::Trc20 { contract: token.address.clone(), to: to.to_owned(), amount, fee_limit };
+            (transfer, crate::Amount::new_raw(units, token.decimals))
+        }
+        None => {
+            let sun = if amount_is_max {
+                let (_, _, max) = crate::tron::max_sendable(rpc, &account.address, to)
+                    .map_err(|e| ApiError::new(400, format!("cannot resolve MAX amount: {e}")))?;
+                if max == 0 {
+                    return Err(ApiError::new(400, "balance does not cover the transfer fees"));
+                }
+                max
+            } else {
+                let units = amount_significand(tx.get("amount")).ok_or_else(|| ApiError::new(400, "amount is required"))?;
+                bigint_to_u64(&units).ok_or_else(|| ApiError::new(400, "amount exceeds representable u64 sun"))?
+            };
+            let transfer = crate::tron::Transfer::Trx { to: to.to_owned(), amount: sun };
+            (transfer, crate::Amount::new_raw(BigInt::from(sun), crate::tron::TRX_DECIMALS))
+        }
+    };
+
+    let unlock = unlock_from_params(params)?;
+    let (hash, raw) = crate::tron::send(env, account, &unlock, rpc, &transfer).map_err(|e| ApiError::new(400, e.to_string()))?;
+
+    let record = crate::models::transaction::Transaction {
+        id: xuid::Xuid::new("tx").to_string(),
+        kind: typ.to_string(),
+        asset: asset.to_string(),
+        from: account.address.clone(),
+        to: to.to_string(),
+        gas: 0,
+        gas_price: String::new(),
+        max_fee_per_gas: String::new(),
+        max_priority_fee_per_gas: String::new(),
+        // Bandwidth/energy are settled by the network after the fact; the
+        // receipt (gettransactioninfobyid) carries the real fee.
+        fee: None,
+        nonce: 0,
+        format: String::new(),
+        raw: base64::engine::general_purpose::STANDARD.encode(&raw),
+        hash: hash.clone(),
+        url: net.transaction_url(&hash),
+        network: net.id.clone(),
+        amount: Some(amount),
         value: None,
         data: String::new(),
         created: crate::now_rfc3339(),
@@ -798,16 +902,6 @@ fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
         .ok()
         .and_then(|v| <[u8; 32]>::try_from(v).ok())
         .ok_or_else(|| ApiError::new(400, format!("bad base58 32-byte value: {s}")))
-}
-
-/// The block-explorer URL for a tx hash (Go `Network.TransactionUrl`): append
-/// `/tx/<hash>` to the resolved explorer, empty when there is none.
-fn tx_url(net: &crate::models::network::Network, hash: &str) -> String {
-    let base = net.resolved_block_explorer();
-    if base.is_empty() {
-        return String::new();
-    }
-    format!("{}/tx/{hash}", base.trim_end_matches('/'))
 }
 
 /// The gas fee (gas × price) as a wei Amount, best-effort.

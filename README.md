@@ -21,15 +21,16 @@ A number of features are still under development and this library is expected to
 | Ethereum & EVM chains | evm | secp256k1 (ECDSA) | Balance, transfers, NFTs, Web3 |
 | Bitcoin, Litecoin, Dogecoin, etc. | bitcoin | secp256k1 (ECDSA) | Balance, address derivation |
 | Solana | solana | ed25519 (EdDSA) | Balance, SOL transfers, SPL tokens, NFTs |
+| Tron | tron | secp256k1 (ECDSA) | Balance, TRX transfers, TRC-20 tokens |
 
 EVM chains include Ethereum, Polygon, BNB Chain, and any EVM-compatible network. Bitcoin-type chains include Bitcoin, Bitcoin Cash, Litecoin, Dogecoin, Monacoin, Namecoin, and Electra Protocol.
 
 ## Features
 
-- **Multi-chain Support**: EVM chains, Bitcoin-family chains, and Solana
+- **Multi-chain Support**: EVM chains, Bitcoin-family chains, Solana, and Tron
 - **Secure Key Management**: TSS (Threshold Signature Scheme) with support for both ECDSA (secp256k1) and EdDSA (ed25519) curves
 - **Transaction Handling**: Create, sign and broadcast transactions across supported networks
-- **Asset Management**: Track native balances, ERC-20/SPL tokens, and NFTs
+- **Asset Management**: Track native balances, ERC-20/SPL/TRC-20 tokens, and NFTs
 - **Account Management**: HD address derivation for ECDSA chains, direct pubkey addressing for Ed25519 chains
 - **Web3 Integration**: Ethereum JSON-RPC provider for decentralized applications
 - **Price Quotes**: Currency conversion for displaying asset values in fiat

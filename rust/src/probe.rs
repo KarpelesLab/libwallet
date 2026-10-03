@@ -17,7 +17,7 @@ pub struct Candidate {
     pub curve: &'static str,            // "secp256k1" | "ed25519"
     pub path: &'static str,             // BIP32 path ("" = ed25519 Sollet)
     pub address_chain: &'static str,    // bitcoin::hd_address chain id (secp/bitcoin)
-    pub network_type: &'static str,     // "evm" | "bitcoin" | "solana"
+    pub network_type: &'static str,     // "evm" | "bitcoin" | "solana" | "tron"
     pub network_chain_id: &'static str, // for the probe network
 }
 
@@ -31,6 +31,7 @@ pub fn default_candidates() -> Vec<Candidate> {
         Candidate { network: "ethereum", variant: "standard", curve: "secp256k1", path: "m/44'/60'/0'/0/0", address_chain: "", network_type: "evm", network_chain_id: "1" },
         Candidate { network: "solana", variant: "sollet (seed[:32])", curve: "ed25519", path: "", address_chain: "", network_type: "solana", network_chain_id: "mainnet" },
         Candidate { network: "solana", variant: "phantom (m/44'/501'/0'/0')", curve: "ed25519", path: "m/44'/501'/0'/0'", address_chain: "", network_type: "solana", network_chain_id: "mainnet" },
+        Candidate { network: "tron", variant: "standard", curve: "secp256k1", path: "m/44'/195'/0'/0/0", address_chain: "", network_type: "tron", network_chain_id: "mainnet" },
     ]
 }
 
@@ -41,6 +42,7 @@ pub fn derive_address(seed: &[u8], c: &Candidate) -> Result<(String, String)> {
     let address = match (c.curve, c.network_type) {
         ("ed25519", _) => bs58::encode(&pubkey).into_string(),
         ("secp256k1", "evm") => crate::hdderive::evm_address(&pubkey).map_err(|e| Error::Env(e.to_string()))?,
+        ("secp256k1", "tron") => crate::hdderive::tron_address(&pubkey).map_err(|e| Error::Env(e.to_string()))?,
         ("secp256k1", "bitcoin") => {
             let p33: [u8; 33] = pubkey.clone().try_into().map_err(|_| Error::Env("secp pubkey not 33 bytes".into()))?;
             crate::bitcoin::hd_address(&p33, c.address_chain)?
@@ -53,7 +55,8 @@ pub fn derive_address(seed: &[u8], c: &Candidate) -> Result<(String, String)> {
 
 /// Probe a candidate's chain for activity, returning `(raw_balance, has_activity)`.
 /// EVM: eth_getBalance (wei). Solana: getBalance (lamports). Bitcoin: presence
-/// of any `modchain_assets` entry.
+/// of any `modchain_assets` entry. Tron: getaccount (sun); an account that
+/// exists counts as activity even when emptied.
 pub fn probe_balance(rpc: &str, c: &Candidate, address: &str) -> Result<(String, bool)> {
     match c.network_type {
         "evm" => {
@@ -72,6 +75,10 @@ pub fn probe_balance(rpc: &str, c: &Candidate, address: &str) -> Result<(String,
             let res = crate::rpc::call(rpc, "modchain_assets", serde_json::json!([address]))?;
             let empty = res.is_null() || res.as_array().map(|a| a.is_empty()).unwrap_or(false) || res.as_object().map(|o| o.is_empty()).unwrap_or(false);
             Ok((res.to_string(), !empty))
+        }
+        "tron" => {
+            let res = crate::tron::post(rpc, "getaccount", &crate::tron::account_body(address))?;
+            Ok((crate::tron::parse_balance(&res).to_string(), crate::tron::account_exists(&res)))
         }
         other => Err(Error::Env(format!("unsupported probe network type {other}"))),
     }
@@ -126,6 +133,15 @@ mod tests {
         let (_pub, addr) = derive_address(&seed, &eth).unwrap();
         // Well-known BIP44 m/44'/60'/0'/0/0 address for this mnemonic.
         assert_eq!(addr, "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
+    }
+
+    #[test]
+    fn tron_candidate_matches_tronlink_vector() {
+        let seed = crate::bip39::mnemonic_to_seed(MNEMONIC, "");
+        let tron = default_candidates().into_iter().find(|c| c.network == "tron").unwrap();
+        let (_pub, addr) = derive_address(&seed, &tron).unwrap();
+        // TronLink's m/44'/195'/0'/0/0 address for this mnemonic.
+        assert_eq!(addr, "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH");
     }
 
     #[test]

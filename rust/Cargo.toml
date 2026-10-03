@@ -39,13 +39,14 @@ bs58 = "0.5"
 # here resolves a SECOND purecrypto into the graph and the mismatched types stop
 # those crates compiling — which is exactly what broke CI once the lockfile
 # stopped being committed.
-purecrypto = "0.9.7"
+purecrypto = "0.9.8"
 # BIP-39 requires the mnemonic AND the passphrase to be UTF-8 NFKD before they
 # reach PBKDF2. Pure Rust, builds on wasm.
 unicode-normalization = "0.1.25"
 # 0.2.5 adds DerSignature::from_rs_low_s, which is how an external signer
-# (our TSS committee) hands back an ECDSA signature.
-outscript = "0.2.5"
+# (our TSS committee) hands back an ECDSA signature; 0.2.6 adds Tron addresses
+# and transactions (tron / trontx).
+outscript = "0.2.6"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # graphitesql (pure-Rust SQLite) is declared per-target: native uses the default
 # std + filesystem VFS; the browser drops `std` (default-features = false) so its

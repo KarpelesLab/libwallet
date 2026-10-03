@@ -151,6 +151,26 @@ fn sign_digest_rsv(
     Ok(sig)
 }
 
+/// DKLs-sign a 32-byte `digest` with `acct`'s secp256k1 key (its HD path and IL
+/// tweak applied) into the 65-byte recoverable `r || s || v` form, low-S, with
+/// `v` the raw recovery id (0/1). The chain-neutral core that Tron signs its
+/// transaction ids with; EVM callers add their own `v` offset.
+pub fn sign_digest_recoverable(
+    env: &Env,
+    acct: &account::Account,
+    unlock: &[(String, String)],
+    digest: &[u8; 32],
+) -> Result<[u8; 65]> {
+    let tweak = il_to_tweak(&acct.il)?;
+    let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, digest)?;
+    let (s, v) = normalize_low_s(s, v);
+    let mut sig = [0u8; 65];
+    sig[..32].copy_from_slice(&pad32(&r));
+    sig[32..64].copy_from_slice(&pad32(&s));
+    sig[64] = v;
+    Ok(sig)
+}
+
 /// The EIP-191 keccak digest for `message` — the hash `personal_sign` signs and
 /// ecrecover uses to recover the signer.
 pub fn personal_sign_digest(message: &[u8]) -> [u8; 32] {

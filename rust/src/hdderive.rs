@@ -381,6 +381,18 @@ pub fn evm_address(compressed_pub: &[u8]) -> Result<String, DeriveError> {
     eip55(&hash[12..32])
 }
 
+/// The `T...` Tron address for a compressed secp256k1 pubkey: the same
+/// keccak-256 account hash as Ethereum, behind the `0x41` prefix, base58check.
+pub fn tron_address(compressed_pub: &[u8]) -> Result<String, DeriveError> {
+    let point = AffinePoint::from_sec1(compressed_pub)
+        .map_err(|e| DeriveError(format!("bad pubkey: {e:?}")))?;
+    let uncompressed = point.to_sec1_uncompressed();
+    let hash = keccak256(&uncompressed[1..65]);
+    let mut raw = [outscript::tron::ADDRESS_PREFIX; 21];
+    raw[1..].copy_from_slice(&hash[12..32]);
+    outscript::tron::address_to_string(&raw).map_err(|e| DeriveError(e.to_string()))
+}
+
 /// EIP-55 checksum-encode a 20-byte address.
 fn eip55(addr: &[u8]) -> Result<String, DeriveError> {
     if addr.len() != 20 {

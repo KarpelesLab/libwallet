@@ -2,6 +2,7 @@ enum NetworkType {
   evm,
   bitcoin,
   solana,
+  tron,
   unknown;
 
   static NetworkType fromString(String s) {
@@ -12,6 +13,8 @@ enum NetworkType {
         return NetworkType.bitcoin;
       case 'solana':
         return NetworkType.solana;
+      case 'tron':
+        return NetworkType.tron;
       default:
         return NetworkType.unknown;
     }
@@ -23,7 +26,8 @@ class Network {
   /// Unique identifier for this network.
   final String id;
 
-  /// Network family: [NetworkType.evm], [NetworkType.bitcoin], or [NetworkType.solana].
+  /// Network family: [NetworkType.evm], [NetworkType.bitcoin],
+  /// [NetworkType.solana], or [NetworkType.tron].
   final NetworkType type;
 
   /// Chain ID (e.g. `"1"` for Ethereum mainnet).
@@ -150,8 +154,14 @@ class Network {
   /// On Solana devnet/testnet the result carries `?cluster=<chainId>`
   /// — required to make explorer.solana.com / solscan.io / solana.fm
   /// query the right cluster. Mainnet stays bare.
+  ///
+  /// On Tron the explorer is tronscan, whose transaction route is
+  /// `/transaction/<id>` rather than `/tx/<id>`.
   String transactionUrl(String txHash) {
     if (resolvedBlockExplorer.isEmpty) return '';
+    if (type == NetworkType.tron) {
+      return '$resolvedBlockExplorer/transaction/$txHash';
+    }
     return '$resolvedBlockExplorer/tx/$txHash${_solanaClusterSuffix()}';
   }
 

@@ -12,7 +12,7 @@ class Account {
   /// Account index used in key derivation.
   final int index;
 
-  /// Blockchain type: `ethereum`, `bitcoin`, or `solana`.
+  /// Blockchain type: `ethereum`, `bitcoin`, `solana`, or `tron`.
   final String type;
 
   /// BIP-44 derivation path (e.g. `m/44'/60'/0'/0/0`).

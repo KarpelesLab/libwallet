@@ -91,7 +91,7 @@ impl ApiError {
 
 pub type ApiResult = Result<Value, ApiError>;
 
-/// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"): the
+/// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"/"tron"): the
 /// `RPC` param wins; else the current network `@` when it matches; else the
 /// seeded DEFAULT network for that chain (evm→1, solana→mainnet, bitcoin→
 /// bitcoin). The endpoint always comes from `Network::resolved_rpc`, never a
@@ -111,6 +111,7 @@ pub(crate) fn resolve_rpc_for_kind(env: &Env, params: &Value, kind: &str) -> Res
                 "evm" => "1",
                 "solana" => "mainnet",
                 "bitcoin" => "bitcoin",
+                "tron" => "mainnet",
                 other => return Err(ApiError::new(400, format!("no default network for {other}"))),
             };
             crate::models::network::fetch(env, &format!("{kind}.{default_chain}"))

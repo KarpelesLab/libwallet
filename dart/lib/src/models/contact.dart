@@ -9,7 +9,7 @@ class Contact {
   /// Blockchain address of the contact.
   final String address;
 
-  /// Address type: `ethereum`, `bitcoin`, or `solana`.
+  /// Address type: `ethereum`, `bitcoin`, `solana`, or `tron`.
   final String type;
 
   /// Contact flags (e.g. `verified`, `favorite`).

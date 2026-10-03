@@ -125,6 +125,7 @@ pub fn discover_token(env: &Env, params: &Value) -> ApiResult {
     match net.kind.as_str() {
         "evm" => discover_erc20(&rpc, address),
         "solana" => discover_spl(&rpc, address),
+        "tron" => discover_trc20(&rpc, address),
         other => Err(ApiError::new(400, format!("token discovery is not supported on {other} networks"))),
     }
 }
@@ -158,6 +159,36 @@ fn discover_erc20(rpc: &str, address: &str) -> ApiResult {
     let mut out = serde_json::json!({
         "name": name, "symbol": symbol, "decimals": decimals,
         "address": address, "type": "erc20",
+    });
+    if let Some(ts) = total_supply {
+        out["total_supply"] = Value::String(ts);
+    }
+    Ok(out)
+}
+
+/// TRC-20 discovery: the ERC-20 views, as constant calls over java-tron's
+/// HTTP API.
+#[cfg(not(target_arch = "wasm32"))]
+fn discover_trc20(rpc: &str, address: &str) -> ApiResult {
+    let address = crate::tron::normalize_address(address).map_err(|e| ApiError::new(400, e.to_string()))?;
+    let view = |sel: &str| crate::tron::trc20_view(rpc, &address, sel);
+    let name = view("name()").map(|r| sanitize_text(&decode_abi_string(&r), MAX_TOKEN_NAME_LEN)).unwrap_or_default();
+    let symbol = view("symbol()").map(|r| sanitize_text(&decode_abi_string(&r), MAX_TOKEN_SYMBOL_LEN)).unwrap_or_default();
+    let mut decimals = 0i64;
+    if let Ok(r) = view("decimals()") {
+        let d = crate::tron::parse_uint(&r);
+        decimals = i64::try_from(&d)
+            .ok()
+            .filter(|d| (0..=MAX_TOKEN_DECIMALS).contains(d))
+            .ok_or_else(|| ApiError::new(422, format!("address {address} reports an invalid decimals value {d}")))?;
+    }
+    let total_supply = view("totalSupply()").map(|r| crate::tron::parse_uint(&r).to_string()).ok();
+    if name.is_empty() && symbol.is_empty() {
+        return Err(ApiError::new(422, format!("address {address} does not appear to be a TRC-20 token contract")));
+    }
+    let mut out = serde_json::json!({
+        "name": name, "symbol": symbol, "decimals": decimals,
+        "address": address, "type": "trc20",
     });
     if let Some(ts) = total_supply {
         out["total_supply"] = Value::String(ts);
@@ -207,7 +238,13 @@ fn eth_call_string(rpc: &str, to: &str, selector: &str) -> Result<String, ApiErr
         return Err(ApiError::new(502, "empty response"));
     }
     let raw = decode_hex_bytes(hex).ok_or_else(|| ApiError::new(502, "bad hex in eth_call result"))?;
+    Ok(decode_abi_string(&raw))
+}
 
+/// Decode an ABI-encoded string return value (ERC-20 / TRC-20 `name()` /
+/// `symbol()`). The offset/length words are attacker-controlled, so every
+/// bound is range-checked before slicing.
+fn decode_abi_string(raw: &[u8]) -> String {
     // ABI string: [offset(32)][length(32)][bytes]. Accept the canonical
     // offset==32 layout with a bounded length; otherwise fall back to raw.
     if raw.len() >= 64 {
@@ -217,15 +254,15 @@ fn eth_call_string(rpc: &str, to: &str, selector: &str) -> Result<String, ApiErr
                 let end = 64usize.checked_add(len as usize);
                 if let Some(end) = end {
                     if end <= raw.len() {
-                        return Ok(String::from_utf8_lossy(&raw[64..end]).trim().to_owned());
+                        return String::from_utf8_lossy(&raw[64..end]).trim().to_owned();
                     }
                 }
             }
         }
     }
     // Fallback: raw bytes with control chars stripped.
-    let s: String = String::from_utf8_lossy(&raw).chars().filter(|c| !c.is_control()).collect();
-    Ok(s.trim().to_owned())
+    let s: String = String::from_utf8_lossy(raw).chars().filter(|c| !c.is_control()).collect();
+    s.trim().to_owned()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

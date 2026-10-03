@@ -74,6 +74,7 @@ fn network_from_params(params: &Value) -> Network {
 ///   evm     : {RPC, Type, ChainId, Name?, CurrencySymbol?}
 ///   solana  : {RPC, Type, SolanaVersion, SolanaCluster}
 ///   bitcoin : {RPC, Type, Chain, Blocks}
+///   tron    : {RPC, Type, Blocks} (a java-tron HTTP API base)
 #[cfg(not(target_arch = "wasm32"))]
 pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
     let url = params
@@ -90,9 +91,10 @@ pub fn test_rpc(_env: &Env, params: &Value) -> ApiResult {
         "evm" => test_rpc_evm(url),
         "solana" => test_rpc_solana(url),
         "bitcoin" => test_rpc_bitcoin(url),
+        "tron" => test_rpc_tron(url),
         other => Err(ApiError::new(
             400,
-            format!("unsupported Type {other:?} (want evm | solana | bitcoin)"),
+            format!("unsupported Type {other:?} (want evm | solana | bitcoin | tron)"),
         )),
     }
 }
@@ -143,6 +145,14 @@ fn test_rpc_solana(url: &str) -> ApiResult {
         "SolanaVersion": core,
         "SolanaCluster": cluster,
     }))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn test_rpc_tron(url: &str) -> ApiResult {
+    let block = crate::tron::post(url, "getnowblock", &serde_json::json!({}))
+        .map_err(|e| ApiError::new(502, format!("getnowblock: {e}")))?;
+    let head = crate::tron::parse_ref_block(&block).map_err(|e| ApiError::new(502, e.to_string()))?;
+    Ok(serde_json::json!({ "RPC": url, "Type": "tron", "Blocks": head.height }))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -2,8 +2,8 @@
 //!
 //! Fetch/list plus create for the ed25519/Solana path: a Solana account is the
 //! wallet's group public key used directly (path "m", no HD), base58-encoded
-//! as the address. secp256k1 (ethereum/bitcoin) HD derivation via outscript
-//! follows next.
+//! as the address. secp256k1 (ethereum/bitcoin/tron) accounts derive by BIP-32
+//! from the wallet's group key.
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -169,7 +169,8 @@ pub fn create_with_unlock(
 /// for mnemonic-keep wallets (hardened steps are fine — we hold the seed):
 /// ethereum `m/44'/60'/0'/0/<i>` (BIP-44 / MetaMask), bitcoin `m/84'/0'/<i>'`
 /// (the BIP-84 account root; receive addresses are `m/0/<j>` below it, so
-/// index 0 shows `m/84'/0'/0'/0/0`), solana `m/44'/501'/<i>'/0'` (Phantom).
+/// index 0 shows `m/84'/0'/0'/0/0`), solana `m/44'/501'/<i>'/0'` (Phantom),
+/// tron `m/44'/195'/0'/0/<i>` (TronLink).
 pub fn mnemonic_account_path(typ: &str, index: i64) -> Option<String> {
     if index < 0 {
         return None;
@@ -178,6 +179,7 @@ pub fn mnemonic_account_path(typ: &str, index: i64) -> Option<String> {
         "ethereum" => format!("m/44'/60'/0'/0/{index}"),
         "bitcoin" => format!("m/84'/0'/{index}'"),
         "solana" => format!("m/44'/501'/{index}'/0'"),
+        "tron" => format!("m/44'/195'/0'/0/{index}"),
         _ => return None,
     })
 }
@@ -203,10 +205,10 @@ fn create_from_seed(env: &Env, wallet: &crate::models::wallet::Wallet, name: &st
             let addr = bs58::encode(&pk).into_string();
             (b64url(&pk), wallet.chaincode.clone(), addr.clone(), format!("solana:{addr}"))
         }
-        "ethereum" => {
+        "ethereum" | "tron" => {
             let (pk, cc) = seed_secp_node(seed, &path)?;
-            let addr = crate::hdderive::evm_address(&pk).map_err(|e| Error::Env(e.to_string()))?;
-            (b64url(&pk), b64url(&cc), addr.clone(), format!("ethereum:{addr}"))
+            let addr = account_address(typ, &pk)?;
+            (b64url(&pk), b64url(&cc), addr.clone(), format!("{typ}:{addr}"))
         }
         "bitcoin" => {
             // The BIP-84 account root; the display address is its first receive
@@ -241,6 +243,16 @@ fn create_from_seed(env: &Env, wallet: &crate::models::wallet::Wallet, name: &st
     };
     persist(env, &account)?;
     Ok(account)
+}
+
+/// The address of a compressed secp256k1 key for an `ethereum` (EIP-55) or
+/// `tron` (`T...`) account.
+fn account_address(typ: &str, pubkey: &[u8]) -> Result<String> {
+    let addr = match typ {
+        "tron" => crate::hdderive::tron_address(pubkey),
+        _ => crate::hdderive::evm_address(pubkey),
+    };
+    addr.map_err(|e| Error::Env(e.to_string()))
 }
 
 /// The compressed secp256k1 pubkey and chain code of the BIP-32 node at `path`
@@ -294,6 +306,7 @@ pub fn default_path(typ: &str, index: i64) -> Option<String> {
         "ethereum" => 60,
         "bitcoin" => 0,
         "solana" => 501,
+        "tron" => 195,
         _ => return None, // create_impl rejects the type
     };
     Some(format!("m/44/{coin}/0/{index}"))
@@ -362,9 +375,11 @@ fn create_impl(
                     }
                 }
             }
-            "ethereum" => {
+            // Tron accounts are Ethereum's key hash behind another encoding, so
+            // both derive the same way and differ only in the address.
+            "ethereum" | "tron" => {
                 if wallet.curve != "secp256k1" {
-                    return Err(Error::Env(format!("ethereum account requires secp256k1 wallet, got {}", wallet.curve)));
+                    return Err(Error::Env(format!("{typ} account requires secp256k1 wallet, got {}", wallet.curve)));
                 }
                 let pb = b64url_decode(&wallet.pubkey)?;
                 match &path_indices {
@@ -373,14 +388,14 @@ fn create_impl(
                         let cc = b64url_decode(&wallet.chaincode)?;
                         let (child, tweak) = crate::hdderive::derive_pub_tweak(&pb, &cc, indices)
                             .map_err(|e| Error::Env(e.to_string()))?;
-                        let addr = crate::hdderive::evm_address(&child).map_err(|e| Error::Env(e.to_string()))?;
+                        let addr = account_address(typ, &child)?;
                         let il = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, &tweak).to_string();
-                        ("secp256k1".into(), explicit_path.unwrap().to_owned(), b64url(&child), addr.clone(), format!("ethereum:{addr}"), Value::String(il))
+                        ("secp256k1".into(), explicit_path.unwrap().to_owned(), b64url(&child), addr.clone(), format!("{typ}:{addr}"), Value::String(il))
                     }
                     _ => {
-                        // Null derivation: the secp group key's own EVM address.
-                        let addr = crate::hdderive::evm_address(&pb).map_err(|e| Error::Env(e.to_string()))?;
-                        ("secp256k1".into(), String::new(), wallet.pubkey.clone(), addr.clone(), format!("ethereum:{addr}"), Value::Null)
+                        // Null derivation: the secp group key's own address.
+                        let addr = account_address(typ, &pb)?;
+                        ("secp256k1".into(), String::new(), wallet.pubkey.clone(), addr.clone(), format!("{typ}:{addr}"), Value::Null)
                     }
                 }
             }
@@ -444,12 +459,21 @@ fn create_impl(
 /// address path): no wallet, no derivation — just a watch address. Curve is
 /// ed25519 for solana, secp256k1 otherwise.
 pub fn create_view(env: &Env, name: &str, typ: &str, address: &str) -> Result<Account> {
-    if typ != "ethereum" && typ != "bitcoin" && typ != "solana" {
+    if !matches!(typ, "ethereum" | "bitcoin" | "solana" | "tron") {
         return Err(Error::Env(format!("unsupported account type {typ}")));
     }
     if address.is_empty() {
         return Err(Error::Env("address required for a view account".into()));
     }
+    // A Tron address has one canonical form; store that (it is what balance
+    // lookups and the From check of a send compare against).
+    let normalized;
+    let address = if typ == "tron" {
+        normalized = crate::tron::normalize_address(address)?;
+        normalized.as_str()
+    } else {
+        address
+    };
     let name = if name.is_empty() { "View Account".to_owned() } else { name.to_owned() };
     let curve = if typ == "solana" { "ed25519" } else { "secp256k1" };
     let now = crate::now_rfc3339();

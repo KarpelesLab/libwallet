@@ -188,7 +188,7 @@ fn fetch_and_build_solana_tx(rpc: &str, net: &crate::models::network::Network, o
         hash: signature.to_owned(),
         network: net.id.clone(),
         amount: Some(Amount::new_raw(amount, dec)),
-        url: tx_url(net, signature),
+        url: net.transaction_url(signature),
         created,
         ..Default::default()
     }))
@@ -245,19 +245,10 @@ fn build_evm_history_tx(net: &crate::models::network::Network, hash: &str, data:
         hash: hash.to_owned(),
         network: net.id.clone(),
         amount: Some(Amount::new_raw(value, decimals)),
-        url: tx_url(net, hash),
+        url: net.transaction_url(hash),
         created,
         ..Default::default()
     })
-}
-
-fn tx_url(net: &crate::models::network::Network, hash: &str) -> String {
-    let base = net.resolved_block_explorer();
-    if base.is_empty() {
-        String::new()
-    } else {
-        format!("{}/tx/{hash}", base.trim_end_matches('/'))
-    }
 }
 
 /// Parse a 0x-hex (or decimal) quantity into a BigInt.

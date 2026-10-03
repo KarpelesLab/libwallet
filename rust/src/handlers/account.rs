@@ -46,6 +46,18 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
             let hex: String = sig.iter().map(|b| format!("{b:02x}")).collect();
             Ok(serde_json::json!({ "signature": format!("0x{hex}") }))
         }
+        // TronWeb signMessageV2: keccak of "\x19TRON Signed Message:\n<len>" +
+        // message, 65-byte R‖S‖V (V 27/28), hex-encoded.
+        "tron" => {
+            let mut full = format!("\x19TRON Signed Message:\n{}", msg.len()).into_bytes();
+            full.extend_from_slice(&msg);
+            let digest = purecrypto::hash::keccak256(&full);
+            let mut sig = crate::evm::sign_digest_recoverable(env, &account, &unlock, &digest)
+                .map_err(ApiError::internal)?;
+            sig[64] += 27;
+            let hex: String = sig.iter().map(|b| format!("{b:02x}")).collect();
+            Ok(serde_json::json!({ "signature": format!("0x{hex}") }))
+        }
         // Solana / ed25519 — FROST signature, base58 in its canonical encoding.
         _ => {
             // Blind-signing guard: refuse a "message" that is actually a Solana
@@ -85,7 +97,7 @@ fn unlock_keys(params: &Value) -> Vec<(String, String)> {
 /// `Account:signTransaction` — chain-agnostic offline transaction signing. The
 /// caller passes an account `Id` and a `Transaction` object; we dispatch on the
 /// account's chain and return a broadcast-ready `raw` (EVM/BTC = `0x`-hex,
-/// Solana = base58). There is NO RPC here — every value the signer needs
+/// Solana = base58, Tron = hex `Transaction` message plus its `txid`). There is NO RPC here — every value the signer needs
 /// (nonce, blockhash, UTXOs) must be supplied in `Transaction`, which is what
 /// lets this build and run on wasm. `Account:signAndSendTransaction` layers the
 /// RPC (fee/blockhash/UTXO fetch + broadcast) on top of these same signers.
@@ -101,6 +113,7 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
         "ethereum" => sign_tx_evm(env, &account, params),
         "solana" => sign_tx_solana(env, &account, params),
         "bitcoin" => sign_tx_bitcoin(env, &account, params),
+        "tron" => sign_tx_tron(env, &account, params),
         other => Err(ApiError::new(400, format!("signTransaction not supported for {other}"))),
     }
 }
@@ -169,6 +182,58 @@ fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: 
     Ok(serde_json::json!({ "raw": raw }))
 }
 
+/// Offline Tron signing. Either `rawDataHex` — raw data a node or dApp built,
+/// parsed and checked to be this account's before it is signed — or a transfer
+/// `{to, value, token?, feeLimit?}` anchored on `refBlock` (a `getnowblock`
+/// reply), built locally. Returns `{raw, txid}`, `raw` being what `broadcasthex`
+/// takes.
+fn sign_tx_tron(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let unlock = unlock_keys(params);
+    let (txid, signed) = match tx.get("rawDataHex").and_then(Value::as_str) {
+        Some(raw) => crate::tron::sign_raw_data(env, account, &unlock, raw).map_err(|e| ApiError::new(400, e.to_string()))?,
+        None => {
+            let block = tx
+                .get("refBlock")
+                .ok_or_else(|| ApiError::new(400, "rawDataHex or refBlock (a getnowblock reply) required"))?;
+            let block = crate::tron::parse_ref_block(block).map_err(|e| ApiError::new(400, e.to_string()))?;
+            let transfer = tron_transfer(tx)?;
+            crate::tron::sign_transfer(env, account, &unlock, &transfer, &block).map_err(|e| ApiError::new(400, e.to_string()))?
+        }
+    };
+    let hex = |b: &[u8]| b.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    Ok(serde_json::json!({ "raw": hex(&signed), "txid": hex(&txid) }))
+}
+
+/// The transfer an Account-level Tron `Transaction` describes: `to` and `value`
+/// (base units, decimal string or number), with `token` naming a TRC-20
+/// contract (absent / "NATIVE": TRX) and `feeLimit` (sun) capping its energy.
+fn tron_transfer(tx: &Value) -> Result<crate::tron::Transfer, ApiError> {
+    let to = tx
+        .get("to")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::new(400, "to required"))?
+        .to_owned();
+    let value: u128 = match tx.get("value") {
+        Some(Value::String(s)) => s.parse().map_err(|_| ApiError::new(400, "value must be a base-unit integer"))?,
+        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| ApiError::new(400, "value must be a base-unit integer"))?.into(),
+        _ => return Err(ApiError::new(400, "value required")),
+    };
+    match tx.get("token").and_then(Value::as_str).filter(|t| !t.is_empty() && *t != "NATIVE") {
+        Some(contract) => Ok(crate::tron::Transfer::Trc20 {
+            contract: contract.to_owned(),
+            to,
+            amount: value,
+            fee_limit: tx.get("feeLimit").and_then(Value::as_u64).unwrap_or(crate::tron::DEFAULT_TRC20_FEE_LIMIT),
+        }),
+        None => Ok(crate::tron::Transfer::Trx {
+            to,
+            amount: u64::try_from(value).map_err(|_| ApiError::new(400, "value exceeds the TRX supply"))?,
+        }),
+    }
+}
+
 fn sign_tx_bitcoin(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
     let unlock = unlock_keys(params);
@@ -218,7 +283,7 @@ pub fn sign_and_send_transaction(env: &Env, params: &Value) -> ApiResult {
     // Every chain goes through the shared async impl (block_on here, awaited on
     // wasm) so the browser drives sends with no client-side RPC.
     match account.kind.as_str() {
-        "ethereum" | "solana" | "bitcoin" => crate::rt::block_on(sign_and_send_impl(env, params)),
+        "ethereum" | "solana" | "bitcoin" | "tron" => crate::rt::block_on(sign_and_send_impl(env, params)),
         other => Err(ApiError::new(400, format!("signAndSend not supported for {other}"))),
     }
 }
@@ -243,6 +308,7 @@ pub async fn sign_and_send_impl(env: &Env, params: &Value) -> ApiResult {
         "ethereum" => evm_send_async(env, &account, &url, params).await,
         "solana" => solana_send_async(env, &account, &url, params).await,
         "bitcoin" => bitcoin_send_async(env, &account, &url, params).await,
+        "tron" => tron_send_async(env, &account, &url, params).await,
         other => Err(ApiError::new(400, format!("signAndSend (async) not supported for {other}"))),
     }
 }
@@ -363,6 +429,19 @@ async fn solana_send_async(env: &Env, account: &crate::models::account::Account,
     Ok(serde_json::json!({ "signature": signature, "raw": tx_b58 }))
 }
 
+/// Tron signAndSend: anchor the transfer on the node's current block, sign it
+/// locally and broadcast it (`broadcasthex`). Returns `{txid, raw}`.
+async fn tron_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    let transfer = tron_transfer(tx)?;
+    let unlock = unlock_keys(params);
+    let (txid, signed) = crate::tron::send_async(env, account, &unlock, url, &transfer)
+        .await
+        .map_err(ApiError::internal)?;
+    let raw: String = signed.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(serde_json::json!({ "txid": txid, "raw": raw }))
+}
+
 /// Build, DKLs-sign, and broadcast a Bitcoin P2PKH transfer. UTXOs and outputs
 /// are supplied in the request (auto-discovery via modchain lands next).
 /// Bitcoin signAndSend (async twin of the old sync path): auto-input
@@ -435,7 +514,8 @@ fn b58_32(s: &str) -> Result<[u8; 32], ApiError> {
 /// implementation shared by native (driven through `crate::rt::block_on`) and
 /// the browser (awaited in `handle_request_async`), so the logic is identical on
 /// both. ethereum = eth_getBalance (wei); solana = getBalance (lamports, minus
-/// the rent-exempt reserve); bitcoin = modchain_assets NATIVE sum (satoshi).
+/// the rent-exempt reserve); bitcoin = modchain_assets NATIVE sum (satoshi);
+/// tron = getaccount (sun).
 /// Returned as a decimal string. Chain I/O goes through `rpc::call_async`.
 pub async fn balance_impl(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
@@ -486,6 +566,12 @@ pub async fn balance_impl(env: &Env, params: &Value) -> ApiResult {
                 .map_err(ApiError::internal)?;
             crate::bitcoin::parse_native_balance(&raw).map_err(ApiError::internal)?.to_string()
         }
+        "tron" => {
+            let res = crate::tron::post_async(&url, "getaccount", &crate::tron::account_body(&account.address))
+                .await
+                .map_err(ApiError::internal)?;
+            crate::tron::parse_balance(&res).to_string()
+        }
         other => return Err(ApiError::new(400, format!("balance not supported for {other}"))),
     };
     Ok(serde_json::json!({ "address": account.address, "balance": bal }))
@@ -517,8 +603,15 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
     // ERC-20 token max: the whole token balance is spendable (native gas is
     // paid separately), Go maxSendableEVMERC20.
     if let Some(token) = params.get("Token").and_then(Value::as_str) {
+        if account.kind == "tron" {
+            // TRC-20: the whole token balance; energy is paid in TRX.
+            let balance = crate::tron::trc20_balance(&rpc, token, &account.address).map_err(ApiError::internal)?;
+            let dec = trc20_decimals(&rpc, token)?;
+            let amt = crate::Amount::new_raw(balance, dec);
+            return Ok(serde_json::json!({ "chain": "tron", "token": token, "balance": amt, "max": amt }));
+        }
         if account.kind != "ethereum" {
-            return Err(ApiError::new(400, "Token maxSendable is EVM-only"));
+            return Err(ApiError::new(400, "Token maxSendable is EVM/Tron-only"));
         }
         let balance = crate::erc20::balance_of(&rpc, token, &account.address).map_err(ApiError::internal)?;
         let dec = crate::erc20::decimals(&rpc, token).map_err(ApiError::internal)?;
@@ -606,12 +699,27 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
                 "bitcoinFeeRate": fee_rate,
             }))
         }
+        "tron" => {
+            let to = params.get("To").and_then(Value::as_str).unwrap_or("");
+            let (balance, fee, max) =
+                crate::tron::max_sendable(&rpc, &account.address, to).map_err(ApiError::internal)?;
+            let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), crate::tron::TRX_DECIMALS);
+            Ok(serde_json::json!({ "chain": "tron", "balance": amt(balance), "fee": amt(fee), "max": amt(max) }))
+        }
         other => Err(ApiError::new(400, format!("maxSendable not supported for {other}"))),
     }
 }
 
-/// `Account:tokenBalance` — the ERC-20 balance of an EVM account for a token
-/// contract, via eth_call balanceOf. {Token, RPC?} — decimal string base units.
+/// A TRC-20 contract's `decimals()`.
+#[cfg(not(target_arch = "wasm32"))]
+fn trc20_decimals(rpc: &str, token: &str) -> Result<i64, ApiError> {
+    let out = crate::tron::trc20_view(rpc, token, "decimals()").map_err(ApiError::internal)?;
+    let d = crate::tron::parse_uint(&out);
+    i64::try_from(d).ok().filter(|d| (0..=77).contains(d)).ok_or_else(|| ApiError::new(502, "bad decimals()"))
+}
+
+/// `Account:tokenBalance` — the ERC-20 / TRC-20 balance of an EVM / Tron
+/// account for a token contract, via a balanceOf call. {Token, RPC?} — decimal string base units.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
     let account_id = params
@@ -625,11 +733,13 @@ pub fn token_balance(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
-    if account.kind != "ethereum" {
-        return Err(ApiError::new(400, "tokenBalance is EVM-only"));
-    }
     let rpc = resolve_rpc(env, params, &account.kind)?;
-    let bal = crate::erc20::balance_of(&rpc, token, &account.address).map_err(ApiError::internal)?;
+    let bal = match account.kind.as_str() {
+        "ethereum" => crate::erc20::balance_of(&rpc, token, &account.address),
+        "tron" => crate::tron::trc20_balance(&rpc, token, &account.address),
+        _ => return Err(ApiError::new(400, "tokenBalance is EVM/Tron-only")),
+    }
+    .map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "token": token, "owner": account.address, "balance": bal.to_string() }))
 }
 

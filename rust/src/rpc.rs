@@ -67,11 +67,11 @@ pub async fn call_async(url: &str, method: &str, params: Value) -> Result<Value>
 /// browser event loop *is* the runtime, so `request` takes no argument. This
 /// tiny shim is the ONLY target-specific line — [`call_async`] above is shared.
 #[cfg(not(target_arch = "wasm32"))]
-async fn aio_send(req: &rsurl::aio::Request) -> std::result::Result<rsurl::aio::Response, rsurl::Error> {
+pub(crate) async fn aio_send(req: &rsurl::aio::Request) -> std::result::Result<rsurl::aio::Response, rsurl::Error> {
     rsurl::aio::request(&rsurl::aio::TokioRuntime, req).await
 }
 #[cfg(target_arch = "wasm32")]
-async fn aio_send(req: &rsurl::aio::Request) -> std::result::Result<rsurl::aio::Response, rsurl::Error> {
+pub(crate) async fn aio_send(req: &rsurl::aio::Request) -> std::result::Result<rsurl::aio::Response, rsurl::Error> {
     rsurl::aio::request(req).await
 }
 

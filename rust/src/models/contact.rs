@@ -152,7 +152,7 @@ pub fn delete(env: &Env, id: &str) -> Result<()> {
 
 fn validate_type(kind: &str) -> Result<()> {
     match kind {
-        "ethereum" | "bitcoin" | "solana" => Ok(()),
+        "ethereum" | "bitcoin" | "solana" | "tron" => Ok(()),
         other => Err(crate::Error::Env(format!("unsupported contact type {other}"))),
     }
 }

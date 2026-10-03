@@ -1,3 +1,25 @@
+## Unreleased
+
+- **Tron (TRX + TRC-20).** New network type `tron` (`NetworkType.tron`) and
+  account type `tron` (secp256k1, the same key hash as Ethereum behind a `T…`
+  address). Tron mainnet is seeded by default; `nile` and `shasta` testnets
+  can be created.
+  - Accounts: mnemonic wallets derive at TronLink's `m/44'/195'/0'/0/<i>`;
+    threshold wallets use the group key at index 0 and `m/44/195/0/<i>` after
+    that. View accounts accept `T…` or `41…` hex addresses.
+  - Balance, `maxSendable` (bandwidth and new-account fees reserved),
+    `tokenBalance`, TRC-20 token registry/discovery and registered-token
+    assets.
+  - `Transaction:signAndSend` / `Account:signAndSendTransaction` send TRX, or
+    TRC-20 when the asset is a registered token (`feeLimit` in sun caps the
+    energy burn, default 100 TRX). Transactions are built and signed locally
+    and checked to recover to the account before broadcast.
+  - `Account:signTransaction` signs a node-built `rawDataHex` after checking
+    the account owns it, or builds a transfer on a supplied `refBlock`.
+  - `Account:signMessage` follows TronWeb `signMessageV2`.
+  - A network's RPC is a java-tron HTTP API base (`…/wallet/<method>` is
+    appended); tronscan explorer links use `/transaction/<id>`.
+
 ## 0.5.1
 
 - **Air-gapped signer interop (`client.airgap`).** QR-payload APIs for

@@ -29,6 +29,13 @@ fn modchain_rpc(chain: &str) -> String {
     format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{chain}/rpc")
 }
 
+/// modchain's proxy of java-tron's native HTTP API — the base a Tron network's
+/// RPC names, to which [`crate::tron`] appends `/wallet/<method>`. (modchain's
+/// `/tron/rpc` is the eth-compatible listener, which cannot broadcast.)
+fn modchain_tron_rest() -> String {
+    format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/tron/rest")
+}
+
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Network" ("Id" text, "Type" text, "ChainId" text, "Name" text, "RPC" text, "CurrencySymbol" text, "CurrencyDecimals" integer, "BlockExplorer" text, "TestNet" numeric, "Priority" integer, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
 CREATE UNIQUE INDEX IF NOT EXISTS "Network_typeChain" ON "Network" ("Type", "ChainId");"#;
 const COLS: &str = r#""Id", "Type", "ChainId", "Name", "RPC", "CurrencySymbol", "CurrencyDecimals", "BlockExplorer", "TestNet", "Priority", "Created", "Updated""#;
@@ -36,7 +43,7 @@ const COLS: &str = r#""Id", "Type", "ChainId", "Name", "RPC", "CurrencySymbol", 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Network {
     pub id: String,
-    pub kind: String, // "evm" | "bitcoin" | "solana"
+    pub kind: String, // "evm" | "bitcoin" | "solana" | "tron"
     pub chain_id: String,
     pub name: String,
     pub rpc: String,
@@ -73,11 +80,30 @@ impl Network {
         // own explorer.
         match self.kind.as_str() {
             "solana" => "https://explorer.solana.com".to_owned(),
+            // tronscan routes in the fragment: <base>/address/<a> works as is,
+            // transactions live at /transaction/<id> (see `transaction_url`).
+            "tron" => match self.chain_id.as_str() {
+                "nile" => "https://nile.tronscan.org/#".to_owned(),
+                "shasta" => "https://shasta.tronscan.org/#".to_owned(),
+                _ => "https://tronscan.org/#".to_owned(),
+            },
             "bitcoin" => format!("https://www.blockexplorer.com/{}", self.chain_id),
             "evm" if self.chain_id == "1" => "https://www.blockexplorer.com/ethereum".to_owned(),
             "evm" => self.evm_explorer().unwrap_or_default(),
             _ => String::new(),
         }
+    }
+
+    /// The block-explorer URL for a tx hash (Go `Network.TransactionUrl`):
+    /// `<explorer>/tx/<hash>`, or tronscan's `/transaction/<hash>` on Tron;
+    /// empty when the network has no explorer.
+    pub fn transaction_url(&self, hash: &str) -> String {
+        let base = self.resolved_block_explorer();
+        if base.is_empty() {
+            return String::new();
+        }
+        let route = if self.kind == "tron" { "transaction" } else { "tx" };
+        format!("{}/{route}/{hash}", base.trim_end_matches('/'))
     }
 
     // EVM chain metadata comes from ethrpc's built-in chain registry — pure data
@@ -107,6 +133,8 @@ impl Network {
     ///   Go getRPC live picker), which is not yet ported — returns an error so
     ///   the caller supplies an explicit RPC;
     /// - Solana falls back to modchain (mainnet) or the Helius devnet endpoint.
+    /// - Tron names a java-tron HTTP API base: modchain for mainnet, TronGrid
+    ///   for the Nile / Shasta testnets.
     ///
     /// Every modchain endpoint is addressed by chain name — see [`modchain_rpc`].
     pub fn resolved_rpc(&self) -> Result<String> {
@@ -119,6 +147,12 @@ impl Network {
             "solana" => Ok(match self.chain_id.as_str() {
                 "devnet" => HELIUS_DEVNET.to_owned(),
                 _ => modchain_rpc("solana"),
+            }),
+            "tron" if explicit => Ok(self.rpc.clone()),
+            "tron" => Ok(match self.chain_id.as_str() {
+                "nile" => "https://nile.trongrid.io".to_owned(),
+                "shasta" => "https://api.shasta.trongrid.io".to_owned(),
+                _ => modchain_tron_rest(),
             }),
             "evm" if explicit => Ok(self.rpc.clone()),
             // Only Ethereum mainnet routes through modchain; other EVM chains use
@@ -146,13 +180,14 @@ impl Network {
                 other => Err(crate::Error::Env(format!("unsupported bitcoin chain type {other}"))),
             },
             "solana" => Ok("SOL".into()),
+            "tron" => Ok("TRX".into()),
             other => Err(crate::Error::Env(format!("symbol not available for type {other}"))),
         }
     }
 
     /// The native-currency decimals for this network: the stored
     /// `currency_decimals`, else the chain registry (EVM), else the chain
-    /// default (SOL=9, BTC-family=8). Matches Go's decimals resolution.
+    /// default (SOL=9, TRX=6, BTC-family=8). Matches Go's decimals resolution.
     pub fn native_decimals(&self) -> i64 {
         if self.currency_decimals > 0 {
             return self.currency_decimals;
@@ -160,6 +195,7 @@ impl Network {
         match self.kind.as_str() {
             "evm" => self.evm_native_decimals().unwrap_or(18),
             "solana" => 9,
+            "tron" => crate::tron::TRX_DECIMALS,
             _ => 8, // bitcoin family (satoshi)
         }
     }
@@ -168,7 +204,7 @@ impl Network {
     /// `Network.nativeBalance`, in currency units rather than raw base units):
     /// EVM eth_getBalance (wei / decimals), Solana getBalance minus the
     /// rent-exempt reserve (lamports / 9), Bitcoin summed NATIVE UTXOs
-    /// (satoshi / 8). `rpc` is a dialable endpoint; `address` the account.
+    /// (satoshi / 8), Tron getaccount (sun / 6). `rpc` is a dialable endpoint; `address` the account.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn native_amount(&self, rpc: &str, address: &str) -> Result<crate::Amount> {
         use num_bigint::BigInt;
@@ -196,6 +232,10 @@ impl Network {
             "bitcoin" => {
                 let sats = crate::bitcoin::native_balance_satoshi(rpc, address)?;
                 Ok(crate::Amount::new_raw(BigInt::from(sats), 8))
+            }
+            "tron" => {
+                let sun = crate::tron::balance_sun(rpc, address)?;
+                Ok(crate::Amount::new_raw(BigInt::from(sun), crate::tron::TRX_DECIMALS))
             }
             other => Err(crate::Error::Env(format!("native balance unsupported for {other}"))),
         }
@@ -314,6 +354,38 @@ impl Network {
                 }
                 return Ok(());
             }
+            "tron" => {
+                let (name, testnet) = match self.chain_id.as_str() {
+                    "mainnet" => ("Tron", false),
+                    "nile" => ("Tron Nile Testnet", true),
+                    "shasta" => ("Tron Shasta Testnet", true),
+                    other => {
+                        return Err(crate::Error::Env(format!(
+                            "invalid network type {}/{other}",
+                            self.kind
+                        )))
+                    }
+                };
+                if self.name.is_empty() {
+                    self.name = name.to_owned();
+                }
+                if self.currency_symbol.is_empty() {
+                    self.currency_symbol = "TRX".to_owned();
+                }
+                if self.currency_decimals == 0 {
+                    self.currency_decimals = crate::tron::TRX_DECIMALS;
+                }
+                if testnet {
+                    self.testnet = true;
+                }
+                if self.rpc.is_empty() {
+                    self.rpc = "auto".to_owned();
+                }
+                if self.block_explorer.is_empty() {
+                    self.block_explorer = "auto".to_owned();
+                }
+                return Ok(());
+            }
             other => return Err(crate::Error::Env(format!("invalid network type {other}"))),
         }
         // EVM: fill from the chain registry when the chain is known; an unknown
@@ -391,6 +463,8 @@ const DEFAULT_NETWORKS: &[(&str, &str, i64, bool)] = &[
     ("bitcoin", "dogecoin", 40, false),
     // Solana.
     ("solana", "mainnet", 97, false),
+    // Tron.
+    ("tron", "mainnet", 96, false),
 ];
 
 /// Seed the built-in networks (port of Go `MakeDefaultNetworks`, called from

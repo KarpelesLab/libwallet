@@ -108,6 +108,7 @@ void main() {
       expect(NetworkType.fromString('evm'), NetworkType.evm);
       expect(NetworkType.fromString('bitcoin'), NetworkType.bitcoin);
       expect(NetworkType.fromString('solana'), NetworkType.solana);
+      expect(NetworkType.fromString('tron'), NetworkType.tron);
       expect(NetworkType.fromString('foo'), NetworkType.unknown);
     });
 
@@ -152,6 +153,12 @@ void main() {
         final n =
             mk(NetworkType.solana, 'mainnet-beta', 'https://explorer.solana.com');
         expect(n.addressUrl('Aaa'), 'https://explorer.solana.com/address/Aaa');
+      });
+
+      test('Tron uses tronscan\'s /transaction/ route', () {
+        final n = mk(NetworkType.tron, 'mainnet', 'https://tronscan.org/#');
+        expect(n.addressUrl('TAbc'), 'https://tronscan.org/#/address/TAbc');
+        expect(n.transactionUrl('ab12'), 'https://tronscan.org/#/transaction/ab12');
       });
 
       test('No resolved explorer returns empty (host hides link)', () {

@@ -92,7 +92,7 @@ pub fn list(env: &Env) -> Result<Vec<Asset>> {
     let sql = format!(r#"SELECT {COLS} FROM "Asset" ORDER BY "Key" ASC"#);
     let rows = env.query(&sql, Vec::new())?;
     let mut assets: Vec<Asset> = rows.iter().map(|r| row_to_asset(r)).collect();
-    // Registered ERC-20 tokens on the current EVM network, with live balances
+    // Registered ERC-20 (TRC-20) tokens on the current EVM (Tron) network, with live balances
     // (port of the EVM leg Go `computeAssets` gained in wltbase/asset.go).
     // Appended after the persisted rows; best-effort, so a missing current
     // network/account or an unresolvable RPC simply contributes nothing.
@@ -109,12 +109,15 @@ pub fn list(env: &Env) -> Result<Vec<Asset>> {
 /// A per-token RPC failure skips that token instead of failing the whole list.
 /// Best-effort throughout — any setup failure yields no rows.
 fn registered_erc20_assets(env: &Env) -> Vec<Asset> {
-    let net = match crate::models::network::fetch(env, "@") {
-        Ok(Some(n)) if n.kind == "evm" => n,
+    // Tron works the same way: TRC-20 is ERC-20 behind another address
+    // encoding, and holdings are not enumerable from the node either.
+    let (net, account_kind, token_kind) = match crate::models::network::fetch(env, "@") {
+        Ok(Some(n)) if n.kind == "evm" => (n, "ethereum", "erc20"),
+        Ok(Some(n)) if n.kind == "tron" => (n, "tron", "trc20"),
         _ => return Vec::new(),
     };
     let account = match crate::models::account::current(env) {
-        Ok(Some(a)) if a.kind == "ethereum" && !a.address.is_empty() && a.address != "N/A" => a,
+        Ok(Some(a)) if a.kind == account_kind && !a.address.is_empty() && a.address != "N/A" => a,
         _ => return Vec::new(),
     };
     let rpc = match net.resolved_rpc() {
@@ -127,10 +130,14 @@ fn registered_erc20_assets(env: &Env) -> Vec<Asset> {
     };
     let mut out = Vec::new();
     for token in tokens {
-        if token.kind != "erc20" {
+        if token.kind != token_kind {
             continue;
         }
-        let bal = match crate::erc20::balance_of(&rpc, &token.address, &account.address) {
+        let bal = match token_kind {
+            "trc20" => crate::tron::trc20_balance(&rpc, &token.address, &account.address),
+            _ => crate::erc20::balance_of(&rpc, &token.address, &account.address),
+        };
+        let bal = match bal {
             Ok(b) => b,
             Err(_) => continue, // per-token RPC failure: skip (Go logs + continues)
         };
