@@ -2947,6 +2947,56 @@ fn storekey_derive_password_matches_wallet_key_via_ffi() {
 }
 
 #[test]
+fn account_address_formats_honours_network_param() {
+    // Regression: addressFormats ignored params.Network and always used the
+    // current network, forcing hosts to switch the global network to see an
+    // account's LTC/DOGE/BCH addresses. Current network stays at the default
+    // (evm) throughout.
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"BTC","Curve":"secp256k1","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"bitcoin","Index":0}}}}"#));
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+
+    // Without Network the current (evm) network is used and rejected as before.
+    let cur = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{}}}}"#));
+    assert_eq!(cur["code"], 400, "{cur}");
+    assert!(cur["error"].as_str().unwrap().contains("current network is evm"), "{cur}");
+
+    // Explicit networks resolve per chain, no setCurrent needed.
+    let ltc = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{"Network":"bitcoin.litecoin"}}}}"#));
+    assert_eq!(ltc["data"]["chainId"], "litecoin", "{ltc}");
+    let ltc_default = ltc["data"]["formats"][0]["address"].as_str().unwrap();
+    assert!(ltc_default.starts_with("ltc1"), "{ltc}");
+
+    let doge = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{"Network":"bitcoin.dogecoin"}}}}"#));
+    assert_eq!(doge["data"]["chainId"], "dogecoin", "{doge}");
+    assert!(doge["data"]["formats"][0]["address"].as_str().unwrap().starts_with('D'), "{doge}");
+
+    let btc = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{"Network":"bitcoin.bitcoin"}}}}"#));
+    assert_eq!(btc["data"]["chainId"], "bitcoin", "{btc}");
+    assert!(btc["data"]["formats"][0]["address"].as_str().unwrap().starts_with("bc1q"), "{btc}");
+
+    // A non-bitcoin or unknown Network is rejected clearly.
+    let evm = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{"Network":"evm.1"}}}}"#));
+    assert_eq!(evm["code"], 400, "{evm}");
+    assert!(evm["error"].as_str().unwrap().contains("requested network is evm"), "{evm}");
+    let missing = request(h, &format!(r#"{{"path":"Account/{account_id}:addressFormats","params":{{"Network":"net-doesnotexist"}}}}"#));
+    assert_eq!(missing["code"], 404, "{missing}");
+
+    // The global selection was never touched.
+    let net = request(h, r#"{"path":"Network","params":{"Id":"@"}}"#);
+    assert_eq!(net["data"]["Type"], "evm", "{net}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn wallet_info_roundtrip_via_ffi() {
     let h = new_env();
     // Set then get the wallet identity record.

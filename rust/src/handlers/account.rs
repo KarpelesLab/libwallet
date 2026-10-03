@@ -676,12 +676,7 @@ pub fn address_formats(env: &Env, params: &Value) -> ApiResult {
     if account.kind != "bitcoin" {
         return Err(ApiError::new(400, "addressFormats is bitcoin-only"));
     }
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "no current network"))?;
-    if net.kind != "bitcoin" {
-        return Err(ApiError::new(400, format!("current network is {}, not bitcoin", net.kind)));
-    }
+    let net = resolve_bitcoin_network(env, params)?;
     let pubkey = decode_b64url_33(&account.pubkey)?;
     let chaincode = decode_b64url_32(&account.chaincode)?;
     let formats = crate::bitcoin::address_formats(&pubkey, &chaincode, &net.chain_id)
@@ -703,13 +698,8 @@ pub fn all_addresses(env: &Env, params: &Value) -> ApiResult {
     if account.kind != "bitcoin" {
         return Err(ApiError::new(400, "allAddresses is bitcoin-only"));
     }
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "no current network"))?;
-    if net.kind != "bitcoin" {
-        return Err(ApiError::new(400, format!("current network is {}, not bitcoin", net.kind)));
-    }
-    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let net = resolve_bitcoin_network(env, params)?;
+    let rpc = rpc_for_network(params, &net)?;
     let xpub = account.xpub().map_err(ApiError::internal)?;
     let pubkey = decode_b64url_33(&account.pubkey)?;
     let chaincode = decode_b64url_32(&account.chaincode)?;
@@ -735,7 +725,8 @@ pub fn utxos(env: &Env, params: &Value) -> ApiResult {
     if account.kind != "bitcoin" {
         return Err(ApiError::new(400, "utxos is bitcoin-only"));
     }
-    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let net = resolve_bitcoin_network(env, params)?;
+    let rpc = rpc_for_network(params, &net)?;
     let xpub = account.xpub().map_err(ApiError::internal)?;
     let utxos = crate::bitcoin::list_utxos(&rpc, &xpub).map_err(ApiError::internal)?;
     let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
@@ -759,14 +750,9 @@ pub fn next_address(env: &Env, params: &Value) -> ApiResult {
     }
     let change = params.get("Change").and_then(Value::as_bool).unwrap_or(false);
 
-    // Resolve the current network to get the bitcoin chain id + RPC.
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "no current network"))?;
-    if net.kind != "bitcoin" {
-        return Err(ApiError::new(400, format!("current network is {}, not bitcoin", net.kind)));
-    }
-    let rpc = resolve_rpc(env, params, &account.kind)?;
+    // The requested (or current) bitcoin-family network gives the chain id + RPC.
+    let net = resolve_bitcoin_network(env, params)?;
+    let rpc = rpc_for_network(params, &net)?;
     let xpub = account.xpub().map_err(ApiError::internal)?;
     let pubkey = decode_b64url_33(&account.pubkey)?;
     let chaincode = decode_b64url_32(&account.chaincode)?;
@@ -845,6 +831,36 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
 /// takes the default-network path; native keeps its current-network behaviour
 /// when `@` matches. Either way the endpoint comes from `Network::resolved_rpc`,
 /// the one resolver, never a client-side URL.
+/// The bitcoin-family network a bitcoin account endpoint operates on:
+/// `params["Network"]` (a stored network id or `"bitcoin.<chainId>"`) when
+/// supplied, else the current network. Lets a host resolve BTC/BCH/DOGE/LTC
+/// addresses for one account without switching the global network.
+fn resolve_bitcoin_network(env: &Env, params: &Value) -> Result<crate::models::network::Network, ApiError> {
+    let requested = params.get("Network").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let id = requested.unwrap_or("@");
+    let net = crate::models::network::fetch(env, id).map_err(ApiError::internal)?.ok_or_else(|| {
+        if requested.is_some() {
+            ApiError::new(404, format!("network {id} not found"))
+        } else {
+            ApiError::new(400, "no current network")
+        }
+    })?;
+    if net.kind != "bitcoin" {
+        let which = if requested.is_some() { "requested" } else { "current" };
+        return Err(ApiError::new(400, format!("{which} network is {}, not bitcoin", net.kind)));
+    }
+    Ok(net)
+}
+
+/// The RPC endpoint for `net`, unless the caller overrides it with `params["RPC"]`.
+#[cfg(not(target_arch = "wasm32"))]
+fn rpc_for_network(params: &Value, net: &crate::models::network::Network) -> Result<String, ApiError> {
+    if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        return Ok(url.to_owned());
+    }
+    net.resolved_rpc().map_err(ApiError::internal)
+}
+
 fn resolve_rpc(env: &Env, params: &Value, account_kind: &str) -> Result<String, ApiError> {
     // account kind (ethereum/solana/bitcoin) -> network type (evm/solana/bitcoin).
     let want = match account_kind {
