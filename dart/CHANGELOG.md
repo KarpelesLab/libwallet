@@ -1,3 +1,46 @@
+## 0.5.1
+
+- **Air-gapped signer interop (`client.airgap`).** QR-payload APIs for
+  external signers (Keystone, Coldcard, Passport, SeedSigner, Sparrow
+  exports) over BC-UR (fountain-coded animated QRs) and BBQr. libwallet
+  handles only the strings; the app renders and scans the QR codes.
+  - `newDecoder()` returns a context you feed one scanned frame at a time;
+    each `feed` reports progress (`received`/`expected`/`percent`) and
+    `complete`, after which the payload is ready.
+  - `parseKeys`/`importKeys` take a key export — Keystone
+    `crypto-multi-accounts` (several chains in one transmission),
+    `crypto-account`, `crypto-hdkey`, Coldcard/Sparrow JSON, SLIP-132
+    `xpub`/`ypub`/`zpub` with an optional `[xfp/path]` origin, or an output
+    descriptor — and create a signer wallet (`Protocol: airgap`) with
+    watch-only accounts (BTC xpub-scanned, ETH leaf accounts, SOL).
+  - `signRequest` builds the unsigned request for one of those accounts:
+    a PSBT with `bip32_derivation` (fingerprint + full path) for bitcoin,
+    `eth-sign-request` with the exact signing preimage for ethereum,
+    `sol-sign-request` for solana. `submitSignature` accepts the signer's
+    answer — only the signature for eth/sol, the signed PSBT for bitcoin —
+    verifies it, assembles the transaction and optionally broadcasts.
+  - `encode`/`decode` frame and reassemble arbitrary payloads.
+- **Mnemonic-imported wallets derive at the standard paths.** Accounts of a
+  `Wallet:importMnemonic` wallet now sit at MetaMask `m/44'/60'/0'/0/i`,
+  BIP-84 `m/84'/0'/i'` and Phantom `m/44'/501'/i'/0'` — where the funds
+  actually are — instead of the BIP-32 master key (which showed a zero
+  native balance). `AccountApi.create` takes `keys` (the wallet's unlock
+  key) for such wallets; signing re-derives the key at the account's path.
+  Accounts created for these wallets before 0.5.1 point at the master key
+  and should be deleted and re-created with `keys`.
+- **Additional accounts get distinct addresses.** Index `n > 0` of a TSS
+  wallet derives `m/44/<coin>/0/n` instead of repeating the group-key
+  address; signing for those accounts applies the derivation (Solana
+  included).
+- **`AccountApi.create` `index` is optional.** Omitted, the backend assigns
+  the next free index for the wallet/type (never reusing a deleted one);
+  an explicit index that already exists returns that account.
+- **`AccountApi.addressFormats` / `allAddresses` / `listUTXOs` /
+  `nextAddress` honour `network`.** Resolving BTC/BCH/DOGE/LTC addresses for
+  an account no longer requires switching the global network.
+- **Fix: `StoreKeyApi.derivePassword` returned `''`.** It read the wrong
+  response field, so correct passwords were rejected.
+
 ## 0.5.0
 
 - **Native backend rewritten in Rust.** The bundled `liblibwallet` is now
