@@ -902,12 +902,25 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 name: String,
                 #[serde(rename = "Type", default)]
                 kind: String,
+                /// Optional: omitted (or null) → the next free index for this
+                /// wallet/type. An index already in use is refused (409) so a
+                /// client that counted accounts after a delete can't re-derive
+                /// an existing address.
                 #[serde(rename = "Index", default)]
-                index: i64,
+                index: Option<i64>,
             }
             let req: CreateReq =
                 serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
-            let a = crate::models::account::create(env, &req.wallet, &req.name, &req.kind, req.index)
+            let index = match req.index {
+                Some(i) => {
+                    if crate::models::account::index_in_use(env, &req.wallet, &req.kind, i).map_err(ApiError::internal)? {
+                        return Err(ApiError::new(409, format!("{} account index {i} already exists for this wallet", req.kind)));
+                    }
+                    i
+                }
+                None => crate::models::account::next_index(env, &req.wallet, &req.kind).map_err(ApiError::internal)?,
+            };
+            let a = crate::models::account::create(env, &req.wallet, &req.name, &req.kind, index)
                 .map_err(ApiError::internal)?;
             Ok(serde_json::to_value(a).unwrap())
         }

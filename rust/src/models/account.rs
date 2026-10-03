@@ -101,6 +101,24 @@ pub fn for_wallet(env: &Env, wallet_id: &str) -> Result<Vec<Account>> {
     Ok(rows.iter().map(|r| row_to_account(r)).collect())
 }
 
+/// The next free account index for `typ` on `wallet_id`: one past the highest
+/// index in use (0 when the wallet has no account of that type). Hosts should
+/// let the backend pick this rather than counting accounts — after a delete,
+/// `count` would re-issue a live index and re-derive an existing address.
+pub fn next_index(env: &Env, wallet_id: &str, typ: &str) -> Result<i64> {
+    Ok(for_wallet(env, wallet_id)?
+        .iter()
+        .filter(|a| a.kind == typ)
+        .map(|a| a.index)
+        .max()
+        .map_or(0, |m| m + 1))
+}
+
+/// Whether `wallet_id` already has a `typ` account at `index`.
+pub fn index_in_use(env: &Env, wallet_id: &str, typ: &str, index: i64) -> Result<bool> {
+    Ok(for_wallet(env, wallet_id)?.iter().any(|a| a.kind == typ && a.index == index))
+}
+
 /// Create account `index` of `typ` for `wallet_id`.
 ///
 /// Index 0 uses **null derivation**: the account IS the wallet's direct group

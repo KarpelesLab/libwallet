@@ -2046,10 +2046,11 @@ async function backendCreateAccount() {
   err.textContent = '';
   if (!backend.wallet) { err.textContent = 'Create a wallet first.'; return; }
   const type = $('#bkAccountType').value;
-  const index = backend.accounts.filter(a => a.Type === type).length;
   try {
+    // No Index: the backend picks the next free one for this wallet/type, so a
+    // deleted account's index is never reissued (counting accounts would).
     const a = await backendRequest('Account', 'POST', {
-      Name: '', Wallet: backend.wallet.Id, Type: type, Index: index
+      Name: '', Wallet: backend.wallet.Id, Type: type
     });
     backend.accounts.push(a);
     $('#bkAccountList').insertAdjacentHTML('beforeend', backendAccountCardHtml(a));

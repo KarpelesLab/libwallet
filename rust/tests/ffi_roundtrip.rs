@@ -2947,6 +2947,67 @@ fn storekey_derive_password_matches_wallet_key_via_ffi() {
 }
 
 #[test]
+fn account_create_assigns_and_guards_index() {
+    // Index is optional: omitted → next free index per wallet/type; a live
+    // index is refused (409). After deleting the middle account, a new one
+    // must NOT reuse index 1 (that would re-derive the deleted address).
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let post = |h: usize, extra: &str| {
+        request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana"{extra}}}}}"#))
+    };
+
+    let a0 = post(h, "");
+    let a1 = post(h, "");
+    let a2 = post(h, "");
+    assert_eq!(a0["data"]["Index"], 0, "{a0}");
+    assert_eq!(a1["data"]["Index"], 1, "{a1}");
+    assert_eq!(a2["data"]["Index"], 2, "{a2}");
+    let addr1 = a1["data"]["Address"].as_str().unwrap().to_string();
+    assert_ne!(a0["data"]["Address"], a1["data"]["Address"]);
+    assert_ne!(a1["data"]["Address"], a2["data"]["Address"]);
+
+    // Explicit duplicate index → 409, nothing created.
+    let dup = post(h, r#","Index":1"#);
+    assert_eq!(dup["code"], 409, "{dup}");
+
+    // Delete the middle account; the next auto-assigned index is 3, not 1.
+    let id1 = a1["data"]["Id"].as_str().unwrap();
+    let del = request(h, &format!(r#"{{"path":"Account/{id1}","verb":"DELETE"}}"#));
+    assert_eq!(del["result"], "success", "{del}");
+    let a3 = post(h, "");
+    assert_eq!(a3["data"]["Index"], 3, "{a3}");
+    assert_ne!(a3["data"]["Address"].as_str().unwrap(), addr1, "must not re-derive the deleted address");
+
+    // Explicitly re-creating index 1 is allowed now that it is free, and it
+    // deterministically yields the same address as before.
+    let a1_again = post(h, r#","Index":1"#);
+    assert_eq!(a1_again["data"]["Index"], 1, "{a1_again}");
+    assert_eq!(a1_again["data"]["Address"], addr1);
+
+    // Index is scoped per type: a bitcoin wallet would start at 0 again (not
+    // testable on an ed25519 wallet), but a second ed25519 wallet does.
+    let w2 = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"W2","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    let w2_id = w2["data"]["Id"].as_str().unwrap();
+    let b0 = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{w2_id}","Type":"solana"}}}}"#));
+    assert_eq!(b0["data"]["Index"], 0, "{b0}");
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn account_address_formats_honours_network_param() {
     // Regression: addressFormats ignored params.Network and always used the
     // current network, forcing hosts to switch the global network to see an

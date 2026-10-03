@@ -32,17 +32,23 @@ class AccountApi {
   Future<Account> getCurrent() => get('@');
 
   /// Create a new account.
+  ///
+  /// Leave [index] null to let the backend assign the next free index for
+  /// this wallet/type (index 0 is the wallet's direct key; higher indexes
+  /// derive distinct addresses). Don't compute it from the account count: after
+  /// a delete that would collide with a live index, which the backend refuses
+  /// with a 409.
   Future<Account> create({
     required String name,
     required String wallet,
     required String type,
-    required int index,
+    int? index,
   }) async {
     final data = await _conn.request('Account', 'POST', {
       'Name': name,
       'Wallet': wallet,
       'Type': type,
-      'Index': index,
+      if (index != null) 'Index': index,
     });
     return Account.fromJson(data as Map<String, dynamic>);
   }
