@@ -1,5 +1,16 @@
-## Unreleased
+## 0.5.2
 
+- **Native asset back in `assets.list()`.** The live native-currency entry
+  (SOL/ETH/BTC/TRX, key `<type>.<chainId>.NATIVE`) for the current account
+  is listed first again, as before the Rust port. Best-effort: a chain
+  mismatch or RPC failure drops only that entry.
+- **`accounts.nativeAsset(id, {convert})`** exposes `Account:nativeAsset`:
+  one account's live native balance, optionally priced in fiat.
+- **Fiat conversion from Dart works again.** `assets.list(convert:)` and
+  `transactions.list(convert:)` send `_convert`, which the Rust backend now
+  accepts alongside `Currency`.
+- `Asset.fromJson` accepts the empty `Created`/`Updated` of computed
+  (non-persisted) assets instead of throwing.
 - **Tron (TRX + TRC-20).** New network type `tron` (`NetworkType.tron`) and
   account type `tron` (secp256k1, the same key hash as Ethereum behind a `T…`
   address). Tron mainnet is seeded by default; `nile` and `shasta` testnets

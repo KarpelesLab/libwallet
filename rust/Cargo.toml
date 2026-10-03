@@ -7,7 +7,7 @@
 
 [package]
 name = "libwallet"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2021"
 license = "LicenseRef-KarpelesLab-NonCommercial"
 repository = "https://github.com/KarpelesLab/libwallet"
