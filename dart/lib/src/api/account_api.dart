@@ -34,21 +34,30 @@ class AccountApi {
   /// Create a new account.
   ///
   /// Leave [index] null to let the backend assign the next free index for
-  /// this wallet/type (index 0 is the wallet's direct key; higher indexes
-  /// derive distinct addresses). Don't compute it from the account count: after
-  /// a delete that would collide with a live index, which the backend refuses
-  /// with a 409.
+  /// this wallet/type. Don't compute it from the account count: after a delete
+  /// that would name a live index. An explicit [index] is deterministic, so
+  /// re-creating one that exists returns the existing account unchanged.
+  ///
+  /// For a wallet imported from a mnemonic (`Wallet:importMnemonic`), pass
+  /// [keys] — the same `KeyDescription` list that unlocks it for signing. Its
+  /// accounts derive from the seed at the standard paths (MetaMask
+  /// `m/44'/60'/0'/0/i`, BIP-84 `m/84'/0'/i'`, Phantom `m/44'/501'/i'/0'`), i.e.
+  /// where the user's funds actually are; without [keys] the call fails. TSS
+  /// wallets ignore [keys]: index 0 is the wallet's direct group key and higher
+  /// indexes are public child derivations.
   Future<Account> create({
     required String name,
     required String wallet,
     required String type,
     int? index,
+    List<Map<String, dynamic>>? keys,
   }) async {
     final data = await _conn.request('Account', 'POST', {
       'Name': name,
       'Wallet': wallet,
       'Type': type,
       if (index != null) 'Index': index,
+      if (keys != null) 'Keys': keys,
     });
     return Account.fromJson(data as Map<String, dynamic>);
   }

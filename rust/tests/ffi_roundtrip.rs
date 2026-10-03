@@ -2609,10 +2609,21 @@ fn mnemonic_import_account_sign_ecrecover_roundtrip() {
     let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
     let wk = w["data"]["Keys"][0]["Id"].as_str().unwrap().to_string();
 
-    // Derive an ethereum account and sign a message with the mnemonic key.
-    let a = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    // A mnemonic wallet's accounts derive from the seed, so POST Account needs
+    // the unlock Keys; without them it refuses instead of handing back the
+    // (unfunded) master-key address.
+    let no_keys = request(h, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0}}}}"#));
+    assert_eq!(no_keys["code"], 400, "{no_keys}");
+
+    // Derive the ethereum account at the standard MetaMask path and sign.
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"ethereum","Index":0,"Keys":[{{"Type":"Password","Id":"{wk}","Key":"password1"}}]}}}}"#),
+    );
     let account_id = a["data"]["Id"].as_str().unwrap().to_string();
     let address = a["data"]["Address"].as_str().unwrap().to_string();
+    assert_eq!(a["data"]["Path"], "m/44'/60'/0'/0/0", "{a}");
+    assert_eq!(address, "0x9858EfFD232B4033E47d90003D41EC34EcaEda94", "MetaMask vector for this phrase");
 
     let signed = request(
         h,
@@ -2948,8 +2959,8 @@ fn storekey_derive_password_matches_wallet_key_via_ffi() {
 
 #[test]
 fn account_create_assigns_and_guards_index() {
-    // Index is optional: omitted → next free index per wallet/type; a live
-    // index is refused (409). After deleting the middle account, a new one
+    // Index is optional: omitted → next free index per wallet/type; an explicit
+    // index already in use returns that account. After deleting the middle one, a new one
     // must NOT reuse index 1 (that would re-derive the deleted address).
     let h = new_env();
     let w = request(
@@ -2974,9 +2985,12 @@ fn account_create_assigns_and_guards_index() {
     assert_ne!(a0["data"]["Address"], a1["data"]["Address"]);
     assert_ne!(a1["data"]["Address"], a2["data"]["Address"]);
 
-    // Explicit duplicate index → 409, nothing created.
+    // Re-posting an explicit index that exists is idempotent: the SAME account
+    // comes back (hosts re-derive index 0 on every unlock), no duplicate row.
     let dup = post(h, r#","Index":1"#);
-    assert_eq!(dup["code"], 409, "{dup}");
+    assert_eq!(dup["data"]["Id"], a1["data"]["Id"], "{dup}");
+    let listed = request(h, r#"{"path":"Account"}"#);
+    assert_eq!(listed["data"].as_array().unwrap().len(), 3, "{listed}");
 
     // Delete the middle account; the next auto-assigned index is 3, not 1.
     let id1 = a1["data"]["Id"].as_str().unwrap();

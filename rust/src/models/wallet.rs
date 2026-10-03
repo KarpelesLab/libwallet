@@ -55,6 +55,16 @@ pub struct Wallet {
     pub keys: Vec<WalletKey>,
 }
 
+impl Wallet {
+    /// A mnemonic-keep wallet (Wallet:importMnemonic): its single key seals the
+    /// BIP-39 seed, so accounts derive at standard **hardened** paths and signing
+    /// re-derives the private key at the account's path — unlike TSS wallets,
+    /// whose accounts are non-hardened IL tweaks of the group key.
+    pub fn is_mnemonic(&self) -> bool {
+        self.protocol == "mnemonic" || self.keys.iter().any(|k| k.schema == "mnemonic")
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WalletKey {
     #[serde(rename = "Id", default)]
@@ -1493,9 +1503,10 @@ fn mnemonic_share_seed(payload: &[u8]) -> Result<(Vec<u8>, String)> {
 }
 
 /// Direct Ed25519 signing for a mnemonic-keep ed25519 wallet: decrypt the
-/// share → seed → SLIP-0010 master → sign `msg` with the master key. Self-
-/// verifies against the wallet's stored group pubkey.
-fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8]) -> Result<Vec<u8>> {
+/// share → seed → the key at `path` (SLIP-0010, hardened) → sign `msg`. A
+/// null path ("" / "m") is the SLIP-0010 master, i.e. the wallet's stored
+/// pubkey. Self-verifies against `expect_pub` (the account's pubkey).
+fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], path: &str, expect_pub: &str, msg: &[u8]) -> Result<Vec<u8>> {
     let (wk_id, secret) = unlock.first().ok_or_else(|| Error::Env("exactly one Key required".into()))?;
     let wk = wallet.keys.iter().find(|k| &k.id == wk_id).unwrap_or(&wallet.keys[0]);
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
@@ -1503,12 +1514,12 @@ fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8
     let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid)?;
     let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
     let (seed, curve) = mnemonic_share_seed(&payload)?;
-    let (master, _cc) = crate::bip39::master_from_seed(&seed, &curve)?;
+    let key = mnemonic_key_at(&seed, &curve, path)?;
 
-    let sk = purecrypto::ec::Ed25519PrivateKey::from_bytes(master);
+    let sk = purecrypto::ec::Ed25519PrivateKey::from_bytes(key);
     let sig = sk.sign(msg).to_bytes().to_vec();
-    // Defense in depth: the signature must verify under the stored group pubkey.
-    if let Ok(pk) = b64url_decode(&wallet.pubkey) {
+    // Defense in depth: the signature must verify under the account's pubkey.
+    if let Ok(pk) = b64url_decode(expect_pub) {
         if let (Ok(pk32), Ok(sig64)) = (<[u8; 32]>::try_from(pk), <[u8; 64]>::try_from(sig.clone())) {
             if !ed25519_verify(&pk32, msg, &sig64) {
                 return Err(Error::Env("mnemonic ed25519 signature failed verification".into()));
@@ -1516,6 +1527,64 @@ fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], msg: &[u8
         }
     }
     Ok(sig)
+}
+
+/// The private key a mnemonic wallet's account at `path` signs with: the
+/// BIP-32 / SLIP-0010 master for a null path ("" or "m" — the key the wallet row
+/// records), else the (possibly hardened) child at `path`.
+fn mnemonic_key_at(seed: &[u8], curve: &str, path: &str) -> Result<[u8; 32]> {
+    if path.is_empty() || path == "m" {
+        return Ok(crate::bip39::master_from_seed(seed, curve)?.0);
+    }
+    crate::hdderive::derive_privkey_from_seed(seed, curve, path).map_err(|e| Error::Env(e.to_string()))
+}
+
+/// Sign `msg` (raw Ed25519 / Solana) **for an account**: a mnemonic wallet
+/// re-derives the key at `account.path` from its seed; a TSS wallet signs FROST
+/// with the account's IL tweak (null derivation = untweaked group key). This is
+/// the entry point every Solana signer should use — `sign_frost_local` alone
+/// ignores the account and only signs for the group key itself.
+pub fn sign_ed25519_for_account(
+    env: &Env,
+    account: &crate::models::account::Account,
+    unlock: &[(String, String)],
+    msg: &[u8],
+) -> Result<Vec<u8>> {
+    let wallet = fetch(env, &account.wallet)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.curve == "ed25519" && wallet.is_mnemonic() {
+        return sign_ed25519_mnemonic(&wallet, unlock, &account.path, &account.pubkey, msg);
+    }
+    let Some(il) = account.il.as_str() else {
+        return sign_frost_local(env, &account.wallet, unlock, msg);
+    };
+    // Derived (tweaked) account on a FROST wallet.
+    if resolve_protocol(&wallet) != "frost" {
+        return Err(Error::Env(format!("derived ed25519 accounts need a frost wallet (protocol {})", wallet.protocol)));
+    }
+    let tweak = il_decimal_to_32(il)?;
+    let committee = frost_committee(&wallet, unlock)?;
+    let sig = crate::tss::frost_sign_local_tweaked(&committee, wallet.threshold.max(0) as usize, msg, &tweak)
+        .map_err(|e| Error::Env(e.to_string()))?;
+    let pk: [u8; 32] = b64url_decode(&account.pubkey)?
+        .try_into()
+        .map_err(|_| Error::Env("account pubkey is not 32 bytes".into()))?;
+    let sig64: [u8; 64] = sig.clone().try_into().map_err(|_| Error::Env("signature is not 64 bytes".into()))?;
+    if !ed25519_verify(&pk, msg, &sig64) {
+        return Err(Error::Env("tweaked signature failed verification under the account key".into()));
+    }
+    Ok(sig)
+}
+
+/// An account IL (decimal string) as a 32-byte big-endian tweak.
+fn il_decimal_to_32(il: &str) -> Result<[u8; 32]> {
+    let n = num_bigint::BigInt::parse_bytes(il.as_bytes(), 10).ok_or_else(|| Error::Env("bad IL".into()))?;
+    let (_, b) = n.to_bytes_be();
+    if b.len() > 32 {
+        return Err(Error::Env("IL exceeds 32 bytes".into()));
+    }
+    let mut out = [0u8; 32];
+    out[32 - b.len()..].copy_from_slice(&b);
+    Ok(out)
 }
 
 /// The effective TSS protocol (Go `resolveProtocol`): empty falls back to the
@@ -1614,7 +1683,7 @@ pub fn sign_frost_local(
     // (its Solana account uses path "m", so no tweak) — a 1-of-1 FROST sign over
     // the LocalHub would deadlock, so bypass it.
     if wallet.curve == "ed25519" && wallet.keys.iter().any(|k| k.schema == "mnemonic") {
-        return sign_ed25519_mnemonic(&wallet, unlock, msg);
+        return sign_ed25519_mnemonic(&wallet, unlock, "m", &wallet.pubkey, msg);
     }
     // Legacy eddsatss wallets (Protocol="eddsa", or empty on an ed25519 wallet —
     // Go resolveProtocol) sign through the GG18-style path, unblocked by tsslib
@@ -1695,6 +1764,24 @@ pub fn dkls_sign_digest(
     tweak: &[u8; 32],
     digest: &[u8],
 ) -> Result<(Vec<u8>, Vec<u8>, u8)> {
+    dkls_sign_digest_at(env, wallet_id, unlock, "", tweak, digest)
+}
+
+/// [`dkls_sign_digest`] for an account at `key_path`. Only a mnemonic-keep
+/// wallet reads the path: it derives the (possibly hardened) private key there
+/// from its seed and imports THAT as the 1-of-1 DKLs key, so the account's own
+/// address signs; `tweak` is then any further non-hardened child derivation
+/// (e.g. a bitcoin m/0/i receive key — the account IL is Null). TSS wallets
+/// ignore the path: their accounts are entirely described by `tweak`. Callers
+/// pass `account.path` + the account/child tweak; see the bitcoin/evm signers.
+pub fn dkls_sign_digest_at(
+    env: &Env,
+    wallet_id: &str,
+    unlock: &[(String, String)],
+    key_path: &str,
+    tweak: &[u8; 32],
+    digest: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8)> {
     let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
     // Legacy ecdsatss wallets (Protocol="gg18", or empty on a secp256k1 wallet)
     // sign through the GG18 path with the account's IL tweak (tsslib 0.2.5's
@@ -1723,8 +1810,8 @@ pub fn dkls_sign_digest(
         let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
         let key = if wk.schema == "mnemonic" {
             let (seed, curve) = mnemonic_share_seed(&payload)?;
-            let (master, _cc) = crate::bip39::master_from_seed(&seed, &curve)?;
-            crate::tss::dkls_import_key(&master, &uuid).map_err(|e| Error::Env(e.to_string()))?.1
+            let node = mnemonic_key_at(&seed, &curve, key_path)?;
+            crate::tss::dkls_import_key(&node, &uuid).map_err(|e| Error::Env(e.to_string()))?.1
         } else {
             tsslib::dklstss::Key::from_json(std::str::from_utf8(&payload).map_err(|e| Error::Env(e.to_string()))?)
                 .map_err(|e| Error::Env(format!("load dkls share: {e:?}")))?

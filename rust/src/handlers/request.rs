@@ -297,7 +297,7 @@ fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: b
     }
 
     let message = crate::solana::tx_message(&raw).ok_or_else(|| ApiError::new(400, "solana tx: no message"))?.to_vec();
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &message).map_err(|e| ApiError::new(400, e.to_string()))?;
+    let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &message).map_err(|e| ApiError::new(400, e.to_string()))?;
     let sig64: [u8; 64] = sig.try_into().map_err(|_| ApiError::new(500, "unexpected signature length"))?;
     let signed = crate::solana::splice_signature(&raw, &sig64).ok_or_else(|| ApiError::new(500, "failed to splice signature"))?;
 
@@ -353,7 +353,7 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
             let account = crate::models::account::find(env, account_id)
                 .map_err(ApiError::internal)?
                 .ok_or_else(|| ApiError::new(404, "account not found"))?;
-            let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &message)
+            let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &message)
                 .map_err(|e| ApiError::new(400, e.to_string()))?;
             json!({ "signature": bs58::encode(&sig).into_string(), "publicKey": account.address })
         }

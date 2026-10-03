@@ -114,9 +114,11 @@ pub fn next_index(env: &Env, wallet_id: &str, typ: &str) -> Result<i64> {
         .map_or(0, |m| m + 1))
 }
 
-/// Whether `wallet_id` already has a `typ` account at `index`.
-pub fn index_in_use(env: &Env, wallet_id: &str, typ: &str, index: i64) -> Result<bool> {
-    Ok(for_wallet(env, wallet_id)?.iter().any(|a| a.kind == typ && a.index == index))
+/// The existing `typ` account of `wallet_id` at `index`, if any. Accounts are
+/// deterministic per (wallet, type, index), so a create for an index that is
+/// already in use should hand this back rather than insert a duplicate.
+pub fn at_index(env: &Env, wallet_id: &str, typ: &str, index: i64) -> Result<Option<Account>> {
+    Ok(for_wallet(env, wallet_id)?.into_iter().find(|a| a.kind == typ && a.index == index))
 }
 
 /// Create account `index` of `typ` for `wallet_id`.
@@ -132,6 +134,151 @@ pub fn index_in_use(env: &Env, wallet_id: &str, typ: &str, index: i64) -> Result
 pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> Result<Account> {
     let path = default_path(typ, index);
     create_impl(env, wallet_id, name, typ, index, path.as_deref())
+}
+
+/// Create account `index` of `typ` for a **mnemonic-keep** wallet: decrypt the
+/// seed with `unlock` (the wallet's single key) and derive at the standard
+/// hardened path ([`mnemonic_account_path`]) so the account lands where
+/// MetaMask / Phantom / BIP-84 wallets keep the funds for that seed — not at the
+/// BIP-32 master the wallet row records. `il` is Null: signing re-derives the
+/// private key at `path` from the seed instead of tweaking a group key. For a
+/// non-mnemonic wallet this is just [`create`].
+pub fn create_with_unlock(
+    env: &Env,
+    wallet_id: &str,
+    name: &str,
+    typ: &str,
+    index: i64,
+    unlock: &[(String, String)],
+) -> Result<Account> {
+    let wallet = crate::models::wallet::fetch(env, wallet_id)?
+        .ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if !wallet.is_mnemonic() {
+        return create(env, wallet_id, name, typ, index);
+    }
+    if unlock.is_empty() {
+        return Err(Error::Env(
+            "accounts on a mnemonic wallet derive from the seed: pass Keys (the wallet's unlock key)".into(),
+        ));
+    }
+    let seed = crate::models::wallet::decrypt_mnemonic_seed(env, wallet_id, unlock)?;
+    create_from_seed(env, &wallet, name, typ, index, &seed)
+}
+
+/// The standard single-key derivation path for account `index` of `typ`, used
+/// for mnemonic-keep wallets (hardened steps are fine — we hold the seed):
+/// ethereum `m/44'/60'/0'/0/<i>` (BIP-44 / MetaMask), bitcoin `m/84'/0'/<i>'`
+/// (the BIP-84 account root; receive addresses are `m/0/<j>` below it, so
+/// index 0 shows `m/84'/0'/0'/0/0`), solana `m/44'/501'/<i>'/0'` (Phantom).
+pub fn mnemonic_account_path(typ: &str, index: i64) -> Option<String> {
+    if index < 0 {
+        return None;
+    }
+    Some(match typ {
+        "ethereum" => format!("m/44'/60'/0'/0/{index}"),
+        "bitcoin" => format!("m/84'/0'/{index}'"),
+        "solana" => format!("m/44'/501'/{index}'/0'"),
+        _ => return None,
+    })
+}
+
+/// Build + persist a mnemonic wallet's account at its standard hardened path
+/// (see [`mnemonic_account_path`]), deriving pubkey/address from `seed`. The
+/// account records its own node's chaincode so a bitcoin xpub (and its m/0/i
+/// receive addresses) is the standard BIP-84 one. IL is Null.
+fn create_from_seed(env: &Env, wallet: &crate::models::wallet::Wallet, name: &str, typ: &str, index: i64, seed: &[u8]) -> Result<Account> {
+    if index < 0 {
+        return Err(Error::Env("index must be non-negative".into()));
+    }
+    let name = if name.is_empty() { format!("Account {}", index + 1) } else { name.to_owned() };
+    let path = mnemonic_account_path(typ, index).ok_or_else(|| Error::Env(format!("unsupported account type {typ}")))?;
+    let need_curve = if typ == "solana" { "ed25519" } else { "secp256k1" };
+    if wallet.curve != need_curve {
+        return Err(Error::Env(format!("{typ} account requires {need_curve} wallet, got {}", wallet.curve)));
+    }
+
+    let (pubkey_b64, chaincode_b64, address, uri) = match typ {
+        "solana" => {
+            let pk = crate::hdderive::derive_pubkey_for_path(seed, "ed25519", &path).map_err(|e| Error::Env(e.to_string()))?;
+            let addr = bs58::encode(&pk).into_string();
+            (b64url(&pk), wallet.chaincode.clone(), addr.clone(), format!("solana:{addr}"))
+        }
+        "ethereum" => {
+            let (pk, cc) = seed_secp_node(seed, &path)?;
+            let addr = crate::hdderive::evm_address(&pk).map_err(|e| Error::Env(e.to_string()))?;
+            (b64url(&pk), b64url(&cc), addr.clone(), format!("ethereum:{addr}"))
+        }
+        "bitcoin" => {
+            // The BIP-84 account root; the display address is its first receive
+            // address m/0/0, encoded for the current bitcoin-family network when
+            // one is selected, else mainnet-BTC P2PKH.
+            let (root, cc) = seed_secp_node(seed, &path)?;
+            let addr = bitcoin_current_address(env, &root, &cc).unwrap_or_else(|| {
+                let child = crate::hdderive::derive_pub(&root, &cc, &[0, 0]).unwrap_or(root);
+                outscript::address::encode_base58_addr(0x00, &outscript::hash::hash160(&child))
+            });
+            (b64url(&root), b64url(&cc), addr.clone(), format!("bitcoin:{addr}"))
+        }
+        other => return Err(Error::Env(format!("unsupported account type {other}"))),
+    };
+
+    let now = crate::now_rfc3339();
+    let account = Account {
+        id: Xuid::new("acct").to_string(),
+        wallet: wallet.id.clone(),
+        name,
+        index,
+        kind: typ.to_owned(),
+        curve: need_curve.to_owned(),
+        path,
+        address,
+        uri,
+        pubkey: pubkey_b64,
+        chaincode: chaincode_b64,
+        il: Value::Null,
+        created: now.clone(),
+        updated: now,
+    };
+    persist(env, &account)?;
+    Ok(account)
+}
+
+/// The compressed secp256k1 pubkey and chain code of the BIP-32 node at `path`
+/// (hardened steps allowed) below a BIP-39 `seed`.
+fn seed_secp_node(seed: &[u8], path: &str) -> Result<([u8; 33], [u8; 32])> {
+    let (_priv, cc) = crate::hdderive::derive_secp_privkey_and_chaincode(seed, path).map_err(|e| Error::Env(e.to_string()))?;
+    let pk: [u8; 33] = crate::hdderive::derive_pubkey_for_path(seed, "secp256k1", path)
+        .map_err(|e| Error::Env(e.to_string()))?
+        .try_into()
+        .map_err(|_| Error::Env("derived secp pubkey is not 33 bytes".into()))?;
+    Ok((pk, cc))
+}
+
+/// Insert a freshly built account row and make it the current account (Go
+/// CreateAccount saves then setCurrent).
+fn persist(env: &Env, account: &Account) -> Result<()> {
+    let il_json = serde_json::to_string(&account.il).unwrap_or_else(|_| "null".into());
+    env.exec(
+        &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),
+        vec![
+            SqlValue::Text(account.id.clone()),
+            SqlValue::Text(account.wallet.clone()),
+            SqlValue::Text(account.name.clone()),
+            SqlValue::Int(account.index),
+            SqlValue::Text(account.kind.clone()),
+            SqlValue::Text(account.curve.clone()),
+            SqlValue::Text(account.path.clone()),
+            SqlValue::Text(account.address.clone()),
+            SqlValue::Text(account.uri.clone()),
+            SqlValue::Text(account.pubkey.clone()),
+            SqlValue::Text(account.chaincode.clone()),
+            SqlValue::Text(il_json),
+            SqlValue::Text(account.created.clone()),
+            SqlValue::Text(account.updated.clone()),
+        ],
+    )?;
+    env.set_current("account", &account.id)?;
+    Ok(())
 }
 
 /// The derivation path for account `index` of `typ`: `None` for index 0 (null
@@ -271,7 +418,6 @@ fn create_impl(
             other => return Err(Error::Env(format!("unsupported account type {other}"))),
         };
     let now = crate::now_rfc3339();
-    let il_json = serde_json::to_string(&il).unwrap_or_else(|_| "null".into());
 
     let account = Account {
         id: Xuid::new("acct").to_string(),
@@ -290,26 +436,7 @@ fn create_impl(
         updated: now,
     };
 
-    env.exec(
-        &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),
-        vec![
-            SqlValue::Text(account.id.clone()),
-            SqlValue::Text(account.wallet.clone()),
-            SqlValue::Text(account.name.clone()),
-            SqlValue::Int(account.index),
-            SqlValue::Text(account.kind.clone()),
-            SqlValue::Text(account.curve.clone()),
-            SqlValue::Text(account.path.clone()),
-            SqlValue::Text(account.address.clone()),
-            SqlValue::Text(account.uri.clone()),
-            SqlValue::Text(account.pubkey.clone()),
-            SqlValue::Text(account.chaincode.clone()),
-            SqlValue::Text(il_json),
-            SqlValue::Text(account.created.clone()),
-            SqlValue::Text(account.updated.clone()),
-        ],
-    )?;
-    env.set_current("account", &account.id)?;
+    persist(env, &account)?;
     Ok(account)
 }
 

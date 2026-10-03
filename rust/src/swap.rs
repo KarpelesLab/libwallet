@@ -436,7 +436,7 @@ pub fn execute_solana(
             .to_vec();
 
         // FROST-sign the message and self-verify under the fee-payer key.
-        let sig = crate::models::wallet::sign_frost_local(env, &acct.wallet, unlock, &message)?;
+        let sig = crate::models::wallet::sign_ed25519_for_account(env, &acct, unlock, &message)?;
         let sig64: [u8; 64] = sig
             .try_into()
             .map_err(|_| Error::Env("unexpected signature length".into()))?;

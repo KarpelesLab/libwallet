@@ -58,7 +58,7 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
                     ));
                 }
             }
-            let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+            let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &msg)
                 .map_err(ApiError::internal)?;
             Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
         }
@@ -155,7 +155,7 @@ fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: 
 
     let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
     let unlock = unlock_keys(params);
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+    let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &msg)
         .map_err(ApiError::internal)?;
     let tx_bytes = crate::solana::assemble_tx(&msg, &sig);
     let raw = bs58::encode(&tx_bytes).into_string();
@@ -822,15 +822,6 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(asset).unwrap())
 }
 
-/// The RPC URL for a request touching an account of `account_kind`: the `RPC`
-/// param wins; otherwise resolve it from the Network model (Go resolves RPC from
-/// the network). The current network `@` is used when its type matches the
-/// account's chain; otherwise we fall back to the seeded DEFAULT network for
-/// that chain (evm→1, solana→mainnet, bitcoin→bitcoin). The browser is
-/// multi-chain — it has no single `@` that matches every account — so it always
-/// takes the default-network path; native keeps its current-network behaviour
-/// when `@` matches. Either way the endpoint comes from `Network::resolved_rpc`,
-/// the one resolver, never a client-side URL.
 /// The bitcoin-family network a bitcoin account endpoint operates on:
 /// `params["Network"]` (a stored network id or `"bitcoin.<chainId>"`) when
 /// supplied, else the current network. Lets a host resolve BTC/BCH/DOGE/LTC
@@ -861,6 +852,15 @@ fn rpc_for_network(params: &Value, net: &crate::models::network::Network) -> Res
     net.resolved_rpc().map_err(ApiError::internal)
 }
 
+/// The RPC URL for a request touching an account of `account_kind`: the `RPC`
+/// param wins; otherwise resolve it from the Network model (Go resolves RPC from
+/// the network). The current network `@` is used when its type matches the
+/// account's chain; otherwise we fall back to the seeded DEFAULT network for
+/// that chain (evm→1, solana→mainnet, bitcoin→bitcoin). The browser is
+/// multi-chain — it has no single `@` that matches every account — so it always
+/// takes the default-network path; native keeps its current-network behaviour
+/// when `@` matches. Either way the endpoint comes from `Network::resolved_rpc`,
+/// the one resolver, never a client-side URL.
 fn resolve_rpc(env: &Env, params: &Value, account_kind: &str) -> Result<String, ApiError> {
     // account kind (ethereum/solana/bitcoin) -> network type (evm/solana/bitcoin).
     let want = match account_kind {
@@ -903,9 +903,10 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 #[serde(rename = "Type", default)]
                 kind: String,
                 /// Optional: omitted (or null) → the next free index for this
-                /// wallet/type. An index already in use is refused (409) so a
-                /// client that counted accounts after a delete can't re-derive
-                /// an existing address.
+                /// wallet/type. An explicit index names a deterministic account,
+                /// so re-posting one that already exists returns that account
+                /// (idempotent) instead of inserting a duplicate row for the
+                /// same address — hosts re-derive index 0 on every unlock.
                 #[serde(rename = "Index", default)]
                 index: Option<i64>,
             }
@@ -913,15 +914,19 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
                 serde_json::from_value(params.clone()).map_err(|e| ApiError::new(400, e.to_string()))?;
             let index = match req.index {
                 Some(i) => {
-                    if crate::models::account::index_in_use(env, &req.wallet, &req.kind, i).map_err(ApiError::internal)? {
-                        return Err(ApiError::new(409, format!("{} account index {i} already exists for this wallet", req.kind)));
+                    if let Some(existing) = crate::models::account::at_index(env, &req.wallet, &req.kind, i).map_err(ApiError::internal)? {
+                        return Ok(serde_json::to_value(existing).unwrap());
                     }
                     i
                 }
                 None => crate::models::account::next_index(env, &req.wallet, &req.kind).map_err(ApiError::internal)?,
             };
-            let a = crate::models::account::create(env, &req.wallet, &req.name, &req.kind, index)
-                .map_err(ApiError::internal)?;
+            // Keys (KeyDescription[]) is required for a mnemonic-keep wallet,
+            // whose accounts derive at standard hardened paths from the seed;
+            // TSS wallets ignore it (accounts are public derivations).
+            let unlock = unlock_keys(params);
+            let a = crate::models::account::create_with_unlock(env, &req.wallet, &req.name, &req.kind, index, &unlock)
+                .map_err(|e| ApiError::new(400, e.to_string()))?;
             Ok(serde_json::to_value(a).unwrap())
         }
         // PATCH Account/<id> — ApiUpdate: only Name is mutable. Returns the

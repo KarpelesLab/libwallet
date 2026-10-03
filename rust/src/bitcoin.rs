@@ -470,7 +470,7 @@ pub fn sign_message(
         base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&acct.pubkey).map_err(|e| Error::Env(format!("bad account pubkey: {e}")))?
     };
     let tweak = il_to_tweak(&acct.il)?;
-    let (r, s, _v) = crate::models::wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
+    let (r, s, _v) = crate::models::wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, &digest)?;
     let r32 = pad32(&r);
     let s32 = pad32(&s);
 
@@ -593,12 +593,13 @@ pub fn sign_transfer(
     let pubkey = SecpPublicKey::from_sec1(&pub_bytes).map_err(|e| Error::Env(format!("{e:?}")))?;
     let tweak = il_to_tweak(&acct.il)?;
     let wallet_id = acct.wallet.clone();
+    let key_path = acct.path.clone(); // mnemonic wallets derive the account node here
 
     let signer = TssSigner {
         pubkey,
         last_error: RefCell::new(None),
         sign_digest: Box::new(move |digest: &[u8; 32]| {
-            let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wallet_id, unlock, &tweak, digest)
+            let (r, s, v) = crate::models::wallet::dkls_sign_digest_at(env, &wallet_id, unlock, &key_path, &tweak, digest)
                 .map_err(|e| e.to_string())?;
             let (s, _) = normalize_low_s(s, v);
             Ok((r, s))
@@ -728,6 +729,7 @@ pub fn build_and_sign_from_utxos(
         BigInt::parse_bytes(s.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0))
     };
     let wallet_id = acct.wallet.clone();
+    let key_path = acct.path.clone(); // mnemonic wallets derive the account node here
 
     // 1. Select inputs from the discovered UTXOs.
     if all.is_empty() {
@@ -778,12 +780,13 @@ pub fn build_and_sign_from_utxos(
             let pubkey = SecpPublicKey::from_sec1(&p.child_pub)
                 .map_err(|e| Error::Env(format!("bad child pubkey: {e:?}")))?;
             let wid = wallet_id.clone();
+            let kpath = key_path.clone();
             let tweak = p.tweak;
             Ok(TssSigner {
                 pubkey,
                 last_error: RefCell::new(None),
                 sign_digest: Box::new(move |digest: &[u8; 32]| {
-                    let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest)
+                    let (r, s, v) = crate::models::wallet::dkls_sign_digest_at(env, &wid, unlock, &kpath, &tweak, digest)
                         .map_err(|e| e.to_string())?;
                     let (s, _) = normalize_low_s(s, v);
                     Ok((r, s))
@@ -867,6 +870,7 @@ pub fn sign_raw_tx(
         .try_into().map_err(|_| Error::Env("chaincode not 32 bytes".into()))?;
     let account_il = BigInt::parse_bytes(acct.il.as_str().unwrap_or("0").as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
     let wallet_id = acct.wallet.clone();
+    let key_path = acct.path.clone(); // mnemonic wallets derive the account node here
 
     // UTXO set → txo ref → derivation/amount/script.
     let xpub = build_xpub(&account_pub, &account_cc);
@@ -896,12 +900,13 @@ pub fn sign_raw_tx(
         .map(|p| {
             let pubkey = SecpPublicKey::from_sec1(&p.child_pub).map_err(|e| Error::Env(format!("bad child pubkey: {e:?}")))?;
             let wid = wallet_id.clone();
+            let kpath = key_path.clone();
             let tweak = p.tweak;
             Ok(TssSigner {
                 pubkey,
                 last_error: RefCell::new(None),
                 sign_digest: Box::new(move |digest: &[u8; 32]| {
-                    let (r, s, v) = crate::models::wallet::dkls_sign_digest(env, &wid, unlock, &tweak, digest).map_err(|e| e.to_string())?;
+                    let (r, s, v) = crate::models::wallet::dkls_sign_digest_at(env, &wid, unlock, &kpath, &tweak, digest).map_err(|e| e.to_string())?;
                     let (s, _) = normalize_low_s(s, v);
                     Ok((r, s))
                 }),

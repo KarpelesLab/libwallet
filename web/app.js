@@ -415,10 +415,14 @@ async function importWalletcoreWallet(mnemonic, passphrase = '') {
   ];
   backend.wallet = wSecp;
   backend.walletEd = wEd;
+  // A mnemonic wallet's accounts derive from the seed at the standard paths
+  // (MetaMask / BIP-84 / Phantom), so the create needs the seal key to unlock
+  // it — exactly the addresses derive_addresses() showed during import.
+  const keysFor = w => [{ Type: 'Password', Id: w.Keys[0].Id, Key: pw }];
   const [evm, btc, sol] = await Promise.all([
-    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'ethereum', Index: 0 }),
-    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'bitcoin', Index: 0 }),
-    backendRequest('Account', 'POST', { Name: '', Wallet: wEd.Id, Type: 'solana', Index: 0 }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'ethereum', Index: 0, Keys: keysFor(wSecp) }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wSecp.Id, Type: 'bitcoin', Index: 0, Keys: keysFor(wSecp) }),
+    backendRequest('Account', 'POST', { Name: '', Wallet: wEd.Id, Type: 'solana', Index: 0, Keys: keysFor(wEd) }),
   ]);
   return {
     evm:     { id: evm.Id, address: evm.Address },

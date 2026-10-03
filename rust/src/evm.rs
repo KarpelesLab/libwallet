@@ -65,7 +65,7 @@ pub fn sign_tx(
 
     let sign_bytes = tx.sign_bytes().map_err(oserr)?;
     let digest = keccak256(&sign_bytes);
-    let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, &tweak, &digest)?;
+    let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, &digest)?;
     let (s, v) = normalize_low_s(s, v);
 
     tx.signed = true;
@@ -131,7 +131,7 @@ fn sign_digest_rsv(
     unlock: &[(String, String)],
     digest: &[u8; 32],
 ) -> Result<Vec<u8>> {
-    let (r, s, v) = wallet::dkls_sign_digest(env, &acct.wallet, unlock, tweak, digest)?;
+    let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, tweak, digest)?;
     let (s, v) = normalize_low_s(s, v);
     let mut sig = Vec::with_capacity(65);
     sig.extend_from_slice(&pad32(&r));

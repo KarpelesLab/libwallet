@@ -389,7 +389,7 @@ fn sign_and_send_solana(
 
     let msg = crate::solana::build_transfer_message(&from, &to, lamports, &blockhash);
     let unlock = unlock_from_params(params)?;
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+    let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &msg)
         .map_err(ApiError::internal)?;
     let raw = crate::solana::assemble_tx(&msg, &sig);
     let tx_b58 = bs58::encode(&raw).into_string();
@@ -603,7 +603,7 @@ fn sign_and_send_solana_spl(
         cu_price,
     );
     let unlock = unlock_from_params(params)?;
-    let sig = crate::models::wallet::sign_frost_local(env, &account.wallet, &unlock, &msg)
+    let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &msg)
         .map_err(ApiError::internal)?;
     let raw = crate::solana::assemble_tx(&msg, &sig);
     let tx_b58 = bs58::encode(&raw).into_string();
