@@ -67,14 +67,19 @@ fn create_ethereum_account_from_secp256k1_wallet() {
     assert_eq!(a.address.len(), 42);
     assert!(a.address[2..].chars().all(|c| c.is_ascii_hexdigit()));
 
-    // With null derivation the index no longer drives a path, so a second index
-    // yields the SAME direct-key address (identity/UX only).
+    // Index 0 is the direct key; every further index derives its own child at
+    // m/44/60/0/<index>, so additional accounts get distinct addresses.
     let a1 = account::create(&env, &w.id, "", "ethereum", 1).unwrap();
-    assert_eq!(a1.address, a.address);
-    assert_eq!(a1.path, "");
+    assert_eq!(a1.path, "m/44/60/0/1");
+    assert!(a1.il.is_string(), "derived account stores the tweak IL");
+    assert_ne!(a1.address, a.address, "index 1 must not reuse the group-key address");
+    let a2 = account::create(&env, &w.id, "", "ethereum", 2).unwrap();
+    assert_eq!(a2.path, "m/44/60/0/2");
+    assert_ne!(a2.address, a1.address);
+    assert_ne!(a2.address, a.address);
 
     // Persisted.
-    assert_eq!(account::for_wallet(&env, &w.id).unwrap().len(), 2);
+    assert_eq!(account::for_wallet(&env, &w.id).unwrap().len(), 3);
 
     // Explicit (legacy) derivation still derives the old m/44/60/0/0 child.
     let d = account::create_derived(&env, &w.id, "", "ethereum", 0, "m/44/60/0/0").unwrap();
@@ -146,6 +151,55 @@ fn create_derived_solana_signs_under_child_key() {
     let sig = frost_sign_local_tweaked(&committee, 1, msg, &tweak).unwrap();
     let sig64: [u8; 64] = sig.try_into().unwrap();
     assert!(ed25519_verify(&child, msg, &sig64), "must verify under the derived child key");
+    assert!(!ed25519_verify(&group, msg, &sig64), "must NOT verify under the group key");
+}
+
+#[test]
+fn additional_solana_accounts_get_distinct_addresses_and_sign() {
+    // Regression: additional Solana accounts used to collapse onto the group
+    // key (every index → the same address). Index 0 stays the group key; index
+    // n>0 derives m/44/501/0/n, each distinct, and signing under the stored IL
+    // verifies against that account's own address.
+    use libwallet::tss::{ed25519_verify, frost_sign_local_tweaked};
+
+    let (env, wallet_id, group_b64) = wallet_env();
+    let group: [u8; 32] =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&group_b64).unwrap().try_into().unwrap();
+
+    let a0 = account::create(&env, &wallet_id, "", "solana", 0).unwrap();
+    let a1 = account::create(&env, &wallet_id, "", "solana", 1).unwrap();
+    let a2 = account::create(&env, &wallet_id, "", "solana", 2).unwrap();
+    assert_eq!(a0.path, "m");
+    assert_eq!(a0.address, bs58::encode(&group).into_string());
+    assert_eq!(a1.path, "m/44/501/0/1");
+    assert_eq!(a2.path, "m/44/501/0/2");
+    assert_ne!(a1.address, a0.address, "index 1 must not reuse the group-key address");
+    assert_ne!(a2.address, a0.address);
+    assert_ne!(a2.address, a1.address);
+    assert_eq!(a1.name, "Account 2");
+
+    // Re-deriving the same index is deterministic (same address, no fresh randomness).
+    let a1_again = account::create(&env, &wallet_id, "", "solana", 1).unwrap();
+    assert_eq!(a1_again.address, a1.address);
+
+    // The stored IL tweak signs for the derived address.
+    let il = a1.il.as_str().expect("derived account stores IL");
+    let il_n = num_bigint::BigInt::parse_bytes(il.as_bytes(), 10).unwrap();
+    let (_, il_be) = il_n.to_bytes_be();
+    let mut tweak = [0u8; 32];
+    tweak[32 - il_be.len()..].copy_from_slice(&il_be);
+    let child: [u8; 32] = bs58::decode(&a1.address).into_vec().unwrap().try_into().unwrap();
+
+    let w = wallet::fetch(&env, &wallet_id).unwrap().unwrap();
+    let unlock = vec![
+        (w.keys[0].id.clone(), "passwordone".to_string()),
+        (w.keys[1].id.clone(), "passwordtwo".to_string()),
+    ];
+    let committee = wallet::frost_committee(&w, &unlock).unwrap();
+    let msg = b"second solana account";
+    let sig = frost_sign_local_tweaked(&committee, 1, msg, &tweak).unwrap();
+    let sig64: [u8; 64] = sig.try_into().unwrap();
+    assert!(ed25519_verify(&child, msg, &sig64), "must verify under account 2's own key");
     assert!(!ed25519_verify(&group, msg, &sig64), "must NOT verify under the group key");
 }
 

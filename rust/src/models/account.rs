@@ -101,14 +101,37 @@ pub fn for_wallet(env: &Env, wallet_id: &str) -> Result<Vec<Account>> {
     Ok(rows.iter().map(|r| row_to_account(r)).collect())
 }
 
-/// Create an account for `wallet_id` with **null derivation**: the account IS
-/// the wallet's direct group key for its network (no HD child). Its address is
-/// the group key's address (evm/bitcoin/base58-solana), `path` is empty, and
-/// `il` is Null — so signing uses the untweaked group key. Sets the new account
-/// as current, matching Go CreateAccount. Use [`create_derived`] for the legacy
-/// explicit-derivation path (imported / secondary addresses).
+/// Create account `index` of `typ` for `wallet_id`.
+///
+/// Index 0 uses **null derivation**: the account IS the wallet's direct group
+/// key for its network (no HD child). Its address is the group key's address
+/// (evm/bitcoin/base58-solana), `path` is empty (`"m"` for solana), and `il` is
+/// Null — so signing uses the untweaked group key. Every further index derives
+/// a distinct child at [`default_path`], so additional accounts get their own
+/// address instead of all collapsing onto the group key. Sets the new account
+/// as current, matching Go CreateAccount. Use [`create_derived`] to pick the
+/// derivation path explicitly (imported / legacy addresses).
 pub fn create(env: &Env, wallet_id: &str, name: &str, typ: &str, index: i64) -> Result<Account> {
-    create_impl(env, wallet_id, name, typ, index, None)
+    let path = default_path(typ, index);
+    create_impl(env, wallet_id, name, typ, index, path.as_deref())
+}
+
+/// The derivation path for account `index` of `typ`: `None` for index 0 (null
+/// derivation, the group key itself), else a non-hardened BIP-44-shaped child
+/// `m/44/<coin>/0/<index>`. Threshold keys cannot derive hardened steps, so the
+/// whole path is non-hardened — these addresses are wallet-internal and are
+/// not expected to match a single-key BIP-44 wallet for the same seed.
+pub fn default_path(typ: &str, index: i64) -> Option<String> {
+    if index <= 0 {
+        return None;
+    }
+    let coin = match typ {
+        "ethereum" => 60,
+        "bitcoin" => 0,
+        "solana" => 501,
+        _ => return None, // create_impl rejects the type
+    };
+    Some(format!("m/44/{coin}/0/{index}"))
 }
 
 /// Create an account with an **explicit (legacy) HD derivation** `path`
