@@ -303,7 +303,10 @@ impl WdronePeer {
         // messageHandler`): fail the ceremony immediately with the remote's
         // reason rather than waiting out the rounds deadline in silence.
         if jm.typ == "walletsign:error" {
-            let reason = jm.data.as_str().unwrap_or("").to_string();
+            let reason = match &jm.data {
+                tsslib::tss::Payload::Json(v) => v.as_str().unwrap_or("").to_string(),
+                _ => String::new(),
+            };
             let reason = if reason.is_empty() {
                 "remote participant reported an unspecified failure".to_string()
             } else {

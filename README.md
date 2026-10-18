@@ -38,7 +38,7 @@ EVM chains include Ethereum, Polygon, BNB Chain, and any EVM-compatible network.
 
 ## Requirements
 
-- Rust (stable) toolchain
+- Rust 1.95+ (stable) toolchain
 - Access to blockchain RPC endpoints
 - Platform cross-compile tooling for iOS/Android builds (optional): `rustup` targets, plus `cargo-ndk` + the Android NDK for Android
 

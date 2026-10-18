@@ -80,7 +80,7 @@ impl WasmBroker {
         let jm: JsonMessage = match serde_json::from_slice(bytes) { Ok(m) => m, Err(_) => return Ok(()) };
         if jm.typ.is_empty() { return Ok(()); }
         if jm.typ == "walletsign:error" {
-            let r = jm.data.as_str().unwrap_or("").to_string();
+            let r = match &jm.data { tsslib::tss::Payload::Json(v) => v.as_str().unwrap_or("").to_string(), _ => String::new() };
             return Err(if r.is_empty() { "remote participant reported an unspecified failure".into() } else { r });
         }
         self.dispatch_inbound(jm);
