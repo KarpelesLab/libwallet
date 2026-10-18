@@ -35,25 +35,23 @@ bs58 = "0.5"
 # crypto.getRandomValues), so the default features (incl. tls/quic) compile for
 # wasm and no dependency patching is needed.
 #
-# 0.9 is the floor for the whole KLB stack: bottlers, tsslib, outscript, rsurl,
-# spotlib/spotproto and klbfw all require ^0.9, and purecrypto types cross those
+# 0.10 is the floor for the whole KLB stack: bottlers, tsslib, outscript, rsurl,
+# spotlib/spotproto and klbfw all require ^0.10, and purecrypto types cross those
 # crate boundaries (bottlers' PrivateKey holds purecrypto keys). A lower floor
 # here resolves a SECOND purecrypto into the graph and the mismatched types stop
 # those crates compiling — which is exactly what broke CI once the lockfile
 # stopped being committed.
 #
-# purecrypto 0.10 is out, but only rsurl has moved to it; bottlers, tsslib,
-# outscript, spotlib and klbfw still require ^0.9, so we stay on 0.9 until they
-# follow. (0.10 also gates the raw secp256k1 / edwards25519 APIs behind the
-# `hazmat-secp256k1` / `hazmat-edwards25519` features, which we'll then need.)
-purecrypto = "0.9.9"
+# 0.10 gates the raw secp256k1 / edwards25519 APIs (hdderive, tss, solana_spl,
+# names) behind the hazmat features; they used to arrive via tsslib.
+purecrypto = { version = "0.10.1", features = ["hazmat-secp256k1", "hazmat-edwards25519"] }
 # BIP-39 requires the mnemonic AND the passphrase to be UTF-8 NFKD before they
 # reach PBKDF2. Pure Rust, builds on wasm.
 unicode-normalization = "0.1.25"
 # 0.2.5 adds DerSignature::from_rs_low_s, which is how an external signer
 # (our TSS committee) hands back an ECDSA signature; 0.2.6 adds Tron addresses
 # and transactions (tron / trontx).
-outscript = "0.2.6"
+outscript = "0.2.7"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # graphitesql (pure-Rust SQLite) is declared per-target: native uses the default
 # std + filesystem VFS; the browser drops `std` (default-features = false) so its
@@ -63,8 +61,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # keystore — pure Rust, compile for wasm (uuid gets its `js` rng below).
 xuid-rs = "0.1.0"
 uuid = { version = "1", features = ["v4"] }
-bottlers = "0.1.4"
-tsslib = "0.2.15"
+bottlers = "0.1.5"
+tsslib = "0.2.16"
 # ethrpc-rs ≥0.3.1 dropped its direct tokio dep, so the chain registry
 # (ethrpc_rs::chains — pure data: names, explorers, native currency) builds on
 # wasm. default-features off drops the ABI helpers we don't use. This is what
@@ -75,7 +73,7 @@ ethrpc-rs = { version = "0.3.2", default-features = false }
 # parts are raw deflate within a 1 KiB window — compcol's deflate encoder can
 # cap the match distance to exactly that (already in-tree via purecrypto).
 ciborium = "0.2"
-compcol = { version = "0.6.11", default-features = false, features = ["deflate"] }
+compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
 
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.
@@ -89,15 +87,14 @@ graphitesql = "0.1.7"
 # rsurl non-optional with features = ["json"]; ethrpc-rs 0.3.2 gates its RPC
 # client behind a feature (so `chains` builds on wasm), and with
 # default-features = false that unification is gone.
-#
-# rsurl ≥0.1.17 is on purecrypto 0.10, so it brings its own copy alongside our
-# 0.9. Fine: no purecrypto types cross the rsurl boundary.
-rsurl = { version = "0.1.19", features = ["tokio-rt", "json"] }
+# default-features off drops rsurl's `ssh` (puressh → nix, which doesn't build
+# for iOS) and `bittorrent` stacks; we only speak HTTP(S).
+rsurl = { version = "0.1.19", default-features = false, features = ["purecrypto-tls", "idn", "tokio-rt", "json"] }
 # The FFI's sync worker threads drive the shared async handlers via crate::rt's
 # block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 tungstenite = "0.20"
-spotlib = "0.1.2"
+spotlib = "0.1.3"
 
 # Browser (wasm32) only — the wasm-bindgen boundary. Entropy comes from
 # purecrypto's wasm OsRng (host import), so no getrandom js backend is needed.
@@ -116,12 +113,12 @@ rsurl = { version = "0.1.19", default-features = false, features = ["purecrypto-
 # spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).
-spotlib = { version = "0.1.2", default-features = false }
+spotlib = { version = "0.1.3", default-features = false }
 # REST-over-Spot: klbfw's `spot` feature ships `{path,verb,params}` over an
 # authenticated spotlib connection to `@/p_api` and parses the KLB
 # `{result,data,error}` envelope — the browser's WalletSign/RemoteKey path, so
 # no HTTP Fetch, no CORS, no clientId (the Spot connection is the auth context).
-klbfw = { version = "0.1.7", default-features = false, features = ["spot"] }
+klbfw = { version = "0.1.8", default-features = false, features = ["spot"] }
 futures-channel = { version = "0.3", features = ["std"], default-features = false }
 futures-util = { version = "0.3", features = ["std"], default-features = false }
 gloo-timers = { version = "0.3", features = ["futures"] }
