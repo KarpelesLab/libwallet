@@ -967,7 +967,7 @@ fn walletconnect_ffi_pair_and_approve_over_loopback() {
         let env0 = wc::seal_type0_with_nonce(&sym, &[1u8; 12], propose.as_bytes());
         ws.send(tungstenite::Message::Text(format!(
             r#"{{"id":1,"method":"irn_subscription","params":{{"data":{{"topic":"{topic_srv}","message":"{env0}","tag":1100}}}}}}"#
-        )))
+        ).into()))
         .unwrap();
         // 3. collect the wallet's remaining frames until we see a sessionSettle
         // publish (the approve). Ack subscriptions/publishes with {result:true}.

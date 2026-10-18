@@ -390,13 +390,13 @@ pub fn connect_ws(url: &str) -> Result<WsTransport<std::net::TcpStream>> {
 impl<S: std::io::Read + std::io::Write> RelayTransport for WsTransport<S> {
     fn send_text(&mut self, text: &str) -> Result<()> {
         self.socket
-            .send(tungstenite::Message::Text(text.to_owned()))
+            .send(tungstenite::Message::Text(text.into()))
             .map_err(|e| Error::Env(format!("ws send: {e}")))
     }
 
     fn recv_text(&mut self) -> Result<Option<String>> {
         match self.socket.read() {
-            Ok(tungstenite::Message::Text(t)) => Ok(Some(t)),
+            Ok(tungstenite::Message::Text(t)) => Ok(Some(t.as_str().to_owned())),
             Ok(_) => Ok(None), // ping/pong/binary/close — no payload for the client
             Err(tungstenite::Error::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(Error::Env(format!("ws read: {e}"))),

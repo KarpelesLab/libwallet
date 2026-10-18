@@ -28,7 +28,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 num-bigint = "0.4"
 num-traits = "0.2"
-base64 = "0.22"
+base64 = "0.23"
 bs58 = "0.5"
 # purecrypto has a wasm32 OsRng backend (routes to a host-supplied
 # `purecrypto.random_get` import — the web build wires it to
@@ -93,7 +93,7 @@ rsurl = { version = "0.1.19", default-features = false, features = ["purecrypto-
 # The FFI's sync worker threads drive the shared async handlers via crate::rt's
 # block_on; wasm awaits the same futures. (tokio is already in-tree via ethrpc.)
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
-tungstenite = "0.20"
+tungstenite = "0.30"
 spotlib = "0.1.3"
 
 # Browser (wasm32) only — the wasm-bindgen boundary. Entropy comes from
@@ -121,11 +121,11 @@ spotlib = { version = "0.1.3", default-features = false }
 klbfw = { version = "0.1.8", default-features = false, features = ["spot"] }
 futures-channel = { version = "0.3", features = ["std"], default-features = false }
 futures-util = { version = "0.3", features = ["std"], default-features = false }
-gloo-timers = { version = "0.3", features = ["futures"] }
+gloo-timers = { version = "0.4", features = ["futures"] }
 
 [dev-dependencies]
 tempfile = "3"
-base64 = "0.22"
+base64 = "0.23"
 # Drives the async `rpc::call_async` (rsurl::aio TokioRuntime) in native tests.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "time"] }
 
