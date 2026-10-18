@@ -1,3 +1,12 @@
+## 0.5.3
+
+- **Rust backend dependencies refreshed.** The KLB crypto stack moves to
+  purecrypto 0.10 (outscript 0.2.7, bottlers 0.1.5, tsslib 0.2.16,
+  spotlib 0.1.3, klbfw 0.1.8, rsurl 0.1.19), plus base64 0.23 and
+  tungstenite 0.30. Building the native library now requires Rust 1.95+.
+- The native library no longer links rsurl's SSH and BitTorrent clients;
+  only HTTP(S) was ever used.
+
 ## 0.5.2
 
 - **Native asset back in `assets.list()`.** The live native-currency entry
