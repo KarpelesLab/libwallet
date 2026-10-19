@@ -34,40 +34,175 @@ const WRAPPED_SOL_MINT: &str = "So11111111111111111111111111111111111111112";
 /// SOL is the output).
 pub const OKX_SOLANA_NATIVE: &str = "11111111111111111111111111111111";
 
-/// A token reference (Go `TokenRef`).
+/// A token reference (Go `TokenRef`), the Dart `SwapTokenRef` wire shape:
+/// `{address, symbol?, decimals}`. Address `"NATIVE"` (or empty) is the
+/// chain's native currency; on Solana the wSOL mint means native SOL too. The
+/// PascalCase aliases keep pre-Dart-contract callers working.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenRef {
-    #[serde(default)]
+    #[serde(default, alias = "Address")]
     pub address: String,
-    #[serde(default)]
+    #[serde(default, alias = "Symbol", skip_serializing_if = "String::is_empty")]
     pub symbol: String,
-    #[serde(default)]
+    #[serde(default, alias = "Decimals")]
     pub decimals: i64,
 }
 
-/// The core of a swap quote (subset of Go `Quote` — the quote-time fields).
-#[derive(Debug, Clone, Serialize)]
+/// One hop of a swap route (Go `RouteHop`, Dart `SwapRouteHop`). Display-only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteHop {
+    pub venue: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub in_symbol: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub out_symbol: String,
+    #[serde(default)]
+    pub share: f64,
+}
+
+/// A swap quote (Go `Quote`), serialized field-for-field as the Dart
+/// `SwapQuote.fromJson` reads it. [`get_quote`] fills the provider-side fields;
+/// the `Swap:*` handlers stamp `quote_id` / `expires_at` (and the EVM approval
+/// fields) and cache it so `Swap:execute` / `Swap:buildApproval` can run by id.
+/// A non-empty `status` marks an advisory, non-executable quote (maxSpendable).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Quote {
+    #[serde(default)]
+    pub quote_id: String,
     pub provider: String,
+    #[serde(default)]
+    pub provider_label: String,
     pub chain: String,
-    #[serde(rename = "tokenIn")]
     pub token_in: TokenRef,
-    #[serde(rename = "tokenOut")]
     pub token_out: TokenRef,
-    #[serde(rename = "amountIn")]
     pub amount_in: Amount,
-    #[serde(rename = "amountOut")]
     pub amount_out: Amount,
-    #[serde(rename = "minAmountOut")]
     pub min_amount_out: Amount,
-    #[serde(rename = "priceImpact")]
+    #[serde(default)]
     pub price_impact: f64,
-    #[serde(rename = "slippageBps")]
-    pub slippage_bps: u16,
-    #[serde(rename = "feeBps")]
+    #[serde(default)]
     pub fee_bps: u16,
-    #[serde(rename = "networkFee", skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub slippage_bps: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referral_fee: Option<Amount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_fee: Option<Amount>,
+    #[serde(default)]
+    pub route: Vec<RouteHop>,
+    /// RFC 3339; past this `Swap:execute` answers `quote_expired`.
+    #[serde(default)]
+    pub expires_at: String,
+    #[serde(default)]
+    pub requires_approval: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub approval_spender: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_allowance: Option<Amount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needed_allowance: Option<Amount>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub status_message: String,
+}
+
+/// The routed provider name for a network type (Go `providerOrderForChain`).
+pub fn provider_for(kind: &str) -> Option<&'static str> {
+    match kind {
+        "solana" => Some("okx_solana"),
+        "evm" => Some("okx_evm"),
+        _ => None,
+    }
+}
+
+/// The display label for a provider name (Go `providerDisplayLabel`).
+pub fn provider_label(provider: &str) -> &str {
+    match provider {
+        "okx_solana" | "okx_evm" => "OKX",
+        other => other,
+    }
+}
+
+impl Quote {
+    /// A non-executable advisory quote (Go `buildAdvisoryQuote`): the resolved
+    /// `amount_in`, zero outputs, and a `status` the host renders as a hint.
+    /// Never cached — it carries no quoteId.
+    pub fn advisory(
+        kind: &str,
+        token_in: TokenRef,
+        token_out: TokenRef,
+        amount_in: BigInt,
+        slippage_bps: u16,
+        status: &str,
+        message: &str,
+    ) -> Quote {
+        let provider = provider_for(kind).unwrap_or_default();
+        let zero_out = Amount::new_raw(BigInt::from(0), token_out.decimals);
+        Quote {
+            quote_id: String::new(),
+            provider: provider.to_owned(),
+            provider_label: provider_label(provider).to_owned(),
+            chain: kind.to_owned(),
+            amount_in: Amount::new_raw(amount_in, token_in.decimals),
+            amount_out: zero_out.clone(),
+            min_amount_out: zero_out,
+            price_impact: 0.0,
+            fee_bps: 0,
+            slippage_bps: normalize_slippage(slippage_bps),
+            referral_fee: None,
+            network_fee: None,
+            route: Vec::new(),
+            expires_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            requires_approval: false,
+            approval_spender: String::new(),
+            current_allowance: None,
+            needed_allowance: None,
+            status: status.to_owned(),
+            status_message: message.to_owned(),
+            token_in,
+            token_out,
+        }
+    }
+}
+
+/// One token block of an OKX `/quote` hop.
+#[derive(Debug, Deserialize, Default)]
+struct OkxToken {
+    #[serde(default, rename = "tokenSymbol")]
+    token_symbol: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct OkxDexProtocol {
+    #[serde(default, rename = "dexName")]
+    dex_name: String,
+    #[serde(default)]
+    percent: String,
+}
+
+/// One hop of OKX's flat V6 `dexRouterList` (Go `okxRouter`).
+#[derive(Debug, Deserialize, Default)]
+struct OkxRouter {
+    #[serde(default, rename = "dexProtocol")]
+    dex_protocol: OkxDexProtocol,
+    #[serde(default, rename = "fromToken")]
+    from_token: OkxToken,
+    #[serde(default, rename = "toToken")]
+    to_token: OkxToken,
+}
+
+/// The platform's echo of the referral fee it forwarded (Go `okxPlatformFee`).
+#[derive(Debug, Deserialize, Default)]
+struct OkxPlatformFee {
+    #[serde(default)]
+    side: String,
+    #[serde(default)]
+    percent: String,
+    #[serde(default)]
+    amount: String,
 }
 
 /// The OKX `/quote` response entry we consume.
@@ -81,6 +216,36 @@ struct OkxQuoteEntry {
     price_impact_percent: String,
     #[serde(default, rename = "estimateGasFee")]
     estimate_gas_fee: String,
+    #[serde(default, rename = "dexRouterList")]
+    dex_router_list: Vec<OkxRouter>,
+    #[serde(default, rename = "platformFee")]
+    platform_fee: Option<OkxPlatformFee>,
+}
+
+/// Flatten OKX's `dexRouterList` into display hops (Go `okxBuildRoute`): hop
+/// symbols from the entry, falling back to the request symbols at the ends.
+fn okx_build_route(routers: &[OkxRouter], in_sym: &str, out_sym: &str) -> Vec<RouteHop> {
+    let last = routers.len().saturating_sub(1);
+    routers
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut hop_in = r.from_token.token_symbol.clone();
+            let mut hop_out = r.to_token.token_symbol.clone();
+            if hop_in.is_empty() && i == 0 {
+                hop_in = in_sym.to_owned();
+            }
+            if hop_out.is_empty() && i == last {
+                hop_out = out_sym.to_owned();
+            }
+            RouteHop {
+                venue: r.dex_protocol.dex_name.clone(),
+                in_symbol: hop_in,
+                out_symbol: hop_out,
+                share: r.dex_protocol.percent.parse::<f64>().map(|p| p / 100.0).unwrap_or(0.0),
+            }
+        })
+        .collect()
 }
 
 /// Strip a `<type>.<chainId>.` address prefix (Go `stripChainPrefix`).
@@ -113,13 +278,32 @@ pub fn okx_chain_index(kind: &str, chain_id: &str) -> Result<String> {
 }
 
 /// Map a token address for OKX (Go `okxTokenAddrFor`): native → the chain's
-/// sentinel (EVM 0xeee…, Solana wrapped-SOL mint), else the stripped address.
+/// sentinel (EVM 0xeee…, Solana [`OKX_SOLANA_NATIVE`]), else the stripped
+/// address. On Solana the wSOL mint also maps to the native sentinel: the Dart
+/// contract documents `So111…112` as an accepted spelling of SOL, and handing
+/// the mint itself to OKX builds a tx that never wraps (the 0xb revert).
 pub fn okx_token_addr(kind: &str, addr: &str) -> String {
     let addr = strip_chain_prefix(addr);
-    if addr.is_empty() || addr.eq_ignore_ascii_case("NATIVE") {
+    if addr.is_empty() || addr.eq_ignore_ascii_case("NATIVE") || (kind == "solana" && addr == WRAPPED_SOL_MINT) {
         return if kind == "solana" { OKX_SOLANA_NATIVE } else { OKX_EVM_NATIVE }.to_owned();
     }
     addr.to_owned()
+}
+
+/// Whether a token address is the chain's native currency: empty / `NATIVE`
+/// everywhere, plus the 0xeee… sentinel on EVM and the wSOL mint on Solana.
+pub fn is_native_for(kind: &str, addr: &str) -> bool {
+    let addr = strip_chain_prefix(addr);
+    match kind {
+        "solana" => is_native_token_address(addr),
+        _ => addr.is_empty() || addr.eq_ignore_ascii_case("NATIVE") || addr.eq_ignore_ascii_case(OKX_EVM_NATIVE),
+    }
+}
+
+/// The bare mint / contract for a token address (`<type>.<chainId>.` prefix
+/// stripped), as on-chain lookups (balanceOf, token accounts) need it.
+pub fn bare_token_addr(addr: &str) -> &str {
+    strip_chain_prefix(addr)
 }
 
 /// Clamp slippage to `[1, MAX]`, defaulting 0 (Go `normalizeSlippageBps`).
@@ -255,6 +439,81 @@ pub fn execute_evm(
     mev: bool,
     quote_id: &str,
 ) -> Result<serde_json::Value> {
+    execute_evm_guarded(
+        env, account_id, unlock, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
+        quote_id, &ExecuteGuard::default(),
+    )
+}
+
+/// What the user approved in a cached quote, checked against the provider's
+/// `/swap` response before anything is signed (Go `okxValidateEVMTx` /
+/// `okxAssertMinReceive`). Empty fields skip their check.
+#[derive(Debug, Clone, Default)]
+pub struct ExecuteGuard {
+    /// The quote's `minAmountOut` — the floor for OKX's `minReceiveAmount`.
+    pub min_amount_out: Option<BigInt>,
+    /// EVM: the approved router; the swap tx must target it (token-in only).
+    pub spender: Option<String>,
+    /// EVM: the exact `tx.value` expected (amountIn for native-in, else 0).
+    pub value: Option<BigInt>,
+}
+
+impl ExecuteGuard {
+    /// The guard for a cached quote: its min-out, approved spender, and (EVM)
+    /// the native value the swap tx must carry.
+    pub fn for_quote(q: &Quote) -> ExecuteGuard {
+        let value = if q.chain != "evm" {
+            None
+        } else if is_native_for("evm", &q.token_in.address) {
+            q.amount_in.value().cloned()
+        } else {
+            Some(BigInt::from(0))
+        };
+        ExecuteGuard {
+            min_amount_out: q.min_amount_out.value().cloned(),
+            spender: Some(q.approval_spender.clone()).filter(|s| !s.is_empty()),
+            value,
+        }
+    }
+
+    /// Run the guard against an OKX `/swap` `tx` block.
+    fn check(&self, tx: &Value, slippage_bps: u16) -> Result<()> {
+        let field = |k: &str| tx.get(k).and_then(Value::as_str).unwrap_or("").trim().to_owned();
+        okx_assert_min_receive(self.min_amount_out.as_ref(), slippage_bps, &field("minReceiveAmount"))?;
+        if let Some(sp) = &self.spender {
+            if !field("to").eq_ignore_ascii_case(sp.trim()) {
+                return Err(Error::Env(format!("okx: swap tx.to {:?} does not match approved spender {sp:?}", field("to"))));
+            }
+        }
+        if let Some(want) = &self.value {
+            let got = BigInt::parse_bytes(field("value").as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
+            if &got != want {
+                return Err(Error::Env(format!("okx: swap tx.value {got} does not match expected native-in amount {want}")));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// [`execute_evm`] with the quote-approval tripwires of `guard` applied to the
+/// fetched swap tx before signing.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_evm_guarded(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    client_id: Option<&str>,
+    base: &str,
+    rpc: &str,
+    chain_id: &str,
+    token_in: &TokenRef,
+    token_out: &TokenRef,
+    amount_in: &str,
+    slippage_bps: u16,
+    mev: bool,
+    quote_id: &str,
+    guard: &ExecuteGuard,
+) -> Result<serde_json::Value> {
     let acct = crate::models::account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
     if acct.kind != "ethereum" {
@@ -282,7 +541,9 @@ pub fn execute_evm(
     if to.is_empty() || tx_data.is_empty() {
         return Err(Error::Env("okx: evm swap returned empty tx".into()));
     }
-    let value = tx.get("value").and_then(Value::as_str).unwrap_or("0").to_owned();
+    // Tripwires: the /swap tx is signed as-is, so it must still match the quote.
+    guard.check(tx, slippage_bps)?;
+    let value =tx.get("value").and_then(Value::as_str).unwrap_or("0").to_owned();
     let gas_price = tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0").to_owned();
     let gas: u64 = tx.get("gas").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
     let gas = gas * 3 / 2; // +50% headroom (OKX guidance)
@@ -389,6 +650,30 @@ pub fn execute_solana(
     unlock: &[(String, String)],
     client_id: Option<&str>,
     base: &str,
+    rpc: &str,
+    chain_id: &str,
+    token_in: &TokenRef,
+    token_out: &TokenRef,
+    amount_in: &str,
+    slippage_bps: u16,
+    mev: bool,
+    quote_id: &str,
+) -> Result<serde_json::Value> {
+    execute_solana_guarded(
+        env, account_id, unlock, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
+        quote_id, &ExecuteGuard::default(),
+    )
+}
+
+/// [`execute_solana`] with the quote's min-receive tripwire (`guard`) applied
+/// to each fetched swap tx before signing.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_solana_guarded(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    client_id: Option<&str>,
+    base: &str,
     _rpc: &str,
     chain_id: &str,
     token_in: &TokenRef,
@@ -397,6 +682,7 @@ pub fn execute_solana(
     slippage_bps: u16,
     _mev: bool,
     quote_id: &str,
+    guard: &ExecuteGuard,
 ) -> Result<serde_json::Value> {
     let acct = crate::models::account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
@@ -429,6 +715,11 @@ pub fn execute_solana(
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| Error::Env("okx: solana swap returned empty tx.data".into()))?;
+        // The Solana tx body is opaque, but OKX echoes the minReceiveAmount it
+        // baked in — refuse to sign below the floor the user approved.
+        if let Some(tx) = entry.get("tx") {
+            guard.check(tx, slippage_bps)?;
+        }
 
         let raw_tx = decode_solana_tx_data(tx_data, &signer)?;
         let message = crate::solana::tx_message(&raw_tx)
@@ -602,19 +893,110 @@ pub fn get_quote(
     let network_fee = BigInt::parse_bytes(entry.estimate_gas_fee.as_bytes(), 10)
         .map(|g| Amount::new_raw(g, native_decimals(kind)));
 
+    // Platform referral fee, when the proxy echoes it (Go okxApplyPlatformFee):
+    // percent → bps, amount in the smallest unit of whichever side it's on.
+    let mut fee_bps = DEFAULT_FEE_BPS;
+    let mut referral_fee = None;
+    if let Some(pf) = &entry.platform_fee {
+        if let Ok(pct) = pf.percent.parse::<f64>() {
+            if pct > 0.0 {
+                fee_bps = (pct * 100.0).round() as u16;
+            }
+        }
+        if let Some(a) = BigInt::parse_bytes(pf.amount.as_bytes(), 10) {
+            let dec = if pf.side == "to" { token_out.decimals } else { token_in.decimals };
+            referral_fee = Some(Amount::new_raw(a, dec));
+        }
+    }
+
+    let provider = provider_for(kind).unwrap_or("okx_evm");
     Ok(Quote {
-        provider: if kind == "solana" { "okx_solana" } else { "okx_evm" }.to_owned(),
+        quote_id: String::new(),
+        provider: provider.to_owned(),
+        provider_label: provider_label(provider).to_owned(),
         chain: kind.to_owned(),
         amount_in: Amount::new_raw(amount_in_bi, token_in.decimals),
         amount_out: Amount::new_raw(amount_out_bi, token_out.decimals),
         min_amount_out: Amount::new_raw(min_out_bi, token_out.decimals),
         price_impact,
         slippage_bps: slippage,
-        fee_bps: DEFAULT_FEE_BPS,
+        fee_bps,
+        referral_fee,
         network_fee,
+        route: okx_build_route(&entry.dex_router_list, &token_in.symbol, &token_out.symbol),
+        expires_at: String::new(),
+        requires_approval: false,
+        approval_spender: String::new(),
+        current_allowance: None,
+        needed_allowance: None,
+        status: String::new(),
+        status_message: String::new(),
         token_in,
         token_out,
     })
+}
+
+/// OKX's ERC-20 approve spender (the DEX router) for an EVM chain index, from
+/// `Crypto/Okx:supportedChains` (Go `okxApproveAddress`).
+pub fn okx_approve_address(client_id: Option<&str>, base: &str, chain_index: &str) -> Result<String> {
+    let data = crate::rest::do_get_params(base, "Crypto/Okx:supportedChains", &json!({}), client_id)?;
+    data.as_array()
+        .into_iter()
+        .flatten()
+        .find(|c| c.get("chainIndex").and_then(Value::as_str) == Some(chain_index))
+        .and_then(|c| c.get("dexTokenApproveAddress").and_then(Value::as_str))
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Env(format!("okx: chain {chain_index} not in supportedChains")))
+}
+
+/// Fill the EVM approval fields of a token-in quote (Go okxQuote's allowance
+/// block): spender = OKX's router, needed = amountIn, current = the on-chain
+/// allowance. Best-effort — an unknown spender leaves the quote untouched; an
+/// allowance read failure reports zero and requires approval.
+pub fn apply_evm_approval(q: &mut Quote, client_id: Option<&str>, base: &str, chain_id: &str, rpc: Option<&str>, owner: &str) {
+    if q.chain != "evm" || is_native_for("evm", &q.token_in.address) {
+        return;
+    }
+    let Ok(spender) = okx_approve_address(client_id, base, chain_id) else { return };
+    let dec = q.token_in.decimals;
+    let needed = q.amount_in.value().cloned().unwrap_or_else(|| BigInt::from(0));
+    let current = rpc
+        .ok_or(())
+        .and_then(|r| crate::erc20::allowance(r, bare_token_addr(&q.token_in.address), owner, &spender).map_err(|_| ()));
+    match current {
+        Ok(cur) => {
+            q.requires_approval = cur < needed;
+            q.current_allowance = Some(Amount::new_raw(cur, dec));
+        }
+        Err(()) => {
+            q.requires_approval = true;
+            q.current_allowance = Some(Amount::new_raw(BigInt::from(0), dec));
+        }
+    }
+    q.needed_allowance = Some(Amount::new_raw(needed, dec));
+    q.approval_spender = spender;
+}
+
+/// The SPL balance (base units) `owner` holds of `mint`, summed over its token
+/// accounts (`getTokenAccountsByOwner`, jsonParsed).
+pub fn solana_spl_balance(rpc: &str, owner: &str, mint: &str) -> Result<BigInt> {
+    let res = crate::rpc::call(
+        rpc,
+        "getTokenAccountsByOwner",
+        json!([owner, { "mint": mint }, { "encoding": "jsonParsed" }]),
+    )?;
+    let mut total = BigInt::from(0);
+    for acct in res.get("value").and_then(Value::as_array).into_iter().flatten() {
+        let amount = acct
+            .pointer("/account/data/parsed/info/tokenAmount/amount")
+            .and_then(Value::as_str)
+            .and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10));
+        if let Some(a) = amount {
+            total += a;
+        }
+    }
+    Ok(total)
 }
 
 // ── OKX settlement robustness (ports of wltswap/okx.go) ─────────────────────
@@ -945,9 +1327,7 @@ pub const SOLANA_TOKEN_ACCOUNT_RENT: u64 = 2_039_280;
 /// conservative max. The `SOLANA_TOKEN_ACCOUNT_RENT` fallback matches the
 /// canonical SPL token-account rent.
 ///
-/// NOTE: `Swap:maxSpendable` is EVM-only in this Rust port, so this helper is
-/// not yet wired into an endpoint; it captures the Go decision + arithmetic
-/// exactly and is exercised directly.
+/// Wired into `Swap:maxSpendable` (and `amountIn: "MAX"`) for native-SOL input.
 pub fn solana_swap_sol_reservation(
     rpc: &str,
     owner: &str,
