@@ -1,5 +1,13 @@
 ## Unreleased
 
+- **Swaps work from Dart again.** The Rust `Swap:*` endpoints now speak the
+  `SwapApi` contract: camelCase params (`tokenIn`, `amountIn`, `from`, …),
+  a 90 s server-side quote cache so `execute` / `buildApproval` run by
+  `quoteId`, `SwapQuote` / `SwapResult` / `ApprovalPreview` shaped as the
+  Dart models parse them, `amountIn: "MAX"` and `maxSpendable` on Solana and
+  tokens. SOL ↔ SPL routes map `NATIVE` and the wSOL mint to OKX's native-SOL
+  id. Error codes (`quote_expired`, `no_liquidity`, …) prefix the exception
+  message.
 - **Standard Solana private keys import directly.**
   `wallets.importPrivateKey(curve: 'ed25519')` accepts the base58 64-byte
   keypair Phantom / Solflare export, a solana-keygen `id.json` byte array,
