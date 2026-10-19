@@ -10,8 +10,8 @@ use xuid::Xuid;
 
 use crate::{Env, Result, SqlValue};
 
-const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "WalletConnect" ("Id" text, "Topic" text, "PairingTopic" text, "State" text, "SymKey" text, "SelfPriv" text, "SelfPub" text, "PeerPub" text, "PeerMetadata" text, "Namespaces" text, "Expiry" text, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
-CREATE UNIQUE INDEX IF NOT EXISTS "WalletConnect_Topic" ON "WalletConnect" ("Topic");"#;
+const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "WalletConnect" ("Id" text, "Topic" text, "PairingTopic" text, "State" text, "SymKey" text, "SelfPriv" text, "SelfPub" text, "PeerPub" text, "PeerMetadata" text, "Namespaces" text, "Expiry" text, "Created" text, "Updated" text, PRIMARY KEY ("Id"));"#;
+const INDEX_DDL: &str = r#"CREATE UNIQUE INDEX IF NOT EXISTS "WalletConnect_Topic" ON "WalletConnect" ("Topic");"#;
 const COLS: &str = r#""Id", "Topic", "PairingTopic", "State", "SymKey", "SelfPriv", "SelfPub", "PeerPub", "PeerMetadata", "Namespaces", "Expiry", "Created", "Updated""#;
 const ID_PREFIX: &str = "wc";
 
@@ -48,7 +48,17 @@ pub struct WcSession {
 }
 
 pub fn init(env: &Env) -> Result<()> {
-    env.ensure_table(TABLE_DDL)
+    env.ensure_table(TABLE_DDL)?;
+    // Databases written by the Go backend never had this index, and can carry
+    // rows that would violate it: several with an empty/NULL Topic, or a topic
+    // reused across rows. A topic-less row is unreachable (every lookup is by
+    // topic), so drop it; for a reused topic keep the most recently updated row.
+    env.exec(r#"DELETE FROM "WalletConnect" WHERE "Topic" IS NULL OR "Topic" = ''"#, vec![])?;
+    env.exec(
+        r#"DELETE FROM "WalletConnect" WHERE EXISTS (SELECT 1 FROM "WalletConnect" AS w WHERE w."Topic" = "WalletConnect"."Topic" AND (COALESCE(w."Updated", '') > COALESCE("WalletConnect"."Updated", '') OR (COALESCE(w."Updated", '') = COALESCE("WalletConnect"."Updated", '') AND w."Id" > "WalletConnect"."Id")))"#,
+        vec![],
+    )?;
+    env.ensure_table(INDEX_DDL)
 }
 
 /// Persist a new pairing row (state = "pairing") for a parsed pairing URI.
