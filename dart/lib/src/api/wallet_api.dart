@@ -242,8 +242,17 @@ class WalletApi {
   /// TSS wallet later via [promote] when the user wants MPC security —
   /// the address survives the upgrade.
   ///
-  /// - [privateKey]: 0x-prefixed hex, bare hex, or Bitcoin-family WIF.
-  ///   WIF is auto-sniffed and only supported for `secp256k1`.
+  /// - [privateKey]: for `secp256k1`, 0x-prefixed hex, bare hex, or a
+  ///   Bitcoin-family WIF (auto-sniffed). For `ed25519` (Solana), the
+  ///   standard wallet exports are accepted as-is: a base58 64-byte keypair
+  ///   (Phantom / Solflare "export private key"), a solana-keygen `id.json`
+  ///   byte array, or 128-char hex — the embedded public key is checked
+  ///   against the secret, so the resulting address is the one the source
+  ///   wallet showed. A 32-byte base58 string or byte array is a seed. A
+  ///   32-byte **hex** string is ambiguous and stays the raw Ed25519 secret
+  ///   scalar (historic behaviour) unless [format] is `'seed'`.
+  /// - [format]: optional `'seed'` or `'scalar'` to disambiguate a 32-byte
+  ///   ed25519 key. Ignored for `secp256k1`.
   /// - [curve]: `'secp256k1'` (EVM / Bitcoin family) or `'ed25519'` (Solana).
   /// - [name]: human-readable wallet name (untrusted display string).
   /// - [keys]: a single [KeyDescription] specifying how to encrypt the
@@ -255,12 +264,14 @@ class WalletApi {
     required String curve,
     required String name,
     required List<KeyDescription> keys,
+    String? format,
   }) async {
     final data = await _conn.request('Wallet:importPrivateKey', 'POST', {
       'PrivateKey': privateKey,
       'Curve': curve,
       'Name': name,
       'Keys': keys.map((k) => k.toJson()).toList(),
+      if (format != null) 'Format': format,
     });
     return Wallet.fromJson(data as Map<String, dynamic>);
   }

@@ -1,3 +1,16 @@
+## Unreleased
+
+- **Standard Solana private keys import directly.**
+  `wallets.importPrivateKey(curve: 'ed25519')` accepts the base58 64-byte
+  keypair Phantom / Solflare export, a solana-keygen `id.json` byte array,
+  or a 32-byte base58 seed, and yields the address the source wallet showed
+  (the embedded public key is verified). 32-byte hex keeps its historic
+  meaning (raw Ed25519 scalar) unless the new `format: 'seed'` is passed.
+- `importPrivateKey(curve: 'secp256k1')` accepts WIF, as documented.
+- WalletConnect: initialization no longer fails on older databases holding
+  several sessions with an empty Topic; such unreachable rows are removed
+  before the unique Topic index is created.
+
 ## 0.5.3
 
 - **Rust backend dependencies refreshed.** The KLB crypto stack moves to

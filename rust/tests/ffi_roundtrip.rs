@@ -2879,6 +2879,72 @@ fn wallet_import_private_key_via_ffi() {
     LibwalletDestroy(h);
 }
 
+/// Standard Solana exports (base58 keypair, id.json byte array, a seed with
+/// Format:"seed") import to the wallet whose key is that seed's RFC 8032
+/// public key; 32-byte hex stays a raw scalar; WIF works for secp256k1.
+#[test]
+fn wallet_import_private_key_formats_via_ffi() {
+    let h = new_env();
+    let import = |curve: &str, key: &str, format: &str| {
+        let body = serde_json::json!({
+            "path": "Wallet:importPrivateKey",
+            "params": {"Curve": curve, "PrivateKey": key, "Format": format, "Keys": [{"Type": "Password", "Key": "password1"}]},
+        });
+        request(h, &body.to_string())
+    };
+    let b64url = |b: &[u8]| {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
+    };
+
+    let seed = [7u8; 32];
+    let pubkey = purecrypto::ec::ed25519::Ed25519PrivateKey::from_bytes(seed).public_key().to_bytes();
+    let want = b64url(&pubkey);
+    let mut keypair = seed.to_vec();
+    keypair.extend_from_slice(&pubkey);
+    let seed_hex: String = seed.iter().map(|b| format!("{b:02x}")).collect();
+
+    for (key, format) in [
+        (bs58::encode(&keypair).into_string(), ""),
+        (serde_json::to_string(&keypair).unwrap(), ""),
+        (keypair.iter().map(|b| format!("{b:02x}")).collect::<String>(), ""),
+        (bs58::encode(&seed).into_string(), ""),
+        (seed_hex.clone(), "seed"),
+    ] {
+        let w = import("ed25519", &key, format);
+        assert_eq!(w["result"], "success", "{key}: {w}");
+        assert_eq!(w["data"]["Pubkey"], want, "{key} ({format})");
+    }
+    // ...and its Solana account carries the address the exporting wallet shows.
+    let w = import("ed25519", &bs58::encode(&keypair).into_string(), "");
+    let acct = request(
+        h,
+        &serde_json::json!({"path": "Account", "verb": "POST", "params": {"Wallet": w["data"]["Id"], "Type": "solana", "Index": 0}}).to_string(),
+    );
+    assert_eq!(acct["data"]["Address"], bs58::encode(&pubkey).into_string(), "{acct}");
+
+    // Bare 32-byte hex is still the raw scalar (back-compat), not the seed.
+    let w = import("ed25519", &seed_hex, "");
+    assert_eq!(w["result"], "success", "{w}");
+    assert_ne!(w["data"]["Pubkey"], want);
+    assert_eq!(import("ed25519", &seed_hex, "scalar")["data"]["Pubkey"], w["data"]["Pubkey"]);
+
+    // A keypair whose public half doesn't match is refused.
+    let mut bad = keypair.clone();
+    bad[63] ^= 1;
+    assert_eq!(import("ed25519", &bs58::encode(&bad).into_string(), "")["result"], "error");
+
+    // WIF (uncompressed and compressed) decodes to the same secp256k1 key as hex.
+    let hex_w = import("secp256k1", "0C28FCA386C7A227600B2FE50B7CAE11EC86D3BF1FBE471BE89827E19D72AA1D", "");
+    for wif in ["5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ", "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617"] {
+        let w = import("secp256k1", wif, "");
+        assert_eq!(w["result"], "success", "{w}");
+        assert_eq!(w["data"]["Pubkey"], hex_w["data"]["Pubkey"]);
+    }
+    assert_eq!(import("secp256k1", "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTK", "")["result"], "error");
+    LibwalletDestroy(h);
+}
+
 #[test]
 fn storekey_create_and_unlock_via_ffi() {
     let h = new_env();

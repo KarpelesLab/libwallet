@@ -395,6 +395,95 @@ pub fn restore(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "restored": restored }))
 }
 
+/// Decode an imported private key into the big-endian scalar the 1-of-1 import
+/// wraps.
+///
+/// secp256k1: 32-byte hex (0x optional) or a Bitcoin-family WIF.
+///
+/// ed25519 — the wallet key is the secret *scalar*, while Solana wallets
+/// export the RFC 8032 *seed* (whose SHA-512 expands to the scalar):
+/// - a 64-byte keypair `seed ‖ pubkey` — base58 (Phantom/Solflare export), a
+///   JSON byte array (solana-keygen `id.json`) or 128 hex chars — is always
+///   treated as a seed, and the derived public key must match the embedded one;
+/// - a 32-byte base58 string or JSON byte array is a seed;
+/// - 32-byte hex is the raw scalar, as it always was, unless `Format` is
+///   `"seed"`. `Format: "scalar"` forces scalar for any 32-byte input.
+pub(crate) fn decode_private_key(curve: &str, input: &str, format: &str) -> Result<Vec<u8>, ApiError> {
+    let input = input.trim();
+    if !matches!(format, "" | "seed" | "scalar") {
+        return Err(ApiError::new(400, format!("unsupported Format {format:?} (expected seed or scalar)")));
+    }
+    let hex_body = input.strip_prefix("0x").or_else(|| input.strip_prefix("0X")).unwrap_or(input);
+    let as_hex = (hex_body.len() % 2 == 0 && hex_body.bytes().all(|b| b.is_ascii_hexdigit()))
+        .then(|| (0..hex_body.len()).step_by(2).map(|i| u8::from_str_radix(&hex_body[i..i + 2], 16).unwrap()).collect::<Vec<u8>>());
+
+    if curve == "secp256k1" {
+        if let Some(b) = as_hex {
+            if b.len() != 32 {
+                return Err(ApiError::new(400, format!("hex private key must be 64 chars, got {}", hex_body.len())));
+            }
+            return Ok(b);
+        }
+        return decode_wif(input);
+    }
+
+    // ed25519
+    let (bytes, is_hex) = if input.starts_with('[') {
+        let arr: Vec<u8> = serde_json::from_str(input).map_err(|e| ApiError::new(400, format!("bad JSON key array: {e}")))?;
+        (arr, false)
+    } else if let Some(b) = as_hex {
+        (b, true)
+    } else {
+        let b = bs58::decode(input).into_vec().map_err(|e| ApiError::new(400, format!("private key is neither hex nor base58: {e}")))?;
+        (b, false)
+    };
+    match bytes.len() {
+        64 => {
+            if format == "scalar" {
+                return Err(ApiError::new(400, "a 64-byte keypair carries a seed, not a scalar"));
+            }
+            let seed: [u8; 32] = bytes[..32].try_into().unwrap();
+            let derived = purecrypto::ec::ed25519::Ed25519PrivateKey::from_bytes(seed).public_key().to_bytes();
+            if derived[..] != bytes[32..] {
+                return Err(ApiError::new(400, "keypair public key does not match its secret key"));
+            }
+            Ok(ed25519_seed_to_scalar(&seed))
+        }
+        32 if format == "scalar" || (is_hex && format != "seed") => Ok(bytes),
+        32 => Ok(ed25519_seed_to_scalar(&bytes.try_into().unwrap())),
+        n => Err(ApiError::new(400, format!("ed25519 private key must be 32 or 64 bytes, got {n}"))),
+    }
+}
+
+/// The RFC 8032 secret scalar for an Ed25519 seed: the clamped low half of
+/// SHA-512(seed), little-endian — returned big-endian for the import.
+fn ed25519_seed_to_scalar(seed: &[u8; 32]) -> Vec<u8> {
+    use purecrypto::hash::Digest;
+    let h = purecrypto::hash::Sha512::digest(seed);
+    let mut a = h[..32].to_vec();
+    a[0] &= 248;
+    a[31] &= 127;
+    a[31] |= 64;
+    a.reverse();
+    a
+}
+
+/// Decode a WIF private key (base58check: version ‖ 32-byte key ‖ [0x01]).
+fn decode_wif(input: &str) -> Result<Vec<u8>, ApiError> {
+    let raw = bs58::decode(input).into_vec().map_err(|_| ApiError::new(400, "private key is neither 32-byte hex nor WIF"))?;
+    if raw.len() != 37 && raw.len() != 38 {
+        return Err(ApiError::new(400, "private key is neither 32-byte hex nor WIF"));
+    }
+    let (body, check) = raw.split_at(raw.len() - 4);
+    if purecrypto::hash::sha256(&purecrypto::hash::sha256(body))[..4] != *check {
+        return Err(ApiError::new(400, "WIF checksum mismatch"));
+    }
+    if body.len() == 34 && body[33] != 0x01 {
+        return Err(ApiError::new(400, "bad WIF compression flag"));
+    }
+    Ok(body[1..33].to_vec())
+}
+
 /// `Wallet:importMnemonic` {Mnemonic, Passphrase?, Curve, Name, Keys(1)} — import
 /// a BIP-39 mnemonic as a 1-of-1 wallet (Go apiImportMnemonic).
 pub fn import_mnemonic(env: &Env, params: &Value) -> ApiResult {
@@ -424,8 +513,9 @@ pub fn import_mnemonic(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::to_value(w).unwrap())
 }
 
-/// `Wallet:importPrivateKey` {PrivateKey, Curve, Name, Keys(1)} — wrap a raw
-/// 32-byte hex private key as a 1-of-1 wallet (Go apiImportPrivateKey).
+/// `Wallet:importPrivateKey` {PrivateKey, Curve, Name, Keys(1), Format?} — wrap
+/// a private key as a 1-of-1 wallet (Go apiImportPrivateKey). See
+/// [`decode_private_key`] for the accepted encodings.
 pub fn import_private_key(env: &Env, params: &Value) -> ApiResult {
     let curve = params.get("Curve").and_then(Value::as_str).unwrap_or("");
     if curve != "secp256k1" && curve != "ed25519" {
@@ -439,21 +529,12 @@ pub fn import_private_key(env: &Env, params: &Value) -> ApiResult {
     if keys.len() != 1 {
         return Err(ApiError::new(400, format!("import requires exactly 1 KeyDescription (got {})", keys.len())));
     }
-    // 32-byte hex private key (0x optional).
     let pk_s = params
         .get("PrivateKey")
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "PrivateKey required"))?
-        .trim();
-    let hexs = pk_s.strip_prefix("0x").or_else(|| pk_s.strip_prefix("0X")).unwrap_or(pk_s);
-    if hexs.len() != 64 {
-        return Err(ApiError::new(400, format!("hex private key must be 64 chars, got {}", hexs.len())));
-    }
-    let priv_bytes: Vec<u8> = (0..64)
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hexs[i..i + 2], 16))
-        .collect::<std::result::Result<_, _>>()
-        .map_err(|e| ApiError::new(400, format!("decode hex: {e}")))?;
+        .ok_or_else(|| ApiError::new(400, "PrivateKey required"))?;
+    let format = params.get("Format").and_then(Value::as_str).unwrap_or("");
+    let priv_bytes = decode_private_key(curve, pk_s, format)?;
 
     let w = crate::models::wallet::import_private_key(env, &name, curve, &priv_bytes, &keys[0])
         .map_err(ApiError::internal)?;
