@@ -102,34 +102,45 @@ pub(crate) fn fiat_currency(params: &Value) -> Option<&str> {
 }
 
 /// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"/"tron"): the
-/// `RPC` param wins; else the current network `@` when it matches; else the
-/// seeded DEFAULT network for that chain (evm→1, solana→mainnet, bitcoin→
-/// bitcoin). The endpoint always comes from `Network::resolved_rpc`, never a
-/// client-supplied URL. Shared by the account send/balance and simulate paths so
-/// the browser (multi-chain, no single `@`) resolves the same way as native.
+/// `RPC` param wins; else the network [`network_for_kind`] picks. The endpoint
+/// always comes from `Network::resolved_rpc`, never a client-supplied URL.
+/// Shared by the account send/balance and simulate paths so the browser
+/// (multi-chain, no single `@`) resolves the same way as native.
 pub(crate) fn resolve_rpc_for_kind(env: &Env, params: &Value, kind: &str) -> Result<String, ApiError> {
     if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
         return Ok(url.to_owned());
     }
-    let current = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .filter(|n| n.kind == kind);
-    let net = match current {
-        Some(n) => n,
-        None => {
-            let default_chain = match kind {
-                "evm" => "1",
-                "solana" => "mainnet",
-                "bitcoin" => "bitcoin",
-                "tron" => "mainnet",
-                other => return Err(ApiError::new(400, format!("no default network for {other}"))),
-            };
-            crate::models::network::fetch(env, &format!("{kind}.{default_chain}"))
-                .map_err(ApiError::internal)?
-                .ok_or_else(|| ApiError::new(400, format!("no seeded network for {kind}")))?
+    network_for_kind(env, params, kind)?.resolved_rpc().map_err(ApiError::internal)
+}
+
+/// The network of `kind` a per-account read runs on: the `Network` param (a
+/// network id) when given, else the current network `@` when it matches, else
+/// the seeded DEFAULT network for that chain (evm→1, solana→mainnet, bitcoin→
+/// bitcoin, tron→mainnet) — so an account is readable whichever chain is
+/// currently selected.
+pub(crate) fn network_for_kind(env: &Env, params: &Value, kind: &str) -> Result<crate::models::network::Network, ApiError> {
+    if let Some(id) = params.get("Network").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let net = crate::models::network::fetch(env, id)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, format!("network {id} not found")))?;
+        if net.kind != kind {
+            return Err(ApiError::new(400, format!("network {id} is {}, not {kind}", net.kind)));
         }
+        return Ok(net);
+    }
+    if let Some(n) = crate::models::network::fetch(env, "@").map_err(ApiError::internal)?.filter(|n| n.kind == kind) {
+        return Ok(n);
+    }
+    let default_chain = match kind {
+        "evm" => "1",
+        "solana" => "mainnet",
+        "bitcoin" => "bitcoin",
+        "tron" => "mainnet",
+        other => return Err(ApiError::new(400, format!("no default network for {other}"))),
     };
-    net.resolved_rpc().map_err(ApiError::internal)
+    crate::models::network::fetch(env, &format!("{kind}.{default_chain}"))
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::new(400, format!("no seeded network for {kind}")))
 }
 
 /// Object names whose registered path is itself two segments (`A/B`); their id,

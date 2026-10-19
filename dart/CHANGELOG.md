@@ -7,6 +7,12 @@
   (the embedded public key is verified). 32-byte hex keeps its historic
   meaning (raw Ed25519 scalar) unless the new `format: 'seed'` is passed.
 - `importPrivateKey(curve: 'secp256k1')` accepts WIF, as documented.
+- **`accounts.nativeAsset()` reads any account's chain.** It no longer
+  errors when the current network is another chain (e.g. an imported Solana
+  account while Ethereum is selected): it uses the new `network` argument,
+  else the current network if it matches, else the chain's default network.
+  Per-account RPC resolution (`balance`, `signAndSend`, `maxSendable`, …)
+  likewise honours an explicit `Network` id of the account's chain.
 - **Backups keep the wallet's accounts.** `wallets.backup()` now includes
   every account of the wallet (type, index, path, name) and
   `wallets.restore()` recreates them — re-derived and checked against the

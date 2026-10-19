@@ -617,6 +617,42 @@ fn native_asset_via_ffi() {
     LibwalletDestroy(h);
 }
 
+/// An imported Solana key's account reads its SOL while the current network is
+/// EVM: nativeAsset uses the account's own chain instead of erroring.
+#[test]
+fn native_asset_follows_the_account_chain_via_ffi() {
+    let h = new_env();
+    let w = request(
+        h,
+        r#"{"path":"Wallet:importPrivateKey","params":{"Curve":"ed25519","PrivateKey":"0707070707070707070707070707070707070707070707070707070707070707","Format":"seed","Keys":[{"Type":"Password","Key":"password1"}]}}"#,
+    );
+    let wallet_id = w["data"]["Id"].as_str().unwrap().to_string();
+    let a = request(
+        h,
+        &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{wallet_id}","Type":"solana","Index":0}}}}"#),
+    );
+    let account_id = a["data"]["Id"].as_str().unwrap().to_string();
+    let net = request(h, r#"{"path":"Network/@","verb":"GET"}"#);
+    assert_eq!(net["data"]["Type"], "evm", "{net}");
+
+    let rpc = mock_node(r#"{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":5000000000}}"#);
+    let asset = request(
+        h,
+        &format!(r#"{{"path":"Account:nativeAsset","params":{{"Id":"{account_id}","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(asset["result"], "success", "nativeAsset failed: {asset:?}");
+    assert_eq!(asset["data"]["key"], "solana.mainnet.NATIVE");
+    assert_eq!(asset["data"]["symbol"], "SOL");
+
+    // An explicit Network of another chain is refused rather than misread.
+    let bad = request(
+        h,
+        &format!(r#"{{"path":"Account:nativeAsset","params":{{"Id":"{account_id}","Network":"evm.1","RPC":"{rpc}"}}}}"#),
+    );
+    assert_eq!(bad["result"], "error", "{bad}");
+    LibwalletDestroy(h);
+}
+
 #[test]
 fn bitcoin_xpub_via_ffi() {
     let h = new_env();

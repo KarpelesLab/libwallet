@@ -135,17 +135,22 @@ class AccountApi {
     return NextAddress.fromJson(data as Map<String, dynamic>);
   }
 
-  /// The account's live native-currency asset (ETH/SOL/BTC/TRX) on the
-  /// current network: the balance fetched from the chain, keyed
-  /// `<type>.<chainId>.NATIVE`. Computed, not persisted, so [Asset.id] is
-  /// empty. Pass [convert] (USD, EUR, GBP, JPY) to populate the fiat fields.
+  /// The account's live native-currency asset (ETH/SOL/BTC/TRX): the
+  /// balance fetched from the chain, keyed `<type>.<chainId>.NATIVE`.
+  /// Computed, not persisted, so [Asset.id] is empty. Pass [convert] (USD,
+  /// EUR, GBP, JPY) to populate the fiat fields.
   ///
-  /// Errors when the current network's chain doesn't match the account type.
+  /// Read on [network] (a network id of the account's chain) when given,
+  /// else on the current network if it is the account's chain, else on that
+  /// chain's default network (Ethereum mainnet, Solana mainnet, …) — so a
+  /// Solana account's SOL is readable while an EVM network is selected.
   /// `assets.list()` already includes this entry for the current account;
   /// use this to read one specific account's native balance.
-  Future<Asset> nativeAsset(String id, {String? convert}) async {
+  Future<Asset> nativeAsset(String id,
+      {String? convert, String? network}) async {
     final data = await _conn.request('Account/$id:nativeAsset', 'POST', {
       if (convert != null) 'Currency': convert,
+      if (network != null) 'Network': network,
     });
     return Asset.fromJson(Map<String, dynamic>.from(data as Map));
   }

@@ -902,7 +902,8 @@ fn decode_b64url_32(s: &str) -> Result<[u8; 32], ApiError> {
 }
 
 /// `Account:nativeAsset` — the live native-currency asset for an account:
-/// resolve the current network (must match the account chain), fetch the
+/// resolve the account's network (`Network`, else the current one when it
+/// matches, else the chain default), fetch the
 /// balance, and build the Asset (Key/Name/Symbol/Amount). With an optional
 /// `Currency` it is priced into fiat. This is the computed (non-persisted)
 /// native asset from Go's asset snapshot.
@@ -916,21 +917,18 @@ pub fn native_asset(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
 
-    // Resolve the current network and require it to match the account's chain.
-    let net = crate::models::network::fetch(env, "@")
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(400, "no current network"))?;
+    // The account's own chain: the Network param, the current network when it
+    // matches, else that chain's default — so an imported Solana account reads
+    // its SOL even while an EVM network is selected.
     let want = match account.kind.as_str() {
         "ethereum" => "evm",
         other => other,
     };
-    if net.kind != want {
-        return Err(ApiError::new(
-            400,
-            format!("current network is {} but account is {}", net.kind, account.kind),
-        ));
-    }
-    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let net = super::network_for_kind(env, params, want)?;
+    let rpc = match params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        Some(url) => url.to_owned(),
+        None => net.resolved_rpc().map_err(ApiError::internal)?,
+    };
 
     let mut asset = net.native_asset(&rpc, &account.address).map_err(ApiError::internal)?;
     if let Some(cur) = super::fiat_currency(params) {
