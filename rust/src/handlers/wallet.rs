@@ -358,12 +358,12 @@ pub fn backup(env: &Env, params: &Value) -> ApiResult {
             let w = crate::models::wallet::fetch(env, id)
                 .map_err(ApiError::internal)?
                 .ok_or_else(|| ApiError::new(404, "wallet not found"))?;
-            vec![crate::models::wallet::backup_entry(&w).map_err(ApiError::internal)?]
+            vec![crate::models::wallet::backup_entry(env, &w).map_err(ApiError::internal)?]
         }
         None => crate::models::wallet::list(env)
             .map_err(ApiError::internal)?
             .iter()
-            .map(crate::models::wallet::backup_entry)
+            .map(|w| crate::models::wallet::backup_entry(env, w))
             .collect::<crate::Result<Vec<_>>>()
             .map_err(ApiError::internal)?,
     };

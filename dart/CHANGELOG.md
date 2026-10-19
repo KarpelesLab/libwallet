@@ -7,6 +7,11 @@
   (the embedded public key is verified). 32-byte hex keeps its historic
   meaning (raw Ed25519 scalar) unless the new `format: 'seed'` is passed.
 - `importPrivateKey(curve: 'secp256k1')` accepts WIF, as documented.
+- **Backups keep the wallet's accounts.** `wallets.backup()` now includes
+  every account of the wallet (type, index, path, name) and
+  `wallets.restore()` recreates them — re-derived and checked against the
+  wallet key for threshold / private-key wallets. Backups from earlier
+  versions still restore (the wallet alone).
 - WalletConnect: initialization no longer fails on older databases holding
   several sessions with an empty Topic; such unreachable rows are removed
   before the unique Topic index is created.

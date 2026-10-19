@@ -115,6 +115,12 @@ class WalletApi {
 
   /// Restore wallets from backup files.
   ///
+  /// Backups made by libwallet 0.5.4+ also carry the wallet's accounts
+  /// (type, derivation index and path, name): restoring recreates every one
+  /// of them, so the host doesn't recreate index 0 itself. Older backups
+  /// restore the wallet alone. Restoring over a wallet that is already
+  /// present only adds its missing accounts.
+  ///
   /// After this call returns, the wallet's encrypted key shares are back
   /// in libwallet's local store but the device share's private key isn't
   /// — `Wallet:backup` excludes it by design (see [backup]). On a fresh

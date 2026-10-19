@@ -269,6 +269,12 @@ fn seed_secp_node(seed: &[u8], path: &str) -> Result<([u8; 33], [u8; 32])> {
 /// Insert a freshly built account row and make it the current account (Go
 /// CreateAccount saves then setCurrent).
 pub(crate) fn persist(env: &Env, account: &Account) -> Result<()> {
+    insert(env, account)?;
+    env.set_current("account", &account.id)?;
+    Ok(())
+}
+
+fn insert(env: &Env, account: &Account) -> Result<()> {
     let il_json = serde_json::to_string(&account.il).unwrap_or_else(|_| "null".into());
     env.exec(
         &format!(r#"INSERT INTO "Account" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)"#),
@@ -289,7 +295,6 @@ pub(crate) fn persist(env: &Env, account: &Account) -> Result<()> {
             SqlValue::Text(account.updated.clone()),
         ],
     )?;
-    env.set_current("account", &account.id)?;
     Ok(())
 }
 
@@ -332,6 +337,23 @@ fn create_impl(
 ) -> Result<Account> {
     let wallet = crate::models::wallet::fetch(env, wallet_id)?
         .ok_or_else(|| Error::Env("wallet not found".into()))?;
+    let account = derive(env, &wallet, name, typ, index, explicit_path)?;
+    persist(env, &account)?;
+    Ok(account)
+}
+
+/// Build (without persisting) account `index` of `typ` from a non-mnemonic
+/// wallet's group key: null derivation when `explicit_path` is `None`, else the
+/// explicit non-hardened path. See [`create`] / [`create_derived`].
+fn derive(
+    env: &Env,
+    wallet: &crate::models::wallet::Wallet,
+    name: &str,
+    typ: &str,
+    index: i64,
+    explicit_path: Option<&str>,
+) -> Result<Account> {
+    let wallet_id = wallet.id.as_str();
 
     let name = if name.is_empty() { format!("Account {}", index + 1) } else { name.to_owned() };
     if index < 0 {
@@ -450,9 +472,44 @@ fn create_impl(
         created: now.clone(),
         updated: now,
     };
-
-    persist(env, &account)?;
     Ok(account)
+}
+
+/// Recreate a backed-up account of `wallet` (from a `Wallet:backup` entry's
+/// `Accounts`), keeping its id, name, type, index and path. Returns `false`
+/// when it is already present (same id, or the same type + index). On a
+/// group-key wallet the address is re-derived from the wallet and must match
+/// the backup; a mnemonic wallet's accounts derive from the sealed seed (hardened
+/// paths), so their public fields are taken from the backup as-is — signing
+/// re-derives the key at `path` either way.
+pub fn restore(env: &Env, wallet: &crate::models::wallet::Wallet, backed: &Account) -> Result<bool> {
+    if backed.wallet != wallet.id {
+        return Err(Error::Env(format!("backed-up account {} belongs to another wallet", backed.id)));
+    }
+    if fetch(env, &backed.id)?.is_some() || at_index(env, &wallet.id, &backed.kind, backed.index)?.is_some() {
+        return Ok(false);
+    }
+    let mut account = if wallet.is_mnemonic() {
+        backed.clone()
+    } else {
+        let path = Some(backed.path.as_str()).filter(|p| !p.is_empty() && *p != "m");
+        let derived = derive(env, wallet, &backed.name, &backed.kind, backed.index, path)?;
+        // Compare keys, not addresses: a bitcoin display address follows the
+        // current network.
+        if derived.pubkey != backed.pubkey {
+            return Err(Error::Env(format!(
+                "backed-up account {} does not match its wallet's key at {:?}",
+                backed.id, backed.path
+            )));
+        }
+        derived
+    };
+    account.id = backed.id.clone();
+    if !backed.created.is_empty() {
+        account.created = backed.created.clone();
+    }
+    insert(env, &account)?;
+    Ok(true)
 }
 
 /// Create a view-only account from a bare address (Go `CreateViewAccount`,

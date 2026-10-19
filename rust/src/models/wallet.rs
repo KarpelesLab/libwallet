@@ -964,7 +964,7 @@ pub fn import_mnemonic(
 #[cfg(not(target_arch = "wasm32"))]
 pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_json::Value) -> Result<Vec<u8>> {
     let w = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
-    let entry = backup_entry(&w)?;
+    let entry = backup_entry(env, &w)?;
     let data_b64 = entry.get("data").and_then(|v| v.as_str()).ok_or_else(|| Error::Env("backup produced no data".into()))?;
     let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(data_b64)
@@ -986,7 +986,7 @@ pub fn build_transfer_payload(env: &Env, wallet_id: &str, device_shares: &serde_
 /// which reads `json['filename']`/`json['data']`. (The inner wallet JSON inside
 /// `data` keeps its capitalised Go field names — that blob must stay
 /// byte-compatible with Go's `json.Marshal(*Wallet)`.)
-pub fn backup_entry(w: &Wallet) -> Result<serde_json::Value> {
+pub fn backup_entry(env: &Env, w: &Wallet) -> Result<serde_json::Value> {
     use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
     if w.keys.is_empty() {
         return Err(Error::Env("wallet has no keys, cannot be backed up".into()));
@@ -1005,6 +1005,9 @@ pub fn backup_entry(w: &Wallet) -> Result<serde_json::Value> {
         "Id": w.id, "Name": w.name, "Curve": w.curve, "Protocol": w.protocol,
         "Threshold": w.threshold, "Gen": w.generation, "Pubkey": w.pubkey,
         "Chaincode": w.chaincode, "Created": w.created, "Modified": w.modified, "Keys": keys,
+        // Not in Go's format: the wallet's accounts, so a restore brings back
+        // every derived account (type, index, path) and not only index 0.
+        "Accounts": crate::models::account::for_wallet(env, &w.id)?,
     });
     let buf = serde_json::to_vec(&wj).map_err(|e| Error::Env(e.to_string()))?;
     let uuid = Xuid::parse_prefix(&w.id, "wlt")
@@ -1029,8 +1032,11 @@ pub fn restore_entry(env: &Env, data_b64url: &str) -> Result<String> {
     if id.is_empty() {
         return Err(Error::Env("backup missing wallet Id".into()));
     }
-    if fetch(env, &id)?.is_some() {
-        return Ok(id); // already present — idempotent restore
+    if let Some(existing) = fetch(env, &id)? {
+        // Already present — idempotent restore, but still bring back any
+        // backed-up account missing here.
+        restore_accounts(env, &existing, &wj)?;
+        return Ok(id);
     }
     let keys: Vec<WalletKey> = wj
         .get("Keys")
@@ -1066,7 +1072,22 @@ pub fn restore_entry(env: &Env, data_b64url: &str) -> Result<String> {
         keys,
     };
     persist(env, &w)?;
+    restore_accounts(env, &w, &wj)?;
     Ok(id)
+}
+
+/// Recreate the accounts listed in a backup's `Accounts` (absent from backups
+/// made before it was added; those restore the wallet alone).
+fn restore_accounts(env: &Env, w: &Wallet, wj: &serde_json::Value) -> Result<()> {
+    let Some(list) = wj.get("Accounts").and_then(|a| a.as_array()) else {
+        return Ok(());
+    };
+    for a in list {
+        let backed: crate::models::account::Account =
+            serde_json::from_value(a.clone()).map_err(|e| Error::Env(format!("bad backed-up account: {e}")))?;
+        crate::models::account::restore(env, w, &backed)?;
+    }
+    Ok(())
 }
 
 /// Update mutable wallet fields (Go `Wallet.ApiUpdate`): only `Name` is
