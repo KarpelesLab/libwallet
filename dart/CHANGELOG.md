@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.4
 
 - **Swaps work from Dart again.** The Rust `Swap:*` endpoints now speak the
   `SwapApi` contract: camelCase params (`tokenIn`, `amountIn`, `from`, …),
