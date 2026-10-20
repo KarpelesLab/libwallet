@@ -557,6 +557,19 @@ pub fn frost_split_key(
     Ok(out)
 }
 
+/// The RFC 8032 secret scalar of an Ed25519 seed: the clamped low half of
+/// SHA-512(seed), little-endian — returned big-endian, as the imports take it.
+pub fn ed25519_seed_to_scalar(seed: &[u8; 32]) -> Vec<u8> {
+    use purecrypto::hash::Digest;
+    let h = purecrypto::hash::Sha512::digest(seed);
+    let mut a = h[..32].to_vec();
+    a[0] &= 248;
+    a[31] &= 127;
+    a[31] |= 64;
+    a.reverse();
+    a
+}
+
 /// Sign with a FROST committee, tweaked or not. A threshold-0 committee is a
 /// 1-of-1 key (an imported private key): its one share IS the whole secret,
 /// and the FROST protocol refuses threshold 0, so it signs as plain Ed25519

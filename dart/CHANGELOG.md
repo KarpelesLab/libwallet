@@ -1,5 +1,12 @@
 ## Unreleased
 
+- **`wallets.exportSecret(walletId, keys:)`** reveals a single-key imported
+  wallet's secret as a `WalletSecret`: the recovery phrase + BIP-39
+  passphrase for mnemonic imports, the private key (hex + WIF) for
+  secp256k1 imports, and for Solana imports the base58 keypair Phantom /
+  Solflare accept. Solana keys imported from now on keep their seed (sealed
+  in the share) for this; ones imported earlier, or as a raw scalar, export
+  the scalar (re-importable into libwallet only). MPC wallets are refused.
 - **Imported Solana (ed25519) keys sign.** A non-promoted private-key import
   is a 1-of-1 key (threshold 0), which the FROST protocol refuses; it now
   signs as plain Ed25519 from its single share, including derived accounts.

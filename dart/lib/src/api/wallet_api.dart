@@ -7,6 +7,7 @@ import '../models/key_description.dart';
 import '../models/probe_activity.dart';
 import '../models/wallet.dart';
 import '../models/wallet_backup.dart';
+import '../models/wallet_secret.dart';
 
 export '../models/device_transfer.dart';
 export '../models/probe_activity.dart';
@@ -280,6 +281,24 @@ class WalletApi {
       if (format != null) 'Format': format,
     });
     return Wallet.fromJson(data as Map<String, dynamic>);
+  }
+
+  /// Reveal the secret of a single-key imported wallet: its recovery phrase
+  /// (plus BIP-39 passphrase) if it was imported from a mnemonic, else its
+  /// private key — for Solana keys imported from a standard export, in the
+  /// base58 keypair form Phantom / Solflare accept (see [WalletSecret.format]).
+  ///
+  /// [keys] is the wallet's single unlock [KeyDescription] (typically the
+  /// Password used at import). Promoted / MPC wallets have no single secret
+  /// and are refused. Gate this behind an explicit user confirmation.
+  Future<WalletSecret> exportSecret(
+    String walletId, {
+    required List<KeyDescription> keys,
+  }) async {
+    final data = await _conn.request('Wallet/$walletId:exportSecret', 'POST', {
+      'Keys': keys.map((k) => k.toJson()).toList(),
+    });
+    return WalletSecret.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
   /// Import a BIP39 mnemonic phrase as a 1-of-1 wallet.

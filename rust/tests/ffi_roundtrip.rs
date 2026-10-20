@@ -2981,6 +2981,67 @@ fn wallet_import_private_key_formats_via_ffi() {
     LibwalletDestroy(h);
 }
 
+/// Wallet:exportSecret hands back what was imported: the base58 keypair of a
+/// Solana seed import, the scalar of a scalar import, hex + WIF for secp256k1,
+/// the phrase + passphrase for a mnemonic. Wrong unlock and MPC wallets fail.
+#[test]
+fn wallet_export_secret_via_ffi() {
+    let h = new_env();
+    let call = |path: &str, params: serde_json::Value| request(h, &serde_json::json!({"path": path, "params": params}).to_string());
+    let pw = serde_json::json!([{"Type": "Password", "Key": "password1"}]);
+    let export = |id: &serde_json::Value, key: &str| {
+        request(h, &serde_json::json!({"path": format!("Wallet/{}:exportSecret", id.as_str().unwrap()), "params": {"Keys": [{"Type": "Password", "Key": key}]}}).to_string())
+    };
+
+    let seed = [9u8; 32];
+    let mut keypair = seed.to_vec();
+    keypair.extend_from_slice(&purecrypto::ec::ed25519::Ed25519PrivateKey::from_bytes(seed).public_key().to_bytes());
+    let kp58 = bs58::encode(&keypair).into_string();
+    let w = call("Wallet:importPrivateKey", serde_json::json!({"Curve": "ed25519", "PrivateKey": kp58, "Keys": pw}));
+    let e = export(&w["data"]["Id"], "password1");
+    assert_eq!(e["result"], "success", "{e}");
+    assert_eq!(e["data"]["format"], "keypair");
+    assert_eq!(e["data"]["privateKey"], kp58);
+    assert_eq!(export(&w["data"]["Id"], "wrong-password")["result"], "error");
+
+    // The seed riding in the share doesn't disturb signing.
+    let a = request(h, &serde_json::json!({"path": "Account", "verb": "POST", "params": {"Wallet": w["data"]["Id"], "Type": "solana", "Index": 0}}).to_string());
+    let wk = w["data"]["Keys"][0]["Id"].clone();
+    let sig = call(
+        "Account:signMessage",
+        serde_json::json!({"Id": a["data"]["Id"], "Message": "aGVsbG8=", "Keys": [{"Type": "Password", "Key": "password1", "Id": wk}]}),
+    );
+    assert_eq!(sig["result"], "success", "{sig}");
+
+    let scalar = "0x0101010101010101010101010101010101010101010101010101010101010101";
+    let w = call("Wallet:importPrivateKey", serde_json::json!({"Curve": "ed25519", "PrivateKey": scalar, "Keys": pw}));
+    let e = export(&w["data"]["Id"], "password1");
+    assert_eq!((e["data"]["format"].as_str(), e["data"]["privateKey"].as_str()), (Some("scalar"), Some(scalar)), "{e}");
+
+    let w = call("Wallet:importPrivateKey", serde_json::json!({"Curve": "secp256k1", "PrivateKey": "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617", "Keys": pw}));
+    let e = export(&w["data"]["Id"], "password1");
+    assert_eq!(e["data"]["privateKey"], "0x0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d", "{e}");
+    assert_eq!(e["data"]["wif"], "KwdMAjGmerYanjeui5SHS7JkmpZvVipYvB2LJGU1ZxJwYvP98617");
+
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let w = call("Wallet:importMnemonic", serde_json::json!({"Curve": "secp256k1", "Mnemonic": m, "Passphrase": "TREZOR", "Keys": pw}));
+    let e = export(&w["data"]["Id"], "password1");
+    assert_eq!(e["data"]["type"], "mnemonic", "{e}");
+    assert_eq!(e["data"]["mnemonic"], m);
+    assert_eq!(e["data"]["passphrase"], "TREZOR");
+
+    // An MPC wallet has no single secret.
+    let w = request(
+        h,
+        r#"{"path":"Wallet","verb":"POST","params":{"Name":"MPC","Curve":"ed25519","Keys":[
+            {"Type":"Password","Key":"passwordone"},
+            {"Type":"Password","Key":"passwordtwo"},
+            {"Type":"Password","Key":"passwordthree"}]}}"#,
+    );
+    assert_eq!(export(&w["data"]["Id"], "passwordone")["result"], "error");
+    LibwalletDestroy(h);
+}
+
 #[test]
 fn storekey_create_and_unlock_via_ffi() {
     let h = new_env();

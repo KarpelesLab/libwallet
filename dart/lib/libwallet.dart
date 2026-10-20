@@ -82,6 +82,7 @@ export 'src/models/signed_message.dart' show SignedMessage;
 export 'src/models/remote_key_session.dart'
     show RemoteKeySession, RemoteKeyValidation;
 export 'src/models/wallet_backup.dart' show WalletBackupEntry;
+export 'src/models/wallet_secret.dart' show WalletSecret;
 export 'src/models/device_transfer.dart'
     show DeviceTransferSession, DeviceShareEntry, DeviceTransferImportResult;
 export 'src/models/nft_listing.dart' show NftListing;

@@ -395,8 +395,30 @@ pub fn restore(env: &Env, params: &Value) -> ApiResult {
     Ok(serde_json::json!({ "restored": restored }))
 }
 
-/// Decode an imported private key into the big-endian scalar the 1-of-1 import
-/// wraps.
+/// `Wallet:exportSecret` {Id, Keys(1)} — reveal a single-key imported wallet's
+/// mnemonic or private key (see [`crate::models::wallet::export_secret`]).
+pub fn export_secret(env: &Env, params: &Value) -> ApiResult {
+    let id = params.get("Id").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Id (wallet) required"))?;
+    let keys: Vec<crate::sign::KeyDescription> =
+        params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
+    if keys.len() != 1 {
+        return Err(ApiError::new(400, format!("exportSecret requires exactly 1 KeyDescription (got {})", keys.len())));
+    }
+    if crate::models::wallet::fetch(env, id).map_err(ApiError::internal)?.is_none() {
+        return Err(ApiError::new(404, "wallet not found"));
+    }
+    let unlock = vec![(keys[0].id.clone(), keys[0].key.clone())];
+    crate::models::wallet::export_secret(env, id, &unlock).map_err(|e| ApiError::new(400, e.to_string()))
+}
+
+/// An imported private key, decoded: a big-endian scalar, or an Ed25519 seed
+/// (kept so the wallet can export it back in the standard Solana form).
+pub(crate) enum DecodedKey {
+    Scalar(Vec<u8>),
+    Ed25519Seed([u8; 32]),
+}
+
+/// Decode an imported private key into what the 1-of-1 import wraps.
 ///
 /// secp256k1: 32-byte hex (0x optional) or a Bitcoin-family WIF.
 ///
@@ -408,7 +430,7 @@ pub fn restore(env: &Env, params: &Value) -> ApiResult {
 /// - a 32-byte base58 string or JSON byte array is a seed;
 /// - 32-byte hex is the raw scalar, as it always was, unless `Format` is
 ///   `"seed"`. `Format: "scalar"` forces scalar for any 32-byte input.
-pub(crate) fn decode_private_key(curve: &str, input: &str, format: &str) -> Result<Vec<u8>, ApiError> {
+pub(crate) fn decode_private_key(curve: &str, input: &str, format: &str) -> Result<DecodedKey, ApiError> {
     let input = input.trim();
     if !matches!(format, "" | "seed" | "scalar") {
         return Err(ApiError::new(400, format!("unsupported Format {format:?} (expected seed or scalar)")));
@@ -422,9 +444,9 @@ pub(crate) fn decode_private_key(curve: &str, input: &str, format: &str) -> Resu
             if b.len() != 32 {
                 return Err(ApiError::new(400, format!("hex private key must be 64 chars, got {}", hex_body.len())));
             }
-            return Ok(b);
+            return Ok(DecodedKey::Scalar(b));
         }
-        return decode_wif(input);
+        return decode_wif(input).map(DecodedKey::Scalar);
     }
 
     // ed25519
@@ -447,25 +469,12 @@ pub(crate) fn decode_private_key(curve: &str, input: &str, format: &str) -> Resu
             if derived[..] != bytes[32..] {
                 return Err(ApiError::new(400, "keypair public key does not match its secret key"));
             }
-            Ok(ed25519_seed_to_scalar(&seed))
+            Ok(DecodedKey::Ed25519Seed(seed))
         }
-        32 if format == "scalar" || (is_hex && format != "seed") => Ok(bytes),
-        32 => Ok(ed25519_seed_to_scalar(&bytes.try_into().unwrap())),
+        32 if format == "scalar" || (is_hex && format != "seed") => Ok(DecodedKey::Scalar(bytes)),
+        32 => Ok(DecodedKey::Ed25519Seed(bytes.try_into().unwrap())),
         n => Err(ApiError::new(400, format!("ed25519 private key must be 32 or 64 bytes, got {n}"))),
     }
-}
-
-/// The RFC 8032 secret scalar for an Ed25519 seed: the clamped low half of
-/// SHA-512(seed), little-endian — returned big-endian for the import.
-fn ed25519_seed_to_scalar(seed: &[u8; 32]) -> Vec<u8> {
-    use purecrypto::hash::Digest;
-    let h = purecrypto::hash::Sha512::digest(seed);
-    let mut a = h[..32].to_vec();
-    a[0] &= 248;
-    a[31] &= 127;
-    a[31] |= 64;
-    a.reverse();
-    a
 }
 
 /// Decode a WIF private key (base58check: version ‖ 32-byte key ‖ [0x01]).
@@ -534,10 +543,11 @@ pub fn import_private_key(env: &Env, params: &Value) -> ApiResult {
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "PrivateKey required"))?;
     let format = params.get("Format").and_then(Value::as_str).unwrap_or("");
-    let priv_bytes = decode_private_key(curve, pk_s, format)?;
-
-    let w = crate::models::wallet::import_private_key(env, &name, curve, &priv_bytes, &keys[0])
-        .map_err(ApiError::internal)?;
+    let w = match decode_private_key(curve, pk_s, format)? {
+        DecodedKey::Scalar(b) => crate::models::wallet::import_private_key(env, &name, curve, &b, &keys[0]),
+        DecodedKey::Ed25519Seed(seed) => crate::models::wallet::import_ed25519_seed(env, &name, &seed, &keys[0]),
+    }
+    .map_err(ApiError::internal)?;
     env.broadcast(&crate::response::event(
         "wallet:created",
         serde_json::json!({ "id": w.id, "curve": w.curve, "imported": true }),

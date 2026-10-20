@@ -523,9 +523,22 @@ pub fn import_private_key(
     priv_bytes: &[u8],
     key_desc: &KeyDescription,
 ) -> Result<Wallet> {
+    import_scalar(env, name, curve, priv_bytes, &random_chaincode(), key_desc)
+}
+
+/// Import an Ed25519 *seed* (the standard Solana private key) as a 1-of-1
+/// wallet: the wallet key is the seed's RFC 8032 scalar, and the seed itself
+/// rides in the sealed share (`Ed25519Seed`, ignored by FROST) so
+/// [`export_secret`] can hand back the standard keypair.
+pub fn import_ed25519_seed(env: &Env, name: &str, seed: &[u8; 32], key_desc: &KeyDescription) -> Result<Wallet> {
+    let scalar = crate::tss::ed25519_seed_to_scalar(seed);
+    import_scalar_inner(env, name, "ed25519", &scalar, &random_chaincode(), key_desc, Some(seed))
+}
+
+fn random_chaincode() -> Vec<u8> {
     let mut cc = Uuid::new_v4().into_bytes().to_vec();
     cc.extend_from_slice(&Uuid::new_v4().into_bytes());
-    import_scalar(env, name, curve, priv_bytes, &cc, key_desc)
+    cc
 }
 
 /// Import a raw scalar as a 1-of-1 wallet with an explicit `chaincode` (Go
@@ -540,6 +553,18 @@ pub fn import_scalar(
     chaincode_bytes: &[u8],
     key_desc: &KeyDescription,
 ) -> Result<Wallet> {
+    import_scalar_inner(env, name, curve, priv_bytes, chaincode_bytes, key_desc, None)
+}
+
+fn import_scalar_inner(
+    env: &Env,
+    name: &str,
+    curve: &str,
+    priv_bytes: &[u8],
+    chaincode_bytes: &[u8],
+    key_desc: &KeyDescription,
+    ed25519_seed: Option<&[u8; 32]>,
+) -> Result<Wallet> {
     let wallet_id = Xuid::new("wlt").to_string();
     let wk_id = Xuid::new("wkey");
     let uuid = wk_id.uuid();
@@ -550,7 +575,13 @@ pub fn import_scalar(
             let (_p, key) = crate::tss::frost_import_key(priv_bytes, uuid_bytes)
                 .map_err(|e| Error::Env(format!("frost import: {e}")))?;
             let pk = b64url(&frost_group_pubkey(&key));
-            (pk, "frost", "ed25519", key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?)
+            let mut json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+            if let Some(seed) = ed25519_seed {
+                let mut v: serde_json::Value = serde_json::from_str(&json).map_err(|e| Error::Env(e.to_string()))?;
+                v["Ed25519Seed"] = serde_json::Value::String(b64url(seed));
+                json = v.to_string();
+            }
+            (pk, "frost", "ed25519", json)
         }
         "secp256k1" => {
             let arr: [u8; 32] = priv_bytes
@@ -1568,6 +1599,107 @@ pub fn decrypt_mnemonic_seed(env: &Env, wallet_id: &str, unlock: &[(String, Stri
     let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
     let _ = wk_id; // the unlock id is validated by the successful decrypt above
     Ok(mnemonic_share_seed(&payload)?.0)
+}
+
+/// `Wallet:exportSecret` — reveal the secret of a 1-of-1 imported wallet,
+/// unlocked by its single key:
+/// - mnemonic import → `{type:"mnemonic", mnemonic, passphrase, language, curve}`;
+/// - secp256k1 private key → `{type:"privateKey", curve, format:"hex",
+///   privateKey:"0x…", wif}` (compressed, mainnet WIF);
+/// - ed25519 private key imported from a seed → `{…, format:"keypair",
+///   privateKey: base58(seed ‖ pubkey)}` — the Phantom / Solflare form;
+///   one imported as a raw scalar (or before seeds were kept) →
+///   `{…, format:"scalar", privateKey:"0x…"}`, which only libwallet re-imports.
+///
+/// MPC wallets (threshold ≥ 1) hold no single secret and are refused.
+pub fn export_secret(env: &Env, wallet_id: &str, unlock: &[(String, String)]) -> Result<serde_json::Value> {
+    use serde_json::json;
+    let wallet = fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
+    if wallet.keys.len() != 1 || wallet.threshold != 0 {
+        return Err(Error::Env("only a single-key imported wallet has a secret to export (MPC wallets have none)".into()));
+    }
+    let wk = &wallet.keys[0];
+    let secret = unlock.first().map(|(_, s)| s.as_str()).unwrap_or("");
+    let payload = if wk.kind == "Plain" {
+        keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
+    } else {
+        let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
+        let unlock_key = resolve_unlock_key(&wk.kind, secret, xid.uuid().as_bytes())?;
+        keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?
+    };
+    let hex = |b: &[u8]| format!("0x{}", hex_bytes(b));
+
+    match wk.schema.as_str() {
+        "mnemonic" => {
+            #[derive(serde::Deserialize)]
+            struct MnemonicShare {
+                #[serde(default)]
+                entropy: String,
+                #[serde(default)]
+                passphrase: String,
+                #[serde(default)]
+                language: String,
+            }
+            let share: MnemonicShare =
+                serde_json::from_slice(&payload).map_err(|e| Error::Env(format!("decode mnemonic share: {e}")))?;
+            let entropy = base64::engine::general_purpose::STANDARD
+                .decode(&share.entropy)
+                .map_err(|e| Error::Env(format!("bad entropy base64: {e}")))?;
+            Ok(json!({
+                "type": "mnemonic",
+                "curve": wallet.curve,
+                "mnemonic": crate::bip39::entropy_to_mnemonic(&entropy)?,
+                "passphrase": share.passphrase,
+                "language": if share.language.is_empty() { "english".to_owned() } else { share.language },
+            }))
+        }
+        "dkls23" => {
+            let key = tsslib::dklstss::Key::from_json(std::str::from_utf8(&payload).map_err(|e| Error::Env(e.to_string()))?)
+                .map_err(|e| Error::Env(format!("load share: {e:?}")))?;
+            let sk = key.xi.to_bytes_be();
+            let mut wif = vec![0x80];
+            wif.extend_from_slice(&sk);
+            wif.push(0x01);
+            let check = purecrypto::hash::sha256(&purecrypto::hash::sha256(&wif));
+            wif.extend_from_slice(&check[..4]);
+            Ok(json!({
+                "type": "privateKey",
+                "curve": "secp256k1",
+                "format": "hex",
+                "privateKey": hex(&sk),
+                "wif": bs58::encode(wif).into_string(),
+            }))
+        }
+        "frost" => {
+            let text = std::str::from_utf8(&payload).map_err(|e| Error::Env(e.to_string()))?;
+            let seed = serde_json::from_str::<serde_json::Value>(text)
+                .ok()
+                .and_then(|v| v.get("Ed25519Seed").and_then(|s| s.as_str()).map(str::to_owned))
+                .and_then(|s| b64url_decode(&s).ok())
+                .and_then(|b| <[u8; 32]>::try_from(b).ok());
+            if let Some(seed) = seed {
+                let mut kp = seed.to_vec();
+                kp.extend_from_slice(&purecrypto::ec::ed25519::Ed25519PrivateKey::from_bytes(seed).public_key().to_bytes());
+                return Ok(json!({
+                    "type": "privateKey",
+                    "curve": "ed25519",
+                    "format": "keypair",
+                    "privateKey": bs58::encode(kp).into_string(),
+                }));
+            }
+            let key = Key::from_json(text).map_err(|e| Error::Env(format!("load share: {e:?}")))?;
+            let be = tsslib::frost::scalar_to_be(&key.xi);
+            let mut sk = [0u8; 32];
+            sk[32 - be.len()..].copy_from_slice(&be);
+            Ok(json!({
+                "type": "privateKey",
+                "curve": "ed25519",
+                "format": "scalar",
+                "privateKey": hex(&sk),
+            }))
+        }
+        other => Err(Error::Env(format!("wallet key schema {other:?} has no exportable secret"))),
+    }
 }
 
 /// Parse a decrypted `MnemonicKeyShare` payload and return `(seed, curve)`.
