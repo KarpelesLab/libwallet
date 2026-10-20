@@ -1,3 +1,12 @@
+## Unreleased
+
+- **Imported Solana (ed25519) keys sign.** A non-promoted private-key import
+  is a 1-of-1 key (threshold 0), which the FROST protocol refuses; it now
+  signs as plain Ed25519 from its single share, including derived accounts.
+- **`wallets.promote()` works for ed25519 imports again**, as documented:
+  the imported key is split into a FROST committee, keeping its address.
+  (Mnemonic ed25519 wallets still go through `promoteMnemonic`.)
+
 ## 0.5.4
 
 - **Swaps work from Dart again.** The Rust `Swap:*` endpoints now speak the

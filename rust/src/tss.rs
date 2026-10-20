@@ -507,6 +507,56 @@ pub fn frost_sign_local(
     Ok(first.signature.clone())
 }
 
+/// Split a whole Ed25519 secret (the share of a 1-of-1 imported FROST key) into
+/// a fresh `threshold`-of-n FROST committee keyed by `new_party_keys`, as a
+/// trusted dealer — we hold the entire secret, so there is nothing to reshare
+/// interactively. The group public key and chain code are kept. Returns each
+/// new party paired with its share.
+pub fn frost_split_key(
+    source: &Key,
+    new_party_keys: Vec<Vec<u8>>,
+    threshold: usize,
+) -> Result<Vec<(PartyId, Key)>, TssError> {
+    use tsslib::frost::{vss, Ed25519};
+    if source.ks.len() != 1 {
+        return Err(TssError(format!("only a 1-of-1 key can be split (it has {} shares)", source.ks.len())));
+    }
+    let ids = PartyId::sort(new_party_keys.iter().map(|k| PartyId::new(hex(k), "", k.clone())).collect(), 0);
+    let id_bytes: Vec<Vec<u8>> = ids.iter().map(|p| p.key.clone()).collect();
+    let mut rng = purecrypto::rng::OsRng;
+    let (_, shares) = vss::create::<Ed25519>(threshold, &source.xi, &id_bytes, &mut rng)
+        .map_err(|e| TssError(format!("split: {e}")))?;
+    let xs: Vec<tsslib::frost::Scalar> = id_bytes
+        .iter()
+        .map(|id| shares.iter().find(|s| &s.id == id).map(|s| s.value.clone()).ok_or_else(|| TssError("split: missing share".into())))
+        .collect::<Result<_, _>>()?;
+    // Share ids as tsslib encodes them (its BigUintDec isn't exported): a
+    // throwaway 1-of-1 import per party yields its share_id.
+    let ks: Vec<_> = ids
+        .iter()
+        .zip(&xs)
+        .map(|(p, x)| tsslib::frosttss::import_key(x, p).map(|k| k.share_id).map_err(|e| TssError(format!("split id: {e:?}"))))
+        .collect::<Result<_, _>>()?;
+    let big_xj: Vec<_> = xs.iter().map(<Ed25519 as tsslib::frost::Ciphersuite>::mul_base).collect();
+    let out = ids
+        .into_iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let key = Key {
+                xi: xs[i].clone(),
+                share_id: ks[i].clone(),
+                ks: ks.clone(),
+                big_xj: big_xj.clone(),
+                group_public_key: source.group_public_key,
+                chain_code: source.chain_code,
+            };
+            key.validate_basic().map_err(|e| TssError(format!("split share: {e:?}")))?;
+            Ok((p, key))
+        })
+        .collect::<Result<Vec<_>, TssError>>()?;
+    Ok(out)
+}
+
 /// Sign with a FROST committee, tweaked or not. A threshold-0 committee is a
 /// 1-of-1 key (an imported private key): its one share IS the whole secret,
 /// and the FROST protocol refuses threshold 0, so it signs as plain Ed25519

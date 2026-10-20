@@ -695,8 +695,8 @@ pub fn promote_mnemonic(
 /// raw-import stored as a 1-of-1 DKLs share) into a real N-of-T secp256k1
 /// DKLs23 committee (Go `Wallet.Promote`). The imported key lives only on this
 /// device, so the reshare runs entirely locally; new RemoteKey shares upload to
-/// the wdrone. Master pubkey + chaincode are preserved. secp256k1 only (ed25519
-/// FROST import needs clamped-scalar extraction — deferred, as in promoteMnemonic).
+/// the wdrone. Master pubkey + chaincode are preserved. ed25519 raw imports
+/// are split into a FROST committee instead ([`promote_frost`]).
 pub fn promote(
     env: &Env,
     wallet_id: &str,
@@ -714,8 +714,11 @@ pub fn promote(
     if threshold < 1 || threshold as usize >= new_keys.len() {
         return Err(Error::Env(format!("Promote: Threshold must be 1 ≤ T < {}", new_keys.len())));
     }
+    if wallet.curve == "ed25519" {
+        return promote_frost(env, &wallet, old_unlock, new_keys, threshold);
+    }
     if wallet.curve != "secp256k1" {
-        return Err(Error::Env("Promote: secp256k1 only (ed25519 deferred)".into()));
+        return Err(Error::Env(format!("Promote: unsupported curve {}", wallet.curve)));
     }
     let imported = &wallet.keys[0];
 
@@ -783,6 +786,71 @@ pub fn promote(
         vec![SqlValue::Text("dkls23".into()), SqlValue::Int(threshold), SqlValue::Text(wallet.id.clone())],
     )?;
     fetch(env, wallet_id)?.ok_or_else(|| Error::Env("wallet vanished after promote".into()))
+}
+
+/// The ed25519 leg of [`promote`]: split the imported 1-of-1 FROST key into the
+/// new committee ([`crate::tss::frost_split_key`]), keeping the group pubkey —
+/// and so every account address — unchanged. Mnemonic-keep ed25519 wallets are
+/// refused: their Solana accounts sit at hardened Phantom paths a threshold
+/// key cannot derive (use Wallet:promoteMnemonic).
+fn promote_frost(
+    env: &Env,
+    wallet: &Wallet,
+    old_unlock: &[(String, String)],
+    new_keys: &[KeyDescription],
+    threshold: i64,
+) -> Result<Wallet> {
+    let imported = &wallet.keys[0];
+    if imported.schema != "frost" {
+        return Err(Error::Env(format!(
+            "Promote: ed25519 promotion needs a raw private-key import (schema frost; got {:?}) — mnemonic wallets use promoteMnemonic",
+            imported.schema
+        )));
+    }
+    let unlock = match old_unlock.first() {
+        Some((id, secret)) if !id.is_empty() => vec![(id.clone(), secret.clone())],
+        Some((_, secret)) => vec![(imported.id.clone(), secret.clone())],
+        None if imported.kind == "Plain" => vec![(imported.id.clone(), String::new())],
+        None => return Err(Error::Env("Promote: Old must carry the imported key's unlock".into())),
+    };
+    let committee = frost_committee(wallet, &unlock)?;
+    let src = &committee[0].1;
+
+    let new_wk_ids: Vec<Xuid> = (0..new_keys.len()).map(|_| Xuid::new("wkey")).collect();
+    let party_keys: Vec<Vec<u8>> = new_wk_ids.iter().map(|id| id.uuid().as_bytes().to_vec()).collect();
+    let split = crate::tss::frost_split_key(src, party_keys, threshold as usize).map_err(|e| Error::Env(e.to_string()))?;
+    if b64url(&frost_group_pubkey(&split[0].1)) != wallet.pubkey {
+        return Err(Error::Env("promote produced a share with a different group pubkey".into()));
+    }
+
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    for (wk_id, kd) in new_wk_ids.iter().zip(new_keys) {
+        let uuid = wk_id.uuid();
+        let uuid_bytes = uuid.as_bytes();
+        let key = split
+            .iter()
+            .find(|(pid, _)| pid.key == uuid_bytes)
+            .map(|(_, k)| k)
+            .ok_or_else(|| Error::Env("split produced no share for a new key".into()))?;
+        let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
+        let (data, key_field) = seal_share_full(env, "ed25519", "frost", kd, uuid_bytes, share_json.as_bytes())?;
+        wkeys.push(WalletKey {
+            id: wk_id.to_string(),
+            wallet: wallet.id.clone(),
+            kind: kd.kind.clone(),
+            schema: "frost".into(),
+            key: key_field,
+            data,
+            generation: wallet.generation + 1,
+        });
+    }
+
+    replace_wallet_keys(env, wallet, &wkeys)?;
+    env.exec(
+        r#"UPDATE "Wallet" SET "Protocol" = ?1, "Threshold" = ?2 WHERE "Id" = ?3"#,
+        vec![SqlValue::Text("frost".into()), SqlValue::Int(threshold), SqlValue::Text(wallet.id.clone())],
+    )?;
+    fetch(env, &wallet.id)?.ok_or_else(|| Error::Env("wallet vanished after promote".into()))
 }
 
 /// Persist the mobile's wallet after a `Wallet:initiateKeygen` ceremony: a
