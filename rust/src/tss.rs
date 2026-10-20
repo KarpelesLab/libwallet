@@ -507,6 +507,63 @@ pub fn frost_sign_local(
     Ok(first.signature.clone())
 }
 
+/// Sign with a FROST committee, tweaked or not. A threshold-0 committee is a
+/// 1-of-1 key (an imported private key): its one share IS the whole secret,
+/// and the FROST protocol refuses threshold 0, so it signs as plain Ed25519
+/// instead ([`ed25519_sign_scalar`]) — same signature validity, no ceremony.
+pub fn frost_sign_any(
+    committee: &[(PartyId, Key)],
+    threshold: usize,
+    msg: &[u8],
+    tweak: Option<&[u8; 32]>,
+) -> Result<Vec<u8>, TssError> {
+    if threshold == 0 {
+        let [(_, key)] = committee else {
+            return Err(TssError(format!("a 1-of-1 key signs alone, got {} shares", committee.len())));
+        };
+        let mut x = key.xi.clone();
+        if let Some(t) = tweak {
+            x = x.add(&tsslib::frost::scalar_from_be_mod_l(t));
+        }
+        return Ok(ed25519_sign_scalar(&x, msg).to_vec());
+    }
+    match tweak {
+        Some(t) => frost_sign_local_tweaked(committee, threshold, msg, t),
+        None => frost_sign_local(committee, threshold, msg),
+    }
+}
+
+/// RFC 8032 Ed25519 signature from a bare secret scalar `x` (no seed, so no
+/// RFC prefix): the nonce is derived deterministically as
+/// `SHA-512(domain ‖ x ‖ msg) mod L`. Verifies under `x·B` like any Ed25519
+/// signature.
+pub fn ed25519_sign_scalar(x: &tsslib::frost::Scalar, msg: &[u8]) -> [u8; 64] {
+    use purecrypto::ec::edwards25519::hazmat::EdwardsPoint;
+    use purecrypto::hash::{Digest, Sha512};
+    use tsslib::frost::Scalar;
+
+    let wide = |parts: &[&[u8]]| {
+        let mut h = Sha512::new();
+        for p in parts {
+            h.update(p);
+        }
+        let d = h.finalize();
+        let mut w = [0u8; 64];
+        w.copy_from_slice(&d);
+        Scalar::from_bytes_mod_order(&w)
+    };
+    let x_le = x.to_bytes();
+    let r = wide(&[b"libwallet/ed25519-scalar-nonce", &x_le, msg]);
+    let big_r = EdwardsPoint::mul_base(&r).compress();
+    let big_a = EdwardsPoint::mul_base(x).compress();
+    let k = wide(&[&big_r, &big_a, msg]);
+    let s = r.add(&k.mul(x));
+    let mut sig = [0u8; 64];
+    sig[..32].copy_from_slice(&big_r);
+    sig[32..].copy_from_slice(&s.to_bytes());
+    sig
+}
+
 /// Like [`frost_sign_local`] but applies a BIP32 non-hardened key-derivation
 /// `tweak` (big-endian, from [`crate::hdderive::ed25519_derive_pub_tweak`]) via
 /// `Key::new_signing_with_tweak`, so the signature verifies under the derived

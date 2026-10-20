@@ -19,7 +19,7 @@ use tsslib::tss::PartyId;
 
 use crate::keystore;
 use crate::sign::{KeyDescription, Recipient};
-use crate::tss::{ed25519_verify, frost_group_pubkey, frost_keygen_with_parties, frost_sign_local, Key};
+use crate::tss::{ed25519_verify, frost_group_pubkey, frost_keygen_with_parties, Key};
 use crate::{Env, Error, Result, SqlValue};
 
 const WALLET_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Wallet" ("Id" text, "Name" text, "Curve" text, "Protocol" text, "Threshold" integer, "Gen" integer, "Pubkey" text, "Chaincode" text, "Created" text, "Modified" text, PRIMARY KEY ("Id"));"#;
@@ -1587,7 +1587,7 @@ pub fn sign_ed25519_for_account(
     }
     let tweak = il_decimal_to_32(il)?;
     let committee = frost_committee(&wallet, unlock)?;
-    let sig = crate::tss::frost_sign_local_tweaked(&committee, wallet.threshold.max(0) as usize, msg, &tweak)
+    let sig = crate::tss::frost_sign_any(&committee, wallet.threshold.max(0) as usize, msg, Some(&tweak))
         .map_err(|e| Error::Env(e.to_string()))?;
     let pk: [u8; 32] = b64url_decode(&account.pubkey)?
         .try_into()
@@ -1722,7 +1722,7 @@ pub fn sign_frost_local(
     let threshold = wallet.threshold.max(0) as usize;
 
     let committee = frost_committee(&wallet, unlock)?;
-    let sig = frost_sign_local(&committee, threshold, msg).map_err(|e| Error::Env(e.to_string()))?;
+    let sig = crate::tss::frost_sign_any(&committee, threshold, msg, None).map_err(|e| Error::Env(e.to_string()))?;
 
     // Defense in depth: the produced signature must verify under the stored key.
     let pk: [u8; 32] = b64url_decode(&wallet.pubkey)?
