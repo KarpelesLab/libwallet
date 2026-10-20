@@ -25,6 +25,9 @@ mod request;
 // the sync `simulate` wrapper + tests are native-only.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) mod simulate;
+// Unsigned Solana build shared by signAndSend / validate / simulate (browser too).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) mod solana_build;
 #[cfg(not(target_arch = "wasm32"))]
 mod spot;
 #[cfg(target_arch = "wasm32")]
@@ -111,6 +114,19 @@ pub(crate) fn resolve_rpc_for_kind(env: &Env, params: &Value, kind: &str) -> Res
         return Ok(url.to_owned());
     }
     network_for_kind(env, params, kind)?.resolved_rpc().map_err(ApiError::internal)
+}
+
+/// Canonicalise a client network reference: a "<type>.<chainId>" key whose
+/// deterministic `net-…` row is stored maps to that row (so its configured RPC
+/// applies); anything else (a `net-…` id, an unstored key) passes through.
+pub(crate) fn network_ref(env: &Env, reference: &str) -> String {
+    if let Some((kind, chain)) = reference.split_once('.') {
+        let id = crate::models::network::network_id_for(kind, chain);
+        if crate::models::network::by_id_opt(env, &id) {
+            return id;
+        }
+    }
+    reference.to_string()
 }
 
 /// The network of `kind` a per-account read runs on: the `Network` param (a

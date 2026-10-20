@@ -1,3 +1,5 @@
+import 'amount.dart';
+
 /// Result of `TransactionApi.simulate(...)`.
 ///
 /// A flat per-tx view suitable for rendering an approval sheet. Per-chain
@@ -21,6 +23,7 @@ class TransactionSimulation {
   /// - `native_transfer` — plain coin send
   /// - `erc20_transfer` — ERC-20 `transfer(to, amount)` call
   /// - `erc20_approve`  — ERC-20 `approve(spender, amount)` call
+  /// - `spl_transfer`   — Solana SPL token transfer
   /// - `unknown`        — arbitrary contract call (decoded selector only)
   /// - null             — no calldata and no amount (rare)
   final String? decodedMethod;
@@ -29,6 +32,7 @@ class TransactionSimulation {
   /// - `native_transfer`: `{to, amount}`
   /// - `erc20_transfer`:  `{token, to, amount}`  (token = the contract)
   /// - `erc20_approve`:   `{token, spender, amount}` (amount may be 2^256-1 for "unlimited")
+  /// - `spl_transfer`:    `{token, to, amount}`  (token = the mint)
   /// - `unknown`:         `{selector, data}`
   final Map<String, dynamic> decodedArgs;
 
@@ -60,6 +64,10 @@ class TransactionSimulation {
   final int? gasEstimate;
 
   // ── Solana ─────────────────────────────────────────────────
+  /// Solana network fee (lamports, 9 decimals) of a transfer libwallet
+  /// built from the tx fields. Null when the caller passed built bytes.
+  final Amount? fee;
+
   /// Solana simulation logs (program output lines).
   final List<String>? logs;
 
@@ -109,6 +117,7 @@ class TransactionSimulation {
     this.balanceChanges = const [],
     this.warnings = const [],
     this.gasEstimate,
+    this.fee,
     this.logs,
     this.unitsConsumed,
     this.bitcoinInputs,
@@ -163,6 +172,7 @@ class TransactionSimulation {
       balanceChanges: parseBalanceChanges(json['balanceChanges']),
       warnings: parseWarnings(json['warnings']),
       gasEstimate: (json['gasEstimate'] as num?)?.toInt(),
+      fee: json['fee'] != null ? Amount.fromJson(json['fee']) : null,
       logs: (json['logs'] as List?)?.whereType<String>().toList(),
       unitsConsumed: (json['unitsConsumed'] as num?)?.toInt(),
       bitcoinInputs: parseIOs(json['bitcoinInputs']),
@@ -182,13 +192,15 @@ class TransactionSimulation {
 /// erigon's `debug_traceCall` callTracer — every ERC-20 Transfer /
 /// Approval event and every value-carrying CALL / CREATE at any depth.
 class Effect {
-  /// `native_transfer` | `erc20_transfer` | `erc20_approve`.
+  /// `native_transfer` | `erc20_transfer` | `erc20_approve` |
+  /// `spl_transfer`.
   final String type;
 
-  /// ERC-20 token contract address. Empty for native transfers.
+  /// ERC-20 token contract address, or the SPL mint. Empty for native
+  /// transfers.
   final String token;
 
-  /// Lowercase hex address.
+  /// Sender: lowercase hex address (EVM) or base58 owner (Solana).
   final String from;
 
   /// Lowercase hex address. For `erc20_approve`, this is the spender.

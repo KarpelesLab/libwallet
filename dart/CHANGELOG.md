@@ -1,5 +1,21 @@
 ## Unreleased
 
+- **`transactions.maxSendable()` works from Dart.** The native handler now
+  takes the Dart params (`from`, `to`, `asset`, `priority`, `data`) and
+  resolves `asset` — `<type>.<chainId>.NATIVE`, an ERC-20 / TRC-20
+  contract or an SPL mint (newly supported, read on-chain when not in the
+  Token table) — on the network its prefix names. Fee and rent reserves
+  are kept; token results always carry the native `fee` (plus the new
+  recipient token account's rent on SPL), and bitcoin returns
+  `bitcoinUtxos` / honours `priority`.
+- **Solana `transactions.simulate()` / `validate()`.** A `transfer` from a
+  Solana account (or on a Solana `network`) no longer goes to the EVM
+  path. libwallet builds the unsigned SOL or SPL transfer itself (fresh
+  blockhash, recipient ATA created when missing) and simulates it with
+  `sigVerify: false` + `replaceRecentBlockhash`, returning `effects`, the
+  new `TransactionSimulation.fee`, and a `recipient_new_account` warning;
+  `validate` returns the built tx (`raw`, `amount`, `fee`). Sends use the
+  same builder.
 - **`wallets.exportSecret(walletId, keys:)`** reveals a single-key imported
   wallet's secret as a `WalletSecret`: the recovery phrase + BIP-39
   passphrase for mnemonic imports, the private key (hex + WIF) for

@@ -583,53 +583,156 @@ pub fn balance(env: &Env, params: &Value) -> ApiResult {
     crate::rt::block_on(balance_impl(env, params))
 }
 
-/// `Account:maxSendable` — the maximum native amount an EVM account can send:
-/// balance − (21000 × gasPrice) reserved for the fee (Go maxSendableEVM, legacy
-/// fee path). {RPC?} — returns {chain, balance, fee, max} as amounts.
+/// `Account:maxSendable` / `Transaction:maxSendable` — the largest amount of an
+/// asset the account can send, net of the fee and (Solana) rent reservations.
+///
+/// Params, camelCase as `TransactionApi.maxSendable` sends them, with the older
+/// PascalCase spellings still accepted:
+///   - `from` (`Id` / `Account`): account id or address; default the current one.
+///   - `asset`: the `Asset:list` key — "<type>.<chainId>.NATIVE",
+///     "<type>.<chainId>.<contract|mint>", bare "NATIVE", a `tok-…` id — or
+///     the legacy `Token` contract. Its "<type>.<chainId>" prefix picks the
+///     network unless `network` (`Network`) names one; else the account
+///     chain's current/default network.
+///   - `to` (`To`): Solana recipient (new-account / new-ATA rent), EVM call target.
+///   - `data`: EVM calldata — gas comes from `eth_estimateGas` instead of 21000.
+///   - `priority` (low/medium/high) or `FeeRate` (sat/vB): bitcoin fee rate.
+///   - `Eip1559`: EVM EIP-1559 fee reserve.
+///
+/// Returns `{chain, balance, fee, max, reserved?, reason?, token?,
+/// bitcoinUtxos?, bitcoinFeeRate?}` as Amounts (`MaxSendableResult`). Tokens
+/// (ERC-20 / TRC-20 / SPL) report their full balance as `max`; `fee` (and an
+/// SPL new-recipient-ATA `recipient_rent`) is then in the native currency.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
     use num_bigint::BigInt;
-    // "Id" (Account:maxSendable) or "Account" (Transaction:maxSendable).
-    let account_id = params
-        .get("Id")
-        .or_else(|| params.get("Account"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::new(400, "Id/Account required"))?;
-    let account = crate::models::account::fetch(env, account_id)
-        .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::new(404, "account not found"))?;
-    let rpc = resolve_rpc(env, params, &account.kind)?;
+    let p = |keys: &[&str]| {
+        keys.iter().find_map(|k| params.get(*k).and_then(Value::as_str).filter(|s| !s.is_empty()))
+    };
+    let account = match p(&["from", "Id", "Account", "From"]) {
+        Some(id) => crate::models::account::find(env, id)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, "account not found"))?,
+        None => crate::models::account::current(env)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(400, "from (account) required"))?,
+    };
+    let kind = if account.kind == "ethereum" { "evm" } else { account.kind.as_str() };
+    let asset = p(&["asset", "Asset"]).unwrap_or("");
+    let to = p(&["to", "To"]).unwrap_or("");
 
-    // ERC-20 token max: the whole token balance is spendable (native gas is
-    // paid separately), Go maxSendableEVMERC20.
-    if let Some(token) = params.get("Token").and_then(Value::as_str) {
-        if account.kind == "tron" {
+    // Network: explicit, else the asset key's "<type>.<chainId>" prefix, else
+    // the chain's current/default one. network_for_kind rejects a mismatch.
+    let asset_parts: Vec<&str> = asset.splitn(3, '.').collect();
+    let net_ref = p(&["network", "Network"]).map(str::to_owned).or_else(|| {
+        (asset_parts.len() == 3).then(|| format!("{}.{}", asset_parts[0], asset_parts[1]))
+    });
+    let mut np = serde_json::Map::new();
+    if let Some(r) = net_ref {
+        np.insert("Network".into(), Value::String(super::network_ref(env, &r)));
+    }
+    if let Some(r) = p(&["RPC"]) {
+        np.insert("RPC".into(), Value::String(r.to_owned()));
+    }
+    let np = Value::Object(np);
+    let net = super::network_for_kind(env, &np, kind)?;
+    let rpc = super::resolve_rpc_for_kind(env, &np, kind)?;
+
+    // Token: the legacy `Token` contract, else the non-native `asset`.
+    let token: Option<String> = match p(&["Token", "token"]) {
+        Some(t) => Some(t.to_owned()),
+        None if super::solana_build::is_native_asset(asset) => None,
+        None if xuid::Xuid::parse_prefix(asset, "tok").is_ok() => Some(
+            crate::models::token::fetch(env, asset)
+                .map_err(ApiError::internal)?
+                .ok_or_else(|| ApiError::new(400, format!("token {asset} not found")))?
+                .address,
+        ),
+        None => Some(asset.rsplit('.').next().unwrap_or(asset).to_owned()),
+    };
+    let lamports = |v: u64| crate::Amount::new_raw(BigInt::from(v), 9);
+    let hex_bi = |v: &Value| {
+        let s = v.as_str().unwrap_or("0x0");
+        BigInt::parse_bytes(s.strip_prefix("0x").unwrap_or(s).as_bytes(), 16).unwrap_or_else(|| BigInt::from(0))
+    };
+
+    if let Some(token) = token {
+        return match account.kind.as_str() {
+            // ERC-20: the whole token balance is spendable; native gas is paid
+            // separately (Go maxSendableEVMERC20). `fee` = a 65k-gas transfer.
+            "ethereum" => {
+                let balance = crate::erc20::balance_of(&rpc, &token, &account.address).map_err(ApiError::internal)?;
+                let dec = crate::erc20::decimals(&rpc, &token).map_err(ApiError::internal)?;
+                let gp = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
+                let fee = BigInt::from(ERC20_TRANSFER_GAS) * hex_bi(&gp);
+                let amt = crate::Amount::new_raw(balance, dec);
+                Ok(serde_json::json!({
+                    "chain": "evm", "token": token, "balance": amt, "max": amt,
+                    "fee": crate::Amount::new_raw(fee, net.native_decimals()),
+                }))
+            }
             // TRC-20: the whole token balance; energy is paid in TRX.
-            let balance = crate::tron::trc20_balance(&rpc, token, &account.address).map_err(ApiError::internal)?;
-            let dec = trc20_decimals(&rpc, token)?;
-            let amt = crate::Amount::new_raw(balance, dec);
-            return Ok(serde_json::json!({ "chain": "tron", "token": token, "balance": amt, "max": amt }));
-        }
-        if account.kind != "ethereum" {
-            return Err(ApiError::new(400, "Token maxSendable is EVM/Tron-only"));
-        }
-        let balance = crate::erc20::balance_of(&rpc, token, &account.address).map_err(ApiError::internal)?;
-        let dec = crate::erc20::decimals(&rpc, token).map_err(ApiError::internal)?;
-        let amt = crate::Amount::new_raw(balance, dec);
-        return Ok(serde_json::json!({ "chain": "evm", "token": token, "balance": amt, "max": amt }));
+            "tron" => {
+                let balance = crate::tron::trc20_balance(&rpc, &token, &account.address).map_err(ApiError::internal)?;
+                let dec = trc20_decimals(&rpc, &token)?;
+                let amt = crate::Amount::new_raw(balance, dec);
+                let fee = crate::Amount::new_raw(BigInt::from(0), crate::tron::TRX_DECIMALS);
+                Ok(serde_json::json!({ "chain": "tron", "token": token, "balance": amt, "max": amt, "fee": fee }))
+            }
+            // SPL: the whole token balance. The fee is the SOL a transfer costs;
+            // a recipient without an ATA for the mint also needs its rent, which
+            // the sender pays in SOL (reported, not deducted from the token max).
+            "solana" => {
+                let mint = crate::rt::block_on(super::solana_build::resolve_spl_asset(env, &net, &rpc, &token))?
+                    .ok_or_else(|| ApiError::new(400, "native asset"))?;
+                let balance =
+                    crate::swap::solana_spl_balance(&rpc, &account.address, &mint.mint_b58).map_err(ApiError::internal)?;
+                let amt = crate::Amount::new_raw(balance, mint.decimals as i64);
+                let fee = crate::solana_spl::fee_lamports(crate::solana_spl::SPL_DEFAULT_CU_LIMIT, 0);
+                let mut reserved = Vec::new();
+                if !to.is_empty() {
+                    let owner = b58_32(to)?;
+                    let ata = crate::solana_spl::derive_ata(&owner, &mint.mint, &mint.program)
+                        .ok_or_else(|| ApiError::new(500, "failed to derive recipient ATA"))?;
+                    let ata_b58 = bs58::encode(ata).into_string();
+                    if crate::rt::block_on(super::solana_build::account_exists(&rpc, &ata_b58)) == Some(false) {
+                        let rent = crate::swap::solana_rent_exempt_minimum(&rpc, 165)
+                            .ok()
+                            .filter(|r| *r > 0)
+                            .unwrap_or(crate::swap::SOLANA_TOKEN_ACCOUNT_RENT);
+                        reserved.push(serde_json::json!({ "kind": "recipient_rent", "amount": lamports(rent) }));
+                    }
+                }
+                Ok(serde_json::json!({
+                    "chain": "solana", "token": mint.mint_b58, "balance": amt, "max": amt,
+                    "fee": lamports(fee), "reserved": reserved,
+                }))
+            }
+            "bitcoin" => Err(ApiError::new(400, "bitcoin-family chains have no token assets")),
+            other => Err(ApiError::new(400, format!("token maxSendable not supported for {other}"))),
+        };
     }
 
     match account.kind.as_str() {
         "ethereum" => {
-            let hex_bi = |v: &Value| {
-                let s = v.as_str().unwrap_or("0x0");
-                BigInt::parse_bytes(s.strip_prefix("0x").unwrap_or(s).as_bytes(), 16)
-                    .unwrap_or_else(|| BigInt::from(0))
-            };
             let bal_dec = crate::rpc::eth_get_balance(&rpc, &account.address).map_err(ApiError::internal)?;
             let balance = BigInt::parse_bytes(bal_dec.as_bytes(), 10).unwrap_or_else(|| BigInt::from(0));
-            // Fee reserve for a 21000-gas transfer. EIP-1559 (when requested):
-            // (2*baseFee + tip) * gas; else legacy gasPrice * gas.
+            // Gas: the caller's calldata against its target (a swap router call
+            // costs far more than a plain transfer), else a 21000 EOA transfer.
+            let gas = match p(&["data", "Data"]).filter(|d| *d != "0x") {
+                Some(data) => {
+                    let mut call = serde_json::json!({ "from": account.address, "data": data });
+                    if !to.is_empty() {
+                        call["to"] = Value::String(to.to_owned());
+                    }
+                    let g = crate::rpc::call(&rpc, "eth_estimateGas", serde_json::json!([call]))
+                        .map_err(|e| ApiError::new(400, format!("estimate gas: {e}")))?;
+                    hex_bi(&g)
+                }
+                None => BigInt::from(21000),
+            };
+            // Fee reserve. EIP-1559 (when requested): (2*baseFee + tip) * gas;
+            // else legacy gasPrice * gas.
             let per_gas = if params.get("Eip1559").and_then(Value::as_bool).unwrap_or(false) {
                 let block = crate::rpc::call(&rpc, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
                     .map_err(ApiError::internal)?;
@@ -644,51 +747,56 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
                 let gp = crate::rpc::call(&rpc, "eth_gasPrice", serde_json::json!([])).map_err(ApiError::internal)?;
                 hex_bi(&gp)
             };
-            let fee = BigInt::from(21000) * &per_gas;
+            let fee = gas * &per_gas;
             let max = if balance <= fee { BigInt::from(0) } else { &balance - &fee };
-            let decimals = crate::models::network::fetch(env, "@")
-                .ok().flatten().map(|n| n.native_decimals()).unwrap_or(18);
-            let amt = |v: BigInt| crate::Amount::new_raw(v, decimals);
-            Ok(serde_json::json!({ "chain": "evm", "balance": amt(balance), "fee": amt(fee), "max": amt(max) }))
+            let reason = if max == BigInt::from(0) { "balance does not cover the network fee" } else { "" };
+            let amt = |v: BigInt| crate::Amount::new_raw(v, net.native_decimals());
+            Ok(serde_json::json!({
+                "chain": "evm", "balance": amt(balance), "fee": amt(fee), "max": amt(max), "reason": reason,
+            }))
         }
         "solana" => {
-            // max = balance - 5000 (signature fee) - rent-exempt reserve.
+            // max = balance − 5000 (signature fee) − rent-exempt reserve.
             let res = crate::rpc::call(&rpc, "getBalance", serde_json::json!([account.address]))
                 .map_err(ApiError::internal)?;
             let balance = res.get("value").and_then(Value::as_u64).unwrap_or(0);
-            const FEE: u64 = 5000;
+            let fee = crate::transfer::SOLANA_BASE_FEE_LAMPORTS;
             let rent = crate::rpc::call(&rpc, "getMinimumBalanceForRentExemption", serde_json::json!([0]))
-                .ok().and_then(|v| v.as_u64()).unwrap_or(890_880);
-            // If a To is given and that account doesn't exist yet, an extra
+                .ok()
+                .and_then(|v| v.as_u64())
+                .unwrap_or(crate::transfer::SOLANA_DEFAULT_SENDER_RENT);
+            // If a `to` is given and that account doesn't exist yet, an extra
             // rent-exempt reserve is held to fund its creation (Go maxSendableSolana).
-            let mut recipient_rent = 0u64;
-            if let Some(to) = params.get("To").and_then(Value::as_str) {
+            let mut recipient_exists = true;
+            if !to.is_empty() {
                 let info = crate::rpc::call(&rpc, "getAccountInfo", serde_json::json!([to, {"encoding":"base64"}]));
-                let exists = info.ok().map(|v| !v.get("value").map(|x| x.is_null()).unwrap_or(true)).unwrap_or(true);
-                if !exists {
-                    recipient_rent = rent;
-                }
+                recipient_exists =
+                    info.ok().map(|v| !v.get("value").map(|x| x.is_null()).unwrap_or(true)).unwrap_or(true);
             }
-            let reserve = FEE + rent + recipient_rent;
-            let max = balance.saturating_sub(reserve);
-            let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), 9);
-            let mut reserved = vec![serde_json::json!({ "kind": "sender_rent", "amount": amt(rent) })];
-            if recipient_rent > 0 {
-                reserved.push(serde_json::json!({ "kind": "recipient_rent", "amount": amt(recipient_rent) }));
+            let (max, _, reason) =
+                crate::transfer::compute_solana_max_sendable(balance, fee, rent, rent, recipient_exists);
+            let mut reserved = vec![serde_json::json!({ "kind": "sender_rent", "amount": lamports(rent) })];
+            if !recipient_exists {
+                reserved.push(serde_json::json!({ "kind": "recipient_rent", "amount": lamports(rent) }));
             }
             Ok(serde_json::json!({
                 "chain": "solana",
-                "balance": amt(balance),
-                "fee": amt(FEE),
+                "balance": lamports(balance),
+                "fee": lamports(fee),
                 "reserved": reserved,
-                "max": amt(max),
+                "max": lamports(max),
+                "reason": reason.unwrap_or_default(),
             }))
         }
         "bitcoin" => {
-            // max = sum(UTXOs) − fee to spend them all into one output.
+            // max = sum(UTXOs) − fee to spend them all into one output. The
+            // inputs + rate are returned so the send can pin them.
             let xpub = account.xpub().map_err(ApiError::internal)?;
-            let fee_rate = params.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
-            let (total, fee, max) =
+            let fee_rate = match params.get("FeeRate").and_then(Value::as_u64).filter(|r| *r > 0) {
+                Some(r) => r,
+                None => bitcoin_priority_fee_rate(&rpc, p(&["priority", "Priority"])),
+            };
+            let (total, fee, max, utxos) =
                 crate::bitcoin::max_sendable_sats(&rpc, &xpub, fee_rate).map_err(ApiError::internal)?;
             let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), 8);
             Ok(serde_json::json!({
@@ -696,11 +804,12 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
                 "balance": amt(total),
                 "fee": amt(fee),
                 "max": amt(max),
+                "reason": if max == 0 { "balance does not cover the network fee" } else { "" },
+                "bitcoinUtxos": utxos,
                 "bitcoinFeeRate": fee_rate,
             }))
         }
         "tron" => {
-            let to = params.get("To").and_then(Value::as_str).unwrap_or("");
             let (balance, fee, max) =
                 crate::tron::max_sendable(&rpc, &account.address, to).map_err(ApiError::internal)?;
             let amt = |v: u64| crate::Amount::new_raw(BigInt::from(v), crate::tron::TRX_DECIMALS);
@@ -708,6 +817,31 @@ pub fn max_sendable(env: &Env, params: &Value) -> ApiResult {
         }
         other => Err(ApiError::new(400, format!("maxSendable not supported for {other}"))),
     }
+}
+
+/// Gas reserved for an ERC-20 `transfer` when reporting a token max's fee.
+#[cfg(not(target_arch = "wasm32"))]
+const ERC20_TRANSFER_GAS: u64 = 65_000;
+
+/// The bitcoin max-send fee rate (sat/vB) for a `priority`: no priority keeps
+/// the flat 10 sat/vB default; low/medium/high query `estimatesmartfee` at a
+/// 144 / 6 / 2-block target (the `TransactionApi.maxSendable` contract),
+/// falling back to 10 when the node can't estimate.
+#[cfg(not(target_arch = "wasm32"))]
+fn bitcoin_priority_fee_rate(rpc: &str, priority: Option<&str>) -> u64 {
+    let target = match priority {
+        Some("low") => 144,
+        Some("medium") => 6,
+        Some("high") => 2,
+        _ => return 10,
+    };
+    crate::rpc::call(rpc, "estimatesmartfee", serde_json::json!([target]))
+        .ok()
+        .and_then(|v| v.get("feerate").and_then(Value::as_f64))
+        // BTC/kvB → sat/vB.
+        .map(|fr| (fr * 100_000.0).ceil() as u64)
+        .filter(|r| *r > 0)
+        .unwrap_or(10)
 }
 
 /// A TRC-20 contract's `decimals()`.

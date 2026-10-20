@@ -77,7 +77,7 @@ fn max_sendable_subtracts_fee_for_all_inputs() {
             {"txo":"bb:1","amt":"0.00050000","path":"m/0/1","script":"p2wpkh"}
         ]}]}"#,
     );
-    let (total, fee, max) = max_sendable_sats(&url, "xpub", 5).unwrap();
+    let (total, fee, max, _inputs) = max_sendable_sats(&url, "xpub", 5).unwrap();
     assert_eq!(total, 150_000);
     assert_eq!(fee, 178 * 5);
     assert_eq!(max, 150_000 - 178 * 5);

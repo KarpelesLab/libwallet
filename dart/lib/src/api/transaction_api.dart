@@ -65,6 +65,10 @@ class TransactionApi {
 
   /// Validate a transaction without signing. Returns the transaction
   /// with backend-filled fields (gas estimate, fee, nonce, etc.).
+  ///
+  /// On Solana the unsigned transfer is built: the result carries the
+  /// resolved `amount`, the `fee`, and `raw` — the base64 wire tx with an
+  /// empty signature slot.
   Future<Transaction> validate(UnsignedTransaction tx) async {
     final data = await _conn.request('Transaction:validate', 'POST', tx.toJson());
     return Transaction.fromJson(data as Map<String, dynamic>);
@@ -80,7 +84,13 @@ class TransactionApi {
   ///   Call data is ABI-decoded for common shapes (ERC-20
   ///   transfer/approve) and surfaced as [decodedMethod] + [decodedArgs].
   /// - **Solana**: wraps `simulateTransaction`. Returns the program
-  ///   logs, compute-unit usage, and any error.
+  ///   logs, compute-unit usage, and any error. Routed by the tx's
+  ///   `network` or the [UnsignedTransaction.from] account's chain, so a
+  ///   plain `type: 'transfer'` works. libwallet builds the unsigned
+  ///   transfer from `from`/`to`/`amount`/`asset` (native SOL, or SPL for
+  ///   a mint asset — creating the recipient's token account when
+  ///   needed) and also reports its [TransactionSimulation.fee],
+  ///   `effects` and a `recipient_new_account` warning.
   /// - **Bitcoin**: parses `tx.Raw` via outscript and returns decoded
   ///   inputs / outputs so the UI can render "send X BTC to addr,
   ///   change Y BTC back to self".
@@ -152,7 +162,8 @@ class TransactionApi {
     return Map<String, dynamic>.from(data as Map);
   }
 
-  /// Compute the maximum amount sendable from [from] in the given
+  /// Compute the maximum amount sendable from [from] (an account id or
+  /// address; the current account when omitted) in the given
   /// [asset], accounting for network fees and, on Solana, the
   /// rent-exempt minimums the sender must retain and a new recipient
   /// must receive.

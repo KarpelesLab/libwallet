@@ -5,8 +5,10 @@
 //! `eth_call` + `eth_estimateGas`. Non-blocking approval warnings
 //! (recipient-is-contract, unlimited-approve) are appended best-effort.
 //!
-//! Solana/Bitcoin simulation is deferred (returns `{chain, decodedMethod:
-//! "unknown"}`); their raw-tx decoders follow.
+//! Solana: a tx carrying built `raw` bytes is simulated as-is; otherwise the
+//! unsigned transfer is built server-side from the high-level fields
+//! (`from`/`to`/`amount`/`asset`, SOL or SPL — the same builder signAndSend
+//! signs) and run through `simulateTransaction`. Bitcoin decodes `raw`.
 
 use num_bigint::BigInt;
 use serde::Deserialize;
@@ -25,19 +27,20 @@ const ERC20_APPROVE_SELECTOR: &str = "095ea7b3";
 /// `Transaction:simulate` {tx fields, RPC?}. One async implementation shared by
 /// native (`crate::rt::block_on`) and the browser (awaited in
 /// `handle_request_async`); chain I/O runs over `rpc::call_async`. The target
-/// chain comes from the tx `type`, and the endpoint from the Network model —
-/// the client never names a URL.
+/// chain comes from the tx (see [`tx_chain`]), and the endpoint from the Network
+/// model — the client never names a URL.
 pub async fn simulate_impl(env: &Env, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").unwrap_or(params);
-    let kind = sim_kind(env, tx)?;
-    if kind == "bitcoin" {
+    let np = with_tx_network(env, params, tx);
+    match tx_chain(env, &np, tx)? {
         // Decode-from-raw only (no RPC); the UTXO dry-run preview follows.
-        return Ok(simulate_bitcoin(tx));
-    }
-    let rpc = super::resolve_rpc_for_kind(env, params, kind)?;
-    match kind {
-        "evm" => Ok(simulate_evm(&rpc, tx).await),
-        _ => simulate_solana(&rpc, tx).await,
+        "bitcoin" => Ok(simulate_bitcoin(tx)),
+        "evm" => {
+            let rpc = super::resolve_rpc_for_kind(env, &np, "evm")?;
+            Ok(simulate_evm(&rpc, tx).await)
+        }
+        "solana" => simulate_solana(env, &np, tx).await,
+        other => Err(ApiError::new(400, format!("Transaction:simulate is not supported for {other}"))),
     }
 }
 
@@ -47,25 +50,69 @@ pub fn simulate(env: &Env, params: &Value) -> ApiResult {
     crate::rt::block_on(simulate_impl(env, params))
 }
 
-/// The chain a tx targets. A chain-specific tx `type` (solana_*/bitcoin_*/evm/
-/// erc20_transfer) decides it directly — this is what the browser relies on
-/// (multi-chain, no single current network). Otherwise fall back to the current
-/// `@` network's kind (the native/Dart path), defaulting to EVM.
-fn sim_kind(env: &Env, tx: &Value) -> Result<&'static str, ApiError> {
-    Ok(match tx.get("type").and_then(Value::as_str).unwrap_or("") {
-        "solana_transfer" | "solana_spl_transfer" => "solana",
-        "bitcoin_transfer" => "bitcoin",
-        "evm" | "erc20_transfer" | "transfer" => "evm",
-        _ => match crate::models::network::fetch(env, "@")
+/// `params` with the tx's camelCase `network` (what the Dart
+/// `UnsignedTransaction` sends) promoted to the `Network` param the network
+/// resolvers read, unless the caller already set one.
+pub(crate) fn with_tx_network(env: &Env, params: &Value, tx: &Value) -> Value {
+    let mut p = match params {
+        Value::Object(m) => m.clone(),
+        _ => serde_json::Map::new(),
+    };
+    let has = p.get("Network").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+    if let (false, Some(n)) = (has, tx.get("network").and_then(Value::as_str).filter(|s| !s.is_empty())) {
+        p.insert("Network".into(), json!(super::network_ref(env, n)));
+    }
+    Value::Object(p)
+}
+
+/// The chain a tx targets: "evm" / "solana" / "bitcoin" / "tron". A
+/// chain-specific tx `type` (solana_*/bitcoin_*/evm/erc20_*) decides it
+/// directly — what the browser relies on (multi-chain, no single current
+/// network). A generic `transfer` (or no type) follows the explicit `Network`,
+/// then the `from` account's chain, then the current `@` network, defaulting to
+/// EVM — so a Solana account's `transfer` never lands on the EVM path.
+pub(crate) fn tx_chain(env: &Env, params: &Value, tx: &Value) -> Result<&'static str, ApiError> {
+    let chain = |kind: &str| match kind {
+        "solana" => "solana",
+        "bitcoin" => "bitcoin",
+        "tron" => "tron",
+        _ => "evm",
+    };
+    match tx.get("type").and_then(Value::as_str).unwrap_or("") {
+        "solana_transfer" | "solana_spl_transfer" => return Ok("solana"),
+        "bitcoin_transfer" => return Ok("bitcoin"),
+        "tron_transfer" | "trc20_transfer" => return Ok("tron"),
+        "evm" | "erc20_transfer" | "erc20_approve" => return Ok("evm"),
+        _ => {}
+    }
+    if let Some(id) = params.get("Network").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let net = crate::models::network::fetch(env, id)
             .map_err(ApiError::internal)?
-            .map(|n| n.kind)
-            .as_deref()
-        {
-            Some("solana") => "solana",
-            Some("bitcoin") => "bitcoin",
-            _ => "evm",
-        },
+            .ok_or_else(|| ApiError::new(404, format!("network {id} not found")))?;
+        return Ok(chain(&net.kind));
+    }
+    if let Some(from) = tx.get("from").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        if let Some(a) = crate::models::account::find(env, from).map_err(ApiError::internal)? {
+            return Ok(chain(&a.kind));
+        }
+    }
+    Ok(match crate::models::network::fetch(env, "@").map_err(ApiError::internal)? {
+        Some(n) => chain(&n.kind),
+        None => "evm",
     })
+}
+
+/// The account a tx spends from: `from` (an account id or address), else the
+/// current account.
+pub(crate) fn tx_account(env: &Env, tx: &Value) -> Result<crate::models::account::Account, ApiError> {
+    match tx.get("from").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        Some(from) => crate::models::account::find(env, from)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, format!("from account {from} not found"))),
+        None => crate::models::account::current(env)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(400, "from is required (no current account)")),
+    }
 }
 
 /// Bitcoin simulate: decode the built `raw` tx into its inputs/outputs (Go
@@ -121,23 +168,85 @@ fn simulate_bitcoin(tx: &Value) -> Value {
     out
 }
 
-/// Solana simulate: `simulateTransaction` on the already-built `raw` bytes
-/// (Go `simulateSolana`). Surfaces logs, unitsConsumed, and revert status.
-async fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
-    let raw = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty());
-    let raw = raw.and_then(decode_tx_bytes).ok_or_else(|| {
-        ApiError::new(400, "solana tx has no raw bytes; build/validate it first")
-    })?;
-    let b64 = base64_std(&raw);
+/// Solana simulate (Go `simulateSolana`). A tx carrying built `raw` bytes is
+/// simulated as-is; otherwise the unsigned transfer is built from the tx fields
+/// with the shared builder — native SOL or SPL (ATA-create included) — and
+/// simulated with `sigVerify: false` + `replaceRecentBlockhash`. Surfaces logs,
+/// unitsConsumed and revert status, plus for a built transfer the EVM-shaped
+/// preview: `fee`, `effects`, `decodedMethod`/`decodedArgs` and `warnings`.
+async fn simulate_solana(env: &Env, params: &Value, tx: &Value) -> ApiResult {
+    let rpc = super::resolve_rpc_for_kind(env, params, "solana")?;
+    if let Some(raw) = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        let raw = decode_tx_bytes(raw).ok_or_else(|| ApiError::new(400, "solana tx raw is not base64 or 0x-hex"))?;
+        let mut out = run_solana_simulation(&rpc, &raw, false).await;
+        // Decode a native transfer from the tx shape (Go simulateSolana tail).
+        if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
+            out["decodedMethod"] = json!("native_transfer");
+            out["decodedArgs"] = json!({
+                "to": tx.get("to").and_then(Value::as_str).unwrap_or(""),
+                "amount": amount_string(tx.get("amount"), &amt),
+            });
+        }
+        return Ok(out);
+    }
 
+    let account = tx_account(env, tx)?;
+    let net = super::network_for_kind(env, params, "solana")?;
+    let built = super::solana_build::build_unsigned(env, &account, &net, &rpc, tx).await?;
+    let mut out = run_solana_simulation(&rpc, &built.unsigned_tx(), true).await;
+    out["fee"] = json!(crate::Amount::new_raw(BigInt::from(built.fee_lamports), 9));
+
+    let amount = built.amount.to_string();
+    let mut warnings = Vec::new();
+    match &built.token {
+        None => {
+            out["decodedMethod"] = json!("native_transfer");
+            out["decodedArgs"] = json!({ "to": built.to, "amount": amount });
+            out["effects"] = json!([{
+                "type": "native_transfer", "from": account.address, "to": built.to, "amount": amount,
+            }]);
+            if super::solana_build::account_exists(&rpc, &built.to).await == Some(false) {
+                warnings.push(json!({
+                    "code": "recipient_new_account",
+                    "severity": "info",
+                    "message": "The recipient account does not exist yet; this transfer creates it and must cover its rent-exempt minimum.",
+                    "field": "to",
+                }));
+            }
+        }
+        Some(token) => {
+            out["decodedMethod"] = json!("spl_transfer");
+            out["decodedArgs"] = json!({ "token": token.mint_b58, "to": built.to, "amount": amount });
+            out["effects"] = json!([{
+                "type": "spl_transfer", "token": token.mint_b58, "from": account.address, "to": built.to, "amount": amount,
+            }]);
+            let ata = built.recipient_ata.map(|a| bs58::encode(a).into_string()).unwrap_or_default();
+            if super::solana_build::account_exists(&rpc, &ata).await == Some(false) {
+                warnings.push(json!({
+                    "code": "recipient_new_account",
+                    "severity": "info",
+                    "message": "The recipient has no token account for this mint yet; this transfer creates it, paying its rent from your SOL.",
+                    "field": "to",
+                }));
+            }
+        }
+    }
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    Ok(out)
+}
+
+/// `simulateTransaction` on wire bytes (signatures unchecked). With
+/// `replace_blockhash` the node swaps in its latest blockhash, so a preview
+/// never fails on an expired anchor.
+async fn run_solana_simulation(rpc: &str, raw: &[u8], replace_blockhash: bool) -> Value {
+    let mut cfg = json!({ "sigVerify": false, "encoding": "base64", "commitment": "processed" });
+    if replace_blockhash {
+        cfg["replaceRecentBlockhash"] = json!(true);
+    }
     let mut out = json!({ "chain": "solana" });
-    let sim = crate::rpc::call_async(
-        rpc,
-        "simulateTransaction",
-        json!([b64, { "sigVerify": false, "encoding": "base64", "commitment": "processed" }]),
-    )
-    .await;
-    match sim {
+    match crate::rpc::call_async(rpc, "simulateTransaction", json!([base64_std(raw), cfg])).await {
         Err(e) => {
             out["willRevert"] = json!(true);
             out["revertReason"] = json!(e.to_string());
@@ -159,15 +268,7 @@ async fn simulate_solana(rpc: &str, tx: &Value) -> ApiResult {
             }
         }
     }
-    // Decode a native transfer from the tx shape (Go simulateSolana tail).
-    if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
-        out["decodedMethod"] = json!("native_transfer");
-        out["decodedArgs"] = json!({
-            "to": tx.get("to").and_then(Value::as_str).unwrap_or(""),
-            "amount": amount_string(tx.get("amount"), &amt),
-        });
-    }
-    Ok(out)
+    out
 }
 
 /// Decode a tx `raw` field as base64 (standard) or 0x-hex.
@@ -727,8 +828,10 @@ mod tests {
     }
 
     #[test]
-    fn simulate_solana_without_raw_errors() {
+    fn simulate_solana_without_raw_or_account_errors() {
+        // No raw bytes and no from / current account: nothing to build from.
         let env = Env::init_memory().unwrap();
+        crate::models::account::init(&env).unwrap();
         crate::models::network::init(&env).unwrap();
         env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         env.exec(

@@ -324,16 +324,15 @@ pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
 
 /// The maximum sendable satoshi for `xpub`: sum all UTXOs and subtract the fee
 /// to spend them all into a single output (Go `maxSendableBitcoin`, one output,
-/// no change). Returns `(total, fee, max)` in satoshi.
+/// no change). Returns `(total, fee, max, inputs)` in satoshi, `inputs` being
+/// the `"<txid>:<vout>"` refs spent — what a pinned max send passes back.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u64, u64)> {
+pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u64, u64, Vec<String>)> {
     let utxos = list_utxos(rpc, xpub)?;
     let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
-    // Convert discovered UTXOs to the vsize estimator's shape.
-    let inputs: Vec<DiscoveredUtxo> = utxos;
-    let fee = estimate_vsize(&inputs, 1) * fee_rate; // one recipient, no change
+    let fee = estimate_vsize(&utxos, 1) * fee_rate; // one recipient, no change
     let max = total.saturating_sub(fee);
-    Ok((total, fee, max))
+    Ok((total, fee, max, utxos.into_iter().map(|u| u.txo).collect()))
 }
 
 /// Sum the NATIVE unspent balance (satoshi) from a decoded `modchain_assets`
