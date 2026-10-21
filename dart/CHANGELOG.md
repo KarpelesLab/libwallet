@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.5
 
 - **`transactions.maxSendable()` works from Dart.** The native handler now
   takes the Dart params (`from`, `to`, `asset`, `priority`, `data`) and
