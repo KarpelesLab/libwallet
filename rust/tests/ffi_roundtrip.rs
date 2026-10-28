@@ -1576,10 +1576,13 @@ fn web3_solana_sign_transaction() {
     let cid = next_request_id(&erx);
     request(h, &format!(r#"{{"path":"Request:approve","params":{{"Id":"{cid}","Accounts":["{account_id}"]}}}}"#));
 
-    // A serialized tx: [compact-u16 sig count = 1][64-byte zero placeholder][message].
+    // A serialized tx: [compact-u16 sig count = 1][64-byte zero placeholder][message],
+    // the message being a transfer the connected account signs.
+    let from: [u8; 32] = bs58::decode(a["data"]["Address"].as_str().unwrap()).into_vec().unwrap().try_into().unwrap();
+    let msg = libwallet::solana::build_transfer_message(&from, &[7u8; 32], 1_000, &[9u8; 32]);
     let mut raw = vec![1u8];
     raw.extend_from_slice(&[0u8; 64]);
-    raw.extend_from_slice(b"a-solana-message-to-sign-0123456"); // 32-byte "message"
+    raw.extend_from_slice(&msg);
     let tx_b64 = base64::engine::general_purpose::STANDARD.encode(&raw);
 
     let (srx, sud) = request_async(h, &format!(r#"{{"path":"Web3:request","params":{{"origin":"{site}","query":{{"method":"solana_signTransaction","params":[{{"transaction":"{tx_b64}"}}]}}}}}}"#));
@@ -1598,11 +1601,12 @@ fn web3_solana_sign_transaction() {
     assert_eq!(j["result"], "success", "{j}");
     let signed_b64 = j["data"]["transaction"].as_str().unwrap();
     let signed = base64::engine::general_purpose::STANDARD.decode(signed_b64).unwrap();
-    // The signature slot (bytes 1..65) is now populated (was all zeros).
+    // The signature slot (bytes 1..65) now holds the account's signature over
+    // the preserved message.
     assert_eq!(signed.len(), raw.len());
-    assert!(signed[1..65].iter().any(|&b| b != 0), "signature slot must be filled");
-    // The message tail is preserved.
-    assert_eq!(&signed[65..], b"a-solana-message-to-sign-0123456");
+    assert_eq!(&signed[65..], msg.as_slice());
+    let sig: [u8; 64] = signed[1..65].try_into().unwrap();
+    assert!(libwallet::tss::ed25519_verify(&from, &msg, &sig), "signature slot must hold the account's signature");
 
     drop(unsafe { Box::from_raw(cud as *mut Sender<String>) });
     drop(unsafe { Box::from_raw(sud as *mut Sender<String>) });

@@ -180,8 +180,11 @@ class AccountApi {
     return SignedMessage.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
-  /// Sign an unsigned Solana transaction. Returns the signed transaction
-  /// as base64. For EVM/Bitcoin sends use `TransactionApi.signAndSend`.
+  /// Sign a serialized Solana transaction (legacy or v0, e.g. a swap or dApp
+  /// transaction). The account's signature goes into its own signer slot;
+  /// the message and other signers' slots are left untouched, so a partially
+  /// signed transaction can be co-signed. Returns the signed transaction.
+  /// For EVM/Bitcoin sends use `TransactionApi.signAndSend`.
   Future<Uint8List> signTransaction(
     String id, {
     required Uint8List transaction,

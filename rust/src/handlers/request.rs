@@ -288,7 +288,6 @@ fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: b
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
     let raw_b64 = req.value.as_ref().and_then(|v| v.get("raw")).and_then(Value::as_str).unwrap_or("");
-    let raw = base64::engine::general_purpose::STANDARD.decode(raw_b64).map_err(|e| ApiError::new(400, format!("decode transaction: {e}")))?;
 
     let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
     let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
@@ -296,10 +295,7 @@ fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: b
         return Err(ApiError::new(400, "transaction_sign approval requires Keys"));
     }
 
-    let message = crate::solana::tx_message(&raw).ok_or_else(|| ApiError::new(400, "solana tx: no message"))?.to_vec();
-    let sig = crate::models::wallet::sign_ed25519_for_account(env, &account, &unlock, &message).map_err(|e| ApiError::new(400, e.to_string()))?;
-    let sig64: [u8; 64] = sig.try_into().map_err(|_| ApiError::new(500, "unexpected signature length"))?;
-    let signed = crate::solana::splice_signature(&raw, &sig64).ok_or_else(|| ApiError::new(500, "failed to splice signature"))?;
+    let (signed, _) = super::account::sign_solana_serialized(env, &account, &unlock, raw_b64)?;
 
     if !broadcast {
         return Ok(json!({ "transaction": base64::engine::general_purpose::STANDARD.encode(&signed) }));

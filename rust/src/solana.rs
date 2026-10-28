@@ -124,10 +124,60 @@ pub fn tx_message(raw_tx: &[u8]) -> Option<&[u8]> {
 /// Splice a 64-byte signature into slot 0 of a serialized transaction (Go
 /// `solanaSplicingSignLocal`'s final copy). Returns the fully-signed bytes.
 pub fn splice_signature(raw_tx: &[u8], sig: &[u8; 64]) -> Option<Vec<u8>> {
-    let (off, _) = tx_sig_layout(raw_tx)?;
+    splice_signature_at(raw_tx, 0, sig)
+}
+
+/// Splice a 64-byte signature into signature slot `slot` of a serialized
+/// transaction, leaving the other signers' slots untouched.
+pub fn splice_signature_at(raw_tx: &[u8], slot: usize, sig: &[u8; 64]) -> Option<Vec<u8>> {
+    let (off, end) = tx_sig_layout(raw_tx)?;
+    let start = off + slot * 64;
+    if start + 64 > end {
+        return None;
+    }
     let mut out = raw_tx.to_vec();
-    out[off..off + 64].copy_from_slice(sig);
+    out[start..start + 64].copy_from_slice(sig);
     Some(out)
+}
+
+/// The signature slot `pubkey` fills in a serialized (legacy or v0)
+/// transaction, checking the signature array is sized to the message header's
+/// `numRequiredSignatures` — otherwise a slot index would point at the wrong
+/// signer. Signers are always static account keys, so v0 address-lookup
+/// tables never matter here.
+pub fn tx_signer_slot(raw_tx: &[u8], pubkey: &[u8; 32]) -> Option<usize> {
+    let (num_sigs, _) = read_compact_u16(raw_tx)?;
+    let msg = tx_message(raw_tx)?;
+    let header = if *msg.first()? & 0x80 != 0 { 1 } else { 0 };
+    if *msg.get(header)? as usize != num_sigs as usize {
+        return None;
+    }
+    find_signer_slot(msg, pubkey)
+}
+
+/// Decode a serialized transaction given as base58 or base64 (standard or
+/// url-safe, padding optional), preferring the candidate that names `signer`
+/// as a required signer, then any structurally valid one.
+pub fn decode_tx_for_signer(s: &str, signer: &[u8; 32]) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let s = s.trim();
+    let mut candidates: Vec<Vec<u8>> = Vec::new();
+    if let Ok(raw) = bs58::decode(s).into_vec() {
+        if !raw.is_empty() {
+            candidates.push(raw);
+        }
+    }
+    let mut b = s.replace('-', "+").replace('_', "/");
+    while b.len() % 4 != 0 {
+        b.push('=');
+    }
+    if let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(&b) {
+        candidates.push(raw);
+    }
+    if let Some(raw) = candidates.iter().find(|raw| tx_signer_slot(raw, signer).is_some()) {
+        return Some(raw.clone());
+    }
+    candidates.into_iter().find(|raw| tx_sig_layout(raw).is_some())
 }
 
 /// Serialize a legacy transfer message: `from` sends `lamports` to `to` at

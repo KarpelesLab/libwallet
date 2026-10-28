@@ -1,3 +1,18 @@
+## Unreleased
+
+- **`accounts.signTransaction()` / `signAndSendTransaction()` sign
+  serialized Solana transactions.** The `Transaction` they send (a base64
+  string, as before) is now signed as-is instead of being rejected: legacy
+  or v0 (address-lookup tables included), for mnemonic, FROST (MPC),
+  derived and imported accounts. The signature goes into the account's own
+  signer slot, not always slot 0, so a transaction with another fee payer
+  can be co-signed. A transaction that does not name the account as a
+  required signer is refused. The same path is in the browser build
+  (`libwallet_request` → `Account:signTransaction`, `Transaction` as a
+  base64/base58 string or `{transaction}`), returning `transaction`
+  (base64), `raw` (base58) and `signature`. dApp `solana_signTransaction`
+  approvals use it as well.
+
 ## 0.5.5
 
 - **`transactions.maxSendable()` works from Dart.** The native handler now

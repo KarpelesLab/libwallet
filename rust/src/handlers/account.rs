@@ -157,8 +157,63 @@ pub(crate) fn evm_request_from_tx(tx: &Value) -> Result<crate::evm::EvmTxRequest
     Ok(req)
 }
 
+/// The serialized transaction a Solana `Transaction` carries, if it is one:
+/// either the bare string (base64 or base58) or `{transaction: "..."}` — the
+/// wallet-adapter / dApp shape. A plain `{to, value, recentBlockhash}` object is
+/// a native transfer to build instead.
+fn solana_serialized_input(tx: &Value) -> Option<&str> {
+    match tx {
+        Value::String(s) => Some(s.as_str()),
+        _ => tx.get("transaction").and_then(Value::as_str),
+    }
+}
+
+/// Sign a complete serialized Solana transaction (legacy or v0, as built by a
+/// swap aggregator, a dApp or `@solana/web3.js`) for `account`: decode it,
+/// locate the account's signature slot, sign the message bytes untouched with
+/// the account's key (mnemonic, FROST committee, derived or imported), verify,
+/// and splice the signature into that slot. Other signers' slots are left as
+/// they are, so a partially signed transaction can be co-signed. Returns the
+/// signed bytes and the signature.
+pub(crate) fn sign_solana_serialized(
+    env: &Env,
+    account: &crate::models::account::Account,
+    unlock: &[(String, String)],
+    encoded: &str,
+) -> Result<(Vec<u8>, [u8; 64]), ApiError> {
+    let signer = crate::solana::pubkey_from_b64url(&account.pubkey)
+        .ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+    let raw = crate::solana::decode_tx_for_signer(encoded, &signer)
+        .ok_or_else(|| ApiError::new(400, "transaction is not a base64 or base58 serialized Solana transaction"))?;
+    let slot = crate::solana::tx_signer_slot(&raw, &signer)
+        .ok_or_else(|| ApiError::new(400, "transaction does not name this account as a required signer"))?;
+    let message = crate::solana::tx_message(&raw).ok_or_else(|| ApiError::new(400, "solana tx: no message"))?;
+    let sig = crate::models::wallet::sign_ed25519_for_account(env, account, unlock, message)
+        .map_err(|e| ApiError::new(400, e.to_string()))?;
+    let sig64: [u8; 64] = sig.try_into().map_err(|_| ApiError::new(500, "unexpected signature length"))?;
+    if !crate::tss::ed25519_verify(&signer, message, &sig64) {
+        return Err(ApiError::new(500, "signature does not verify under the account key"));
+    }
+    let signed = crate::solana::splice_signature_at(&raw, slot, &sig64)
+        .ok_or_else(|| ApiError::new(500, "failed to splice signature"))?;
+    Ok((signed, sig64))
+}
+
+/// Offline Solana signing. `Transaction` is either a complete serialized
+/// transaction (see [`solana_serialized_input`]) — signed as-is, returned as
+/// `{transaction (base64), raw (base58), signature (base58)}` — or a native
+/// transfer `{to, value, recentBlockhash}`, built locally and returned as
+/// `{raw}`.
 fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    if let Some(encoded) = solana_serialized_input(tx) {
+        let (signed, sig) = sign_solana_serialized(env, account, &unlock_keys(params), encoded)?;
+        return Ok(serde_json::json!({
+            "transaction": base64::engine::general_purpose::STANDARD.encode(&signed),
+            "raw": bs58::encode(&signed).into_string(),
+            "signature": bs58::encode(&sig).into_string(),
+        }));
+    }
     let to_b58 = tx.get("to").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "to required"))?;
     let lamports: u64 =
         tx.get("value").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -406,6 +461,15 @@ async fn evm_send_async(env: &Env, account: &crate::models::account::Account, ur
 /// Solana signAndSend: fetch the recent blockhash, delegate signing to the
 /// shared offline `sign_tx_solana`, then broadcast. Async twin of `solana_send`.
 async fn solana_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
+    // A pre-built transaction already carries its blockhash: sign and send it.
+    if params.get("Transaction").and_then(solana_serialized_input).is_some() {
+        let signed = sign_tx_solana(env, account, params)?;
+        let tx_b58 = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
+        let signature = crate::rpc::call_async(url, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))
+            .await
+            .map_err(ApiError::internal)?;
+        return Ok(serde_json::json!({ "signature": signature, "raw": tx_b58, "transaction": signed["transaction"] }));
+    }
     let bh = crate::rpc::call_async(url, "getLatestBlockhash", serde_json::json!([]))
         .await
         .map_err(ApiError::internal)?;

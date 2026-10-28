@@ -4,7 +4,6 @@
 //! platform's `Crypto/Okx:*` proxy, authenticated by the app's clientId in the
 //! `Sec-ClientId` header (no request signature) — see [`crate::rest`].
 
-use base64::Engine as _;
 use num_bigint::BigInt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -602,34 +601,8 @@ pub fn execute_evm_guarded(
 /// (the documented encoding) then base64/base64url, preferring the candidate
 /// that parses as a transaction whose fee-payer is `signer`.
 pub fn decode_solana_tx_data(s: &str, signer: &[u8; 32]) -> Result<Vec<u8>> {
-    let mut candidates: Vec<Vec<u8>> = Vec::new();
-    if let Ok(raw) = bs58::decode(s).into_vec() {
-        if !raw.is_empty() {
-            candidates.push(raw);
-        }
-    }
-    let mut b = s.replace('-', "+").replace('_', "/");
-    while b.len() % 4 != 0 {
-        b.push('=');
-    }
-    if let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(&b) {
-        candidates.push(raw);
-    }
-    // Prefer one whose message names `signer` as a required signer.
-    for raw in &candidates {
-        if let Some(msg) = crate::solana::tx_message(raw) {
-            if crate::solana::find_signer_slot(msg, signer).is_some() {
-                return Ok(raw.clone());
-            }
-        }
-    }
-    // Fall back to the first structurally-valid candidate.
-    for raw in &candidates {
-        if crate::solana::tx_sig_layout(raw).is_some() {
-            return Ok(raw.clone());
-        }
-    }
-    Err(Error::Env("tx.data is neither valid base58 nor base64 transaction".into()))
+    crate::solana::decode_tx_for_signer(s, signer)
+        .ok_or_else(|| Error::Env("tx.data is neither valid base58 nor base64 transaction".into()))
 }
 
 /// Bounds the Solana fetch→sign→broadcast retries (Go `okxSolanaBroadcastAttempts`).
