@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.6
 
 - **`accounts.signTransaction()` / `signAndSendTransaction()` sign
   serialized Solana transactions.** The `Transaction` they send (a base64
