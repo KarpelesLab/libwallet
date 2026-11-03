@@ -37,6 +37,7 @@ mod nft;
 mod quote;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) mod remotekey;
+pub(crate) mod bitfi;
 mod storekey;
 #[cfg(not(target_arch = "wasm32"))]
 mod swap;
@@ -268,6 +269,16 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
+        "Bitfi:open" => bitfi::open(params),
+        "Bitfi:addresses" => bitfi::addresses(params),
+        "Bitfi:export" => bitfi::export(params),
+        "Bitfi:close" => bitfi::close(params),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Bitfi:balances" => crate::rt::block_on(bitfi::balances(params)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Bitfi:prepareSend" => crate::rt::block_on(bitfi::prepare_send(params)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Bitfi:broadcast" => crate::rt::block_on(bitfi::broadcast(params)),
         "Wallet:importPrivateKey" => wallet::import_private_key(&handle.env, params),
         "Wallet:importMnemonic" => wallet::import_mnemonic(&handle.env, params),
         "Wallet:exportSecret" => wallet::export_secret(&handle.env, params),

@@ -1,0 +1,75 @@
+/* The recovery page, on the wallet's own tokens. */
+.recover {
+  max-width: var(--content);
+  margin: 0 auto;
+  padding: clamp(20px, 5vw, 48px) 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.recover [hidden], .recover-dialog [hidden] { display: none; }
+.gap-6 { --gap: 6px; }
+.gap-8 { --gap: 8px; }
+.gap-12 { --gap: 12px; }
+.gap-14 { --gap: 14px; }
+.gap-20 { --gap: 20px; }
+.gap-22 { --gap: 22px; }
+.recover .field-label, .recover-dialog .field-label { margin-bottom: 0; }
+.recover a { color: var(--iris-bright); }
+.recover-back { font-size: 14px; }
+.recover-h2 { margin: 0; font-size: 16px; font-weight: 650; }
+.recover-note { margin: 0; color: var(--text-dim); font-size: 14px; }
+.recover-hint { margin: 0; min-height: 1.4em; color: var(--text-faint); font-size: 13px; }
+.recover-hint.warn { color: var(--warn); }
+.recover-hint.bad { color: var(--danger); }
+.recover-hint.good { color: var(--ok); }
+.recover-break { overflow-wrap: anywhere; }
+
+.recover-terms { display: grid; gap: 10px; color: var(--text-dim); font-size: 14px; }
+.recover-terms p { margin: 0; }
+.recover-terms strong { color: var(--text); font-weight: 600; }
+
+/* A found balance is the point of the page, so it's the one loud thing on it. */
+.recover-fund {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-ctl);
+}
+.recover-fund.failed { border-color: var(--warn); }
+.recover-amounts { display: grid; gap: 4px; }
+.recover-amount {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 14px;
+}
+.recover-amount b { font-size: 21px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.recover-meta { color: var(--text-dim); font-size: 13px; }
+.recover-address { margin: 0; font-family: var(--font-mono); font-size: 12.5px; color: var(--text-dim); overflow-wrap: anywhere; }
+.recover-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.recover-keys { display: grid; gap: 8px; margin: 0; padding: 12px; background: var(--bg); border-radius: var(--r-chip); }
+.recover-keys dt { color: var(--text-dim); font-size: 13px; }
+.recover-keys dd { margin: 0; font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; user-select: all; }
+
+.recover-all summary { cursor: pointer; color: var(--text-dim); }
+.recover-all[open] summary { margin-bottom: 12px; }
+.recover-row { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.recover-row:first-child { border-top: 0; }
+
+.recover-dialog {
+  width: min(520px, calc(100vw - 32px));
+  padding: 24px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-card);
+}
+.recover-dialog::backdrop { background: rgba(0, 0, 0, 0.65); }
+.recover-review { display: grid; gap: 10px; margin: 0; padding: 14px; background: var(--bg); border-radius: var(--r-chip); }
+.recover-review[hidden] { display: none; }
+.recover-review dt { color: var(--text-dim); font-size: 13px; }
+.recover-review dd { margin: 0; font-family: var(--font-mono); font-size: 13px; overflow-wrap: anywhere; }

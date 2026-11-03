@@ -25,7 +25,7 @@ const HELIUS_DEVNET: &str = "https://trudie-xvrnf4-fast-devnet.helius-rpc.com";
 /// modchain's JSON-RPC endpoint for `chain`, which is addressed by NAME —
 /// `/api/<key>/<chain>/rpc`, e.g. `ethereum`, `bitcoin`, `solana`. Never a
 /// numeric chain id: `/api/<key>/1/rpc` answers 404 "file does not exist".
-fn modchain_rpc(chain: &str) -> String {
+pub(crate) fn modchain_rpc(chain: &str) -> String {
     format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/{chain}/rpc")
 }
 

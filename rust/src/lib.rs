@@ -65,6 +65,8 @@ pub mod eip712;
 pub mod solana_spl;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod bitcoin;
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub mod bitfi;
 // Tron (TRX / TRC-20) over java-tron's HTTP API; the round trips have async
 // twins, so the module builds on wasm too.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

@@ -10,6 +10,13 @@
   Sign SPL transfers and swaps as a complete serialized transaction.
 - **`raw` and `serializedTransaction` are accepted** alongside
   `transaction` as the field holding a serialized Solana transaction.
+- **Bitfi wallet recovery.** New `Bitfi:*` endpoints derive keys from a Bitfi
+  salt and secret phrase, held in memory only until the session closes:
+  `open`, `addresses`, `balances`, `prepareSend`, `broadcast`, `export` and
+  `close`. They cover BTC, LTC, DOGE, BCH, MONA and ETH with ERC-20 tokens,
+  including Bitfi's uncompressed legacy addresses. For Monero they give the
+  address and keys, without balances or sending. The web wallet adds a
+  no-login page for this at `recover/bitfi.html`.
 - **Docs:** `docs/solana-signing.md` covers the request and response
   format, with a working browser example in `web/examples/`.
 

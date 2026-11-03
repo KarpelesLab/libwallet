@@ -100,6 +100,9 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         // resolving endpoints via the Network model — the JS never names a URL.
         ("Account:balance", _) => crate::handlers::account::balance_impl(&handle.env, &req.params).await,
         ("Account:signAndSendTransaction", _) => crate::handlers::account::sign_and_send_impl(&handle.env, &req.params).await,
+        ("Bitfi:balances", _) => crate::handlers::bitfi::balances(&req.params).await,
+        ("Bitfi:prepareSend", _) => crate::handlers::bitfi::prepare_send(&req.params).await,
+        ("Bitfi:broadcast", _) => crate::handlers::bitfi::broadcast(&req.params).await,
         ("Transaction:simulate", _) => crate::handlers::simulate::simulate_impl(&handle.env, &req.params).await,
         _ => return handle_request(handle, raw),
     };

@@ -55,6 +55,9 @@ jobs:
       - name: Test Solana signing in the built WASM
         run: node web/tools/test-solana-sign.mjs web/pkg
 
+      - name: Test Bitfi recovery in the built WASM
+        run: node web/tools/test-bitfi.mjs web/pkg
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

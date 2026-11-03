@@ -319,7 +319,7 @@ fn build_ethereum(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json
     let tx = match rpc {
         Some(url) => {
             let params = json!({ "Transaction": tx });
-            let filled = crate::rt::block_on(crate::handlers::account::evm_fill(account, url, &params)).map_err(|e| Error::Env(e.message))?;
+            let filled = crate::rt::block_on(crate::handlers::account::evm_fill(&account.address, url, &params)).map_err(|e| Error::Env(e.message))?;
             filled["Transaction"].clone()
         }
         None => tx.clone(),

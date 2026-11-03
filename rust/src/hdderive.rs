@@ -162,7 +162,7 @@ pub fn master_pubkey(seed: &[u8], curve: &str) -> Result<Vec<u8>, DeriveError> {
 }
 
 /// HMAC-SHA512(`key`, seed) split into a 32-byte master key + 32-byte chain code.
-fn hmac_master(key: &[u8], seed: &[u8]) -> ([u8; 32], [u8; 32]) {
+pub(crate) fn hmac_master(key: &[u8], seed: &[u8]) -> ([u8; 32], [u8; 32]) {
     let mut mac = HmacSha512::new(key);
     mac.update(seed);
     let i = mac.finalize();
@@ -175,7 +175,7 @@ fn hmac_master(key: &[u8], seed: &[u8]) -> ([u8; 32], [u8; 32]) {
 
 /// One BIP32 CKDpriv step: hardened uses `0x00 || priv || ser32(i)`, normal uses
 /// the compressed pubkey. `child = (IL + priv) mod n`, `cc = IR`.
-fn ckd_priv(key: &[u8; 32], chain_code: &[u8; 32], index: u32) -> Result<([u8; 32], [u8; 32]), DeriveError> {
+pub(crate) fn ckd_priv(key: &[u8; 32], chain_code: &[u8; 32], index: u32) -> Result<([u8; 32], [u8; 32]), DeriveError> {
     let mut mac = HmacSha512::new(chain_code);
     if index >= 0x8000_0000 {
         mac.update(&[0u8]);

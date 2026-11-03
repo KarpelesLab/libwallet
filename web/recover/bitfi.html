@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark" />
+<meta name="referrer" content="no-referrer" />
+<!-- Secrets are typed here: only our own scripts run, and only our RPC server can be reached. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self' https://rpc.modchain.net; base-uri 'none'; form-action 'none'" />
+<meta name="description" content="See and move funds using a Bitfi salt and secret phrase, in your browser, with nothing to install and no account." />
+<title>Recover a Bitfi wallet</title>
+<link rel="stylesheet" href="../styles.css" />
+<link rel="stylesheet" href="./recover.css" />
+
+<main class="recover">
+  <a class="recover-back" href="../">libwallet</a>
+
+  <section id="start" class="stack gap-20" hidden>
+    <div class="stack gap-8">
+      <h1 class="title">Recover a Bitfi wallet</h1>
+      <p class="subtitle">
+        Enter the salt and secret phrase you use on your Bitfi device to see the funds they
+        control and move them. There's nothing to install and no account. This tool isn't made
+        by or affiliated with Bitfi.
+      </p>
+    </div>
+
+    <form id="unlock" class="stack gap-14" autocomplete="off">
+      <div class="stack gap-6">
+        <label class="field-label" for="salt">Salt</label>
+        <div class="input-wrap">
+          <input class="input mono" id="salt" type="password" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" />
+          <button class="ghost-btn" type="button" data-reveal="salt">Show</button>
+        </div>
+        <p class="recover-hint" id="saltHint"></p>
+      </div>
+      <div class="stack gap-6">
+        <label class="field-label" for="secret">Secret phrase</label>
+        <div class="input-wrap">
+          <input class="input mono" id="secret" type="password" required autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" data-1p-ignore data-lpignore="true" />
+          <button class="ghost-btn" type="button" data-reveal="secret">Show</button>
+        </div>
+        <p class="recover-hint" id="secretHint"></p>
+      </div>
+      <p class="err-inline" id="unlockError" role="alert"></p>
+      <button class="btn primary block" id="unlockButton" type="submit">Check for funds</button>
+    </form>
+
+    <div class="recover-terms">
+      <p><strong>Nothing is saved.</strong> Your salt and secret are used on this page and never sent anywhere. Closing this window forgets them.</p>
+      <p><strong>Move what you find to a new wallet.</strong> A Bitfi secret can't be changed, and typing it on a computer exposes it to anything running there, including browser extensions.</p>
+      <p><strong>Balances come from our server.</strong> To check them, this page sends your addresses to rpc.modchain.net, which can see that they're being looked up together.</p>
+    </div>
+  </section>
+
+  <section id="results" class="stack gap-22" hidden>
+    <div class="stack gap-6">
+      <h1 class="title" id="summary" tabindex="-1">Checking for funds</h1>
+      <p class="subtitle" id="summaryDetail" aria-live="polite"></p>
+    </div>
+
+    <div id="funds" class="stack gap-12"></div>
+
+    <div class="btn-row">
+      <button class="btn ghost" id="more" type="button">Check 10 more positions</button>
+      <button class="btn subtle" id="forget" type="button">Forget and start over</button>
+    </div>
+
+    <section class="stack gap-8">
+      <h2 class="recover-h2">Check an address you know</h2>
+      <p class="recover-note">An address you've used before shows whether this is the right salt and secret.</p>
+      <input class="input mono" id="known" type="text" aria-label="Address" placeholder="Address" autocomplete="off" spellcheck="false" />
+      <p class="recover-hint" id="knownResult" aria-live="polite"></p>
+    </section>
+
+    <section class="stack gap-8">
+      <h2 class="recover-h2">Monero</h2>
+      <p class="recover-note">
+        This page can't check Monero balances or send Monero yet. To reach your funds, restore
+        this address in a Monero wallet with its spend and view keys. If the wallet asks for a
+        restore height, use a date before your first deposit. Bitfi's first address is usually
+        position 1.
+      </p>
+      <div id="monero"></div>
+      <details class="recover-all" id="moneroMoreWrap">
+        <summary>Other positions</summary>
+        <div id="moneroMore"></div>
+      </details>
+    </section>
+
+    <details class="recover-all">
+      <summary>All addresses checked</summary>
+      <div id="all" class="stack gap-6"></div>
+    </details>
+  </section>
+
+  <p class="err-inline" id="fatal" role="alert"></p>
+</main>
+
+<dialog id="sendDialog" class="recover-dialog">
+  <form id="sendForm" class="stack gap-14" method="dialog" autocomplete="off">
+    <h2 class="recover-h2" id="sendTitle"></h2>
+    <p class="recover-note mono recover-break" id="sendFrom"></p>
+    <div class="stack gap-6">
+      <label class="field-label" for="sendTo">Recipient address</label>
+      <input class="input mono" id="sendTo" type="text" required autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="stack gap-6">
+      <label class="field-label" for="sendAmount">Amount</label>
+      <div class="input-wrap">
+        <input class="input mono" id="sendAmount" type="text" inputmode="decimal" required autocomplete="off" />
+        <button class="ghost-btn" type="button" id="sendMax">Max</button>
+      </div>
+    </div>
+    <dl class="recover-review" id="review" hidden></dl>
+    <p class="err-inline" id="sendError" role="alert"></p>
+    <div class="btn-row">
+      <button class="btn subtle" type="button" id="sendCancel">Cancel</button>
+      <button class="btn primary grow" type="button" id="sendAction">Review</button>
+    </div>
+  </form>
+</dialog>
+
+<script type="module" src="./bitfi.mjs"></script>
+</html>

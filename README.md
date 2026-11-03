@@ -105,6 +105,8 @@ The Dart package's build hook downloads the matching native binary from the GitH
 
 The WASM build runs the same `libwallet_request` handlers in the browser. To sign Solana swaps and SPL transfers, see [docs/solana-signing.md](docs/solana-signing.md).
 
+The web wallet also has a no-login page for [recovering a Bitfi wallet](web/recover/bitfi.html) from its salt and secret phrase. Nothing is saved: closing the window forgets them.
+
 ## Managed Release
 
 Releases are fully automated. A single `v{X}.{Y}.{Z}` tag triggers both the native library release (with per-platform binaries) and the Dart package publish.

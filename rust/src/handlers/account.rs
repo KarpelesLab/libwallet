@@ -411,7 +411,7 @@ fn u64_from_hex(s: &str) -> u64 {
 /// Autofill an EVM `Transaction` from the node (chainId, nonce, gas, EIP-1559
 /// fees) for any field the caller omitted, returning the params with a fully
 /// populated `Transaction`. Shared by estimate (preview) and send (sign).
-pub(crate) async fn evm_fill(account: &crate::models::account::Account, url: &str, params: &Value) -> Result<Value, ApiError> {
+pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result<Value, ApiError> {
     let mut p = params.clone();
     {
         let tx = p
@@ -426,7 +426,7 @@ pub(crate) async fn evm_fill(account: &crate::models::account::Account, url: &st
             tx.insert("chainId".into(), serde_json::json!(u64_from_hex(cid.as_str().unwrap_or("0x1"))));
         }
         if !tx.contains_key("nonce") {
-            let n = crate::rpc::call_async(url, "eth_getTransactionCount", serde_json::json!([account.address, "pending"]))
+            let n = crate::rpc::call_async(url, "eth_getTransactionCount", serde_json::json!([address, "pending"]))
                 .await
                 .map_err(ApiError::internal)?;
             tx.insert("nonce".into(), serde_json::json!(u64_from_hex(n.as_str().unwrap_or("0x0"))));
@@ -438,7 +438,7 @@ pub(crate) async fn evm_fill(account: &crate::models::account::Account, url: &st
             let est = crate::rpc::call_async(
                 url,
                 "eth_estimateGas",
-                serde_json::json!([{ "from": account.address, "to": to, "value": value_hex }]),
+                serde_json::json!([{ "from": address, "to": to, "value": value_hex }]),
             )
             .await
             .ok()
@@ -479,7 +479,7 @@ pub(crate) async fn evm_fill(account: &crate::models::account::Account, url: &st
 }
 
 async fn evm_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
-    let p = evm_fill(account, url, params).await?;
+    let p = evm_fill(&account.address, url, params).await?;
     let signed = sign_tx_evm(env, account, &p)?;
     let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
     let hash = crate::rpc::call_async(url, "eth_sendRawTransaction", serde_json::json!([raw]))
