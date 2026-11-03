@@ -52,6 +52,9 @@ jobs:
       - name: Wire purecrypto's wasm entropy import into the glue
         run: node web/tools/inject-entropy.mjs web/pkg/libwallet.js
 
+      - name: Test Solana signing in the built WASM
+        run: node web/tools/test-solana-sign.mjs web/pkg
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

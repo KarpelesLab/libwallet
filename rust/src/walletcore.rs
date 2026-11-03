@@ -278,6 +278,7 @@ pub fn sign_evm_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String>
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)] // a `mint` here must not sign a plain SOL transfer
 struct SolTxJson {
     to: String,
     lamports: u64,

@@ -157,15 +157,45 @@ pub(crate) fn evm_request_from_tx(tx: &Value) -> Result<crate::evm::EvmTxRequest
     Ok(req)
 }
 
-/// The serialized transaction a Solana `Transaction` carries, if it is one:
-/// either the bare string (base64 or base58) or `{transaction: "..."}` — the
-/// wallet-adapter / dApp shape. A plain `{to, value, recentBlockhash}` object is
-/// a native transfer to build instead.
-fn solana_serialized_input(tx: &Value) -> Option<&str> {
-    match tx {
-        Value::String(s) => Some(s.as_str()),
-        _ => tx.get("transaction").and_then(Value::as_str),
+/// The fields that name a complete serialized Solana transaction.
+const SOLANA_SERIALIZED_FIELDS: [&str; 3] = ["transaction", "serializedTransaction", "raw"];
+/// The only fields of the native SOL transfer form.
+const SOLANA_TRANSFER_FIELDS: [&str; 3] = ["to", "value", "recentBlockhash"];
+
+/// Which of the two forms a Solana `Transaction` takes. `Some` is the serialized
+/// transaction it carries: the bare string (base64 or base58) or an object whose
+/// only field is one of [`SOLANA_SERIALIZED_FIELDS`]. `None` is a native transfer
+/// `{to, value, recentBlockhash}` to build instead.
+///
+/// Anything else is refused rather than ignored: signing `{to, value, mint}` as a
+/// plain transfer would move `value` lamports of SOL instead of the token the
+/// caller meant, and a stray `to` next to a serialized transaction would describe
+/// a transfer other than the one being signed.
+fn solana_serialized_input(tx: &Value) -> Result<Option<&str>, ApiError> {
+    let fields = match tx {
+        Value::String(s) => return Ok(Some(s)),
+        Value::Object(fields) => fields,
+        _ => return Err(ApiError::new(400, "Transaction must be a serialized transaction string or an object")),
+    };
+    let Some(key) = fields.keys().find(|k| SOLANA_SERIALIZED_FIELDS.contains(&k.as_str())) else {
+        return match fields.keys().find(|k| !SOLANA_TRANSFER_FIELDS.contains(&k.as_str())) {
+            Some(unknown) => Err(ApiError::new(
+                400,
+                format!(
+                    "unsupported field {unknown:?}: a Solana Transaction object is a native SOL transfer \
+                     {{to, value, recentBlockhash}}; sign SPL transfers and swaps as a complete serialized transaction"
+                ),
+            )),
+            None => Ok(None),
+        };
+    };
+    if fields.len() > 1 {
+        return Err(ApiError::new(400, format!("{key} must be the only field of a serialized Solana Transaction")));
     }
+    fields[key]
+        .as_str()
+        .map(Some)
+        .ok_or_else(|| ApiError::new(400, format!("{key} must be a base64 or base58 string")))
 }
 
 /// Sign a complete serialized Solana transaction (legacy or v0, as built by a
@@ -206,7 +236,7 @@ pub(crate) fn sign_solana_serialized(
 /// `{raw}`.
 fn sign_tx_solana(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
-    if let Some(encoded) = solana_serialized_input(tx) {
+    if let Some(encoded) = solana_serialized_input(tx)? {
         let (signed, sig) = sign_solana_serialized(env, account, &unlock_keys(params), encoded)?;
         return Ok(serde_json::json!({
             "transaction": base64::engine::general_purpose::STANDARD.encode(&signed),
@@ -462,7 +492,8 @@ async fn evm_send_async(env: &Env, account: &crate::models::account::Account, ur
 /// shared offline `sign_tx_solana`, then broadcast. Async twin of `solana_send`.
 async fn solana_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
     // A pre-built transaction already carries its blockhash: sign and send it.
-    if params.get("Transaction").and_then(solana_serialized_input).is_some() {
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    if solana_serialized_input(tx)?.is_some() {
         let signed = sign_tx_solana(env, account, params)?;
         let tx_b58 = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
         let signature = crate::rpc::call_async(url, "sendTransaction", serde_json::json!([tx_b58, {"encoding":"base58"}]))

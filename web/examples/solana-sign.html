@@ -1,0 +1,59 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>libwallet: sign a serialized Solana transaction</title>
+<style>
+  body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; }
+  pre { background: #8882; padding: 1rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+</style>
+<h1>Sign a serialized Solana transaction</h1>
+<p>
+  Creates a throwaway MPC account in this tab's memory, signs a placeholder v0
+  transaction with it, and checks the message is unchanged. Nothing is broadcast.
+  See <a href="solana-sign.mjs">solana-sign.mjs</a> for the code and
+  <code>docs/solana-signing.md</code> in the libwallet repository for the format.
+</p>
+<button id="run" type="button">Create account and sign</button>
+<pre id="out" aria-live="polite">Not run yet.</pre>
+<script type="module">
+  import init, * as wasm from '../pkg/libwallet.js';
+  import { openSession, createDemoAccount, demoTransaction, signSolanaTransaction, fromBase64 } from './solana-sign.mjs';
+
+  const out = document.getElementById('out');
+  const button = document.getElementById('run');
+  const base58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+  function decodeAddress(address) {
+    let n = 0n;
+    for (const c of address) n = n * 58n + BigInt(base58.indexOf(c));
+    const bytes = new Uint8Array(32);
+    for (let i = 31; i >= 0; i--, n >>= 8n) bytes[i] = Number(n & 255n);
+    return bytes;
+  }
+
+  let request;
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    out.textContent = 'Working…';
+    try {
+      if (!request) {
+        await init();
+        request = openSession(wasm);
+      }
+      const { account, keys } = await createDemoAccount(request);
+      const unsigned = demoTransaction(decodeAddress(account.Address));
+      const signed = await signSolanaTransaction(request, account.Id, keys, unsigned);
+      out.textContent = [
+        `Account: ${account.Address}`,
+        `Signature: ${signed.signature}`,
+        'Message: unchanged',
+        `Signed transaction (${fromBase64(signed.transaction).length} bytes, base64):`,
+        signed.transaction,
+      ].join('\n');
+    } catch (err) {
+      out.textContent = `Failed: ${err.message || err}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+</script>

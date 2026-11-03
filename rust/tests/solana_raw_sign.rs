@@ -2,7 +2,8 @@
 //! (legacy or v0), the shape swap aggregators, dApps and the browser app hand
 //! over: the account's signature is spliced into its own slot, the message and
 //! every other signer's slot are left untouched. Driven through the C-ABI
-//! against FROST (MPC) accounts, root and derived.
+//! against FROST (MPC) accounts, root and derived, and the 1-of-1 mnemonic and
+//! private-key imports.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -182,4 +183,115 @@ fn native_transfer_form_still_builds() {
     let sig: [u8; 64] = signed[1..65].try_into().unwrap();
     assert!(ed25519_verify(&pk, tx_message(&signed).unwrap(), &sig));
     LibwalletDestroy(h);
+}
+
+/// The field names integrators reach for all sign the same transaction.
+#[test]
+fn serialized_field_aliases() {
+    let h = new_env();
+    let (id, pk, keys) = frost_account(h, 0);
+    let msg = build_transfer_message(&pk, &[7u8; 32], 1_000, &[9u8; 32]);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(unsigned_tx(1, &msg, None));
+    for field in ["transaction", "serializedTransaction", "raw"] {
+        let r = sign(h, &id, &keys, json!({ field: b64 }));
+        assert_eq!(r["result"], "success", "{field}: {r}");
+        let signed = bs58::decode(r["data"]["raw"].as_str().unwrap()).into_vec().unwrap();
+        assert_eq!(tx_message(&signed).unwrap(), msg.as_slice(), "{field}");
+    }
+    LibwalletDestroy(h);
+}
+
+/// Signing `{to, value, mint}` as a plain transfer would move `value` lamports of
+/// SOL instead of the token. Nothing the signer doesn't understand gets ignored.
+#[test]
+fn refuses_transaction_it_would_misread() {
+    let h = new_env();
+    let (id, pk, keys) = frost_account(h, 0);
+    let transfer = json!({"to":"11111111111111111111111111111112","value":"1000","recentBlockhash":"11111111111111111111111111111111"});
+    let b64 = base64::engine::general_purpose::STANDARD
+        .encode(unsigned_tx(1, &build_transfer_message(&pk, &[7u8; 32], 1_000, &[9u8; 32]), None));
+
+    for field in ["mint", "token", "instructions", "programId"] {
+        let mut tx = transfer.clone();
+        tx[field] = json!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+        let r = sign(h, &id, &keys, tx);
+        assert_eq!(r["result"], "error", "{field}: {r}");
+        assert!(r["error"].as_str().unwrap().contains(field), "{field}: {r}");
+    }
+    for tx in [
+        json!({ "transaction": b64, "to": "11111111111111111111111111111112" }), // which one is it?
+        json!({ "transaction": b64, "raw": b64 }),
+        json!({ "raw": 42 }),
+        json!(42),
+    ] {
+        let r = sign(h, &id, &keys, tx.clone());
+        assert_eq!(r["result"], "error", "{tx}: {r}");
+    }
+    LibwalletDestroy(h);
+}
+
+/// The same refusal on the broadcast path, before anything reaches the node.
+#[test]
+fn sign_and_send_refuses_token_fields() {
+    let h = new_env();
+    let (id, _, keys) = frost_account(h, 0);
+    let r = request(
+        h,
+        &json!({"path":"Account:signAndSendTransaction","verb":"POST","params":{
+            "Id":id,"Keys":keys,"RPC":"http://127.0.0.1:9/",
+            "Transaction":{"to":"11111111111111111111111111111112","value":"1000","mint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"}}}),
+    );
+    assert_eq!(r["result"], "error", "{r}");
+    assert!(r["error"].as_str().unwrap().contains("mint"), "{r}");
+    LibwalletDestroy(h);
+}
+
+/// Seed-phrase and imported-key accounts sign serialized transactions as well,
+/// legacy and v0, without their message changing.
+#[test]
+fn mnemonic_and_imported_accounts_sign() {
+    let h = new_env();
+    let key = "seal-password";
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    for (path, secret) in [
+        ("Wallet:importMnemonic", json!({ "Mnemonic": mnemonic })),
+        ("Wallet:importPrivateKey", json!({ "PrivateKey": "11".repeat(32) })),
+    ] {
+        let mut params = json!({"Name":"I","Curve":"ed25519","Keys":[{"Type":"Password","Key":key}]});
+        params.as_object_mut().unwrap().extend(secret.as_object().unwrap().clone());
+        let w = request(h, &json!({"path":path,"verb":"POST","params":params}));
+        assert_eq!(w["result"], "success", "{path}: {w}");
+        let keys = json!([{"Type":"Password","Id":w["data"]["Keys"][0]["Id"],"Key":key}]);
+        let a = request(
+            h,
+            &json!({"path":"Account","verb":"POST","params":{"Wallet":w["data"]["Id"],"Type":"solana","Index":0,"Keys":keys}}),
+        );
+        assert_eq!(a["result"], "success", "{path}: {a}");
+        let id = a["data"]["Id"].as_str().unwrap();
+        let pk: [u8; 32] = bs58::decode(a["data"]["Address"].as_str().unwrap()).into_vec().unwrap().try_into().unwrap();
+
+        let legacy = build_transfer_message(&pk, &[7u8; 32], 1_000, &[9u8; 32]);
+        for (msg, n, slot) in [(legacy, 1u8, 0usize), (v0_message(&[0x55u8; 32], &pk), 2, 1)] {
+            let r = sign(h, id, &keys, json!(base64::engine::general_purpose::STANDARD.encode(unsigned_tx(n, &msg, None))));
+            assert_eq!(r["result"], "success", "{path}: {r}");
+            let signed = bs58::decode(r["data"]["raw"].as_str().unwrap()).into_vec().unwrap();
+            assert_eq!(tx_message(&signed).unwrap(), msg.as_slice(), "{path}");
+            let sig: [u8; 64] = signed[1 + slot * 64..1 + (slot + 1) * 64].try_into().unwrap();
+            assert!(ed25519_verify(&pk, &msg, &sig), "{path}");
+        }
+    }
+    LibwalletDestroy(h);
+}
+
+/// The mnemonic-only browser signer has the same rule: it builds SOL transfers,
+/// so a token field must not be dropped on the way to one.
+#[test]
+fn walletcore_transfer_refuses_unknown_fields() {
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    let transfer = json!({"to":"11111111111111111111111111111112","lamports":1000,"recentBlockhash":"11111111111111111111111111111111"});
+    assert!(libwallet::walletcore::sign_solana_transfer(mnemonic, "", &transfer.to_string()).is_ok());
+
+    let mut with_mint = transfer.clone();
+    with_mint["mint"] = json!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    assert!(libwallet::walletcore::sign_solana_transfer(mnemonic, "", &with_mint.to_string()).is_err());
 }

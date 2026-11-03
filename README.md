@@ -101,6 +101,10 @@ final wallets = await client.wallets.list();
 
 The Dart package's build hook downloads the matching native binary from the GitHub Release for the target platform at install time — no Rust toolchain needed for consumers.
 
+## Browser (WASM)
+
+The WASM build runs the same `libwallet_request` handlers in the browser. To sign Solana swaps and SPL transfers, see [docs/solana-signing.md](docs/solana-signing.md).
+
 ## Managed Release
 
 Releases are fully automated. A single `v{X}.{Y}.{Z}` tag triggers both the native library release (with per-platform binaries) and the Dart package publish.

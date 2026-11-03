@@ -1,3 +1,18 @@
+## 0.5.7
+
+- **`Account:signTransaction` no longer signs a SOL transfer when it was
+  given token fields.** A Solana `Transaction` object carrying anything
+  beyond `{to, value, recentBlockhash}`, such as `mint`, `token` or
+  `instructions`, used to have the extras ignored, so `value` went out as
+  lamports of SOL. It is now refused, on `signAndSendTransaction` too. A
+  serialized transaction must likewise be the object's only field.
+  `sign_solana_transfer` in the browser build refuses unknown fields too.
+  Sign SPL transfers and swaps as a complete serialized transaction.
+- **`raw` and `serializedTransaction` are accepted** alongside
+  `transaction` as the field holding a serialized Solana transaction.
+- **Docs:** `docs/solana-signing.md` covers the request and response
+  format, with a working browser example in `web/examples/`.
+
 ## 0.5.6
 
 - **`accounts.signTransaction()` / `signAndSendTransaction()` sign
