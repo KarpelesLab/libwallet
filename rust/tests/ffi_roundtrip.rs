@@ -3458,7 +3458,7 @@ fn wallet_generate_and_validate_mnemonic_via_ffi() {
 
     // Default 12; 24 on request; each phrase fresh, valid, and importable.
     let mut seen = std::collections::HashSet::new();
-    for (params, n) in [("{}", 12), (r#"{"Words":12}"#, 12), (r#"{"Words":24}"#, 24)] {
+    for (params, n) in [("{}", 12), (r#"{"Words":12}"#, 12), (r#"{"Words":15}"#, 15), (r#"{"Words":18}"#, 18), (r#"{"Words":21}"#, 21), (r#"{"Words":24}"#, 24)] {
         let r = gen(params);
         assert_eq!(r["result"], "success", "{r}");
         assert_eq!(r["data"]["Words"], n);
@@ -3471,7 +3471,7 @@ fn wallet_generate_and_validate_mnemonic_via_ffi() {
         ));
         assert_eq!(w["result"], "success", "{w}");
     }
-    for bad in [r#"{"Words":15}"#, r#"{"Words":"24"}"#, r#"{"Words":-1}"#] {
+    for bad in [r#"{"Words":13}"#, r#"{"Words":27}"#, r#"{"Words":"24"}"#, r#"{"Words":-1}"#] {
         let r = gen(bad);
         assert_eq!(r["result"], "error", "{bad}: {r}");
     }

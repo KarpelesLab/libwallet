@@ -495,14 +495,14 @@ fn decode_wif(input: &str) -> Result<Vec<u8>, ApiError> {
 
 /// `Wallet:generateMnemonic` — a fresh English BIP-39 phrase from the OS RNG
 /// (the request-API twin of the browser's `generate_mnemonic`). `Words` is 12
-/// (default) or 24. Nothing is stored: pass the phrase to `Wallet:importMnemonic`
+/// (default), 15, 18, 21 or 24. Nothing is stored: pass the phrase to `Wallet:importMnemonic`
 /// once the user has backed it up. Returns `{Mnemonic, Words}`.
 pub fn generate_mnemonic(params: &Value) -> ApiResult {
     let words = match params.get("Words") {
         None | Some(Value::Null) => 12,
-        Some(v) => v.as_u64().ok_or_else(|| ApiError::new(400, "Words must be 12 or 24"))?,
+        Some(v) => v.as_u64().ok_or_else(|| ApiError::new(400, "Words must be 12, 15, 18, 21 or 24"))?,
     };
-    let words = u32::try_from(words).map_err(|_| ApiError::new(400, "Words must be 12 or 24"))?;
+    let words = u32::try_from(words).map_err(|_| ApiError::new(400, "Words must be 12, 15, 18, 21 or 24"))?;
     let mnemonic = crate::walletcore::generate_mnemonic(words).map_err(|e| ApiError::new(400, e))?;
     Ok(serde_json::json!({ "Mnemonic": mnemonic, "Words": words }))
 }

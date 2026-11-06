@@ -11,7 +11,7 @@ fn js_err(e: String) -> JsValue {
     JsValue::from_str(&e)
 }
 
-/// Generate a fresh BIP-39 mnemonic (`words` = 12 or 24).
+/// Generate a fresh BIP-39 mnemonic (`words` = 12, 15, 18, 21 or 24).
 #[wasm_bindgen]
 pub fn generate_mnemonic(words: u32) -> Result<String, JsValue> {
     walletcore::generate_mnemonic(words).map_err(js_err)

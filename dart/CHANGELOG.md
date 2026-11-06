@@ -14,8 +14,8 @@
   input was the account's, the fee. Incoming rows carry what the account
   received. Unconfirmed transactions are stored once they confirm.
 - **`wallets.generateMnemonic({words})` and `wallets.validateMnemonic()`.**
-  Mobile and desktop apps can now generate a fresh 12-word (default) or
-  24-word English BIP39 phrase, and check a typed one, through libwallet,
+  Mobile and desktop apps can now generate a fresh English BIP39 phrase of
+  12 (default), 15, 18, 21 or 24 words, the lengths import accepts, and check a typed one, through libwallet,
   as the browser build's `generate_mnemonic` / `validate_mnemonic` already
   did. The request endpoints are `Wallet:generateMnemonic` `{Words}` and
   `Wallet:validateMnemonic` `{Mnemonic}`. Nothing is stored: pass the backed-up

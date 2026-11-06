@@ -256,8 +256,13 @@ void main() {
       expect(twentyFour, isNot(startsWith(twelve)));
       expect(await client.wallets.validateMnemonic('abandon ' * 11 + 'abandon'),
           isFalse);
+      for (final n in [15, 18, 21]) {
+        final m = await client.wallets.generateMnemonic(words: n);
+        expect(m.split(' '), hasLength(n));
+        expect(await client.wallets.validateMnemonic(m), isTrue);
+      }
       await expectLater(
-          client.wallets.generateMnemonic(words: 15), throwsA(anything));
+          client.wallets.generateMnemonic(words: 13), throwsA(anything));
     });
 
     late Wallet wallet;

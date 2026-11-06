@@ -111,12 +111,12 @@ fn dec_bigint(s: &str) -> R<BigInt> {
 
 // ── Mnemonic ────────────────────────────────────────────────────────────────
 
-/// Generate a fresh BIP-39 mnemonic (`words` = 12 or 24).
+/// Generate a fresh BIP-39 mnemonic (`words` = 12, 15, 18, 21 or 24).
 pub fn generate_mnemonic(words: u32) -> R<String> {
+    // BIP-39: 32 bits of entropy per 3 words (12 → 128 bits … 24 → 256).
     let entropy_len = match words {
-        12 => 16,
-        24 => 32,
-        _ => return Err("words must be 12 or 24".into()),
+        12 | 15 | 18 | 21 | 24 => words as usize * 4 / 3,
+        _ => return Err("words must be 12, 15, 18, 21 or 24".into()),
     };
     let mut ent = vec![0u8; entropy_len];
     fill_random(&mut ent)?;
@@ -392,7 +392,14 @@ mod tests {
         assert_eq!(m24.split_whitespace().count(), 24);
         assert!(validate_mnemonic(&m24));
         assert!(!validate_mnemonic("not a real mnemonic phrase at all here nope"));
-        assert!(generate_mnemonic(15).is_err());
+        for n in [15, 18, 21] {
+            let m = generate_mnemonic(n).unwrap();
+            assert_eq!(m.split_whitespace().count(), n as usize);
+            assert!(validate_mnemonic(&m));
+        }
+        for n in [0, 11, 13, 25, 27] {
+            assert!(generate_mnemonic(n).is_err(), "{n}");
+        }
     }
 
     #[test]

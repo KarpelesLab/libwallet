@@ -304,7 +304,8 @@ class WalletApi {
   /// Generate a fresh English BIP39 recovery phrase — the native twin of
   /// the browser build's `generate_mnemonic`.
   ///
-  /// [words] is 12 (default, 128-bit entropy) or 24 (256-bit). The entropy
+  /// [words] is 12 (default, 128-bit entropy), 15, 18, 21 or 24 (256-bit),
+  /// the same lengths [importMnemonic] accepts. The entropy
   /// comes from the OS RNG inside libwallet; nothing is stored. Show the
   /// phrase to the user for backup, then pass it to [importMnemonic]. Any
   /// other [words] value throws.
