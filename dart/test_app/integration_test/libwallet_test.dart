@@ -198,4 +198,29 @@ void main() {
     await expectLater(sign(), throwsA(anything));
     await client.wallets.delete(wallet.id);
   });
+
+  // Opt-in (--dart-define=LIBWALLET_VAULT_PROMPT_TEST=true): a user-presence
+  // entry, so unsealing shows the OS prompt. Needs a screen lock and someone
+  // (or an adb script typing the PIN) to answer it.
+  test('Vault: a user-presence entry unseals only after the OS prompt', () async {
+    // "true": answer the prompt; "cancel": lock the vault while it is up.
+    const mode = String.fromEnvironment('LIBWALLET_VAULT_PROMPT_TEST');
+    if (mode.isEmpty) return;
+    final entry = await client.vault.create(
+        kind: 'data', policy: const VaultPolicy(exportable: true));
+    print('[vault] prompt test ($mode): created ${entry.id}, unsealing');
+    final unseal = client.vault.export(entry.id, reason: 'libwallet vault test');
+    if (mode == 'cancel') {
+      // Locking the vault dismisses a pending prompt (as backgrounding does).
+      await Future<void>.delayed(const Duration(seconds: 4));
+      await client.vault.lock();
+      await expectLater(unseal,
+          throwsA(predicate((e) => e.toString().contains('user cancelled'))));
+      print('[vault] prompt test: cancel reported as "user cancelled"');
+    } else {
+      expect(await unseal, isNotEmpty);
+      print('[vault] prompt test: unsealed after the prompt');
+    }
+    await client.vault.delete(entry.id);
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }

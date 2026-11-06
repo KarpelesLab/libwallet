@@ -51,6 +51,11 @@ pub trait SecureBackend: Send + Sync {
     fn open_key(&self, entry_id: &str, wrapped: &[u8], reason: &str) -> Result<Zeroizing<[u8; 32]>, String>;
     /// Destroy the entry's platform key (idempotent).
     fn delete_key(&self, entry_id: &str) -> Result<(), String>;
+    /// Dismiss any authentication prompt this backend has on screen (the
+    /// vault was locked). The waiting caller then fails with "user
+    /// cancelled". The OS does this itself on Apple when the app leaves the
+    /// foreground.
+    fn cancel_prompts(&self) {}
 }
 
 /// The real backend for this build, or None where the platform has none

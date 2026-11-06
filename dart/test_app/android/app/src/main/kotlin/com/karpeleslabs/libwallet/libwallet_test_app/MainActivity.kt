@@ -1,5 +1,7 @@
 package com.karpeleslabs.libwallet.libwallet_test_app
 
-import io.flutter.embedding.android.FlutterActivity
+// FlutterFragmentActivity: the libwallet vault shows BiometricPrompt, which
+// needs a FragmentActivity.
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+class MainActivity : FlutterFragmentActivity()

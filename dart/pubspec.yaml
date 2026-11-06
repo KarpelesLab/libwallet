@@ -38,3 +38,9 @@ flutter:
     platforms:
       ios:
         ffiPlugin: true
+      # Kotlin glue for the vault's Android Keystore backend (BiometricPrompt
+      # needs an Activity); the native library itself still ships through
+      # the build hook.
+      android:
+        package: com.karpeleslabs.libwallet
+        pluginClass: LibwalletPlugin

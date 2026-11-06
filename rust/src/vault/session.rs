@@ -198,6 +198,9 @@ pub fn forget(id: &str) {
 /// `Vault:lock` / app backgrounded: drop every cached secret.
 pub fn lock_all() {
     CACHE.lock().unwrap().clear();
+    if let Some(b) = super::platform::backend() {
+        b.cancel_prompts();
+    }
 }
 
 /// Overwrite every string in a request's params in place. The dispatcher runs

@@ -232,6 +232,27 @@ impl LaContext {
     }
 }
 
+/// Contexts of prompts in flight, so [`Apple::cancel_prompts`] can invalidate
+/// them (which dismisses the prompt; the waiting call then fails as cancelled).
+static ACTIVE: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// Registers a context in [`ACTIVE`] for its lifetime. Declared after the
+/// context it guards, so it is dropped (unregistered) first.
+struct ActiveGuard(usize);
+
+impl ActiveGuard {
+    fn new(ctx: &LaContext) -> ActiveGuard {
+        ACTIVE.lock().unwrap().push(ctx.0 as usize);
+        ActiveGuard(ctx.0 as usize)
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        ACTIVE.lock().unwrap().retain(|p| *p != self.0);
+    }
+}
+
 impl Drop for LaContext {
     fn drop(&mut self) {
         unsafe {
@@ -434,6 +455,7 @@ impl SecureBackend for Apple {
         let (eph_pub, key_pub) = wrapped.split_at(65);
         pool(|| unsafe {
             let ctx = LaContext::new().ok_or("LocalAuthentication is unavailable")?;
+            let _active = ActiveGuard::new(&ctx);
             ctx.set_reason(reason);
             let t = tag(entry_id);
             let mut q = self.base_query(&t);
@@ -464,6 +486,18 @@ impl SecureBackend for Apple {
             let shared = data_bytes(&shared, true);
             Ok(derive(&shared, eph_pub, key_pub, entry_id))
         })
+    }
+
+    fn cancel_prompts(&self) {
+        // Held while messaging, so no context can be released meanwhile
+        // (its guard has to take this lock first).
+        let active = ACTIVE.lock().unwrap();
+        pool(|| unsafe {
+            let send: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            for p in active.iter() {
+                send(*p as Id, sel(b"invalidate\0"));
+            }
+        });
     }
 
     fn delete_key(&self, entry_id: &str) -> Result<(), String> {
