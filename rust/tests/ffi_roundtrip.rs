@@ -3449,3 +3449,36 @@ fn quote_get_via_ffi() {
     assert_eq!(miss["code"], 404);
     LibwalletDestroy(h);
 }
+
+#[test]
+fn wallet_generate_and_validate_mnemonic_via_ffi() {
+    let h = new_env();
+    let gen = |params: &str| request(h, &format!(r#"{{"path":"Wallet:generateMnemonic","params":{params}}}"#));
+    let valid = |m: &str| request(h, &format!(r#"{{"path":"Wallet:validateMnemonic","params":{{"Mnemonic":"{m}"}}}}"#))["data"]["Valid"].clone();
+
+    // Default 12; 24 on request; each phrase fresh, valid, and importable.
+    let mut seen = std::collections::HashSet::new();
+    for (params, n) in [("{}", 12), (r#"{"Words":12}"#, 12), (r#"{"Words":24}"#, 24)] {
+        let r = gen(params);
+        assert_eq!(r["result"], "success", "{r}");
+        assert_eq!(r["data"]["Words"], n);
+        let m = r["data"]["Mnemonic"].as_str().unwrap().to_owned();
+        assert_eq!(m.split(' ').count(), n);
+        assert_eq!(valid(&m), true, "{m}");
+        assert!(seen.insert(m.clone()), "phrases must not repeat");
+        let w = request(h, &format!(
+            r#"{{"path":"Wallet:importMnemonic","params":{{"Curve":"secp256k1","Mnemonic":"{m}","Keys":[{{"Type":"Password","Key":"password1"}}]}}}}"#
+        ));
+        assert_eq!(w["result"], "success", "{w}");
+    }
+    for bad in [r#"{"Words":15}"#, r#"{"Words":"24"}"#, r#"{"Words":-1}"#] {
+        let r = gen(bad);
+        assert_eq!(r["result"], "error", "{bad}: {r}");
+    }
+
+    // A bad checksum (last word swapped) is invalid, not an error.
+    let m = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+    assert_eq!(valid(m), false);
+    assert_eq!(valid("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"), true);
+    LibwalletDestroy(h);
+}

@@ -281,6 +281,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Bitfi:broadcast" => crate::rt::block_on(bitfi::broadcast(params)),
         "Wallet:importPrivateKey" => wallet::import_private_key(&handle.env, params),
         "Wallet:importMnemonic" => wallet::import_mnemonic(&handle.env, params),
+        "Wallet:generateMnemonic" => wallet::generate_mnemonic(params),
+        "Wallet:validateMnemonic" => wallet::validate_mnemonic(params),
         "Wallet:exportSecret" => wallet::export_secret(&handle.env, params),
         "Wallet:multiCreate" => wallet::multi_create(&handle.env, params),
         "Wallet:backup" => wallet::backup(&handle.env, params),

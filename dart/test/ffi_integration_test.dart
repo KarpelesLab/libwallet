@@ -246,6 +246,20 @@ void main() {
   // ── Wallet full lifecycle ─────────────────────────────────────────────
 
   group('Wallet', () {
+    test('generateMnemonic → validateMnemonic', () async {
+      final twelve = await client.wallets.generateMnemonic();
+      expect(twelve.split(' '), hasLength(12));
+      expect(await client.wallets.validateMnemonic(twelve), isTrue);
+      final twentyFour = await client.wallets.generateMnemonic(words: 24);
+      expect(twentyFour.split(' '), hasLength(24));
+      expect(await client.wallets.validateMnemonic(twentyFour), isTrue);
+      expect(twentyFour, isNot(startsWith(twelve)));
+      expect(await client.wallets.validateMnemonic('abandon ' * 11 + 'abandon'),
+          isFalse);
+      await expectLater(
+          client.wallets.generateMnemonic(words: 15), throwsA(anything));
+    });
+
     late Wallet wallet;
 
     test('create with progress', () async {

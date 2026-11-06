@@ -493,6 +493,31 @@ fn decode_wif(input: &str) -> Result<Vec<u8>, ApiError> {
     Ok(body[1..33].to_vec())
 }
 
+/// `Wallet:generateMnemonic` — a fresh English BIP-39 phrase from the OS RNG
+/// (the request-API twin of the browser's `generate_mnemonic`). `Words` is 12
+/// (default) or 24. Nothing is stored: pass the phrase to `Wallet:importMnemonic`
+/// once the user has backed it up. Returns `{Mnemonic, Words}`.
+pub fn generate_mnemonic(params: &Value) -> ApiResult {
+    let words = match params.get("Words") {
+        None | Some(Value::Null) => 12,
+        Some(v) => v.as_u64().ok_or_else(|| ApiError::new(400, "Words must be 12 or 24"))?,
+    };
+    let words = u32::try_from(words).map_err(|_| ApiError::new(400, "Words must be 12 or 24"))?;
+    let mnemonic = crate::walletcore::generate_mnemonic(words).map_err(|e| ApiError::new(400, e))?;
+    Ok(serde_json::json!({ "Mnemonic": mnemonic, "Words": words }))
+}
+
+/// `Wallet:validateMnemonic` — whether `Mnemonic` is a valid English BIP-39
+/// phrase, checksum included (the browser's `validate_mnemonic`). Returns
+/// `{Valid}`; never an error for a bad phrase.
+pub fn validate_mnemonic(params: &Value) -> ApiResult {
+    let mnemonic = params
+        .get("Mnemonic")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::new(400, "Mnemonic required"))?;
+    Ok(serde_json::json!({ "Valid": crate::walletcore::validate_mnemonic(mnemonic) }))
+}
+
 /// `Wallet:importMnemonic` {Mnemonic, Passphrase?, Curve, Name, Keys(1)} — import
 /// a BIP-39 mnemonic as a 1-of-1 wallet (Go apiImportMnemonic).
 pub fn import_mnemonic(env: &Env, params: &Value) -> ApiResult {

@@ -301,6 +301,30 @@ class WalletApi {
     return WalletSecret.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
+  /// Generate a fresh English BIP39 recovery phrase — the native twin of
+  /// the browser build's `generate_mnemonic`.
+  ///
+  /// [words] is 12 (default, 128-bit entropy) or 24 (256-bit). The entropy
+  /// comes from the OS RNG inside libwallet; nothing is stored. Show the
+  /// phrase to the user for backup, then pass it to [importMnemonic]. Any
+  /// other [words] value throws.
+  Future<String> generateMnemonic({int words = 12}) async {
+    final data = await _conn.request('Wallet:generateMnemonic', 'POST', {
+      'Words': words,
+    });
+    return (data as Map)['Mnemonic'] as String;
+  }
+
+  /// Whether [mnemonic] is a valid English BIP39 phrase, checksum included
+  /// (the browser's `validate_mnemonic`). Returns false for a bad phrase
+  /// instead of throwing — use it to validate input before [importMnemonic].
+  Future<bool> validateMnemonic(String mnemonic) async {
+    final data = await _conn.request('Wallet:validateMnemonic', 'POST', {
+      'Mnemonic': mnemonic,
+    });
+    return (data as Map)['Valid'] == true;
+  }
+
   /// Import a BIP39 mnemonic phrase as a 1-of-1 wallet.
   ///
   /// The mnemonic's wordlist language is auto-detected (English, Japanese,
