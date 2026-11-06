@@ -59,21 +59,21 @@ fn secure_entry_prompts_per_policy_and_caches() {
     let e = create(&env, new(Kind::StoreKey, "secure", Policy::default(), None)).unwrap();
     assert_eq!(e.provider, "test-memory");
     assert!(!e.public.is_empty());
-    session::secret(&e, None, "x").unwrap();
-    session::secret(&e, None, "x").unwrap();
+    session::secret(&e, env.vault_scope(), None, "x").unwrap();
+    session::secret(&e, env.vault_scope(), None, "x").unwrap();
     assert_eq!(be.prompts.load(Ordering::SeqCst), 2);
-    assert!(session::unlock(&e, None, "x").is_err(), "unlock is refused when caching is off");
+    assert!(session::unlock(&e, env.vault_scope(), None, "x").is_err(), "unlock is refused when caching is off");
 
     // CacheSeconds -1: one prompt, then cached until locked.
     let c = create(&env, new(Kind::StoreKey, "secure", Policy { cache_seconds: -1, ..Default::default() }, None)).unwrap();
     be.prompts.store(0, Ordering::SeqCst);
-    session::unlock(&c, None, "x").unwrap();
-    session::secret(&c, None, "x").unwrap();
+    session::unlock(&c, env.vault_scope(), None, "x").unwrap();
+    session::secret(&c, env.vault_scope(), None, "x").unwrap();
     assert_eq!(be.prompts.load(Ordering::SeqCst), 1);
     session::lock_all();
-    assert!(!session::is_unlocked(&c.id));
+    assert!(!session::is_unlocked(env.vault_scope(), &c.id));
     be.cancel.store(true, Ordering::SeqCst);
-    assert!(session::secret(&c, None, "x").is_err(), "a cancelled prompt is an error");
+    assert!(session::secret(&c, env.vault_scope(), None, "x").is_err(), "a cancelled prompt is an error");
     be.cancel.store(false, Ordering::SeqCst);
 
     // Delete destroys the platform key.
@@ -167,4 +167,23 @@ fn wipe_value_clears_every_string() {
     session::wipe_value(&mut v);
     assert_eq!(v["a"].as_str().unwrap().bytes().all(|b| b == 0), true);
     assert_eq!(v["b"][0]["c"].as_str().unwrap().bytes().all(|b| b == 0), true);
+}
+
+#[test]
+fn unlocks_are_scoped_to_their_session() {
+    let a = env();
+    let e = create(&a, new(Kind::Data, "password", Policy { cache_seconds: -1, ..Default::default() }, Some("correct horse"))).unwrap();
+    session::unlock(&e, a.vault_scope(), Some("correct horse"), "").unwrap();
+    assert!(session::is_unlocked(a.vault_scope(), &e.id));
+
+    // Another session that loads the same blob starts locked.
+    let b = env();
+    let loaded = load_blob(&b, &e.data).unwrap();
+    assert!(!session::is_unlocked(b.vault_scope(), &loaded.id));
+    assert!(session::secret(&loaded, b.vault_scope(), None, "").is_err());
+
+    // Closing a session wipes what it unlocked.
+    let scope = a.vault_scope();
+    drop(a);
+    assert!(!session::is_unlocked(scope, &e.id));
 }

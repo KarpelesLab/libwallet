@@ -54,26 +54,30 @@ pub fn route(env: &Env, verb: &str, action: &str, params: &Value) -> ApiResult {
         ("import", _) => create(env, params, true),
         ("unlock", _) => {
             let e = entry(env, params)?;
-            let expires = session::unlock(&e, str_param(params, "Password"), reason(params)).map_err(bad)?;
+            let expires = session::unlock(&e, env.vault_scope(), str_param(params, "Password"), reason(params)).map_err(bad)?;
             Ok(json!({ "Unlocked": true, "Expires": expires }))
         }
         ("lock", _) => {
             match str_param(params, "Id") {
-                Some(id) => session::forget(id),
-                None => session::lock_all(),
+                Some(id) => session::forget(env.vault_scope(), id),
+                None => session::lock_scope(env.vault_scope()),
+            }
+            // A prompt still waiting for the user is dismissed either way.
+            if let Some(b) = vault::platform::backend() {
+                b.cancel_prompts();
             }
             Ok(json!({ "Locked": true }))
         }
         ("status", _) => {
             let e = entry(env, params)?;
-            Ok(json!({ "Id": e.id, "Unlocked": session::is_unlocked(&e.id) }))
+            Ok(json!({ "Id": e.id, "Unlocked": session::is_unlocked(env.vault_scope(), &e.id) }))
         }
         ("export", _) => {
             let e = entry(env, params)?;
             if !e.policy.exportable {
                 return Err(ApiError::new(403, "this vault entry is not exportable"));
             }
-            let secret = session::secret(&e, str_param(params, "Password"), reason(params)).map_err(bad)?;
+            let secret = session::secret(&e, env.vault_scope(), str_param(params, "Password"), reason(params)).map_err(bad)?;
             let encoded = vault::encode_secret(e.kind, &secret);
             Ok(json!({ "Id": e.id, "Kind": e.kind.as_str(), "Secret": encoded.as_str() }))
         }
@@ -98,7 +102,7 @@ pub fn route(env: &Env, verb: &str, action: &str, params: &Value) -> ApiResult {
             let old = str_param(params, "Password").ok_or_else(|| ApiError::new(400, "Password required"))?;
             let new = str_param(params, "NewPassword").ok_or_else(|| ApiError::new(400, "NewPassword required"))?;
             let e = vault::change_password(env, id, old, new, kdf(params)).map_err(bad)?;
-            session::forget(&e.id);
+            session::forget_everywhere(&e.id);
             Ok(e.to_json())
         }
         (other, _) => Err(ApiError::new(404, format!("unknown Vault action {other:?}"))),

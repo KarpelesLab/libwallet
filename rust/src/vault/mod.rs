@@ -222,7 +222,7 @@ pub fn delete(env: &Env, id: &str) -> Result<bool> {
             b.delete_key(&e.id).map_err(Error::Env)?;
         }
     }
-    session::forget(&e.id);
+    session::forget_everywhere(&e.id);
     env.exec(r#"DELETE FROM "Vault" WHERE "Id" = ?1"#, vec![SqlValue::Text(e.id)])?;
     Ok(true)
 }

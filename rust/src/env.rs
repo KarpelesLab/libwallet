@@ -79,6 +79,17 @@ pub struct Env {
     /// Wallet:exportToDevice — the `transfer` Spot handler resolves them).
     #[cfg(not(target_arch = "wasm32"))]
     transfer_sessions: Mutex<std::collections::HashMap<String, Arc<TransferSession>>>,
+    /// Unique per Env for the life of the process: scopes the vault's unlock
+    /// cache, so one session's unlock never unlocks another's entries.
+    vault_scope: u64,
+}
+
+static NEXT_VAULT_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+impl Drop for Env {
+    fn drop(&mut self) {
+        crate::vault::session::lock_scope(self.vault_scope);
+    }
 }
 
 /// One in-flight `Wallet:exportToDevice` session: the pairing token, the wallet
@@ -119,6 +130,7 @@ impl Env {
             request_waiters: Mutex::new(std::collections::HashMap::new()),
             spot: Mutex::new(None),
             transfer_sessions: Mutex::new(std::collections::HashMap::new()),
+            vault_scope: NEXT_VAULT_SCOPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         env.init_config()?;
         Ok(env)
@@ -127,6 +139,11 @@ impl Env {
     /// In-memory environment (mirrors Go `InitTempEnv`). The browser build uses
     /// this as its only `Env` constructor (in-memory DB; persistence is the
     /// host's concern).
+    /// See the `vault_scope` field.
+    pub fn vault_scope(&self) -> u64 {
+        self.vault_scope
+    }
+
     pub fn init_memory() -> Result<Env> {
         let env = Env {
             data_dir: PathBuf::new(),
@@ -142,6 +159,7 @@ impl Env {
             spot: RefCell::new(None),
             #[cfg(not(target_arch = "wasm32"))]
             transfer_sessions: Mutex::new(std::collections::HashMap::new()),
+            vault_scope: NEXT_VAULT_SCOPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
         env.init_config()?;
         Ok(env)

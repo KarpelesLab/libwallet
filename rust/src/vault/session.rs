@@ -36,6 +36,7 @@ pub const DEFAULT_REASON: &str = "Unlock your wallet";
 
 struct Ref {
     entry: Entry,
+    scope: u64,
     password: Option<Zeroizing<String>>,
     reason: String,
 }
@@ -47,7 +48,8 @@ struct Cached {
 }
 
 static REFS: LazyLock<Mutex<HashMap<String, Arc<Ref>>>> = LazyLock::new(Default::default);
-static CACHE: LazyLock<Mutex<HashMap<String, Cached>>> = LazyLock::new(Default::default);
+/// Keyed by (session scope, entry id): see [`crate::Env::vault_scope`].
+static CACHE: LazyLock<Mutex<HashMap<(u64, String), Cached>>> = LazyLock::new(Default::default);
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -95,7 +97,7 @@ fn walk(env: &Env, v: &mut Value, lease: &mut Lease) -> Result<()> {
             let mut raw = [0u8; 16];
             OsRng.fill_bytes(&mut raw);
             let token = format!("{TOKEN_PREFIX}{}", raw.iter().map(|b| format!("{b:02x}")).collect::<String>());
-            REFS.lock().unwrap().insert(token.clone(), Arc::new(Ref { entry, password, reason }));
+            REFS.lock().unwrap().insert(token.clone(), Arc::new(Ref { entry, scope: env.vault_scope(), password, reason }));
             m.insert("Type".into(), Value::String(key_type.into()));
             m.insert("Key".into(), Value::String(token.clone()));
             lease.tokens.push(token);
@@ -124,7 +126,7 @@ pub fn secret_for_token(material: &str) -> Option<Result<Zeroizing<Vec<u8>>>> {
     Some(match lookup(material) {
         Some(r) => {
             let reason = if r.reason.is_empty() { DEFAULT_REASON } else { &r.reason };
-            secret(&r.entry, r.password.as_ref().map(|p| p.as_str()), reason)
+            secret(&r.entry, r.scope, r.password.as_ref().map(|p| p.as_str()), reason)
         }
         None => Err(Error::Env("vault reference expired".into())),
     })
@@ -143,59 +145,73 @@ pub fn public_for_token(material: &str) -> Option<Result<String>> {
     })
 }
 
-/// An entry's secret: from the cache when it holds a live copy, else unsealed
-/// (and cached when the policy allows it).
-pub fn secret(e: &Entry, password: Option<&str>, reason: &str) -> Result<Zeroizing<Vec<u8>>> {
+/// An entry's secret in session `scope` ([`crate::Env::vault_scope`]): from
+/// the cache when it holds a live copy, else unsealed (and cached when the
+/// policy allows it).
+pub fn secret(e: &Entry, scope: u64, password: Option<&str>, reason: &str) -> Result<Zeroizing<Vec<u8>>> {
+    let key = (scope, e.id.clone());
     {
         let mut cache = CACHE.lock().unwrap();
-        match cache.get(&e.id) {
+        match cache.get(&key) {
             Some(c) if c.expires_ms.is_none_or(|t| t > now_ms()) => return Ok(c.secret.clone()),
             Some(_) => {
-                cache.remove(&e.id);
+                cache.remove(&key);
             }
             None => {}
         }
     }
     let s = super::unseal(e, password, reason)?;
-    keep(e, &s);
+    keep(e, key, &s);
     Ok(s)
 }
 
-fn keep(e: &Entry, s: &Zeroizing<Vec<u8>>) {
+fn keep(e: &Entry, key: (u64, String), s: &Zeroizing<Vec<u8>>) {
     let expires_ms = match e.policy.cache_seconds {
         0 => return,
         n if n < 0 => None,
         n => Some(now_ms().saturating_add(n.saturating_mul(1000))),
     };
-    CACHE.lock().unwrap().insert(e.id.clone(), Cached { secret: s.clone(), expires_ms });
+    CACHE.lock().unwrap().insert(key, Cached { secret: s.clone(), expires_ms });
 }
 
 /// `Vault:unlock`: unseal now and keep the secret for the entry's
 /// `CacheSeconds`, so later uses don't prompt. Returns the expiry (Unix ms,
 /// None = until locked).
-pub fn unlock(e: &Entry, password: Option<&str>, reason: &str) -> Result<Option<i64>> {
+pub fn unlock(e: &Entry, scope: u64, password: Option<&str>, reason: &str) -> Result<Option<i64>> {
     if e.policy.cache_seconds == 0 {
         return Err(Error::Env(format!(
             "vault entry {} is set to unlock on every use (CacheSeconds 0); use it directly instead",
             e.id
         )));
     }
-    forget(&e.id);
-    secret(e, password, reason)?;
-    Ok(CACHE.lock().unwrap().get(&e.id).and_then(|c| c.expires_ms))
+    forget(scope, &e.id);
+    secret(e, scope, password, reason)?;
+    Ok(CACHE.lock().unwrap().get(&(scope, e.id.clone())).and_then(|c| c.expires_ms))
 }
 
 /// Whether the entry has a live cached secret.
-pub fn is_unlocked(id: &str) -> bool {
-    CACHE.lock().unwrap().get(id).is_some_and(|c| c.expires_ms.is_none_or(|t| t > now_ms()))
+pub fn is_unlocked(scope: u64, id: &str) -> bool {
+    CACHE.lock().unwrap().get(&(scope, id.to_owned())).is_some_and(|c| c.expires_ms.is_none_or(|t| t > now_ms()))
 }
 
-/// Drop the cached secret of one entry (wiped by `Zeroizing`).
-pub fn forget(id: &str) {
-    CACHE.lock().unwrap().remove(id);
+/// Drop one entry's cached secret in session `scope` (wiped by `Zeroizing`).
+pub fn forget(scope: u64, id: &str) {
+    CACHE.lock().unwrap().remove(&(scope, id.to_owned()));
 }
 
-/// `Vault:lock` / app backgrounded: drop every cached secret.
+/// Drop one entry's cached secret in every session (the entry was deleted).
+pub fn forget_everywhere(id: &str) {
+    CACHE.lock().unwrap().retain(|(_, e), _| e != id);
+}
+
+/// `Vault:lock` without an id, or the session closing: drop every cached
+/// secret of session `scope`.
+pub fn lock_scope(scope: u64) {
+    CACHE.lock().unwrap().retain(|(s, _), _| *s != scope);
+}
+
+/// App backgrounded: drop every cached secret of every session, and dismiss
+/// any prompt on screen.
 pub fn lock_all() {
     CACHE.lock().unwrap().clear();
     if let Some(b) = super::platform::backend() {

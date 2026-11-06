@@ -78,7 +78,7 @@ pub fn export_confirm(env: &Env, params: &Value) -> ApiResult {
         if e.kind != crate::vault::Kind::StoreKey {
             return Err(ApiError::new(400, format!("vault entry {entry_id} is not a storekey")));
         }
-        let secret = crate::vault::session::secret(&e, None, reason).map_err(|e| ApiError::new(400, e.to_string()))?;
+        let secret = crate::vault::session::secret(&e, env.vault_scope(), None, reason).map_err(|e| ApiError::new(400, e.to_string()))?;
         let key = crate::vault::encode_secret(e.kind, &secret);
         share["private_key"] = json!(key.as_str());
         if let Some(m) = share.as_object_mut() {
