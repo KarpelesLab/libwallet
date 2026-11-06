@@ -80,10 +80,11 @@ class Network {
   /// not implemented on this chain" (provider empty + Transaction
   /// list always empty). Stable values:
   ///
-  ///   - `"modchain"`   — EVM (primary), via modchain_historyByAddress
+  ///   - `"modchain"`   — EVM and the bitcoin family (BTC, LTC, DOGE,
+  ///     BCH, MONA), via modchain_historyByAddress
   ///   - `"otterscan"`  — EVM (fallback), via ots_searchTransactionsAfter
   ///   - `"signatures"` — Solana, via getSignaturesForAddress + getTransaction
-  ///   - `""`           — no provider (bitcoin family, custom chains, …)
+  ///   - `""`           — no provider (Tron, custom chains, …)
   ///
   /// Hosts that render a "Powered by …" badge can read this; UIs
   /// that want to hide the tx tab on chains without an indexer

@@ -61,7 +61,7 @@ impl Network {
     /// TxHistoryProvider.
     pub fn tx_history_provider(&self) -> &'static str {
         match self.kind.as_str() {
-            "evm" => "modchain",
+            "evm" | "bitcoin" => "modchain",
             "solana" => "signatures",
             _ => "",
         }

@@ -5,6 +5,16 @@
   whichever two shares the caller unlocks, in any order. Before, every share
   had to be unlocked. Unlocking more shares than needed still works. With too
   few, the error says how many are needed.
+- **Bitcoin-family transaction history.** `transactions.backfill()` now
+  fills the history of BTC, LTC, DOGE, BCH and MONA accounts through
+  modchain, the same provider as EVM; `Network.txHistoryProvider` is
+  `"modchain"` for these networks. Every used receive and change address is
+  swept, and each confirmed transaction is stored once, as seen by the
+  account. Outgoing rows carry the amount the account sent and, when every
+  input was the account's, the fee. Incoming rows carry what the account
+  received. Unconfirmed transactions are stored once they confirm.
+- **`tx:history_updated` carries `network`**, as `TxHistoryUpdatedEvent.networkId`
+  already documented.
 
 ## 0.5.7
 

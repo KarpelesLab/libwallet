@@ -167,7 +167,7 @@ fn ephemeral_solana_and_bitcoin() {
     assert!(sol.get("EVM_Info").is_none());
 
     let btc = network::fetch(&env, "bitcoin.bitcoin").unwrap().unwrap().to_json();
-    assert_eq!(btc["TxHistoryProvider"], "");
+    assert_eq!(btc["TxHistoryProvider"], "modchain");
     assert_eq!(btc["ResolvedBlockExplorer"], "https://www.blockexplorer.com/bitcoin");
 }
 

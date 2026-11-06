@@ -168,8 +168,9 @@ fn validate_solana(env: &Env, params: &Value, tx: &Value, typ: &str) -> ApiResul
 }
 
 /// `Transaction:backfill` — sweep the current account+network's tx-history
-/// provider and upsert the results (Go `apiTransactionBackfill`). EVM only for
-/// now (modchain_historyByAddress); runs synchronously on the worker thread and
+/// provider and upsert the results (Go `apiTransactionBackfill`): EVM and the
+/// Bitcoin family via modchain_historyByAddress, Solana via
+/// getSignaturesForAddress. Runs synchronously on the worker thread and
 /// emits `tx:history_updated`. Returns `{started, provider, count}`. `RPC` in
 /// params overrides the network's resolved RPC (tests / explicit routing).
 pub fn backfill(env: &Env, params: &Value) -> ApiResult {
@@ -185,8 +186,10 @@ pub fn backfill(env: &Env, params: &Value) -> ApiResult {
         .ok_or_else(|| ApiError::new(400, "no current network"))?;
 
     let provider = net.tx_history_provider();
-    if !matches!(net.kind.as_str(), "evm" | "solana") || provider.is_empty() {
-        // Bitcoin provider not yet ported.
+    if net.kind == "bitcoin" && account.kind != "bitcoin" {
+        return Ok(json!({ "started": false, "provider": provider, "reason": format!("current account is {}, not bitcoin", account.kind) }));
+    }
+    if provider.is_empty() {
         return Ok(json!({ "started": false, "provider": provider, "reason": format!("no tx-history provider ported for {}", net.kind) }));
     }
     let rpc = match params.get("RPC").and_then(Value::as_str) {
@@ -195,11 +198,12 @@ pub fn backfill(env: &Env, params: &Value) -> ApiResult {
     };
     let count = match net.kind.as_str() {
         "solana" => crate::txhistory::backfill_solana_signatures(env, &account.address, &net, &rpc),
+        "bitcoin" => crate::txhistory::backfill_bitcoin_modchain(env, &account, &net, &rpc),
         _ => crate::txhistory::backfill_evm_modchain(env, &account.address, &net, &rpc),
     }
     .map_err(ApiError::internal)?;
     if count > 0 {
-        env.broadcast(&crate::response::event("tx:history_updated", json!({ "account": account.id, "count": count })));
+        env.broadcast(&crate::response::event("tx:history_updated", json!({ "account": account.id, "network": net.id, "count": count })));
     }
     Ok(json!({ "started": true, "provider": provider, "count": count }))
 }
