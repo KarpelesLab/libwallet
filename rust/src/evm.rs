@@ -38,8 +38,8 @@ pub struct EvmTxRequest {
 }
 
 /// Build, DKLs-sign, and serialize an EVM transaction (legacy or EIP-1559) for
-/// `account_id`. `unlock` provides the Password creds for ALL of the wallet's
-/// shares (DKLs signing needs the full set). Returns the raw signed tx bytes.
+/// `account_id`. `unlock` provides the creds for at least threshold+1 of the
+/// wallet's shares (any 2 of a 2-of-3). Returns the raw signed tx bytes.
 pub fn sign_tx(
     env: &Env,
     account_id: &str,

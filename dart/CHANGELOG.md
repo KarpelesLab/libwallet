@@ -1,3 +1,11 @@
+## 0.5.8
+
+- **secp256k1 MPC wallets sign with any threshold+1 shares.** A 2-of-3
+  wallet now signs EVM, Tron and Bitcoin-family transactions and messages with
+  whichever two shares the caller unlocks, in any order. Before, every share
+  had to be unlocked. Unlocking more shares than needed still works. With too
+  few, the error says how many are needed.
+
 ## 0.5.7
 
 - **`Account:signTransaction` no longer signs a SOL transfer when it was

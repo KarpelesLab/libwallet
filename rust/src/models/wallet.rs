@@ -1978,8 +1978,8 @@ pub fn frost_committee(
 }
 
 /// Sign a 32-byte digest with a secp256k1/DKLs23 wallet, returning the ECDSA
-/// `(r, s, v)`. DKLs signing needs the full key set, so `unlock` must name and
-/// unlock ALL of the wallet's Password shares. This is the crypto behind
+/// `(r, s, v)`. `unlock` must name and unlock at least threshold+1 of the
+/// wallet's shares (any 2 of a 2-of-3); extras are ignored. This is the crypto behind
 /// Account:signTransaction for EVM wallets.
 pub fn dkls_sign_digest(
     env: &Env,
@@ -2046,13 +2046,21 @@ pub fn dkls_sign_digest_at(
         keys.push(key);
     }
 
-    if keys.len() < wallet.keys.len() {
-        return Err(Error::Env("DKLs signing requires all shares to be unlocked".into()));
-    }
-    // dkls_sign_local indexes the full array by party index; put keys[i] at i.
+    // Any threshold+1 shares sign (2 of a 2-of-3); extra unlocks are fine, the
+    // lowest-index t+1 distinct shares form the committee.
     keys.sort_by_key(|k| k.idx);
+    keys.dedup_by_key(|k| k.idx);
+    let need = keys.first().map_or(threshold, |k| k.t) + 1;
+    if keys.len() < need {
+        return Err(Error::Env(format!(
+            "DKLs signing needs {need} of the wallet's {} shares unlocked, got {}",
+            wallet.keys.len(),
+            keys.len()
+        )));
+    }
+    keys.truncate(need);
 
-    crate::tss::dkls_sign_local_tweaked(&keys, threshold, tweak, digest).map_err(|e| Error::Env(e.to_string()))
+    crate::tss::dkls_sign_committee_tweaked(&keys, tweak, digest).map_err(|e| Error::Env(e.to_string()))
 }
 
 fn row_to_wallet(row: &[SqlValue]) -> Wallet {

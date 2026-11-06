@@ -233,8 +233,43 @@ pub fn dkls_sign_local_tweaked(
     Ok((sig.r, sig.s, sig.v))
 }
 
-/// The wallet's group public key as the 33-byte SEC1-compressed secp256k1
-/// encoding (Wallet.Pubkey for secp256k1 wallets).
+/// Sign with exactly the shares a caller holds: any `t + 1` distinct parties of
+/// a DKLs key (e.g. 2 of a 2-of-3 wallet), in any order, plus the HD `tweak`.
+/// `dklstss::sign_with_tweak` takes the key set indexed by party slot and reads
+/// only the slots named in `signer_idx` (plus slot 0's public `n`/`t`/group
+/// key, common to every share), so the unheld slots are filled with a copy of
+/// a held share purely to satisfy the indexing — they never enter the protocol.
+pub fn dkls_sign_committee_tweaked(
+    committee: &[tsslib::dklstss::Key],
+    tweak: &[u8; 32],
+    hash: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>, u8), TssError> {
+    let first = committee.first().ok_or_else(|| TssError("no shares to sign with".into()))?;
+    let (n, t) = (first.n, first.t);
+    if committee.len() != t + 1 {
+        return Err(TssError(format!("need exactly {} shares, got {}", t + 1, committee.len())));
+    }
+    let group = dkls_group_pubkey(first)?;
+    let mut slots: Vec<Option<&tsslib::dklstss::Key>> = vec![None; n];
+    for k in committee {
+        if k.n != n || k.t != t || dkls_group_pubkey(k)? != group {
+            return Err(TssError("shares belong to different keys".into()));
+        }
+        match slots.get_mut(k.idx) {
+            Some(s @ None) => *s = Some(k),
+            Some(Some(_)) => return Err(TssError(format!("share {} given twice", k.idx))),
+            None => return Err(TssError(format!("share index {} out of range", k.idx))),
+        }
+    }
+    let signer_idx: Vec<usize> = (0..n).filter(|&i| slots[i].is_some()).collect();
+    let keys: Vec<tsslib::dklstss::Key> = slots.into_iter().map(|s| s.unwrap_or(first).clone()).collect();
+    let tw = purecrypto::ec::secp256k1::Scalar::from_bytes_be_reduce(tweak);
+    let mut rng = purecrypto::rng::OsRng;
+    let sig = tsslib::dklstss::sign_with_tweak(&keys, &signer_idx, &tw, hash, &mut rng)
+        .map_err(|e| TssError(format!("dkls sign_with_tweak: {e:?}")))?;
+    Ok((sig.r, sig.s, sig.v))
+}
+
 /// Reshare a source DKLs key into a fresh `new_party_keys`-of-`new_threshold`
 /// committee (synchronous, no broker — `dklstss::reshare`). The group public key
 /// is preserved. Used by Wallet:promoteMnemonic (1-of-1 imported key → n-of-m).
