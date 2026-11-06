@@ -118,13 +118,14 @@ pub fn libwallet_init() -> Result<u32, JsValue> {
 /// ceremonies) drive async I/O, while offline handlers resolve immediately.
 /// The request/response contract is identical to the native FFI.
 #[wasm_bindgen]
-pub fn libwallet_request(handle: u32, request_json: String) -> js_sys::Promise {
+pub fn libwallet_request(handle: u32, mut request_json: String) -> js_sys::Promise {
     let h = HANDLES.with(|m| m.borrow().get(&handle).cloned());
     wasm_bindgen_futures::future_to_promise(async move {
         let out = match h {
             Some(h) => dispatch::handle_request_async(&h, &request_json).await,
             None => r#"{"result":"error","error":"invalid handle","code":500}"#.to_string(),
         };
+        purecrypto::zeroize::Zeroize::zeroize(&mut request_json);
         Ok(JsValue::from_str(&out))
     })
 }

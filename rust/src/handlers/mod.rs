@@ -39,6 +39,7 @@ mod quote;
 pub(crate) mod remotekey;
 pub(crate) mod bitfi;
 mod storekey;
+mod vault;
 #[cfg(not(target_arch = "wasm32"))]
 mod swap;
 mod token;
@@ -72,6 +73,7 @@ pub fn init_models(env: &Env) -> crate::Result<()> {
     crate::models::wc_session::init(env)?;
     crate::models::request::init(env)?;
     crate::models::connected_site::init(env)?;
+    crate::vault::init(env)?;
     Ok(())
 }
 
@@ -233,6 +235,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         }
         #[cfg(not(target_arch = "wasm32"))]
         "Web3/Connection" => return web3::connection_route(env, verb, id, params),
+        "Vault" => return vault::route(env, verb, action, params),
         "Wallet" if id.is_some() => {
             let wid = id.unwrap();
             match action {

@@ -12,11 +12,14 @@
 use base64::Engine;
 use bottlers::{Bottle, Keychain, Opener, PrivateKey, PublicKey};
 use purecrypto::ec::Ed25519PrivateKey;
+use purecrypto::zeroize::Zeroizing;
 
 #[derive(Debug)]
 pub enum KeystoreError {
     PasswordTooShort,
     Decode(String),
+    /// A vault reference could not be resolved (locked, cancelled, expired).
+    Vault(String),
     Bottle(bottlers::BottleError),
 }
 
@@ -25,6 +28,7 @@ impl std::fmt::Display for KeystoreError {
         match self {
             KeystoreError::PasswordTooShort => write!(f, "password is too short"),
             KeystoreError::Decode(s) => write!(f, "decode error: {s}"),
+            KeystoreError::Vault(s) => write!(f, "{s}"),
             KeystoreError::Bottle(e) => write!(f, "bottle error: {e:?}"),
         }
     }
@@ -72,33 +76,64 @@ pub fn create_store_key() -> Result<(String, String), KeystoreError> {
 /// `PBKDF2-HMAC-SHA256(store[:32], salt = store[32:], 4096, 32)` gives the seed.
 /// This is the StoreKey scheme's unlock derivation and the input to
 /// `StoreKey:create`'s public key.
+///
+/// `store_key_b64url` may also be a vault reference (see [`crate::vault`]):
+/// the entry's 64 bytes are then unsealed here, used, and wiped.
 pub fn store_key_to_ed25519(store_key_b64url: &str) -> Result<PrivateKey, KeystoreError> {
-    let k = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(store_key_b64url)
-        .map_err(|e| KeystoreError::Decode(e.to_string()))?;
+    if let Some(secret) = crate::vault::session::secret_for_token(store_key_b64url) {
+        let secret = secret.map_err(|e| KeystoreError::Vault(e.to_string()))?;
+        return store_key_bytes_to_ed25519(&secret);
+    }
+    let k = Zeroizing::new(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(store_key_b64url)
+            .map_err(|e| KeystoreError::Decode(e.to_string()))?,
+    );
+    store_key_bytes_to_ed25519(&k)
+}
+
+/// [`store_key_to_ed25519`] on the raw 64 bytes.
+pub fn store_key_bytes_to_ed25519(k: &[u8]) -> Result<PrivateKey, KeystoreError> {
     if k.len() != 64 {
         return Err(KeystoreError::Decode(format!("storeKey must be 64 bytes, got {}", k.len())));
     }
-    let mut seed = [0u8; 32];
-    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(&k[..32], &k[32..], 4096, &mut seed);
-    Ok(ed25519_from_seed(seed))
+    let mut seed = Zeroizing::new([0u8; 32]);
+    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(&k[..32], &k[32..], 4096, &mut *seed);
+    Ok(ed25519_from_seed(*seed))
 }
 
 /// Derive an Ed25519 key from a password + salt via PBKDF2-HMAC-SHA256, 4096
 /// iterations, 32-byte output — matching Go wltwallet `passwordToEd25519`
 /// (salt is the WalletKey UUID bytes).
+///
+/// `password` may also be a vault reference to a password entry.
 pub fn password_to_ed25519(password: &str, salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
+    if let Some(secret) = crate::vault::session::secret_for_token(password) {
+        let secret = secret.map_err(|e| KeystoreError::Vault(e.to_string()))?;
+        return password_bytes_to_ed25519(&secret, salt);
+    }
+    password_bytes_to_ed25519(password.as_bytes(), salt)
+}
+
+fn password_bytes_to_ed25519(password: &[u8], salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
     if password.len() < 6 {
         return Err(KeystoreError::PasswordTooShort);
     }
-    let mut seed = [0u8; 32];
-    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(password.as_bytes(), salt, 4096, &mut seed);
-    Ok(ed25519_from_seed(seed))
+    let mut seed = Zeroizing::new([0u8; 32]);
+    purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(password, salt, 4096, &mut *seed);
+    Ok(ed25519_from_seed(*seed))
 }
 
 /// Parse a StoreKey recipient: a base64url (no-pad) PKIX/DER SubjectPublicKeyInfo
 /// (as Go stores in `WalletKey.Key`) into a bottlers public key.
+///
+/// `b64` may also be a vault reference to a StoreKey entry, which resolves to
+/// the entry's public key without unsealing it.
 pub fn public_key_from_pkix_b64(b64: &str) -> Result<PublicKey, KeystoreError> {
+    if let Some(public) = crate::vault::session::public_for_token(b64) {
+        let public = public.map_err(|e| KeystoreError::Vault(e.to_string()))?;
+        return public_key_from_pkix_b64(&public);
+    }
     let der = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(b64)
         .map_err(|e| KeystoreError::Decode(e.to_string()))?;

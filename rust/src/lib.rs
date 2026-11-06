@@ -23,6 +23,7 @@ pub mod bip39;
 pub mod hdderive;
 pub mod solana;
 pub mod walletcore;
+pub mod vault;
 // SQLite persistence — graphitesql is pure Rust with a wasm in-memory VFS.
 // (Compiled for wasm now; its consumers migrate in later steps — hence the
 // transitional dead-code allowance on the browser target.)
@@ -242,7 +243,7 @@ pub extern "C" fn LibwalletRequest(
             return;
         };
 
-        let req = match unsafe { cstr_to_string(request_json) } {
+        let mut req = match unsafe { cstr_to_string(request_json) } {
             Ok(s) => s,
             Err(e) => {
                 respond(cb, user_data, &response::error(&e, 400));
@@ -279,6 +280,8 @@ pub extern "C" fn LibwalletRequest(
                 dispatch::with_progress_sink(sink, || dispatch::handle_request(&worker, &req))
             }))
             .unwrap_or_else(|_| response::error("internal panic", 500));
+            // The request may have carried a password or an imported secret.
+            purecrypto::zeroize::Zeroize::zeroize(&mut req);
             if worker.shutdown.load(Ordering::SeqCst) {
                 return; // don't call back after shutdown
             }

@@ -57,13 +57,28 @@ struct Request {
 /// string ready to hand back over the callback. Never panics; all error paths
 /// produce a well-formed error envelope.
 pub fn handle_request(handle: &Handle, raw: &str) -> String {
-    let req: Request = match serde_json::from_str(raw) {
+    let mut req: Request = match serde_json::from_str(raw) {
         Ok(r) => r,
         Err(e) => return response::error(&e.to_string(), 400),
     };
+    let out = route_parsed(handle, &mut req);
+    crate::vault::session::wipe_value(&mut req.params);
+    out
+}
 
+/// Bind the request's vault references (see [`crate::vault::session`]),
+/// route it, and revoke them once it is answered.
+fn route_parsed(handle: &Handle, req: &mut Request) -> String {
+    let _lease = match crate::vault::session::bind_params(&handle.env, &mut req.params) {
+        Ok(l) => l,
+        Err(e) => return response::error(&e.to_string(), 400),
+    };
+    route_bound(handle, req)
+}
+
+/// Route a request whose vault references are already bound.
+fn route_bound(handle: &Handle, req: &Request) -> String {
     let verb = if req.verb.is_empty() { "GET" } else { req.verb.as_str() };
-
     match handlers::route(handle, &req.path, verb, &req.params) {
         Ok(data) => response::success(data),
         Err(e) => response::error(&e.message, e.code),
@@ -77,8 +92,19 @@ pub fn handle_request(handle: &Handle, raw: &str) -> String {
 /// browser Fetch API) and delegates everything else to the synchronous router.
 #[cfg(target_arch = "wasm32")]
 pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
-    let req: Request = match serde_json::from_str(raw) {
+    let mut req: Request = match serde_json::from_str(raw) {
         Ok(r) => r,
+        Err(e) => return response::error(&e.to_string(), 400),
+    };
+    let out = handle_parsed_async(handle, &mut req).await;
+    crate::vault::session::wipe_value(&mut req.params);
+    out
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn handle_parsed_async(handle: &Handle, req: &mut Request) -> String {
+    let _lease = match crate::vault::session::bind_params(&handle.env, &mut req.params) {
+        Ok(l) => l,
         Err(e) => return response::error(&e.to_string(), 400),
     };
     let verb = if req.verb.is_empty() { "GET" } else { req.verb.as_str() };
@@ -104,7 +130,7 @@ pub async fn handle_request_async(handle: &Handle, raw: &str) -> String {
         ("Bitfi:prepareSend", _) => crate::handlers::bitfi::prepare_send(&req.params).await,
         ("Bitfi:broadcast", _) => crate::handlers::bitfi::broadcast(&req.params).await,
         ("Transaction:simulate", _) => crate::handlers::simulate::simulate_impl(&handle.env, &req.params).await,
-        _ => return handle_request(handle, raw),
+        _ => return route_bound(handle, req),
     };
     match out {
         Ok(d) => response::success(d),

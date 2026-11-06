@@ -11,7 +11,13 @@ use super::ApiResult;
 /// In Go this pauses the balance poller in `background`/`paused` and resumes it
 /// on `foreground`/`resumed`/`active`; the poller isn't ported yet, so the
 /// pause/resume is a no-op and only the echo contract is honored.
+///
+/// Leaving the foreground also locks the vault: every cached unsealed secret
+/// is wiped, whatever its `CacheSeconds`.
 pub fn update(_env: &Env, params: &Value) -> ApiResult {
     let status = params.get("Status").or_else(|| params.get("status")).and_then(Value::as_str).unwrap_or("");
+    if matches!(status.to_ascii_lowercase().as_str(), "background" | "paused" | "inactive" | "hidden" | "detached") {
+        crate::vault::session::lock_all();
+    }
     Ok(json!({ "status": status }))
 }
