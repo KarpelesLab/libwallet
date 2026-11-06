@@ -2,6 +2,7 @@
 // ignore_for_file: avoid_print
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -148,5 +149,53 @@ void main() {
     await client.wallets.delete(createdWallet.id);
     final afterDelete = await client.wallets.list();
     expect(afterDelete, isEmpty);
+  });
+
+  // The secure vault backend needs a real platform keychain/keystore, so it
+  // is only exercisable here (host tests use the password backend).
+  test('Vault: a secure entry protects an MPC share on the device', () async {
+    final caps = await client.vault.capabilities();
+    print('[vault] capabilities: secure=${caps.secure} hardware=${caps.hardware} '
+        'biometry=${caps.biometry} provider=${caps.provider} reason=${caps.reason}');
+    if (!caps.secure) {
+      // CI builds pass --dart-define=LIBWALLET_REQUIRE_SECURE_VAULT=true so a
+      // regression (e.g. losing the keychain entitlement) fails, not skips.
+      const require = bool.fromEnvironment('LIBWALLET_REQUIRE_SECURE_VAULT');
+      expect(require, isFalse, reason: 'secure vault required: ${caps.reason}');
+      print('[vault] SKIP: no secure storage in this build (${caps.reason})');
+      return;
+    }
+    // No user-presence requirement: an automated run cannot answer a prompt.
+    final entry = await client.vault.create(
+        kind: 'storekey', policy: const VaultPolicy(userPresence: false));
+    expect(entry.backend, 'secure');
+    expect(entry.provider, caps.provider);
+    expect(entry.publicKey, isNotEmpty);
+
+    Wallet? w;
+    await for (final e in client.wallets.create(name: 'Vault wallet', keys: [
+      KeyDescription.vault(entry.id),
+      KeyDescription.password('vault-pass-2'),
+      KeyDescription.password('vault-pass-3'),
+    ])) {
+      if (e case Complete(:final value)) w = value;
+    }
+    final wallet = w!;
+    expect(wallet.keys[0].key, entry.publicKey);
+    final acct = await client.accounts
+        .create(name: 'V', wallet: wallet.id, type: 'ethereum', index: 0);
+    Future<SignedMessage> sign() => client.accounts.signMessage(acct.id,
+        message: Uint8List.fromList('vault'.codeUnits),
+        keys: [
+          KeyDescription.vault(entry.id, walletKeyId: wallet.keys[0].id).toJson(),
+          KeyDescription.password('vault-pass-2').withId(wallet.keys[1].id).toJson(),
+        ]);
+    final sig = await sign();
+    expect(sig.signature, startsWith('0x'));
+
+    // Deleting the entry destroys the device key: the share is gone with it.
+    expect(await client.vault.delete(entry.id), isTrue);
+    await expectLater(sign(), throwsA(anything));
+    await client.wallets.delete(wallet.id);
   });
 }

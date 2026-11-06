@@ -144,6 +144,8 @@ export 'src/api/lifecycle_api.dart' show LifecycleApi;
 export 'src/api/spot_api.dart' show SpotApi, SpotStatus;
 export 'src/api/name_api.dart' show NameApi;
 export 'src/api/store_key_api.dart' show StoreKeyApi, StoreKeyPair;
+export 'src/api/vault_api.dart'
+    show VaultApi, VaultEntry, VaultPolicy, VaultCapabilities;
 export 'src/api/remote_key_api.dart' show RemoteKeyApi;
 export 'src/api/wallet_api.dart' show WalletApi, CreateAgentWalletResult;
 export 'src/models/probe_activity.dart' show ProbeActivityRow, ChainMigration;

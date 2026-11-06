@@ -156,8 +156,13 @@ pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescr
             wk.key = String::new();
         }
         "Password" | "StoreKey" => {
-            let priv_key = resolve_unlock_key(&new.kind, &new.key, &uuid)?;
-            let pub_key = priv_key.public();
+            // A vault StoreKey target is sealed to its stored public key: no
+            // need to unseal (and prompt for) the entry just to derive it.
+            let pub_key = if new.kind == "StoreKey" && crate::vault::session::is_token(&new.key) {
+                keystore::public_key_from_pkix_b64(&new.key).map_err(|e| Error::Env(e.to_string()))?
+            } else {
+                resolve_unlock_key(&new.kind, &new.key, &uuid)?.public()
+            };
             wk.key = keystore::public_key_to_pkix_b64(&pub_key).map_err(|e| Error::Env(e.to_string()))?;
             wk.data = keystore::seal(&payload, &[pub_key]).map_err(|e| Error::Env(e.to_string()))?;
         }

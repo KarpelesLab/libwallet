@@ -157,7 +157,7 @@ fn no_platform_backend_reports_why() {
     if !caps.secure {
         let env = env();
         let err = create(&env, new(Kind::StoreKey, "secure", Policy::default(), None)).unwrap_err().to_string();
-        assert!(err.contains("password backend"), "{err}");
+        assert!(err.contains("secure storage unavailable"), "{err}");
     }
 }
 

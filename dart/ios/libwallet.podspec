@@ -170,6 +170,6 @@ Pod::Spec.new do |s|
   # Go runtime needs CoreFoundation + Security for entropy /
   # keychain hooks, and resolv for the chain RPC HTTP client's
   # DNS lookups.
-  s.frameworks = 'CoreFoundation', 'Security'
+  s.frameworks = 'CoreFoundation', 'Security', 'LocalAuthentication'
   s.libraries  = 'resolv'
 end

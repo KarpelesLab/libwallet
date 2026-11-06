@@ -4,6 +4,7 @@ library;
 
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:test/test.dart';
 import 'package:libwallet/libwallet.dart';
@@ -941,4 +942,112 @@ void main() {
     });
   });
 
+
+  // ── Vault ─────────────────────────────────────────────────────────────
+  // Host runs have no entitled keychain, so these use the password backend;
+  // the secure backend is covered by the iOS/Android integration tests.
+
+  group('Vault', () {
+    const vaultPw = 'vault password 1';
+
+    test('capabilities answer', () async {
+      final caps = await client.vault.capabilities();
+      if (!caps.secure) expect(caps.reason, isNotEmpty);
+    });
+
+    test('MPC wallet whose shares live in the vault signs without secrets in Dart',
+        () async {
+      final sk = await client.vault.create(
+          kind: 'storekey',
+          backend: 'password',
+          password: vaultPw,
+          policy: const VaultPolicy(cacheSeconds: -1));
+      expect(sk.publicKey, isNotEmpty);
+      expect(sk.blob, isNotEmpty);
+      final pw = await client.vault
+          .create(kind: 'password', backend: 'password', password: vaultPw);
+
+      late Wallet w;
+      await for (final e in client.wallets.create(name: 'Vault wallet', keys: [
+        KeyDescription.vault(sk.id),
+        KeyDescription.vault(pw.id, password: vaultPw),
+        KeyDescription.password('pass-3'),
+      ])) {
+        if (e case Complete(:final value)) w = value;
+      }
+      expect(w.keys[0].key, sk.publicKey);
+      final acct = await client.accounts
+          .create(name: 'V', wallet: w.id, type: 'ethereum', index: 0);
+
+      Future<SignedMessage> sign(List<KeyDescription> keys) =>
+          client.accounts.signMessage(acct.id,
+              message: Uint8List.fromList('hi'.codeUnits),
+              keys: keys.map((k) => k.toJson()).toList());
+
+      // Locked StoreKey entry: refused until unlocked.
+      await expectLater(
+          sign([
+            KeyDescription.vault(sk.id, walletKeyId: w.keys[0].id),
+            KeyDescription.password('pass-3').withId(w.keys[2].id),
+          ]),
+          throwsA(anything));
+      await client.vault.unlock(sk.id, password: vaultPw);
+      expect(await client.vault.isUnlocked(sk.id), isTrue);
+      final sig = await sign([
+        KeyDescription.vault(sk.id, walletKeyId: w.keys[0].id),
+        KeyDescription.vault(pw.id, walletKeyId: w.keys[1].id, password: vaultPw),
+      ]);
+      expect(sig.signature, startsWith('0x'));
+
+      // Backgrounding locks.
+      await client.lifecycle.update('background');
+      expect(await client.vault.isUnlocked(sk.id), isFalse);
+
+      // Not exportable by default.
+      await expectLater(client.vault.export(sk.id, password: vaultPw),
+          throwsA(anything));
+    });
+
+    test('blob reload, password change, import and moveToVault', () async {
+      final e = await client.vault.create(
+          kind: 'data',
+          backend: 'password',
+          password: vaultPw,
+          policy: const VaultPolicy(exportable: true));
+      final secret = await client.vault.export(e.id, password: vaultPw);
+      final blob = await client.vault.blob(e.id);
+      expect(await client.vault.delete(e.id), isTrue);
+      final back = await client.vault.load(blob);
+      expect(back.id, e.id);
+      expect(await client.vault.export(e.id, password: vaultPw), secret);
+      await client.vault.changePassword(e.id, vaultPw, 'new vault password');
+      await expectLater(client.vault.export(e.id, password: vaultPw),
+          throwsA(anything));
+      expect(await client.vault.export(e.id, password: 'new vault password'),
+          secret);
+
+      // Migrating an app-held StoreKey keeps its public key.
+      final pair = await client.storeKeys.create();
+      final imported = await client.vault.import(
+          kind: 'storekey',
+          secret: pair.privateKey,
+          backend: 'password',
+          password: vaultPw);
+      expect(imported.publicKey, pair.publicKey);
+
+      // Moving an existing Password share under a vault entry.
+      late Wallet w;
+      await for (final ev in client.wallets.create(name: 'Migrate', keys: [
+        KeyDescription.password('old-pass-1'),
+        KeyDescription.password('old-pass-2'),
+        KeyDescription.password('old-pass-3'),
+      ])) {
+        if (ev case Complete(:final value)) w = value;
+      }
+      final moved = await client.walletKeys.moveToVault(w.keys[0].id,
+          from: KeyDescription.password('old-pass-1'), entryId: imported.id);
+      expect(moved.type, 'StoreKey');
+      expect(moved.key, pair.publicKey);
+    });
+  });
 }

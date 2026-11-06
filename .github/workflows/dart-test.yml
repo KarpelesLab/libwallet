@@ -184,11 +184,20 @@ jobs:
         working-directory: dart/test_app
         # Run the integration test as a native XCTest via xcodebuild (the same
         # mechanism Flutter's engine CI uses) rather than `flutter test`, which
-        # hits an mDNS attach race on the hosted runner. CODE_SIGNING_ALLOWED=NO
-        # because the simulator ignores signatures.
+        # hits an mDNS attach race on the hosted runner. The app is signed
+        # ad-hoc (CODE_SIGN_IDENTITY=-, no team needed for the simulator): an
+        # unsigned app has no keychain entitlement, and the vault's secure
+        # backend (Secure Enclave / Keychain) refuses it.
+        #
+        # xcodebuild's verdict alone is not enough: the integration runner can
+        # report "TEST SUCCEEDED" with zero XCTest cases executed while the
+        # Dart tests failed. The Dart summary only reaches the result bundle's
+        # console log, so it is extracted and checked below.
         run: |
           set +e
-          flutter build ios --config-only --simulator integration_test/libwallet_test.dart || exit $?
+          flutter build ios --config-only --simulator \
+            --dart-define=LIBWALLET_REQUIRE_SECURE_VAULT=true \
+            integration_test/libwallet_test.dart || exit $?
           XCRESULT="$RUNNER_TEMP/xcodebuild-test.xcresult"
           rm -rf "$XCRESULT"
           xcodebuild test \
@@ -197,9 +206,21 @@ jobs:
             -only-testing:RunnerTests \
             -destination "platform=iOS Simulator,id=$DEVICE_ID" \
             -resultBundlePath "$XCRESULT" \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY=- \
             COMPILER_INDEX_STORE_ENABLE=NO
           EXIT=$?
+          if [ "$EXIT" = "0" ]; then
+            DIAG="$RUNNER_TEMP/xcresult-diagnostics"
+            rm -rf "$DIAG"; mkdir -p "$DIAG"
+            xcrun xcresulttool export diagnostics --path "$XCRESULT" --output-path "$DIAG" >/dev/null 2>&1
+            echo "::group::Dart integration test output"
+            grep -rh "flutter: " "$DIAG" | sed 's/.*flutter: //' | awk '!seen[$0]++' | grep -v '^\[wltlog' || true
+            echo "::endgroup::"
+            if grep -rqh "flutter: .*Some tests failed" "$DIAG" || ! grep -rqh "flutter: .*All tests passed!" "$DIAG"; then
+              echo "::error::Dart integration tests did not all pass (see the group above)"
+              EXIT=1
+            fi
+          fi
           if [ "$EXIT" != "0" ] && [ -d "$XCRESULT" ]; then
             echo "::group::xcresulttool — failure scan"
             (

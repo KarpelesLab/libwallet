@@ -17,6 +17,7 @@ import '../api/remote_key_api.dart';
 import '../api/request_api.dart';
 import '../api/spot_api.dart';
 import '../api/store_key_api.dart';
+import '../api/vault_api.dart';
 import '../api/swap_api.dart';
 import '../api/token_api.dart';
 import '../api/transaction_api.dart';
@@ -53,6 +54,7 @@ class LibwalletClient {
   late final SpotApi spot = SpotApi(_transport);
   late final NameApi names = NameApi(_transport);
   late final StoreKeyApi storeKeys = StoreKeyApi(_transport);
+  late final VaultApi vault = VaultApi(_transport);
   late final RemoteKeyApi remoteKeys = RemoteKeyApi(_transport);
   late final WalletApi wallets = WalletApi(_transport);
   late final WalletKeyApi walletKeys = WalletKeyApi(_transport);

@@ -312,7 +312,8 @@ pub fn create(env: &Env, n: NewEntry<'_>) -> Result<Entry> {
             e.data = blob::seal_password(&e.meta(), pw.as_bytes(), &secret, n.kdf).map_err(Error::Env)?;
         }
         "secure" => {
-            let b = platform::backend().ok_or_else(|| Error::Env(platform::capabilities().reason))?;
+            let caps = platform::capabilities();
+            let b = platform::backend().filter(|_| caps.secure).ok_or_else(|| Error::Env(format!("secure storage unavailable: {}", caps.reason)))?;
             e.provider = b.provider().to_owned();
             let (dek, wrapped) = b.seal_key(&e.id, &e.policy).map_err(Error::Env)?;
             e.data = blob::seal_secure(&e.meta(), &e.provider, &wrapped, &dek, &secret).map_err(Error::Env)?;
