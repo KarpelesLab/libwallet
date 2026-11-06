@@ -65,23 +65,35 @@ class DeviceShareEntry {
   final String walletKeyId;
 
   /// 64-byte StoreKey blob, base64url-encoded (no padding).
-  /// Identical shape to `StoreKey:create`'s `private` field.
+  /// Identical shape to `StoreKey:create`'s `private` field. Empty when
+  /// the share lives in the vault ([vaultEntry]).
   final String privateKey;
+
+  /// The vault entry holding this share, instead of [privateKey]: libwallet
+  /// reads it itself, so the key never reaches the app.
+  final String? vaultEntry;
 
   const DeviceShareEntry({
     required this.walletKeyId,
-    required this.privateKey,
+    this.privateKey = '',
+    this.vaultEntry,
   });
+
+  /// A share held in vault entry [entryId] (see [VaultApi]).
+  const DeviceShareEntry.vault(this.walletKeyId, String entryId)
+      : privateKey = '',
+        vaultEntry = entryId;
 
   factory DeviceShareEntry.fromJson(Map<String, dynamic> json) =>
       DeviceShareEntry(
         walletKeyId: (json['wallet_key_id'] as String?) ?? '',
         privateKey: (json['private_key'] as String?) ?? '',
+        vaultEntry: json['vault'] as String?,
       );
 
   Map<String, dynamic> toJson() => {
         'wallet_key_id': walletKeyId,
-        'private_key': privateKey,
+        if (vaultEntry != null) 'vault': vaultEntry else 'private_key': privateKey,
       };
 }
 
@@ -107,7 +119,9 @@ class DeviceTransferImportResult {
   });
 
   factory DeviceTransferImportResult.fromJson(Map<String, dynamic> json) {
-    final raw = json['deviceShares'];
+    // libwallet answers in snake_case (`wallet_id`, `device_shares`); the
+    // camelCase keys are accepted too.
+    final raw = json['device_shares'] ?? json['deviceShares'];
     final shares = raw is List
         ? raw
             .whereType<Map>()
@@ -115,7 +129,7 @@ class DeviceTransferImportResult {
             .toList()
         : <DeviceShareEntry>[];
     return DeviceTransferImportResult(
-      walletId: (json['walletId'] as String?) ?? '',
+      walletId: (json['wallet_id'] as String?) ?? (json['walletId'] as String?) ?? '',
       deviceShares: shares,
     );
   }

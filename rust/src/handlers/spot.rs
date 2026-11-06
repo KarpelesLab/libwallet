@@ -59,9 +59,32 @@ pub fn export_to_device(env: &Arc<Env>, id: &str, params: &Value) -> ApiResult {
 
 /// `Wallet:exportToDevice:confirm` {Sid, DeviceShares} — release the wallet to
 /// the waiting peer query with the host-supplied StoreKey device shares.
+///
+/// A share may name a vault entry instead of carrying the key —
+/// `{wallet_key_id, vault: "<entry id>"}`: the entry is unsealed here
+/// (prompting if its policy asks), straight into the end-to-end encrypted
+/// transfer payload, so the key never reaches the host. Moving a share to the
+/// user's new device is not an export to the app, so `Exportable` is not
+/// required.
 pub fn export_confirm(env: &Env, params: &Value) -> ApiResult {
     let sid = params.get("Sid").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Sid required"))?;
-    let shares = params.get("DeviceShares").cloned().unwrap_or_else(|| json!([]));
+    let mut shares = params.get("DeviceShares").cloned().unwrap_or_else(|| json!([]));
+    let reason = params.get("Reason").and_then(Value::as_str).unwrap_or("Transfer your wallet to your new device");
+    for share in shares.as_array_mut().into_iter().flatten() {
+        let Some(entry_id) = share.get("vault").and_then(Value::as_str).map(str::to_owned) else { continue };
+        let e = crate::vault::fetch(env, &entry_id)
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| ApiError::new(404, format!("vault entry {entry_id} not found")))?;
+        if e.kind != crate::vault::Kind::StoreKey {
+            return Err(ApiError::new(400, format!("vault entry {entry_id} is not a storekey")));
+        }
+        let secret = crate::vault::session::secret(&e, None, reason).map_err(|e| ApiError::new(400, e.to_string()))?;
+        let key = crate::vault::encode_secret(e.kind, &secret);
+        share["private_key"] = json!(key.as_str());
+        if let Some(m) = share.as_object_mut() {
+            m.remove("vault");
+        }
+    }
     if !env.transfer_resolve(sid, Some(shares)) {
         return Err(ApiError::new(404, "transfer session not found"));
     }
@@ -78,6 +101,11 @@ pub fn export_cancel(env: &Env, params: &Value) -> ApiResult {
 /// `Wallet:importFromDevice` {PairingCode} — pull a wallet from the source
 /// device: query it over Spot, decrypt the sealed payload, and restore the
 /// wallet. Returns the restored wallet id + device shares for the host to store.
+///
+/// With `Vault: {Backend?, Policy?, Password?}` the received device shares are
+/// stored as vault StoreKey entries and returned as `{wallet_key_id, vault}`
+/// — the keys never reach the host. Without it they are returned as
+/// `{wallet_key_id, private_key}` for the host to store (legacy).
 pub fn import_from_device(env: &Arc<Env>, params: &Value) -> ApiResult {
     let pairing = params.get("PairingCode").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "PairingCode required"))?;
     let (spot_id, token_b64, sid) = crate::transfer::parse_pairing_url(pairing).map_err(|e| ApiError::new(400, e.to_string()))?;
@@ -106,12 +134,47 @@ pub fn import_from_device(env: &Arc<Env>, params: &Value) -> ApiResult {
         return Err(ApiError::new(400, "bad transfer payload version"));
     }
     let wallet_json = payload.get("wallet").ok_or_else(|| ApiError::new(400, "payload missing wallet"))?;
-    let device_shares = payload.get("device_shares").cloned().unwrap_or_else(|| json!([]));
+    let mut device_shares = payload.get("device_shares").cloned().unwrap_or_else(|| json!([]));
 
     // Restore via the standard restore path (re-encode the wallet JSON to the
     // base64url the backup/restore shape uses).
     let data_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(wallet_json).unwrap());
     let wallet_id = crate::models::wallet::restore_entry(env, &data_b64).map_err(|e| ApiError::new(400, e.to_string()))?;
+    // The payload carried the device shares in the clear (inside the
+    // transfer encryption): wipe our parsed copy.
+    let mut payload = payload;
+    crate::vault::session::wipe_value(&mut payload);
+
+    if let Some(v) = params.get("Vault").filter(|v| v.is_object()) {
+        let policy: crate::vault::Policy = match v.get("Policy") {
+            Some(p) if !p.is_null() => serde_json::from_value(p.clone()).map_err(|e| ApiError::new(400, format!("bad Vault.Policy: {e}")))?,
+            _ => crate::vault::Policy::default(),
+        };
+        let backend = v.get("Backend").and_then(Value::as_str).unwrap_or("secure");
+        let password = v.get("Password").and_then(Value::as_str);
+        let mut stored = Vec::new();
+        for share in device_shares.as_array().into_iter().flatten() {
+            let wk = share.get("wallet_key_id").and_then(Value::as_str).unwrap_or("");
+            let key = share.get("private_key").and_then(Value::as_str).unwrap_or("");
+            let secret = crate::vault::decode_secret(crate::vault::Kind::StoreKey, key, None).map_err(|e| ApiError::new(400, e.to_string()))?;
+            let e = crate::vault::create(
+                env,
+                crate::vault::NewEntry {
+                    label: &format!("device share {wk}"),
+                    kind: crate::vault::Kind::StoreKey,
+                    backend,
+                    policy: policy.clone(),
+                    password,
+                    secret: Some(secret),
+                    kdf: Default::default(),
+                },
+            )
+            .map_err(|e| ApiError::new(400, e.to_string()))?;
+            stored.push(json!({ "wallet_key_id": wk, "vault": e.id }));
+        }
+        crate::vault::session::wipe_value(&mut device_shares);
+        return Ok(json!({ "wallet_id": wallet_id, "device_shares": stored }));
+    }
 
     Ok(json!({ "wallet_id": wallet_id, "device_shares": device_shares }))
 }

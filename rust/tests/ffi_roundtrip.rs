@@ -3482,3 +3482,56 @@ fn wallet_generate_and_validate_mnemonic_via_ffi() {
     assert_eq!(valid("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"), true);
     LibwalletDestroy(h);
 }
+
+#[test]
+fn device_transfer_keeps_the_device_share_in_the_vault() {
+    // Like device_transfer_over_live_spot, but the device share lives in a
+    // vault entry on both ends: the source confirms with a vault reference
+    // and the receiver files the share into its own vault. The key is never
+    // in a request or a response. Gated behind SPOT_LIVE=1.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let ha = new_env();
+    let hb = new_env();
+    let ok = |r: serde_json::Value| -> serde_json::Value {
+        assert_eq!(r["result"], "success", "{r}");
+        r["data"].clone()
+    };
+    let entry = ok(request(ha, r#"{"path":"Vault:create","params":{"Kind":"storekey","Backend":"password","Password":"source vault pw","Policy":{"CacheSeconds":-1}}}"#));
+    let eid = entry["Id"].as_str().unwrap();
+    let w = ok(request(ha, &format!(r#"{{"path":"Wallet","verb":"POST","params":{{"Name":"Move","Curve":"ed25519","Keys":[
+        {{"Type":"Vault","Key":"{eid}"}},{{"Type":"Password","Key":"passwordtwo"}},{{"Type":"Password","Key":"passwordthree"}}]}}}}"#)));
+    let wallet_id = w["Id"].as_str().unwrap().to_string();
+    let wk0 = w["Keys"][0]["Id"].as_str().unwrap().to_string();
+    let wk1 = w["Keys"][1]["Id"].as_str().unwrap().to_string();
+    ok(request(ha, &format!(r#"{{"path":"Vault/{eid}:unlock","params":{{"Password":"source vault pw"}}}}"#)));
+
+    let exp = ok(request(ha, &format!(r#"{{"path":"Wallet:exportToDevice","params":{{"WalletId":"{wallet_id}"}}}}"#)));
+    let sid = exp["sid"].as_str().unwrap();
+    let pairing = exp["pairingCode"].as_str().unwrap();
+    ok(request(ha, &format!(r#"{{"path":"Wallet:exportToDeviceConfirm","params":{{"Sid":"{sid}","DeviceShares":[{{"wallet_key_id":"{wk0}","vault":"{eid}"}}]}}}}"#)));
+
+    let (irx, iud) = request_async(hb, &format!(
+        r#"{{"path":"Wallet:importFromDevice","params":{{"PairingCode":"{pairing}","Vault":{{"Backend":"password","Password":"new vault pw!","Policy":{{"CacheSeconds":-1}}}}}}}}"#
+    ));
+    let resp = irx.recv_timeout(Duration::from_secs(90)).expect("import resolved");
+    let j: serde_json::Value = serde_json::from_str(&resp).unwrap();
+    let data = ok(j.clone());
+    assert!(!resp.contains("private_key"), "no key in the response: {resp}");
+    let share = &data["device_shares"][0];
+    assert_eq!(share["wallet_key_id"], wk0.as_str());
+    let new_entry = share["vault"].as_str().unwrap();
+
+    // The new device signs with its vault-held share + a password share.
+    let new_wallet = data["wallet_id"].as_str().unwrap();
+    ok(request(hb, &format!(r#"{{"path":"Vault/{new_entry}:unlock","params":{{"Password":"new vault pw!"}}}}"#)));
+    let acct = ok(request(hb, &format!(r#"{{"path":"Account","verb":"POST","params":{{"Wallet":"{new_wallet}","Type":"solana","Index":0}}}}"#)));
+    let aid = acct["Id"].as_str().unwrap();
+    ok(request(hb, &format!(r#"{{"path":"Account:signMessage","params":{{"Id":"{aid}","Message":"aGk=","Keys":[
+        {{"Type":"Vault","Id":"{wk0}","Key":"{new_entry}"}},{{"Type":"Password","Id":"{wk1}","Key":"passwordtwo"}}]}}}}"#)));
+
+    drop(unsafe { Box::from_raw(iud as *mut Sender<String>) });
+    LibwalletDestroy(ha);
+    LibwalletDestroy(hb);
+}

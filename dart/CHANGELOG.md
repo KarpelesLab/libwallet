@@ -20,6 +20,28 @@
   did. The request endpoints are `Wallet:generateMnemonic` `{Words}` and
   `Wallet:validateMnemonic` `{Mnemonic}`. Nothing is stored: pass the backed-up
   phrase to `importMnemonic`.
+- **Vault: libwallet keeps your secrets.** `client.vault` holds StoreKeys,
+  wallet passwords and opaque data inside libwallet. They can live in the Secure
+  Enclave or Keychain (iOS, macOS), in the Android Keystore (StrongBox or
+  TEE) behind Face ID, Touch ID, fingerprint or passcode, or in a
+  password-sealed blob (Argon2id) for hosts with no secure hardware, such as
+  browser extensions, Linux and Windows. Refer to an entry with
+  `KeyDescription.vault(id)` or `SigningKey.vault(...)` anywhere keys are
+  taken: wallet creation, signing, recrypt and reshare. The secret is
+  unsealed, used and wiped inside libwallet, and never reaches Dart unless the
+  entry was created `exportable`. Each entry's policy sets user presence, how
+  long an unlock lasts (`cacheSeconds`, 0 by default) and exportability.
+  `lifecycle.update('paused')` locks everything and dismisses pending
+  prompts. Migrate app-held secrets with `vault.import` and
+  `walletKeys.moveToVault`. Device transfer can keep the device share in the
+  vault on both ends (`DeviceShareEntry.vault`,
+  `importFromDevice(vaultPolicy: …)`). Android apps need `MainActivity` to
+  extend `FlutterFragmentActivity`; the package now includes a small Kotlin
+  plugin for the Keystore. The guide is `docs/secret-storage.md`; the browser
+  version is `web/examples/vault-extension.mjs`.
+- **Device transfer results reach Dart.** `importFromDevice` returned an
+  empty wallet id and no device shares, because it read camelCase keys while
+  libwallet answers in snake_case. It now reads both.
 - **`tx:history_updated` carries `network`**, as `TxHistoryUpdatedEvent.networkId`
   already documented.
 

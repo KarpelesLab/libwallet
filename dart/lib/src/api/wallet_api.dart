@@ -2,6 +2,7 @@ import 'package:atonline_api/atonline_api.dart' show AtOnline;
 
 import '../client/transport.dart';
 import '../client/response.dart';
+import 'vault_api.dart' show VaultPolicy;
 import '../models/device_transfer.dart';
 import '../models/key_description.dart';
 import '../models/probe_activity.dart';
@@ -234,10 +235,25 @@ class WalletApi {
   /// failed to come online — the import path currently coalesces
   /// both onto this code). Map these to typed exceptions in your UI
   /// layer the way ClawdWallet pairing already does.
+  ///
+  /// Pass [vaultPolicy] (and [vaultBackend] / [vaultPassword]) to have
+  /// libwallet store the received device shares in the vault instead: each
+  /// returned [DeviceShareEntry] then carries a [DeviceShareEntry.vaultEntry]
+  /// and no key, and there is nothing for the host to store.
   Future<DeviceTransferImportResult> importFromDevice(
-      String pairingCode) async {
+    String pairingCode, {
+    VaultPolicy? vaultPolicy,
+    String vaultBackend = 'secure',
+    String? vaultPassword,
+  }) async {
     final data = await _conn.request('Wallet:importFromDevice', 'POST', {
       'PairingCode': pairingCode,
+      if (vaultPolicy != null)
+        'Vault': {
+          'Backend': vaultBackend,
+          'Policy': vaultPolicy.toJson(),
+          if (vaultPassword != null) 'Password': vaultPassword,
+        },
     });
     return DeviceTransferImportResult.fromJson(
         Map<String, dynamic>.from(data as Map));

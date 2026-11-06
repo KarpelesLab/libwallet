@@ -1,5 +1,23 @@
 # Device share — backup, restore, and rotation
 
+> **Since 0.5.8, let libwallet hold the device share.** Create it with
+> `client.vault.create(kind: 'storekey')` instead of `storeKeys.create()`
+> plus your own keystore: libwallet keeps it in the Secure Enclave / Keychain
+> / Android Keystore itself, behind Face ID or fingerprint, and the private
+> key never reaches your app. Where this guide says to read or write the
+> device share's private key, use the vault instead:
+>
+> | This guide | With the vault |
+> |---|---|
+> | `storeKeys.create()` + write `private` to your keystore | `vault.create(kind: 'storekey')`; create the wallet with `KeyDescription.vault(entry.id)` |
+> | read `private` from your keystore to unlock | `SigningKey.vault(walletKeyId, entry.id)` |
+> | `exportToDeviceConfirm(deviceShares: [DeviceShareEntry(privateKey: …)])` | `DeviceShareEntry.vault(walletKeyId, entry.id)` |
+> | `importFromDevice(code)`, then store `privateKey` | `importFromDevice(code, vaultPolicy: const VaultPolicy())`: the share lands in the vault |
+> | rotate: new StoreKey + reshare | new vault entry + reshare onto `KeyDescription.vault(newEntry.id)` |
+>
+> Existing apps migrate once with `vault.import(kind: 'storekey', secret: <stored private>)`.
+> See [`docs/secret-storage.md`](../../docs/secret-storage.md).
+
 libwallet wallets are 1-of-3 threshold-signed: every new wallet
 holds three key shares — `StoreKey` + `RemoteKey` + `Password` —
 and any two of them can sign or reshare. The `StoreKey` share is

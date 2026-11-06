@@ -160,6 +160,29 @@ final result = await client.swap.execute(quoteId: quote.quoteId, keys: keys);
 Full walkthrough with UI patterns, copy guidelines, and error
 handling: **[`doc/swap_integration.md`](doc/swap_integration.md)**.
 
+## Keeping secrets: the vault
+
+Don't keep StoreKeys, wallet passwords or recovery phrases in Dart (Dart
+strings can't be wiped) or in your own secure storage. `client.vault`
+holds them inside libwallet: in the Secure Enclave / Keychain on iOS and
+macOS, or the Keystore on Android, behind Face ID or fingerprint, or in a
+password-sealed blob where there is no secure hardware (browser extensions,
+Linux, Windows). You refer to an entry by id, with
+`KeyDescription.vault(id)` / `SigningKey.vault(...)`, and its secret is
+unsealed and wiped inside libwallet at the moment of use.
+
+```dart
+final caps = await client.vault.capabilities();
+final device = await client.vault.create(
+    kind: 'storekey', backend: caps.secure ? 'secure' : 'password', password: caps.secure ? null : pw);
+// …create the wallet with KeyDescription.vault(device.id), sign with SigningKey.vault(...)
+```
+
+Android apps need `MainActivity` to extend `FlutterFragmentActivity`, and
+iOS apps an `NSFaceIDUsageDescription`. Migration from app-held secrets,
+caching, the browser-extension pattern and recovery are covered in
+**[`docs/secret-storage.md`](../docs/secret-storage.md)**.
+
 ## Backup, restore, and the device share
 
 Every libwallet wallet is 1-of-3 threshold-signed (StoreKey +

@@ -7,6 +7,11 @@ class StoreKeyApi {
   StoreKeyApi(this._conn);
 
   /// Create a new store key. Returns `{"private": ..., "public": ...}`.
+  ///
+  /// This hands the private key to Dart, where it can't be wiped and must
+  /// be stored by the app. Prefer `client.vault.create(kind: 'storekey')`,
+  /// which keeps it inside libwallet (device secure storage or a
+  /// password-sealed blob); see `docs/secret-storage.md`.
   Future<StoreKeyPair> create() async {
     final data = await _conn.request('StoreKey:create', 'POST');
     final map = data as Map<String, dynamic>;
