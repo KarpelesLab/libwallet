@@ -156,6 +156,9 @@ object VaultBridge {
     @JvmStatic
     fun generateKey(id: String, userPresence: Boolean) {
         val ctx = context ?: throw IllegalStateException("the libwallet Android plugin is not registered")
+        // "Unlocked device required" means nothing without a secure lock
+        // screen, and some Keystore versions refuse the key outright then.
+        val secured = (ctx.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).isDeviceSecure
         fun spec(strongBox: Boolean): KeyGenParameterSpec {
             val b = KeyGenParameterSpec.Builder(alias(id), KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_ENCRYPT)
                 .setKeySize(2048)
@@ -171,7 +174,7 @@ object VaultBridge {
                 if (Build.VERSION.SDK_INT >= 24) b.setInvalidatedByBiometricEnrollment(false)
             }
             if (Build.VERSION.SDK_INT >= 28) {
-                b.setUnlockedDeviceRequired(true)
+                if (secured) b.setUnlockedDeviceRequired(true)
                 if (strongBox) b.setIsStrongBoxBacked(true)
             }
             return b.build()
@@ -186,9 +189,17 @@ object VaultBridge {
                 Log.i(TAG, "StrongBox refused the key, using the TEE")
             }
         }
-        kpg.initialize(spec(false))
-        kpg.generateKeyPair()
+        try {
+            kpg.initialize(spec(false))
+            kpg.generateKeyPair()
+        } catch (e: Exception) {
+            throw IllegalStateException("creating the vault key failed: ${causes(e)}", e)
+        }
     }
+
+    /** An exception and its causes, for an error message that says why. */
+    private fun causes(e: Throwable): String =
+        generateSequence(e) { it.cause }.take(4).joinToString(": ") { it.message ?: it.javaClass.simpleName }
 
     /** Encrypt [dek] to entry [id]'s public key (no authentication needed). */
     @JvmStatic
