@@ -36,12 +36,16 @@ void main() {
 
     // Load the c-shared library via FFI — no platform channel needed.
     // On iOS the lib is statically linked into the app binary.
-    // On Android it's a .so in the app's lib directory.
+    // On Android it's the .so the build hook bundles, under the same
+    // versioned name the Kotlin vault bridge loads: opening another copy
+    // would leave the vault without its JNI hookup.
     final DynamicLibrary lib;
     if (Platform.isIOS) {
       lib = DynamicLibrary.process();
     } else if (Platform.isAndroid) {
-      lib = DynamicLibrary.open('liblibwallet.so');
+      final abi = Abi.current() == Abi.androidArm64 ? 'arm64' : 'x64';
+      lib = DynamicLibrary.open(
+          'liblibwallet-android-$abi-v$libwalletPackageVersion.so');
     } else {
       throw UnsupportedError('Unsupported platform: ${Platform.operatingSystem}');
     }

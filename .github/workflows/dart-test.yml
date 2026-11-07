@@ -278,10 +278,12 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          mkdir -p ../dart/test_app/android/app/src/main/jniLibs/x86_64
+          # hook/build.dart bundles testserver/liblibwallet.so under the
+          # versioned name real apps load (liblibwallet-android-x64-v<ver>.so),
+          # so Dart and the Kotlin vault bridge open this same build.
+          mkdir -p ../dart/testserver
           cargo ndk -t x86_64 build --release
-          cp target/x86_64-linux-android/release/liblibwallet.so \
-            ../dart/test_app/android/app/src/main/jniLibs/x86_64/liblibwallet.so
+          cp target/x86_64-linux-android/release/liblibwallet.so ../dart/testserver/liblibwallet.so
 
       - uses: actions/setup-java@v4
         with:
