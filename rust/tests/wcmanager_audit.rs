@@ -405,3 +405,49 @@ fn legacy_session_without_namespaces_forwards() {
     s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:56", "eth_signTypedData_v4"));
     assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { .. }))));
 }
+
+// ── F10: replay protection ───────────────────────────────────────────────────
+
+/// A relay (or anyone who captured a frame) re-delivering a request must not
+/// make the wallet act on it twice.
+#[test]
+fn replayed_frames_are_dropped() {
+    let mut s = established(40);
+
+    // The very same envelope delivered twice: forwarded once.
+    let envelope = wc::seal_type0(&s.sym, session_request(7, "eip155:1", "eth_sendTransaction").to_string().as_bytes());
+    s.p.relay.deliver(&s.topic, &envelope);
+    s.p.relay.deliver(&s.topic, &envelope);
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { id: 7, .. }))));
+    assert!(s.p.mgr.pump(&s.p.env).unwrap().is_none(), "replayed request was forwarded again");
+
+    // A re-sealed copy with the same JSON-RPC id is a replay too.
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(7, "eip155:1", "eth_sendTransaction"));
+    assert!(s.p.mgr.pump(&s.p.env).unwrap().is_none(), "same-id request was forwarded again");
+
+    // A fresh id is unaffected, and ids are tracked per topic.
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(8, "eip155:1", "eth_sendTransaction"));
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { id: 8, .. }))));
+
+    // Proposals: a replayed wc_sessionPropose does not re-raise the prompt.
+    let mut p = paired(41);
+    let (_, dapp_pub) = wc::new_x25519_keypair();
+    let envelope = wc::seal_type0(&p.sym, proposal(100, &dapp_pub).to_string().as_bytes());
+    p.relay.deliver(&p.topic, &envelope);
+    p.relay.deliver(&p.topic, &envelope);
+    assert!(matches!(p.mgr.pump(&p.env).unwrap(), Some((_, wc::WcInbound::Propose { id: 100, .. }))));
+    assert!(p.mgr.pump(&p.env).unwrap().is_none(), "replayed proposal was forwarded again");
+}
+
+/// The per-topic id memory is bounded: it keeps accepting new ids indefinitely.
+#[test]
+fn replay_memory_is_bounded() {
+    let mut s = established(42);
+    for id in 1..=1100 {
+        s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(id, "eip155:1", "personal_sign"));
+        assert!(s.p.mgr.pump(&s.p.env).unwrap().is_some(), "fresh id {id} dropped");
+    }
+    // A recent id is still remembered.
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1100, "eip155:1", "personal_sign"));
+    assert!(s.p.mgr.pump(&s.p.env).unwrap().is_none());
+}

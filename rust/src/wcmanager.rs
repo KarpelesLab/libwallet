@@ -12,17 +12,29 @@ use crate::{Env, Error, Result};
 /// Seven days in seconds — the default WC v2 session lifetime.
 const SESSION_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// How many inbound JSON-RPC request ids are remembered per topic for replay
+/// detection (oldest forgotten first).
+const SEEN_IDS_PER_TOPIC: usize = 1024;
+
 /// A WalletConnect session manager driving one relay connection.
 pub struct WcManager<T: wc::RelayTransport> {
     client: wc::RelayClient<T>,
     /// Pending `wc_sessionPropose` ids keyed by pairing topic (mirrors Go's
     /// `proposalsByPairing`) so `reject` can address the right proposal.
     pending_proposals: std::collections::HashMap<String, i64>,
+    /// JSON-RPC ids of the peer requests already processed on each topic, so a
+    /// frame replayed by the relay (or anyone who captured it) is not acted on
+    /// twice. Bounded to [`SEEN_IDS_PER_TOPIC`] per topic; in-memory only.
+    seen_ids: std::collections::HashMap<String, std::collections::VecDeque<i64>>,
 }
 
 impl<T: wc::RelayTransport> WcManager<T> {
     pub fn new(transport: T) -> Self {
-        WcManager { client: wc::RelayClient::new(transport), pending_proposals: std::collections::HashMap::new() }
+        WcManager {
+            client: wc::RelayClient::new(transport),
+            pending_proposals: std::collections::HashMap::new(),
+            seen_ids: std::collections::HashMap::new(),
+        }
     }
 
     /// `WalletConnect:pair`: parse the pairing URI, generate the wallet's
@@ -62,6 +74,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
         if s.is_expired(now_unix()) {
             wc_session::set_state(env, &s.id, "disconnected")?;
             self.pending_proposals.remove(&topic);
+            self.seen_ids.remove(&topic);
             return Err(Error::Env("inbound on expired session dropped".into()));
         }
         let sym: [u8; 32] = b64url_decode(&s.sym_key)?
@@ -76,6 +89,22 @@ impl<T: wc::RelayTransport> WcManager<T> {
         // thing authenticating the dApp), so it is never offered.
         let active = s.state == "active";
         let inbound = wc::process_inbound(&sym, None, active, &message)?;
+        // Replay protection: every peer request (anything but a reply to one of
+        // ours) is processed at most once per topic. The id is only recorded
+        // after the envelope authenticated, so garbage cannot poison the set.
+        let request_id = match &inbound {
+            wc::WcInbound::Response { .. } => None,
+            wc::WcInbound::Propose { id, .. }
+            | wc::WcInbound::Settle { id }
+            | wc::WcInbound::Request { id, .. }
+            | wc::WcInbound::Delete { id }
+            | wc::WcInbound::Other { id, .. } => Some(*id),
+        };
+        if let Some(id) = request_id {
+            if !self.first_sighting(&topic, id) {
+                return Ok(None);
+            }
+        }
         match &inbound {
             // A proposal only makes sense on a pairing topic; track it so a
             // later reject can address it.
@@ -105,10 +134,25 @@ impl<T: wc::RelayTransport> WcManager<T> {
             wc::WcInbound::Delete { .. } => {
                 wc_session::set_state(env, &s.id, "disconnected")?;
                 self.pending_proposals.remove(&topic);
+                self.seen_ids.remove(&topic);
             }
             _ => {}
         }
         Ok(Some((topic, inbound)))
+    }
+
+    /// Record `id` as seen on `topic`; false when it was already there (a
+    /// replay). Keeps the newest [`SEEN_IDS_PER_TOPIC`] ids per topic.
+    fn first_sighting(&mut self, topic: &str, id: i64) -> bool {
+        let seen = self.seen_ids.entry(topic.to_owned()).or_default();
+        if seen.contains(&id) {
+            return false;
+        }
+        if seen.len() >= SEEN_IDS_PER_TOPIC {
+            seen.pop_front();
+        }
+        seen.push_back(id);
+        true
     }
 
     /// `WalletConnect:approveSession`: settle a pending proposal. Derives the
@@ -204,6 +248,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
         // The pairing has served its purpose: retire it so its symKey stops
         // authenticating further proposals.
         self.pending_proposals.remove(pairing_topic);
+        self.seen_ids.remove(pairing_topic);
         wc_session::set_state(env, &pairing.id, "disconnected")?;
         Ok(session_topic)
     }
@@ -290,6 +335,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
         // Best-effort publish, then always tear down locally.
         let _ = self.client.publish(topic, &env0, wc::TAG_SESSION_DELETE, 0);
+        self.seen_ids.remove(topic);
         wc_session::set_state(env, &s.id, "disconnected")?;
         Ok(())
     }
