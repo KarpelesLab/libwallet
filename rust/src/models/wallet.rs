@@ -170,21 +170,21 @@ pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescr
     }
     wk.kind = new.kind.clone();
 
-    // Persist the updated row (delete + reinsert — SQLite upsert without a
-    // dedicated statement; the Id is the primary key).
-    env.exec(r#"DELETE FROM "WalletKey" WHERE "Id" = ?1"#, vec![SqlValue::Text(wk.id.clone())])?;
-    env.exec(
-        &format!(r#"INSERT INTO "WalletKey" ({WALLETKEY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"#),
+    // Persist the re-sealed share with ONE statement: the row (same Id, Wallet,
+    // Schema, Gen) is rewritten in place, so no crash or failed write can leave
+    // the wallet without this share (a delete + reinsert could).
+    let updated = env.exec(
+        r#"UPDATE "WalletKey" SET "Type" = ?1, "Key" = ?2, "Data" = ?3 WHERE "Id" = ?4"#,
         vec![
-            SqlValue::Text(wk.id.clone()),
-            SqlValue::Text(wk.wallet.clone()),
             SqlValue::Text(wk.kind.clone()),
-            SqlValue::Text(wk.schema.clone()),
             SqlValue::Text(wk.key.clone()),
             SqlValue::Blob(wk.data.clone()),
-            SqlValue::Int(wk.generation as i64),
+            SqlValue::Text(wk.id.clone()),
         ],
     )?;
+    if updated == 0 {
+        return Err(Error::Env("wallet key vanished during recrypt".into()));
+    }
     Ok(wk)
 }
 
@@ -1546,12 +1546,26 @@ pub fn persist_reshared_dkls(
     replace_wallet_keys(env, wallet, &wkeys)
 }
 
-/// Replace a wallet's WalletKey rows with `wkeys` and bump its generation
-/// (single-threaded DB actor makes the delete+insert+update sequence safe).
+/// Replace a wallet's WalletKey rows with `wkeys` and bump its generation.
+///
+/// Each statement commits on its own, so the order is what keeps a crash or a
+/// failed write from losing shares: the new rows go in first (fresh ids — the
+/// only uniqueness constraint on WalletKey is its `Id` primary key), and only
+/// once ALL of them are stored are the previous rows removed. An interruption
+/// therefore leaves the old committee intact (plus possibly some new rows),
+/// never a wallet without shares. A failed insert takes back the rows it
+/// already added and reports the error with the old committee untouched.
 fn replace_wallet_keys(env: &Env, wallet: &Wallet, wkeys: &[WalletKey]) -> Result<()> {
-    env.exec(r#"DELETE FROM "WalletKey" WHERE "Wallet" = ?1"#, vec![SqlValue::Text(wallet.id.clone())])?;
-    for k in wkeys {
-        env.exec(
+    if wkeys.is_empty() {
+        return Err(Error::Env("refusing to replace a wallet's keys with an empty committee".into()));
+    }
+    for (i, k) in wkeys.iter().enumerate() {
+        if k.id.is_empty() || k.wallet != wallet.id || wkeys[..i].iter().any(|o| o.id == k.id) {
+            return Err(Error::Env("replacement wallet keys must have distinct ids and belong to the wallet".into()));
+        }
+    }
+    for (i, k) in wkeys.iter().enumerate() {
+        let inserted = env.exec(
             &format!(r#"INSERT INTO "WalletKey" ({WALLETKEY_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7)"#),
             vec![
                 SqlValue::Text(k.id.clone()),
@@ -1562,8 +1576,23 @@ fn replace_wallet_keys(env: &Env, wallet: &Wallet, wkeys: &[WalletKey]) -> Resul
                 SqlValue::Blob(k.data.clone()),
                 SqlValue::Int(k.generation as i64),
             ],
-        )?;
+        );
+        if let Err(e) = inserted {
+            // Best effort: drop the new rows added so far (never the old ones).
+            for done in &wkeys[..i] {
+                let _ = env.exec(r#"DELETE FROM "WalletKey" WHERE "Id" = ?1"#, vec![SqlValue::Text(done.id.clone())]);
+            }
+            return Err(e);
+        }
     }
+    // Every new share is stored: drop the rows that are not part of it.
+    let placeholders: Vec<String> = (0..wkeys.len()).map(|i| format!("?{}", i + 2)).collect();
+    let mut args = vec![SqlValue::Text(wallet.id.clone())];
+    args.extend(wkeys.iter().map(|k| SqlValue::Text(k.id.clone())));
+    env.exec(
+        &format!(r#"DELETE FROM "WalletKey" WHERE "Wallet" = ?1 AND "Id" NOT IN ({})"#, placeholders.join(",")),
+        args,
+    )?;
     env.exec(
         r#"UPDATE "Wallet" SET "Gen" = ?1, "Modified" = ?2 WHERE "Id" = ?3"#,
         vec![
