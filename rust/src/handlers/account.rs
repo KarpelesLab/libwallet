@@ -1302,6 +1302,11 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
     if s.len() % 2 != 0 {
         return Err(ApiError::new(400, "odd-length hex"));
     }
+    // Hex digits only — which also keeps the two-byte slices below on
+    // character boundaries (a non-ASCII string would panic there).
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::new(400, "invalid hex string"));
+    }
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| ApiError::new(400, e.to_string())))
@@ -1590,6 +1595,17 @@ mod balance_tests {
             tx["chainId"] = cid.clone();
             assert!(evm_request_from_tx(&tx).is_err(), "chainId {cid} accepted");
         }
+    }
+
+    // Audit L1: hex that isn't hex is an error, not a slicing panic.
+    #[test]
+    fn decode_hex_refuses_non_hex() {
+        assert_eq!(decode_hex("0x0aFF").ok(), Some(vec![0x0a, 0xff]));
+        for bad in ["0x\u{e9}\u{e9}", "a\u{e9}b", "+f", "0xzz", "abc"] {
+            assert!(decode_hex(bad).is_err(), "{bad:?}");
+        }
+        let tx = serde_json::json!({ "chainId": 1, "to": "0x000000000000000000000000000000000000dead", "data": "0x\u{e9}\u{e9}" });
+        assert!(evm_request_from_tx(&tx).is_err());
     }
 
     // Audit H1: a node quantity that isn't one is an error, not a zero.

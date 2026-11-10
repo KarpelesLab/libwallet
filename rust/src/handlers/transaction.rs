@@ -770,6 +770,11 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
     if s.len() % 2 != 0 {
         return Err(ApiError::new(400, "odd-length hex"));
     }
+    // Hex digits only — which also keeps the two-byte slices below on
+    // character boundaries (a non-ASCII string would panic there).
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::new(400, "bad hex"));
+    }
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ApiError::new(400, "bad hex")))
@@ -797,5 +802,15 @@ mod tests {
         assert!(v(json!({ "type": "erc20_transfer", "amount": "1000" })).is_err());
         assert!(v(json!({ "data": "a9059cbb" })).is_err(), "data needs its 0x prefix");
         assert!(v(json!({ "value": "-1" })).is_err());
+    }
+
+    // Audit L1: calldata that isn't hex is an error, not a slicing panic.
+    #[test]
+    fn decode_hex_refuses_non_hex() {
+        assert_eq!(decode_hex("0aFF").ok(), Some(vec![0x0a, 0xff]));
+        for bad in ["\u{e9}\u{e9}", "a\u{e9}b", "+f", "zz", "abc"] {
+            assert!(decode_hex(bad).is_err(), "{bad:?}");
+        }
+        assert!(evm_call(&json!({ "data": "0x\u{e9}\u{e9}" })).is_err());
     }
 }

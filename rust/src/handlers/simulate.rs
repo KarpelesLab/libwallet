@@ -484,10 +484,12 @@ fn decode_log(lg: &CallLog, kind: &str) -> Option<Value> {
 
 fn topic_to_address(topic: &str) -> String {
     let t = topic.strip_prefix("0x").unwrap_or(topic);
-    if t.len() < 40 {
-        return t.to_lowercase();
+    // `get` rather than an index: a node can put anything in a topic, and a
+    // multi-byte character straddling the cut would panic a plain slice.
+    match t.len().checked_sub(40).and_then(|start| t.get(start..)) {
+        Some(tail) => tail.to_lowercase(),
+        None => t.to_lowercase(),
     }
-    t[t.len() - 40..].to_lowercase()
 }
 
 /// Synthesize a single Effect from the top-level decode when no tracer tree is
@@ -548,15 +550,21 @@ fn decode_revert_hex(s: &str) -> String {
         Some(r) if r.len() >= 4 + 64 => r,
         _ => return s.to_owned(),
     };
-    if hex_lower(&raw[..4]) != "08c379a0" {
-        return s.to_owned();
+    error_string(&raw).unwrap_or_else(|| s.to_owned())
+}
+
+/// The message of an ABI-encoded `Error(string)` (selector 0x08c379a0, offset
+/// word, length word, bytes). The length is the node's claim: it is bounds-
+/// checked against what is actually there, without arithmetic that can
+/// overflow (a length near 2^63 used to slip past the check and panic).
+fn error_string(raw: &[u8]) -> Option<String> {
+    if raw.get(..4)? != [0x08, 0xc3, 0x79, 0xa0] {
+        return None;
     }
-    let length = BigInt::from_bytes_be(num_bigint::Sign::Plus, &raw[4 + 32..4 + 64]);
-    let length: i64 = (&length).try_into().unwrap_or(-1);
-    if length <= 0 || (raw.len() as i64) < 4 + 64 + length {
-        return s.to_owned();
-    }
-    String::from_utf8_lossy(&raw[4 + 64..4 + 64 + length as usize]).into_owned()
+    let length = BigInt::from_bytes_be(num_bigint::Sign::Plus, raw.get(4 + 32..4 + 64)?);
+    let length = usize::try_from(&length).ok().filter(|l| *l > 0)?;
+    let text = raw.get(4 + 64..(4usize + 64).checked_add(length)?)?;
+    Some(String::from_utf8_lossy(text).into_owned())
 }
 
 /// Pull a human reason out of an eth_call error string (`Error(string)`).
@@ -575,14 +583,7 @@ fn decode_evm_revert(msg: &str) -> String {
         Some(r) if r.len() >= 4 => r,
         _ => return msg.to_owned(),
     };
-    if raw.len() >= 4 + 64 && hex_lower(&raw[..4]) == "08c379a0" {
-        let length = BigInt::from_bytes_be(num_bigint::Sign::Plus, &raw[4 + 32..4 + 64]);
-        let length: i64 = (&length).try_into().unwrap_or(-1);
-        if length > 0 && (raw.len() as i64) >= 4 + 64 + length {
-            return String::from_utf8_lossy(&raw[4 + 64..4 + 64 + length as usize]).into_owned();
-        }
-    }
-    msg.to_owned()
+    error_string(&raw).unwrap_or_else(|| msg.to_owned())
 }
 
 /// prestateTracer diff → per-address native-balance deltas.
@@ -701,7 +702,9 @@ fn hex_bigint_val(v: &Value) -> Option<BigInt> {
 }
 
 fn hex_bytes(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    // Hex digits only — which also keeps the two-byte slices below on
+    // character boundaries (a non-ASCII string would panic there).
+    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
@@ -862,6 +865,35 @@ mod tests {
         let out = sim("0xDEADBEEF00".into());
         assert_eq!(out["decodedArgs"]["selector"], "0xdeadbeef");
         assert_eq!(out["decodedArgs"]["data"], "0xdeadbeef00");
+    }
+
+    // Audit L1: strings from the node or the dApp are never byte-sliced blind —
+    // non-ASCII input, and lengths the node merely claims, don't panic.
+    #[test]
+    fn untrusted_strings_do_not_panic() {
+        // 39 ASCII bytes + a 2-byte char: the 40-byte cut lands mid-character.
+        let topic = format!("0x{}\u{e9}{}", "0".repeat(24), "a".repeat(39));
+        let _ = topic_to_address(&topic);
+        assert_eq!(topic_to_address(&format!("0x{}{}", "0".repeat(24), "AB".repeat(20))), "ab".repeat(20));
+        assert_eq!(topic_to_address("0xAB"), "ab");
+
+        assert_eq!(hex_bytes("\u{e9}\u{e9}"), None);
+        assert_eq!(hex_bytes("a\u{e9}b"), None);
+        assert_eq!(hex_bytes("+f"), None);
+        assert_eq!(hex_bytes("0aFF"), Some(vec![0x0a, 0xff]));
+
+        // Error(string) whose length word claims i64::MAX bytes.
+        let huge = format!("0x08c379a0{:0>64}{:0>64}{}", "20", "7fffffffffffffff", "41".repeat(32));
+        assert_eq!(decode_revert_hex(&huge), huge);
+        assert_eq!(decode_evm_revert(&format!("execution reverted: {huge}")), format!("execution reverted: {huge}"));
+        let ok = format!("0x08c379a0{:0>64}{:0>64}{}", "20", "3", "6e6f7065");
+        assert_eq!(decode_revert_hex(&ok), "nop");
+        assert_eq!(decode_evm_revert(&format!("reverted {ok} \u{e9}")), "nop");
+        assert_eq!(decode_revert_hex("0x\u{e9}\u{e9}"), "0x\u{e9}\u{e9}");
+
+        let env = Env::init_memory().unwrap();
+        let out = simulate(&env, &json!({ "type": "evm", "to": "0xbb", "data": "0x\u{e9}\u{e9}\u{e9}\u{e9}", "RPC": "http://127.0.0.1:1" })).unwrap();
+        assert_eq!(out["willRevert"], true, "{out}");
     }
 
     #[test]

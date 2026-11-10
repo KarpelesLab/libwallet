@@ -16,6 +16,21 @@ fn selectors_are_keccak() {
     assert_eq!(sel(b"allowance(address,address)"), "dd62ed3e");
 }
 
+/// Audit L1: an address that is 40 bytes long but not ASCII hex is an error —
+/// it used to be sliced two bytes at a time, panicking mid-character.
+#[test]
+fn non_hex_addresses_error_instead_of_panicking() {
+    for bad in [
+        format!("0x{}\u{e9}", "1".repeat(38)),                // 40 bytes, last char 2 bytes wide
+        format!("0x1\u{e9}{}", "1".repeat(37)),               // …straddling a byte pair
+        format!("0x+1{}", "1".repeat(38)),                    // from_str_radix would take the sign
+        format!("0x{}", "g".repeat(40)),
+    ] {
+        assert!(erc20::encode_balance_of(&bad).is_err(), "{bad:?}");
+        assert!(erc20::encode_allowance("0x1111111111111111111111111111111111111111", &bad).is_err(), "{bad:?}");
+    }
+}
+
 #[test]
 fn encode_calldata_is_byte_exact() {
     let bal = erc20::encode_balance_of("0x1111111111111111111111111111111111111111").unwrap();

@@ -19,6 +19,11 @@ fn address_bytes(addr: &str) -> Result<[u8; 20]> {
     if hexs.len() != 40 {
         return Err(Error::Env(format!("address must be 20 bytes, got {} hex chars", hexs.len())));
     }
+    // Hex digits only — which also keeps the two-byte slices below on
+    // character boundaries (a non-ASCII string would panic there).
+    if !hexs.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Env("invalid hex: address is not hexadecimal".into()));
+    }
     let mut out = [0u8; 20];
     for i in 0..20 {
         out[i] = u8::from_str_radix(&hexs[i * 2..i * 2 + 2], 16)

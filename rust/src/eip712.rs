@@ -278,6 +278,11 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     if s.is_empty() {
         return Ok(Vec::new());
     }
+    // Hex digits only: this also keeps the two-byte slices below on character
+    // boundaries (a non-ASCII string would panic there).
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("invalid hex string".into());
+    }
     let s = if s.len() % 2 != 0 { format!("0{s}") } else { s.to_owned() };
     (0..s.len())
         .step_by(2)
@@ -534,6 +539,18 @@ mod tests {
         // Kept as they were (compat): an absent address / bytesN field is zero.
         assert_eq!(enc("address", Value::Null).unwrap(), "0".repeat(64));
         assert_eq!(enc("bytes32", Value::Null).unwrap(), "0".repeat(64));
+    }
+
+    // Audit L1: hex that isn't hex is an error, not a slicing panic.
+    #[test]
+    fn hex_decode_refuses_non_hex() {
+        assert_eq!(hex_decode("0x0aFF").unwrap(), vec![0x0a, 0xff]);
+        assert_eq!(hex_decode("0xf").unwrap(), vec![0x0f]);
+        for bad in ["0x\u{e9}\u{e9}", "a\u{e9}b", "0x+f", "0xzz"] {
+            assert!(hex_decode(bad).is_err(), "{bad:?}");
+        }
+        let td = parse(MAIL).unwrap();
+        assert!(td.encode_value("bytes", &Value::String("0x\u{e9}\u{e9}".into()), 0).is_err());
     }
 
     #[test]
