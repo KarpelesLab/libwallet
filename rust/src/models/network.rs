@@ -38,6 +38,8 @@ fn modchain_tron_rest() -> String {
 
 const TABLE_DDL: &str = r#"CREATE TABLE IF NOT EXISTS "Network" ("Id" text, "Type" text, "ChainId" text, "Name" text, "RPC" text, "CurrencySymbol" text, "CurrencyDecimals" integer, "BlockExplorer" text, "TestNet" numeric, "Priority" integer, "Created" text, "Updated" text, PRIMARY KEY ("Id"));
 CREATE UNIQUE INDEX IF NOT EXISTS "Network_typeChain" ON "Network" ("Type", "ChainId");"#;
+/// Upper bound for `Network.CurrencyDecimals` (real chains: 6..=18).
+const MAX_CURRENCY_DECIMALS: i64 = 36;
 const COLS: &str = r#""Id", "Type", "ChainId", "Name", "RPC", "CurrencySymbol", "CurrencyDecimals", "BlockExplorer", "TestNet", "Priority", "Created", "Updated""#;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -286,13 +288,31 @@ impl Network {
     /// Validate the network and fill anything missing (port of Go
     /// `Network.check`). Rejects a caller-supplied RPC that points at an
     /// internal address / downgrades the scheme (SSRF guard) before it is ever
-    /// persisted, then fills chain-derived defaults. Unknown EVM chain ids are
+    /// persisted, canonicalises an EVM chain id to its decimal string (rejecting
+    /// a non-numeric one), then fills chain-derived defaults. Unknown EVM chain ids are
     /// accepted (create succeeds) but leave no defaults filled — matching Go's
     /// "ignore fetch failed but do not input anything either".
         pub fn check(&mut self) -> Result<()> {
         validate_network_rpc(&self.rpc)?;
+        // No real chain has more than a few dozen decimals; an absurd value
+        // would only skew every amount rendered for the network.
+        if !(0..=MAX_CURRENCY_DECIMALS).contains(&self.currency_decimals) {
+            return Err(crate::Error::Env(format!(
+                "invalid currency decimals {} (want 0..={MAX_CURRENCY_DECIMALS})",
+                self.currency_decimals
+            )));
+        }
         match self.kind.as_str() {
-            "evm" => {} // fall through to the chain-registry fill below
+            "evm" => {
+                // An EVM chain id is a number; store its one canonical decimal
+                // spelling so "1", "01", "+1" and "0x1" cannot become distinct
+                // rows (the id derives from type+chainId) for the same chain.
+                let n = parse_chain_id(&self.chain_id).ok_or_else(|| {
+                    crate::Error::Env(format!("invalid EVM chain id {:?}", self.chain_id))
+                })?;
+                self.chain_id = n.to_string();
+                // then fall through to the chain-registry fill below
+            }
             "bitcoin" => {
                 let (name, sym) = match self.chain_id.as_str() {
                     "bitcoin" => ("Bitcoin", "BTC"),

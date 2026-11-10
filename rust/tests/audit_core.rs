@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::time::Duration;
 
-use libwallet::models::network;
+use libwallet::models::network::{self, Network};
 use libwallet::Env;
 use libwallet::{LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest, ResponseCallback};
 
@@ -87,6 +87,44 @@ fn fetch_current_survives_a_stored_self_reference() {
         env.set_current("network", stored).unwrap();
         let n = network::fetch(&env, "@").unwrap().expect("default network");
         assert_eq!((n.kind.as_str(), n.chain_id.as_str()), ("evm", "1"));
+    }
+}
+
+// --- F6: one row per EVM chain; sane currency decimals --------------------
+
+#[test]
+fn evm_chain_id_is_canonicalised() {
+    let env = mem_env();
+    env.exec(r#"DELETE FROM "Network""#, Vec::new()).unwrap();
+    let evm = |chain: &str| Network { kind: "evm".into(), chain_id: chain.into(), ..Default::default() };
+
+    let canonical = network::create(&env, evm("1")).unwrap();
+    for spelling in ["01", "+1", "0x1", "0X01", "0001"] {
+        let n = network::create(&env, evm(spelling)).unwrap();
+        assert_eq!(n.chain_id, "1", "{spelling}");
+        assert_eq!(n.id, canonical.id, "{spelling} must map to the chain-1 row");
+    }
+    assert_eq!(network::list(&env).unwrap().len(), 1);
+
+    for bad in ["", " 1", "1 ", "abc", "1a", "0x", "0xzz", "-1", "1.0", "99999999999999999999999"] {
+        assert!(network::create(&env, evm(bad)).is_err(), "{bad:?} must be rejected");
+    }
+    assert_eq!(network::list(&env).unwrap().len(), 1);
+
+    // Non-EVM chain ids are names and are untouched.
+    let b = network::create(&env, Network { kind: "bitcoin".into(), chain_id: "bitcoin".into(), ..Default::default() }).unwrap();
+    assert_eq!(b.chain_id, "bitcoin");
+}
+
+#[test]
+fn currency_decimals_are_bounded() {
+    let env = mem_env();
+    let net = |d: i64| Network { kind: "evm".into(), chain_id: "424242".into(), currency_decimals: d, ..Default::default() };
+    for bad in [-1, 37, 255, i64::MAX, i64::MIN] {
+        assert!(network::create(&env, net(bad)).is_err(), "{bad} must be rejected");
+    }
+    for good in [0, 6, 18, 36] {
+        assert!(network::create(&env, net(good)).is_ok(), "{good} must be accepted");
     }
 }
 
