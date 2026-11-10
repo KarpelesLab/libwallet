@@ -15,11 +15,24 @@ use crate::Env;
 
 use super::{ApiError, ApiResult};
 
+/// How long a request waits for the user before it times out.
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
+/// Once an approve/reject has claimed a request, how much longer `run` keeps
+/// waiting for it to finish (signing + broadcast) before giving up — without
+/// declaring a timeout it can no longer vouch for.
+const PROCESSING_GRACE: Duration = Duration::from_secs(600);
+/// Re-check interval while waiting on a claimed request.
+const PROCESSING_POLL: Duration = Duration::from_secs(1);
+
 /// Run a request through the approval flow: persist as pending, broadcast the
 /// `request` host event, and block on the waiter. Returns the resolved request
 /// (accepted) or an ApiError (rejected 4001 / timed out 4001). Runs on the FFI
 /// worker thread, so blocking here is fine.
-pub fn run(env: &Env, mut req: Request) -> Result<Request, ApiError> {
+pub fn run(env: &Env, req: Request) -> Result<Request, ApiError> {
+    run_with_timeout(env, req, APPROVAL_TIMEOUT)
+}
+
+fn run_with_timeout(env: &Env, mut req: Request, timeout: Duration) -> Result<Request, ApiError> {
     if req.id.is_empty() {
         req.id = xuid::Xuid::new("req").to_string();
     }
@@ -38,22 +51,64 @@ pub fn run(env: &Env, mut req: Request) -> Result<Request, ApiError> {
         json!({ "request_id": req.id, "request": req }),
     ));
 
-    match rx.recv_timeout(Duration::from_secs(120)) {
-        Ok(status) => {
-            // Reload the authoritative row (approve may have set Result etc.).
-            let reloaded = request::fetch(env, &req.id).ok().flatten();
-            let mut out = reloaded.unwrap_or(req);
-            out.status = status;
-            Ok(out)
-        }
-        Err(_) => {
-            env.request_take(&req.id);
-            if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
-                r.status = "timedout".into();
-                r.updated = crate::now_rfc3339();
-                let _ = request::save(env, &r);
+    let mut wait = timeout;
+    let mut grace_left = PROCESSING_GRACE;
+    loop {
+        match rx.recv_timeout(wait) {
+            Ok(status) => {
+                // Reload the authoritative row (approve may have set Result etc.).
+                let reloaded = request::fetch(env, &req.id).ok().flatten();
+                let mut out = reloaded.unwrap_or(req);
+                out.status = status;
+                return Ok(out);
             }
-            Err(ApiError::new(4001, "Request timed out."))
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Time the request out ONLY if it is still pending — the same
+                // guarded transition `claim` uses, so exactly one of "timed
+                // out" and "claimed by an approve/reject" can happen.
+                match request::transition(env, &req.id, "pending", "timedout") {
+                    Ok(false) => {}
+                    // Timed out (or the DB is failing: give up as before).
+                    _ => {
+                        env.request_take(&req.id);
+                        return Err(ApiError::new(4001, "Request timed out."));
+                    }
+                }
+                // Not pending: an approve/reject claimed it and is mid-flight
+                // (possibly signing + broadcasting), or its outcome is about to
+                // be delivered. Reporting "timed out" now would tell the dApp
+                // nothing happened while the transaction still goes out, so keep
+                // the waiter registered and wait for the real outcome.
+                let status = request::fetch(env, &req.id).ok().flatten().map(|r| r.status);
+                match status.as_deref() {
+                    // A row that is momentarily unreadable (None) is treated like
+                    // one still being processed.
+                    Some("processing") | Some("accepted") | Some("rejected") | None if !grace_left.is_zero() => {
+                        grace_left = grace_left.saturating_sub(PROCESSING_POLL);
+                        wait = PROCESSING_POLL;
+                    }
+                    Some("processing") | Some("accepted") | Some("rejected") | None => {
+                        // Still unresolved after the grace period: stop waiting,
+                        // but do not touch the row or claim a clean timeout.
+                        env.request_take(&req.id);
+                        return Err(ApiError::new(
+                            500,
+                            "Request approval did not complete in time; its outcome is unknown.",
+                        ));
+                    }
+                    _ => {
+                        env.request_take(&req.id);
+                        return Err(ApiError::new(4001, "Request timed out."));
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                // The waiter was dropped (replaced / cleared): nobody can resolve
+                // this request any more.
+                env.request_take(&req.id);
+                let _ = request::transition(env, &req.id, "pending", "timedout");
+                return Err(ApiError::new(4001, "Request timed out."));
+            }
         }
     }
 }
@@ -382,27 +437,27 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
 /// Atomically move a still-pending request into `processing` so approve/reject
 /// side effects run at most once (Go `request.claim`). Requires the in-memory
 /// waiter to still exist (a timed-out request whose waiter gave up is rejected).
+///
+/// The claim itself is a single guarded `pending → processing` UPDATE, so of any
+/// number of concurrent approve/reject calls (and the `run` timeout, which uses
+/// the same guard) exactly one wins.
 fn claim(env: &Env, id: &str) -> Result<Request, ApiError> {
     if !env.request_pending(id) {
         return Err(ApiError::new(400, "request is no longer awaiting a response"));
     }
-    let mut req = request::fetch(env, id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "request not found"))?;
-    if req.status != "pending" {
-        return Err(ApiError::new(400, format!("request is not pending (status {:?})", req.status)));
+    if !request::transition(env, id, "pending", "processing").map_err(ApiError::internal)? {
+        return Err(match request::fetch(env, id).map_err(ApiError::internal)? {
+            Some(r) => ApiError::new(400, format!("request is not pending (status {:?})", r.status)),
+            None => ApiError::new(404, "request not found"),
+        });
     }
-    req.status = "processing".into();
-    req.updated = crate::now_rfc3339();
-    request::save(env, &req).map_err(ApiError::internal)?;
-    Ok(req)
+    request::fetch(env, id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "request not found"))
 }
 
 /// Persist the terminal status and deliver it to the waiter (Go `respond`).
 fn respond(env: &Env, id: &str, status: &str) -> Result<(), ApiError> {
-    if let Ok(Some(mut r)) = request::fetch(env, id) {
-        r.status = status.into();
-        r.updated = crate::now_rfc3339();
-        let _ = request::save(env, &r);
-    }
+    // Only the claimer gets here, so the row is `processing`.
+    let _ = request::transition(env, id, "processing", status);
     if !env.request_resolve(id, status) {
         return Err(ApiError::new(400, "request is no longer awaiting a response"));
     }
@@ -411,12 +466,7 @@ fn respond(env: &Env, id: &str, status: &str) -> Result<(), ApiError> {
 
 /// Roll a claimed-but-unfinished request back to pending (Go `releaseClaim`).
 fn release(env: &Env, id: &str) {
-    if let Ok(Some(mut r)) = request::fetch(env, id) {
-        if r.status == "processing" {
-            r.status = "pending".into();
-            let _ = request::save(env, &r);
-        }
-    }
+    let _ = request::transition(env, id, "processing", "pending");
 }
 
 /// `Request` object routing: GET/<id> fetch, GET list.
@@ -430,5 +480,135 @@ pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
             None => Ok(serde_json::to_value(request::list(env).map_err(ApiError::internal)?).unwrap()),
         },
         other => Err(ApiError::new(405, format!("unsupported verb {other} for Request"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn env() -> Arc<Env> {
+        let env = Env::init_memory().unwrap();
+        request::init(&env).unwrap();
+        Arc::new(env)
+    }
+
+    /// Persist a pending request with a registered waiter, as `run` does.
+    fn pending(env: &Env, id: &str) -> std::sync::mpsc::Receiver<String> {
+        let req = Request { id: id.into(), kind: "test".into(), status: "pending".into(), ..Default::default() };
+        request::save(env, &req).unwrap();
+        env.request_register(id)
+    }
+
+    fn status(env: &Env, id: &str) -> String {
+        request::fetch(env, id).unwrap().unwrap().status
+    }
+
+    /// Audit F5: of many concurrent approve/reject calls exactly one may claim
+    /// the request (and so run its sign-and-broadcast side effect).
+    #[test]
+    fn concurrent_claims_have_exactly_one_winner() {
+        for round in 0..20 {
+            let env = env();
+            let id = format!("req-race-{round}");
+            let _rx = pending(&env, &id);
+            let start = Arc::new(std::sync::Barrier::new(8));
+            let handles: Vec<_> = (0..8)
+                .map(|_| {
+                    let (env, id, start) = (env.clone(), id.clone(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        claim(&env, &id).is_ok()
+                    })
+                })
+                .collect();
+            let winners = handles.into_iter().map(|h| h.join().unwrap()).filter(|won| *won).count();
+            assert_eq!(winners, 1, "round {round}: {winners} callers claimed the same request");
+            assert_eq!(status(&env, &id), "processing");
+        }
+    }
+
+    #[test]
+    fn claim_then_release_then_claim_again() {
+        let env = env();
+        let _rx = pending(&env, "req-1");
+        assert_eq!(claim(&env, "req-1").unwrap().status, "processing");
+        assert_eq!(claim(&env, "req-1").unwrap_err().code, 400);
+        release(&env, "req-1");
+        assert_eq!(status(&env, "req-1"), "pending");
+        assert!(claim(&env, "req-1").is_ok());
+        assert_eq!(claim(&env, "req-missing").unwrap_err().code, 400); // no waiter
+    }
+
+    /// Wait for `run_with_timeout` (on another thread) to persist its row.
+    fn wait_for_row(env: &Env, id: &str) {
+        for _ in 0..200 {
+            if env.request_pending(id) && request::fetch(env, id).unwrap().is_some() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("request {id} never appeared");
+    }
+
+    /// An unanswered request times out, and cannot be approved afterwards.
+    #[test]
+    fn unanswered_request_times_out() {
+        let env = env();
+        let req = Request { id: "req-t".into(), kind: "test".into(), ..Default::default() };
+        let err = run_with_timeout(&env, req, Duration::from_millis(50)).unwrap_err();
+        assert_eq!(err.code, 4001);
+        assert_eq!(status(&env, "req-t"), "timedout");
+        assert!(claim(&env, "req-t").is_err());
+    }
+
+    /// Audit F5: when the approval is already mid-flight as the timeout fires,
+    /// `run` must not report "timed out" (nor overwrite the row) — it waits for
+    /// the approval's real outcome.
+    #[test]
+    fn timeout_during_processing_waits_for_the_outcome() {
+        let env = env();
+        let runner = {
+            let env = env.clone();
+            std::thread::spawn(move || {
+                let req = Request { id: "req-p".into(), kind: "test".into(), ..Default::default() };
+                run_with_timeout(&env, req, Duration::from_millis(150))
+            })
+        };
+        wait_for_row(&env, "req-p");
+        claim(&env, "req-p").unwrap();
+
+        // Well past the timeout: still processing, the caller still parked.
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(!runner.is_finished(), "run returned while the approval was still processing");
+        assert_eq!(status(&env, "req-p"), "processing");
+
+        // The approval completes: the caller gets the real result.
+        respond(&env, "req-p", "accepted").unwrap();
+        let out = runner.join().unwrap().expect("accepted, not timed out");
+        assert_eq!(out.status, "accepted");
+        assert_eq!(status(&env, "req-p"), "accepted");
+    }
+
+    /// A failed approval (claim released) after the timeout fired lets the
+    /// request time out normally.
+    #[test]
+    fn released_claim_after_timeout_times_out() {
+        let env = env();
+        let runner = {
+            let env = env.clone();
+            std::thread::spawn(move || {
+                let req = Request { id: "req-r".into(), kind: "test".into(), ..Default::default() };
+                run_with_timeout(&env, req, Duration::from_millis(150))
+            })
+        };
+        wait_for_row(&env, "req-r");
+        claim(&env, "req-r").unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        release(&env, "req-r");
+        let err = runner.join().unwrap().unwrap_err();
+        assert_eq!(err.code, 4001);
+        assert_eq!(status(&env, "req-r"), "timedout");
     }
 }

@@ -75,6 +75,24 @@ pub fn save(env: &Env, r: &Request) -> Result<()> {
     Ok(())
 }
 
+/// Move a request from status `from` to status `to` in ONE guarded statement
+/// (`UPDATE … WHERE "Status" = from`). Returns whether this call performed the
+/// transition — false when the row is missing or was not in `from`. This is the
+/// compare-and-swap the approval flow claims a request with, so two racing
+/// callers can never both win.
+pub fn transition(env: &Env, id: &str, from: &str, to: &str) -> Result<bool> {
+    let changed = env.exec(
+        r#"UPDATE "Request" SET "Status" = ?1, "Updated" = ?2 WHERE "Id" = ?3 AND "Status" = ?4"#,
+        vec![
+            SqlValue::Text(to.to_owned()),
+            SqlValue::Text(crate::now_rfc3339()),
+            SqlValue::Text(id.to_owned()),
+            SqlValue::Text(from.to_owned()),
+        ],
+    )?;
+    Ok(changed > 0)
+}
+
 fn row_to_request(row: &[SqlValue]) -> Request {
     let text = |i: usize| row.get(i).and_then(|v| v.as_text()).unwrap_or("").to_owned();
     let opt_json = |i: usize| -> Option<Value> {
