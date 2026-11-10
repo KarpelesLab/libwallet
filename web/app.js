@@ -2306,7 +2306,7 @@ function confirmRemove() {
 // ============================================================================
 
 const LEDGER_APPS = { ethereum: 'Ethereum', bitcoin: 'Bitcoin', solana: 'Solana' };
-const LEDGER_DECIMALS = { ethereum: 18, solana: 9 };
+const LEDGER_DECIMALS = { ethereum: 18, bitcoin: 8, solana: 9 };
 const LEDGER_SYMBOL = { ethereum: 'ETH', bitcoin: 'BTC', solana: 'SOL' };
 const ledger = { wired: false, connected: false, busy: false, wallet: null, accounts: [], update: null, installed: null };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -2526,7 +2526,7 @@ function ledgerRenderAccounts() {
     const cell = $(`[data-lg-bal="${CSS.escape(a.Id)}"]`);
     try {
       const r = await backendRequest('Account:balance', 'POST', { Id: a.Id });
-      const dec = { ethereum: 18, bitcoin: 8, solana: 9 }[a.Type] ?? 0;
+      const dec = LEDGER_DECIMALS[a.Type] ?? 0;
       if (cell) cell.textContent = formatUnits(BigInt(r.balance ?? r.Balance ?? '0'), dec, 6);
     } catch { if (cell) cell.textContent = 'balance unavailable'; }
   });
@@ -2555,7 +2555,10 @@ function ledgerSend() {
     if (!to) throw new Error('Enter a recipient address.');
     const units = toBaseUnits($('#lgSendAmount').value, LEDGER_DECIMALS[a.Type]);
     if (units <= 0n) throw new Error('Enter an amount.');
-    const tx = a.Type === 'ethereum' ? { to, value: units.toString() } : { to, amount: units.toString() };
+    // Each chain's Transaction shape (see docs/ledger.md).
+    const tx = a.Type === 'ethereum' ? { to, value: units.toString() }
+      : a.Type === 'bitcoin' ? { To: to, Amount: Number(units) }
+      : { to, amount: units.toString() };
     await ledgerEnsureApp(LEDGER_APPS[a.Type]);
     toast('ok', 'Review the transaction on your device');
     const out = await backendRequest('Ledger:signTransaction', 'POST', { Account: a.Id, Transaction: tx, Broadcast: true });

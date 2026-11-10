@@ -273,7 +273,7 @@ select.input { appearance: none; cursor: pointer;
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em;
   text-transform: uppercase; padding: 8px 10px; border-radius: 8px;
 }
-.input-wrap .ghost-btn:hover { color: var(--text); background: var(--surface-2); }
+.input-wrap .ghost-btn:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
 
 /* ---- Buttons ------------------------------------------------------------- */
 .btn {
@@ -661,6 +661,17 @@ select.input { appearance: none; cursor: pointer;
   font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em;
   color: var(--text-faint);
 }
+/* A standalone .ghost-btn (outside an .input-wrap) is a text link that happens
+   to be a button. Without this it falls back to the browser's default button
+   chrome — grey text on a grey face, unreadable on the dark page. */
+.ghost-btn {
+  background: none; border: none; padding: 4px 2px; cursor: pointer;
+  font: inherit; letter-spacing: inherit;
+  color: var(--iris-bright);
+}
+.ghost-btn:hover { color: var(--text); text-decoration: underline; }
+.ghost-btn:focus-visible { outline: 2px solid var(--iris); outline-offset: 2px; border-radius: 6px; }
+.foot .ghost-btn, .foot a { font-size: 12px; }
 
 /* ---- Utility ------------------------------------------------------------- */
 .hidden { display: none !important; }
