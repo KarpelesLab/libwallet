@@ -134,6 +134,13 @@ pub fn resolve_sns(rpc_url: &str, name: &str) -> Result<String> {
         "getAccountInfo",
         json!([domain_b58, { "encoding": "base64" }]),
     )?;
+    // The account at the domain address must belong to the name program: any
+    // other program can write whatever "owner" it likes into its own data.
+    if let Some(program_owner) = res.get("value").and_then(|v| v.get("owner")).filter(|o| !o.is_null()) {
+        if program_owner.as_str() != Some(SNS_PROGRAM) {
+            return Err(Error::Env("SNS domain account is not owned by the name service program".into()));
+        }
+    }
     let data_b64 = res
         .get("value")
         .and_then(|v| v.get("data"))
@@ -153,9 +160,17 @@ pub fn resolve_sns(rpc_url: &str, name: &str) -> Result<String> {
     if data[0..32] != parent {
         return Err(Error::Env("SNS record parent mismatch".into()));
     }
-    let owner = &data[32..64];
+    let owner: [u8; 32] = data[32..64].try_into().map_err(|_| Error::Env("SNS record too short".into()))?;
     if owner.iter().all(|&b| b == 0) {
         return Err(Error::Env("SNS name resolves to zero owner".into()));
+    }
+    // An off-curve owner is a program-derived account (a tokenized domain is
+    // held by the NFT program's PDA, not by its holder): nobody has a key for
+    // it, so funds sent there would not reach whoever the name stands for.
+    if !is_on_curve(&owner) {
+        return Err(Error::Env(
+            "SNS name is owned by a program account (e.g. a tokenized domain), not a wallet; cannot resolve it to an address".into(),
+        ));
     }
     Ok(bs58::encode(owner).into_string())
 }
@@ -200,22 +215,54 @@ mod sns_tests {
         format!("http://{addr}/")
     }
 
-    #[test]
-    fn resolve_sns_returns_owner() {
+    /// A mock node answering getAccountInfo with a name record held by `owner`,
+    /// the account itself owned by `program` (omitted from the reply if None).
+    fn mock_record(owner: &[u8; 32], program: Option<&str>) -> String {
         let parent = b58_32(SNS_PARENT).unwrap();
-        let owner = [0x11u8; 32];
         // NameRecordHeader: parent | owner | class(0).
         let mut record = Vec::new();
         record.extend_from_slice(&parent);
-        record.extend_from_slice(&owner);
+        record.extend_from_slice(owner);
         record.extend_from_slice(&[0u8; 32]);
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&record);
-        let url = mock(format!(
-            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":{{"data":["{data_b64}","base64"]}}}}}}"#
-        ));
+        let program = program.map(|p| format!(r#","owner":"{p}""#)).unwrap_or_default();
+        mock(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"result":{{"value":{{"data":["{data_b64}","base64"]{program}}}}}}}"#
+        ))
+    }
 
-        let got = resolve_sns(&url, "example.sol").unwrap();
+    /// The first `sha256(counter)` that is / is not a valid Ed25519 point.
+    fn key_with_curve(on_curve: bool) -> [u8; 32] {
+        (0u8..=255).map(|i| sha256(&[i])).find(|k| is_on_curve(k) == on_curve).unwrap()
+    }
+
+    #[test]
+    fn resolve_sns_returns_owner() {
+        let owner = key_with_curve(true);
+        let got = resolve_sns(&mock_record(&owner, Some(SNS_PROGRAM)), "example.sol").unwrap();
         assert_eq!(got, bs58::encode(&owner).into_string());
+        // A reply without the owning program still resolves (nothing to check).
+        let got = resolve_sns(&mock_record(&owner, None), "example.sol").unwrap();
+        assert_eq!(got, bs58::encode(&owner).into_string());
+    }
+
+    #[test]
+    fn resolve_sns_rejects_program_owned_names() {
+        // Tokenized domain: the registry owner is a PDA nobody can sign for.
+        let pda = key_with_curve(false);
+        let err = resolve_sns(&mock_record(&pda, Some(SNS_PROGRAM)), "example.sol").unwrap_err();
+        assert!(err.to_string().contains("program account"), "{err}");
+        assert!(resolve_sns(&mock_record(&pda, None), "example.sol").is_err());
+    }
+
+    #[test]
+    fn resolve_sns_rejects_account_of_another_program() {
+        let owner = key_with_curve(true);
+        let system = "11111111111111111111111111111111";
+        let err = resolve_sns(&mock_record(&owner, Some(system)), "example.sol").unwrap_err();
+        assert!(err.to_string().contains("name service program"), "{err}");
+        let token = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+        assert!(resolve_sns(&mock_record(&owner, Some(token)), "example.sol").is_err());
     }
 
     #[test]
