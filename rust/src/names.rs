@@ -219,17 +219,35 @@ mod sns_tests {
     }
 
     #[test]
+    fn hex_decode_rejects_non_ascii_without_panicking() {
+        assert_eq!(hex_decode("00ff").unwrap(), vec![0x00, 0xff]);
+        assert_eq!(hex_decode("AbCd").unwrap(), vec![0xab, 0xcd]);
+        assert!(hex_decode("aé1").is_err()); // 4 bytes, char boundary inside a pair
+        assert!(hex_decode("éé").is_err());
+        assert!(hex_decode("+1").is_err());
+        assert!(hex_decode("abc").is_err());
+    }
+
+    #[test]
     fn resolve_sns_rejects_non_sol() {
         assert!(resolve_sns("http://unused", "foo.eth").is_err());
     }
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    // `s` is a node reply: check it is hex digits before slicing by byte offset
+    // (a multi-byte character would panic on a char boundary).
+    let b = s.as_bytes();
+    if b.len() % 2 != 0 {
         return Err(Error::Env("odd-length hex".into()));
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| Error::Env(e.to_string())))
-        .collect()
+    if !b.iter().all(u8::is_ascii_hexdigit) {
+        return Err(Error::Env("invalid hex".into()));
+    }
+    Ok(b.chunks_exact(2)
+        .map(|pair| {
+            let nibble = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+            nibble(pair[0]) << 4 | nibble(pair[1])
+        })
+        .collect())
 }

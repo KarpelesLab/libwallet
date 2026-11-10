@@ -44,13 +44,11 @@ pub const NEW_ACCOUNT_SUN: u64 = 1_100_000;
 /// form java-tron prints with `visible: false`.
 pub fn parse_address(s: &str) -> Result<TronAddress> {
     let s = s.trim();
-    if s.len() == 42 && s[..2].eq_ignore_ascii_case("41") {
-        let mut raw = [0u8; 21];
-        for (i, b) in raw.iter_mut().enumerate() {
-            *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)
-                .map_err(|_| Error::Env(format!("invalid tron address {s:?}")))?;
-        }
-        return Ok(raw);
+    // ASCII-only before slicing by byte offset: a 42-byte string with a
+    // multi-byte character would otherwise panic on a char boundary.
+    if s.len() == 42 && s.is_ascii() && s[..2].eq_ignore_ascii_case("41") {
+        let raw = unhex(s).and_then(|b| TronAddress::try_from(b).ok());
+        return raw.ok_or_else(|| Error::Env(format!("invalid tron address {s:?}")));
     }
     outscript::tron::address_from_str(s).map_err(|e| Error::Env(format!("invalid tron address {s:?}: {e}")))
 }
@@ -65,11 +63,17 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Decode plain hex digits (no sign, no prefix). None for anything else —
+/// including non-ASCII input, which must not be sliced by byte offset (node
+/// replies and caller strings both land here).
 fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
+    let b = s.as_bytes();
+    if b.len() % 2 != 0 || !b.iter().all(u8::is_ascii_hexdigit) {
         return None;
     }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+    b.chunks_exact(2)
+        .map(|pair| std::str::from_utf8(pair).ok().and_then(|h| u8::from_str_radix(h, 16).ok()))
+        .collect()
 }
 
 fn endpoint(base: &str, method: &str) -> String {
@@ -408,6 +412,27 @@ mod tests {
         let e = crate::hdderive::evm_address(&pk).unwrap();
         assert!(t.starts_with('T') && t.len() == 34);
         assert_eq!(hex(&parse_address(&t).unwrap()[1..]), e[2..].to_ascii_lowercase());
+    }
+
+    #[test]
+    fn non_ascii_input_is_an_error_not_a_panic() {
+        // 42 bytes with multi-byte characters straddling the 2-byte hex pairs.
+        let s = format!("4{}", "é".repeat(20) + "a");
+        assert_eq!(s.len(), 42);
+        assert!(parse_address(&s).is_err());
+        let s = format!("é{}", "a".repeat(40));
+        assert_eq!(s.len(), 42);
+        assert!(parse_address(&s).is_err());
+        assert!(parse_address("41+614f803b6fd780986a42c78ec9c7f77e6ded13c").is_err());
+
+        // Node replies: blockID, constant_result and messages go through unhex.
+        assert_eq!(unhex("aé1"), None);
+        assert_eq!(unhex("+1"), None);
+        assert_eq!(unhex("0aFf"), Some(vec![0x0a, 0xff]));
+        assert!(parse_ref_block(&json!({ "blockID": "é".repeat(32), "block_header": { "raw_data": { "timestamp": 1 } } })).is_err());
+        assert!(parse_constant_result(&json!({ "constant_result": ["aé1"] })).is_err());
+        let bad = json!({ "result": false, "code": "X", "message": "aé1" });
+        assert!(parse_broadcast(&bad, &[0; 32]).unwrap_err().to_string().contains("aé1"));
     }
 
     #[test]
