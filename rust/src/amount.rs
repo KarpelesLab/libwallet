@@ -24,6 +24,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const MAX_AMOUNT_STRING_LEN: usize = 128;
 const MAX_SENTINEL: &str = "MAX";
+/// Largest decimal exponent (number of fractional digits) an Amount may carry,
+/// and the largest magnitude accepted for a scientific-notation exponent.
+/// Real values are tiny — token decimals top out around 36, and ERC-20 /
+/// SPL decimals are a u8 on the wire — so 255 covers every legitimate value
+/// while keeping 10^exp cheap: an unbounded exponent from untrusted input is
+/// a CPU / memory exhaustion vector (10^999999999) and wraps the integer casts
+/// below. Parsers reject anything outside `0..=MAX_EXP`; constructors clamp.
+const MAX_EXP: i64 = 255;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AmountError(pub String);
@@ -49,6 +57,27 @@ fn exp10(n: u32) -> BigInt {
     BigInt::from(10u32).pow(n)
 }
 
+/// 10^d for a difference of two in-range exponents. Exponents are bounded by
+/// [`MAX_EXP`] (sums of two by twice that), so the clamp never bites; it only
+/// guarantees the cast cannot truncate or wrap.
+fn exp10_diff(d: i64) -> BigInt {
+    exp10(d.clamp(0, 2 * MAX_EXP) as u32)
+}
+
+/// Validate an exponent read from untrusted input (string / JSON / binary).
+fn check_exp(e: i64) -> Result<i64, AmountError> {
+    if (0..=MAX_EXP).contains(&e) {
+        Ok(e)
+    } else {
+        Err(AmountError(format!("exponent {e} out of range (0..={MAX_EXP})")))
+    }
+}
+
+/// Bring a caller-supplied decimals count into the supported range.
+fn clamp_exp(e: i64) -> i64 {
+    e.clamp(0, MAX_EXP)
+}
+
 /// BigInt from an already-integral f64 (NaN/inf -> 0). Handles magnitudes
 /// beyond i64 by decomposing the float, matching Go's `big.Float.Int`.
 fn bigint_from_f64_trunc(f: f64) -> BigInt {
@@ -60,17 +89,17 @@ fn bigint_from_f64_trunc(f: f64) -> BigInt {
 
 impl Amount {
     pub fn new(value: i64, decimals: i64) -> Amount {
-        Amount { value: Some(BigInt::from(value)), exp: decimals, is_max: false }
+        Amount { value: Some(BigInt::from(value)), exp: clamp_exp(decimals), is_max: false }
     }
 
     pub fn new_raw(value: BigInt, decimals: i64) -> Amount {
-        Amount { value: Some(value), exp: decimals, is_max: false }
+        Amount { value: Some(value), exp: clamp_exp(decimals), is_max: false }
     }
 
     /// The MAX sentinel with the given decimals (inherited by the resolved
     /// amount). Value is None until [`set_max_resolved`](Amount::set_max_resolved).
     pub fn new_max(decimals: i64) -> Amount {
-        Amount { value: None, exp: decimals, is_max: true }
+        Amount { value: None, exp: clamp_exp(decimals), is_max: true }
     }
 
     /// Port of Go `NewAmountFromFloat64(f, exp)`: store `f` with `exp` decimal
@@ -92,6 +121,7 @@ impl Amount {
         if decimals < 5 {
             decimals = 5;
         }
+        let decimals = clamp_exp(decimals);
         let scaled = f * 10f64.powi(decimals as i32);
         // Round half away from zero (Go adds 0.5*sign then truncates to int).
         let rounded = if scaled >= 0.0 {
@@ -120,6 +150,11 @@ impl Amount {
             let v = s[pos + 1..]
                 .parse::<i64>()
                 .map_err(|e| AmountError(e.to_string()))?;
+            // Bounded before it is negated or used as a power of ten: no
+            // i64::MIN negation, no u32 truncation, no gigantic 10^v.
+            if !(-MAX_EXP..=MAX_EXP).contains(&v) {
+                return Err(AmountError(format!("exponent {v} out of range (max {MAX_EXP})")));
+            }
             extra_e = -v;
             s = &s[..pos];
         }
@@ -129,10 +164,10 @@ impl Amount {
                 let mut v = parse_bigint_base10(s)?;
                 let mut e = extra_e;
                 if e < 0 {
-                    v *= exp10((-e) as u32);
+                    v *= exp10_diff(-e);
                     e = 0;
                 }
-                Ok(Amount { value: Some(v), exp: e, is_max: false })
+                Ok(Amount { value: Some(v), exp: check_exp(e)?, is_max: false })
             }
             Some(pos) => {
                 let mut digits = String::with_capacity(s.len() - 1);
@@ -141,10 +176,10 @@ impl Amount {
                 let mut v = parse_bigint_base10(&digits)?;
                 let mut e = (s.len() - pos - 1) as i64 + extra_e;
                 if e < 0 {
-                    v *= exp10((-e) as u32);
+                    v *= exp10_diff(-e);
                     e = 0;
                 }
-                Ok(Amount { value: Some(v), exp: e, is_max: false })
+                Ok(Amount { value: Some(v), exp: check_exp(e)?, is_max: false })
             }
         }
     }
@@ -192,19 +227,25 @@ impl Amount {
 
     /// Rescale to `e` decimals in place, rounding half away from zero when
     /// reducing precision. Matches Go `SetExp` exactly.
+    ///
+    /// `e` is clamped to the supported `0..=MAX_EXP` range.
     pub fn set_exp(&mut self, e: i64) -> &mut Amount {
+        self.rescale(clamp_exp(e))
+    }
+
+    /// [`set_exp`](Amount::set_exp) without the clamp, for the intermediate
+    /// scales of mul/div (a sum of two in-range exponents).
+    fn rescale(&mut self, e: i64) -> &mut Amount {
         if self.exp == e {
             return self;
         }
         let value = self.value.as_mut().expect("set_exp on unresolved MAX");
         if e > self.exp {
-            let add = (e - self.exp) as u32;
-            *value *= exp10(add);
+            *value *= exp10_diff(e - self.exp);
             self.exp = e;
             return self;
         }
-        let sub = (self.exp - e) as u32;
-        let e10 = exp10(sub);
+        let e10 = exp10_diff(self.exp - e);
         let mut half = &e10 / BigInt::from(2); // truncates toward zero (matches big.Int.Quo)
         if value.sign() == Sign::Minus {
             half = -half;
@@ -241,13 +282,13 @@ impl Amount {
         let target = self.exp;
         self.value = Some(x.require_value() * y.require_value());
         self.exp = x.exp + y.exp;
-        self.set_exp(target)
+        self.rescale(target)
     }
 
     /// a = x / y (integer quotient after rescaling x to y.exp + a.exp).
     pub fn div(&mut self, x: &Amount, y: &Amount) -> &mut Amount {
         let mut xd = x.clone();
-        xd.set_exp(y.exp + self.exp);
+        xd.rescale(y.exp + self.exp);
         self.value = Some(xd.require_value() / y.require_value());
         self
     }
@@ -266,7 +307,7 @@ impl Amount {
             Some(rest) => ("-", rest),
             None => ("", s.as_str()),
         };
-        let exp = self.exp as usize;
+        let exp = usize::try_from(self.exp).unwrap_or(0);
         if mag.len() > exp {
             let p = mag.len() - exp;
             format!("{neg}{}.{}", &mag[..p], &mag[p..])
@@ -337,7 +378,7 @@ impl Amount {
             }
             v
         };
-        Ok(Amount { value: Some(value), exp, is_max: false })
+        Ok(Amount { value: Some(value), exp: check_exp(exp)?, is_max: false })
     }
 
     // --- JSON (serde_json::Value bridge) ----------------------------------
@@ -366,7 +407,7 @@ impl Amount {
             Value::Number(n) => Amount::from_string(&n.to_string(), 0),
             Value::Object(m) => {
                 if let (Some(Value::String(vs)), Some(e)) = (m.get("v"), m.get("e")) {
-                    let exp = json_to_i64(e)?;
+                    let exp = check_exp(json_to_i64(e)?)?;
                     if vs == MAX_SENTINEL {
                         return Ok(Amount { value: None, exp, is_max: true });
                     }
