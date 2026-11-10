@@ -105,17 +105,43 @@ fn chain_for_coin(coin: u32) -> &'static str {
     }
 }
 
-fn bitcoin_display_address(env: &Env, root: &[u8; 33], cc: &[u8; 32], script: &str) -> String {
-    let child = crate::hdderive::derive_pub(root, cc, &[0, 0]).unwrap_or(*root);
+/// Whether `pk` is a point on secp256k1. A 02/03 prefix alone proves nothing
+/// (about half of all x coordinates have no point), and nobody can sign for a
+/// key that is not one.
+fn is_secp_point(pk: &[u8; 33]) -> bool {
+    purecrypto::ec::secp256k1::AffinePoint::from_sec1(pk).is_ok()
+}
+
+/// Longest device/label string kept from a scanned export.
+const MAX_LABEL_CHARS: usize = 64;
+
+/// A scanned, device-supplied display string (device name, key name/note…)
+/// made safe to show and store: no control or bidi/invisible formatting
+/// characters, bounded length. `None` when nothing is left.
+fn clean_label(s: Option<&str>) -> Option<String> {
+    let hidden = |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+    let out: String = s?.chars().filter(|c| !hidden(*c)).take(MAX_LABEL_CHARS).collect();
+    let out = out.trim();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.to_owned())
+    }
+}
+
+/// The first receive address (m/0/0) of an account xpub. Fails — rather than
+/// falling back to some other key or script — when the child cannot be derived
+/// or the script cannot be encoded: an address shown for a key the signer does
+/// not hold is worse than no account.
+fn bitcoin_display_address(env: &Env, root: &[u8; 33], cc: &[u8; 32], script: &str) -> std::result::Result<String, String> {
+    let child = crate::hdderive::derive_pub(root, cc, &[0, 0]).map_err(|e| e.to_string())?;
     let tag = crate::models::network::fetch(env, "@")
         .ok()
         .flatten()
         .filter(|n| n.kind == "bitcoin")
         .map(|n| if n.chain_id == "bitcoin-cash" { "bitcoincash".to_owned() } else { n.chain_id })
         .unwrap_or_else(|| "bitcoin".into());
-    crate::bitcoin::address_for(&child, script, &tag)
-        .or_else(|_| crate::bitcoin::address_for(&child, script, "bitcoin"))
-        .unwrap_or_else(|_| outscript::address::encode_base58_addr(0x00, &outscript::hash::hash160(&child)))
+    crate::bitcoin::address_for(&child, script, &tag).or_else(|_| crate::bitcoin::address_for(&child, script, "bitcoin")).map_err(|e| e.to_string())
 }
 
 /// Normalize one hdkey (+ optional script wrapper) into a DiscoveredKey.
@@ -134,15 +160,15 @@ fn key_from_hdkey(env: &Env, k: &HdKey, script_hint: Option<&str>, xfp: Option<u
         chain_code: k.chain_code.map(|c| super::hex(&c)),
         script: String::new(),
         address: String::new(),
-        name: k.name.clone(),
-        note: k.note.clone(),
+        name: clean_label(k.name.as_deref()),
+        note: clean_label(k.note.as_deref()),
         reason: None,
     };
     match dk.chain.as_str() {
         "bitcoin" => {
-            let Some(root) = k.secp_key() else {
+            let Some(root) = k.secp_key().filter(is_secp_point) else {
                 dk.chain = "unsupported".into();
-                dk.reason = Some("bitcoin key is not a compressed secp256k1 key".into());
+                dk.reason = Some("bitcoin key is not a valid compressed secp256k1 key".into());
                 return dk;
             };
             let Some(cc) = k.chain_code else {
@@ -156,21 +182,36 @@ fn key_from_hdkey(env: &Env, k: &HdKey, script_hint: Option<&str>, xfp: Option<u
                 dk.reason = Some(format!("{} descriptors are not supported", dk.script));
                 return dk;
             }
-            dk.address = bitcoin_display_address(env, &root, &cc, &dk.script);
+            match bitcoin_display_address(env, &root, &cc, &dk.script) {
+                Ok(a) => dk.address = a,
+                Err(e) => {
+                    dk.chain = "unsupported".into();
+                    dk.reason = Some(format!("cannot derive the bitcoin address: {e}"));
+                    return dk;
+                }
+            }
         }
         "ethereum" => {
-            let Some(pk) = k.secp_key() else {
+            let Some(pk) = k.secp_key().filter(is_secp_point) else {
                 dk.chain = "unsupported".into();
-                dk.reason = Some("ethereum key is not a compressed secp256k1 key".into());
+                dk.reason = Some("ethereum key is not a valid compressed secp256k1 key".into());
                 return dk;
             };
             // An account-level xpub (chain code present, depth 3) addresses …/0/0;
-            // a leaf key is its own address.
+            // a leaf key is its own address. No fallback to the parent key or an
+            // empty address when that fails.
             let leaf = match k.chain_code {
-                Some(cc) if origin.components.len() <= 3 => crate::hdderive::derive_pub(&pk, &cc, &[0, 0]).unwrap_or(pk),
-                _ => pk,
+                Some(cc) if origin.components.len() <= 3 => crate::hdderive::derive_pub(&pk, &cc, &[0, 0]).map_err(|e| e.to_string()),
+                _ => Ok(pk),
             };
-            dk.address = crate::hdderive::evm_address(&leaf).unwrap_or_default();
+            match leaf.and_then(|l| crate::hdderive::evm_address(&l).map_err(|e| e.to_string())) {
+                Ok(a) => dk.address = a,
+                Err(e) => {
+                    dk.chain = "unsupported".into();
+                    dk.reason = Some(format!("cannot derive the ethereum address: {e}"));
+                    return dk;
+                }
+            }
         }
         "solana" => {
             let Some(pk) = k.ed25519_key() else {
@@ -237,6 +278,9 @@ pub fn parse_slip132(s: &str) -> Result<Slip132> {
     let pubkey: [u8; 33] = payload[45..78].try_into().unwrap();
     if !matches!(pubkey[0], 2 | 3) {
         return Err(Error::Env("extended key: not a public key".into()));
+    }
+    if !is_secp_point(&pubkey) {
+        return Err(Error::Env("extended key: public key is not a point on secp256k1".into()));
     }
     Ok(Slip132 {
         pubkey,
@@ -352,8 +396,8 @@ fn parse_coldcard_json(env: &Env, j: &Json) -> Result<Option<Export>> {
             _ => String::new(),
         };
         let mut dk = key_from_extended(env, &format!("{origin}{xpub}"), Some(script))?;
-        if let Some(name) = entry.get("name").and_then(Json::as_str) {
-            dk.note = Some(name.to_owned());
+        if let Some(name) = clean_label(entry.get("name").and_then(Json::as_str)) {
+            dk.note = Some(name);
         }
         keys.push(dk);
     }
@@ -370,6 +414,16 @@ fn parse_coldcard_json(env: &Env, j: &Json) -> Result<Option<Export>> {
     }))
 }
 
+/// A signer export carries public keys only. An hdkey flagged `is-private`
+/// holds secret key material: refuse the whole export rather than echo that
+/// material back to the host as a "pubkey" or import around it.
+fn refuse_private<'a>(keys: impl IntoIterator<Item = &'a HdKey>) -> Result<()> {
+    if keys.into_iter().any(|k| k.is_private) {
+        return Err(Error::Env("export contains a PRIVATE key (hdkey is-private): refusing to import — a signer must only ever show public keys".into()));
+    }
+    Ok(())
+}
+
 /// Parse a complete payload into an [`Export`].
 pub fn parse(env: &Env, payload: &Payload) -> Result<Export> {
     match payload {
@@ -378,17 +432,19 @@ pub fn parse(env: &Env, payload: &Payload) -> Result<Export> {
             match ur_type.as_str() {
                 registry::UR_MULTI_ACCOUNTS => {
                     let m = MultiAccounts::from_cbor(&v)?;
+                    refuse_private(&m.keys)?;
                     Ok(Export {
                         format: registry::UR_MULTI_ACCOUNTS.into(),
                         master_fingerprint: Some(fp_hex(m.master_fingerprint)),
-                        device: m.device.clone(),
-                        device_id: m.device_id.clone(),
-                        version: m.version.clone(),
+                        device: clean_label(m.device.as_deref()),
+                        device_id: clean_label(m.device_id.as_deref()),
+                        version: clean_label(m.version.as_deref()),
                         keys: m.keys.iter().map(|k| key_from_hdkey(env, k, None, Some(m.master_fingerprint))).collect(),
                     })
                 }
                 registry::UR_ACCOUNT => {
                     let a = CryptoAccount::from_cbor(&v)?;
+                    refuse_private(a.outputs.iter().map(|o| &o.key))?;
                     Ok(Export {
                         format: registry::UR_ACCOUNT.into(),
                         master_fingerprint: Some(fp_hex(a.master_fingerprint)),
@@ -398,6 +454,7 @@ pub fn parse(env: &Env, payload: &Payload) -> Result<Export> {
                 }
                 registry::UR_HDKEY => {
                     let k = HdKey::from_cbor(&v)?;
+                    refuse_private([&k])?;
                     Ok(Export {
                         format: registry::UR_HDKEY.into(),
                         master_fingerprint: k.master_fingerprint().map(fp_hex),
@@ -441,7 +498,8 @@ pub fn parse_text(env: &Env, text: &str) -> Result<Export> {
         if line.starts_with('[') || is_extended_key(bare) {
             keys.push(key_from_extended(env, line, None)?);
         } else {
-            return Err(Error::Env(format!("unrecognized key payload: {}…", &line[..line.len().min(24)])));
+            // By characters: a byte-offset slice can land inside a multi-byte one.
+            return Err(Error::Env(format!("unrecognized key payload: {}…", line.chars().take(24).collect::<String>())));
         }
     }
     if keys.is_empty() {
@@ -683,6 +741,109 @@ mod tests {
         let info = account_key_info(&env, &a.id).unwrap().unwrap();
         assert_eq!((info.master_fingerprint.as_deref(), info.script.as_str()), (Some("73c5da0a"), "p2wpkh"));
         assert_eq!(wallet_signer(&env, &imported.wallet.id).unwrap().unwrap().format, "json");
+    }
+
+    #[test]
+    fn unrecognized_non_ascii_payload_is_an_error_not_a_panic() {
+        let env = env();
+        // 12 three-byte characters: byte 24 is a boundary, byte 24 of the
+        // shifted one below is not (AG-05).
+        for t in ["\u{20ac}".repeat(12), format!("a{}", "\u{20ac}".repeat(12)), "\u{1f600}".repeat(9), "x".into()] {
+            let e = parse_text(&env, &t).unwrap_err().to_string();
+            assert!(e.contains("unrecognized key payload"), "{e}");
+            assert!(parse(&env, &Payload::Raw(t.clone())).is_err());
+        }
+    }
+
+    #[test]
+    fn private_and_invalid_keys_are_not_imported() {
+        let env = env();
+        let x = parse_slip132(XPUB84).unwrap();
+        let good = |coin: u32| HdKey {
+            key_data: x.pubkey.to_vec(),
+            chain_code: Some(x.chain_code),
+            origin: Some(KeyPath { components: vec![44 | HARDENED, coin | HARDENED, HARDENED], source_fingerprint: Some(1), depth: Some(3) }),
+            ..Default::default()
+        };
+        let ur = |t: &str, v: ciborium::value::Value| Payload::Ur { ur_type: t.into(), cbor: super::super::cbor::to_bytes(&v).unwrap() };
+
+        // is-private anywhere in the export refuses all of it, in every UR type.
+        let private = HdKey { is_private: true, ..good(0) };
+        let m = MultiAccounts { master_fingerprint: 1, keys: vec![good(0), private.clone()], ..Default::default() };
+        let acct = CryptoAccount { master_fingerprint: 1, outputs: vec![registry::OutputDescriptor { script: "p2wpkh".into(), key: private.clone() }] };
+        for p in [ur(registry::UR_MULTI_ACCOUNTS, m.to_cbor()), ur(registry::UR_ACCOUNT, acct.to_cbor()), ur(registry::UR_HDKEY, private.to_cbor())] {
+            let e = parse(&env, &p).unwrap_err().to_string();
+            assert!(e.contains("PRIVATE"), "{e}");
+        }
+
+        // 02 || x with no point on the curve: unsupported, no address — for
+        // bitcoin and ethereum alike (it used to get a plausible address).
+        let mut off = [0u8; 33];
+        off[0] = 2;
+        let off = (0u8..=255).map(|b| { let mut k = off; k[32] = b; k }).find(|k| !is_secp_point(k)).expect("an x with no point");
+        assert!(is_secp_point(&x.pubkey));
+        let bad = |coin: u32| HdKey { key_data: off.to_vec(), ..good(coin) };
+        let m = MultiAccounts { master_fingerprint: 1, keys: vec![bad(0), bad(60), HdKey { chain_code: None, ..bad(60) }, good(0), good(60)], ..Default::default() };
+        let e = parse(&env, &ur(registry::UR_MULTI_ACCOUNTS, m.to_cbor())).unwrap();
+        for k in &e.keys[..3] {
+            assert_eq!((k.chain.as_str(), k.address.as_str()), ("unsupported", ""), "{k:?}");
+            assert!(k.reason.as_deref().unwrap().contains("not a valid compressed secp256k1 key"));
+        }
+        assert_eq!((e.keys[3].chain.as_str(), e.keys[4].chain.as_str()), ("bitcoin", "ethereum"));
+        assert!(!e.keys[3].address.is_empty() && e.keys[4].address.starts_with("0x"));
+        let imported = import(&env, &e, &ImportOptions::default()).unwrap();
+        assert_eq!((imported.accounts.len(), imported.skipped.len()), (2, 3));
+
+        // The same key as an xpub string: rejected by parse_slip132.
+        let mut payload = bs58::decode(XPUB84).into_vec().unwrap();
+        payload.truncate(78);
+        payload[45..78].copy_from_slice(&off);
+        let ck = purecrypto::hash::sha256(&purecrypto::hash::sha256(&payload));
+        payload.extend_from_slice(&ck[..4]);
+        let forged = bs58::encode(&payload).into_string();
+        assert!(parse_slip132(&forged).err().unwrap().to_string().contains("not a point"));
+        assert!(parse_text(&env, &forged).is_err());
+    }
+
+    #[test]
+    fn every_supported_script_still_gets_its_own_address() {
+        // The display address no longer falls back to p2pkh when a script
+        // fails to encode, so each supported script must encode.
+        let env = env();
+        for (desc, prefix) in [("wpkh", "bc1q"), ("pkh", "1"), ("tr", "bc1p")] {
+            let e = parse_text(&env, &format!("{desc}([73c5da0a/84h/0h/0h]{XPUB84}/0/*)")).unwrap();
+            assert_eq!(e.keys[0].chain, "bitcoin", "{desc}: {:?}", e.keys[0].reason);
+            assert!(e.keys[0].address.starts_with(prefix), "{desc}: {}", e.keys[0].address);
+        }
+        let e = parse_text(&env, &format!("sh(wpkh([73c5da0a/49h/0h/0h]{XPUB84}/0/*))")).unwrap();
+        assert!(e.keys[0].chain == "bitcoin" && e.keys[0].address.starts_with('3'), "{:?}", e.keys[0]);
+    }
+
+    #[test]
+    fn scanned_labels_are_sanitized() {
+        let env = env();
+        assert_eq!(clean_label(Some(" Key\u{202e}stone\n\x1b[31m 3\0 ")).as_deref(), Some("Keystone[31m 3"));
+        assert_eq!(clean_label(Some("\n\t\u{200b}")), None);
+        assert_eq!(clean_label(None), None);
+        assert_eq!(clean_label(Some(&"\u{20ac}".repeat(500))).unwrap().chars().count(), MAX_LABEL_CHARS);
+
+        let x = parse_slip132(XPUB84).unwrap();
+        let k = HdKey {
+            key_data: x.pubkey.to_vec(),
+            chain_code: Some(x.chain_code),
+            origin: Some(KeyPath::parse("m/84'/0'/0'").unwrap()),
+            name: Some("evil\r\nname".into()),
+            note: Some("n".repeat(1000)),
+            ..Default::default()
+        };
+        let m = MultiAccounts { master_fingerprint: 1, keys: vec![k], device: Some("Dev\u{7}ice\n".into()), device_id: Some("\0".into()), version: Some("1.0\t".into()) };
+        let cbor = super::super::cbor::to_bytes(&m.to_cbor()).unwrap();
+        let e = parse(&env, &Payload::Ur { ur_type: registry::UR_MULTI_ACCOUNTS.into(), cbor }).unwrap();
+        assert_eq!((e.device.as_deref(), e.device_id.as_deref(), e.version.as_deref()), (Some("Device"), None, Some("1.0")));
+        assert_eq!(e.keys[0].name.as_deref(), Some("evilname"));
+        assert_eq!(e.keys[0].note.as_deref().map(str::len), Some(MAX_LABEL_CHARS));
+        let imported = import(&env, &e, &ImportOptions::default()).unwrap();
+        assert_eq!(imported.wallet.name, "Device");
     }
 
     #[test]
