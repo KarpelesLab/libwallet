@@ -947,6 +947,54 @@ void main() {
   // Host runs have no entitled keychain, so these use the password backend;
   // the secure backend is covered by the iOS/Android integration tests.
 
+  group('Ledger', () {
+    test('list reports the transports of this build', () async {
+      final l = await client.ledger.list();
+      expect(l.transports, contains('bridge'));
+      expect(l.transports, contains(l.defaultTransport));
+    });
+
+    test('bridge relays APDUs to the app and back', () async {
+      // The "device": answers GET_APP_AND_VERSION as the Ethereum app would.
+      final seen = <Uint8List>[];
+      final sub = client.ledger.bridge((apdu) async {
+        seen.add(apdu);
+        return Uint8List.fromList(
+            [1, 8, ...'Ethereum'.codeUnits, 5, ...'1.2.3'.codeUnits, 0x90, 0x00]);
+      });
+      try {
+        final info =
+            await client.ledger.info(link: const LedgerLink.bridge());
+        expect(info.appName, 'Ethereum');
+        expect(info.appVersion, '1.2.3');
+        expect(info.dashboard, isFalse);
+        expect(seen.single, [0xb0, 0x01, 0x00, 0x00, 0x00]);
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('a failing bridge fails the call, with the reason', () async {
+      final sub = client.ledger
+          .bridge((apdu) async => throw StateError('bluetooth is off'));
+      try {
+        await expectLater(
+            client.ledger.info(link: const LedgerLink.bridge()),
+            throwsA(isA<LibwalletException>()
+                .having((e) => e.toString(), 'message', contains('bluetooth is off'))));
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('signing needs an account on a Ledger wallet', () async {
+      await expectLater(
+          client.ledger.signMessage(
+              account: 'acct-nope', message: Uint8List.fromList([1])),
+          throwsA(isA<LibwalletException>()));
+    });
+  });
+
   group('Vault', () {
     const vaultPw = 'vault password 1';
 

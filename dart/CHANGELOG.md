@@ -1,3 +1,19 @@
+## Unreleased
+
+- **Ledger hardware wallets (`client.ledger`).** Use a Ledger device as the
+  signer for Ethereum, Bitcoin and Solana accounts: `getKeys()` /
+  `importKeys()` read the open app's keys into a `Protocol: ledger` wallet,
+  `signTransaction()` and `signMessage()` sign on the device, `showAddress()`
+  verifies an address on its screen. libwallet opens USB itself on desktop;
+  on iOS and Android the app relays the APDUs with `client.ledger.bridge()`.
+  A signature is only returned when it verifies under the account's key over
+  what was requested. See `docs/ledger.md`.
+- **WalletConnect events.** `walletConnectProposals` and
+  `walletConnectRequests` now receive the proposals and requests the backend
+  emits (the event names and payload shape did not match before).
+- **Rejected Web3 requests** now fail with the EIP-1193 code 4001 instead of
+  being reported to the dApp as a success.
+
 ## 0.5.8
 
 - **secp256k1 MPC wallets sign with any threshold+1 shares.** A 2-of-3

@@ -110,6 +110,16 @@ export 'src/models/swap_quote.dart'
 export 'src/models/unsigned_transaction.dart' show UnsignedTransaction;
 export 'src/models/wc_session.dart'
     show WcSession, WcSessionProposal, WcSessionRequest;
+export 'src/api/ledger_api.dart'
+    show
+        LedgerApi,
+        LedgerLink,
+        LedgerDevice,
+        LedgerDevices,
+        LedgerInfo,
+        LedgerKeys,
+        LedgerImportResult,
+        LedgerSignedTransaction;
 export 'src/api/airgap_api.dart'
     show
         AirgapApi,
