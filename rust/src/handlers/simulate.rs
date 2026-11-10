@@ -21,8 +21,11 @@ use super::{ApiError, ApiResult};
 // keccak256("Transfer(address,address,uint256)") / ("Approval(...)").
 const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const APPROVAL_TOPIC: &str = "0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925";
-const ERC20_TRANSFER_SELECTOR: &str = "a9059cbb";
-const ERC20_APPROVE_SELECTOR: &str = "095ea7b3";
+// 4-byte selectors, matched against the decoded calldata.
+const ERC20_TRANSFER_SELECTOR: [u8; 4] = [0xa9, 0x05, 0x9c, 0xbb]; // transfer(address,uint256)
+const ERC20_APPROVE_SELECTOR: [u8; 4] = [0x09, 0x5e, 0xa7, 0xb3]; // approve(address,uint256)
+const ERC20_INCREASE_ALLOWANCE_SELECTOR: [u8; 4] = [0x39, 0x50, 0x93, 0x51]; // increaseAllowance(address,uint256)
+const SET_APPROVAL_FOR_ALL_SELECTOR: [u8; 4] = [0xa2, 0x2c, 0xb4, 0x65]; // setApprovalForAll(address,bool)
 
 /// `Transaction:simulate` {tx fields, RPC?}. One async implementation shared by
 /// native (`crate::rt::block_on`) and the browser (awaited in
@@ -502,8 +505,11 @@ fn effect_from_decoded(from: &str, method: &str, args: &Value) -> Option<Value> 
 
 /// Recognize the ERC-20 transfer/approve shape and a plain native transfer.
 /// Returns (decodedMethod, decodedArgs).
+///
+/// The selector is matched on the decoded calldata bytes — the same bytes the
+/// signer signs — so the spelling of the hex (`0x095EA7B3…`) cannot hide a call.
 fn decode_evm_call(call: &super::transaction::EvmCall<'_>) -> (String, Value) {
-    let data = hex_lower(&call.data);
+    let data = call.data.as_slice();
     let to = call.to.as_str();
     if data.is_empty() {
         // The amount shown is the value the call carries (tx.value, else
@@ -513,33 +519,27 @@ fn decode_evm_call(call: &super::transaction::EvmCall<'_>) -> (String, Value) {
         }
         return (String::new(), Value::Null);
     }
-    if data.len() < 8 {
-        return ("unknown".into(), json!({ "selector": format!("0x{data}") }));
-    }
-    let selector = &data[..8];
-    if selector == ERC20_TRANSFER_SELECTOR {
-        if let Some((addr, amt)) = decode_erc20_args(&data[8..]) {
+    let Some((selector, args)) = data.split_first_chunk::<4>() else {
+        return ("unknown".into(), json!({ "selector": format!("0x{}", hex_lower(data)) }));
+    };
+    if *selector == ERC20_TRANSFER_SELECTOR {
+        if let Some((addr, amt)) = decode_erc20_args(args) {
             return ("erc20_transfer".into(), json!({ "token": to, "to": addr, "amount": amt.to_string() }));
         }
-    } else if selector == ERC20_APPROVE_SELECTOR {
-        if let Some((addr, amt)) = decode_erc20_args(&data[8..]) {
+    } else if *selector == ERC20_APPROVE_SELECTOR {
+        if let Some((addr, amt)) = decode_erc20_args(args) {
             return ("erc20_approve".into(), json!({ "token": to, "spender": addr, "amount": amt.to_string() }));
         }
     }
-    ("unknown".into(), json!({ "selector": format!("0x{selector}"), "data": format!("0x{data}") }))
+    ("unknown".into(), json!({ "selector": format!("0x{}", hex_lower(selector)), "data": format!("0x{}", hex_lower(data)) }))
 }
 
-/// Parse a 64-byte ABI-encoded (address, uint256).
-fn decode_erc20_args(hex_args: &str) -> Option<(String, BigInt)> {
-    if hex_args.len() < 128 {
-        return None;
-    }
-    let addr_hex = &hex_args[24..64];
-    if addr_hex.chars().any(|c| !c.is_ascii_hexdigit()) {
-        return None;
-    }
-    let amt = BigInt::parse_bytes(hex_args[64..128].as_bytes(), 16)?;
-    Some((format!("0x{addr_hex}"), amt))
+/// Parse a 64-byte ABI-encoded (address, uint256): the address as lowercase
+/// `0x`-hex, the second word as an unsigned integer.
+fn decode_erc20_args(args: &[u8]) -> Option<(String, BigInt)> {
+    let addr = args.get(12..32)?;
+    let amt = BigInt::from_bytes_be(num_bigint::Sign::Plus, args.get(32..64)?);
+    Some((format!("0x{}", hex_lower(addr)), amt))
 }
 
 /// Decode a callTracer revertReason blob (`Error(string)` = 0x08c379a0).
@@ -636,15 +636,34 @@ async fn evm_warnings(rpc: &str, tx: &Value, call: &super::transaction::EvmCall<
         }));
     }
 
-    if data_hex.len() >= 8 + 128 && &data_hex[..8] == ERC20_APPROVE_SELECTOR {
-        if let Some((_, amount)) = decode_erc20_args(&data_hex[8..]) {
-            // Unlimited = top bit set (> 2^255).
-            if amount >= (BigInt::from(1) << 255) {
+    // Approval-shaped calls, matched on the calldata bytes. `(address, word)`:
+    // approve / increaseAllowance carry an amount, setApprovalForAll a bool.
+    let unlimited = json!({
+        "code": "erc20_approve_unlimited",
+        "severity": "warn",
+        "message": "this transaction grants an unlimited allowance to the spender — a compromised or malicious spender contract can drain the entire token balance at any time",
+        "field": "amount",
+    });
+    if let Some((selector, args)) = call.data.split_first_chunk::<4>() {
+        if let Some((_, word)) = decode_erc20_args(args) {
+            // Unlimited = top bit set (>= 2^255).
+            let is_unlimited = word >= (BigInt::from(1) << 255);
+            let grants = *selector == ERC20_APPROVE_SELECTOR || *selector == ERC20_INCREASE_ALLOWANCE_SELECTOR;
+            if grants && is_unlimited {
+                out.push(unlimited);
+            } else if *selector == ERC20_INCREASE_ALLOWANCE_SELECTOR {
                 out.push(json!({
-                    "code": "erc20_approve_unlimited",
+                    "code": "erc20_increase_allowance",
                     "severity": "warn",
-                    "message": "this transaction grants an unlimited allowance to the spender — a compromised or malicious spender contract can drain the entire token balance at any time",
+                    "message": "this transaction raises the allowance of the spender — it can move that many more of your tokens at any time",
                     "field": "amount",
+                }));
+            } else if *selector == SET_APPROVAL_FOR_ALL_SELECTOR && word.sign() == num_bigint::Sign::Plus {
+                out.push(json!({
+                    "code": "set_approval_for_all",
+                    "severity": "warn",
+                    "message": "this transaction lets the operator move every token of this collection you hold, now and in the future — a compromised or malicious operator can take them all at any time",
+                    "field": "data",
                 }));
             }
         }
@@ -798,6 +817,51 @@ mod tests {
         assert!(reqs.is_empty(), "{reqs:?}");
         assert_eq!(out["willRevert"], true);
         assert!(out["revertReason"].as_str().unwrap().contains("erc20_transfer requires"), "{out}");
+    }
+
+    // Audit M6: selectors are matched on the calldata bytes, so uppercase hex
+    // (which the signer accepts) decodes and warns like lowercase; and the
+    // other approval-shaped calls warn too.
+    #[test]
+    fn simulate_evm_matches_selectors_on_bytes_and_warns_on_approvals() {
+        let env = Env::init_memory().unwrap();
+        let to = "0x00000000000000000000000000000000000000bb";
+        let sim = |data: String| {
+            let (rpc, _) = mock_rpc_log(r#""0x""#);
+            simulate(&env, &json!({ "type": "evm", "to": to, "data": data, "RPC": rpc })).unwrap()
+        };
+        let codes = |out: &Value| -> Vec<String> {
+            out["warnings"].as_array().map(|w| w.iter().map(|x| x["code"].as_str().unwrap().to_owned()).collect()).unwrap_or_default()
+        };
+        let spender = format!("{:0>64}", "aa");
+        let max = "f".repeat(64);
+        let word = |hex: &str| format!("{hex:0>64}");
+
+        for approve in ["0x095ea7b3", "0x095EA7B3"] {
+            let out = sim(format!("{approve}{spender}{}", max.to_uppercase()));
+            assert_eq!(out["decodedMethod"], "erc20_approve", "{out}");
+            assert_eq!(out["decodedArgs"]["spender"], "0x00000000000000000000000000000000000000aa");
+            assert_eq!(codes(&out), ["erc20_approve_unlimited"], "{out}");
+        }
+        let out = sim(format!("0xA9059CBB{spender}{}", word("3E8")));
+        assert_eq!(out["decodedMethod"], "erc20_transfer", "{out}");
+        assert_eq!(out["decodedArgs"]["amount"], "1000");
+
+        // A bounded approve doesn't warn; increaseAllowance always does.
+        assert!(codes(&sim(format!("0x095ea7b3{spender}{}", word("3e8")))).is_empty());
+        assert_eq!(codes(&sim(format!("0x39509351{spender}{}", word("3e8")))), ["erc20_increase_allowance"]);
+        assert_eq!(codes(&sim(format!("0x39509351{spender}{max}"))), ["erc20_approve_unlimited"]);
+        // setApprovalForAll(operator, true) warns; revoking (false) doesn't.
+        assert_eq!(codes(&sim(format!("0xA22CB465{spender}{}", word("1")))), ["set_approval_for_all"]);
+        assert!(codes(&sim(format!("0xa22cb465{spender}{}", word("0")))).is_empty());
+
+        // Short / unknown calldata is "unknown", in canonical lowercase.
+        let out = sim("0xDEAD".into());
+        assert_eq!(out["decodedMethod"], "unknown");
+        assert_eq!(out["decodedArgs"]["selector"], "0xdead");
+        let out = sim("0xDEADBEEF00".into());
+        assert_eq!(out["decodedArgs"]["selector"], "0xdeadbeef");
+        assert_eq!(out["decodedArgs"]["data"], "0xdeadbeef00");
     }
 
     #[test]
