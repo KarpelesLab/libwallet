@@ -206,6 +206,20 @@ pub fn sign_request(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "account not found"))?;
     let rpc = rpc_from_params(env, params, &account.kind)?;
     let framing = framing_from_params(params)?;
+    // The EVM chain id is the signature's replay domain: it is pinned from the
+    // Network model, never asked of the node. With an explicit `RPC` there is no
+    // Network to vouch for the chain, so the caller must supply chainId itself.
+    let pinned;
+    let tx = if account.kind == "ethereum" && rpc.is_some() && str_param(params, "RPC").is_none() {
+        let mut p = json!({ "Transaction": tx });
+        if let Some(net) = str_param(params, "Network") {
+            p["Network"] = json!(net);
+        }
+        pinned = super::account::evm_pin_chain_id(env, &p)?;
+        &pinned["Transaction"]
+    } else {
+        tx
+    };
     let built = airgap::sign::build_request(env, account_id, tx, &framing, rpc.as_deref()).map_err(bad)?;
     let mut j = serde_json::to_value(&built).unwrap();
     j["count"] = json!(built.parts.len());

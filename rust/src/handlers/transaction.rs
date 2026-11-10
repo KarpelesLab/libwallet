@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 use crate::sign::KeyDescription;
 use crate::Env;
 
+#[cfg(test)]
+use super::simulate::hex_bytes_strict as decode_hex;
+use super::simulate::{evm_call, EvmCall};
 use super::{ApiError, ApiResult};
 
 pub fn route(env: &Env, verb: &str, params: &Value) -> ApiResult {
@@ -360,49 +363,6 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     record.raw = format!("0x{raw_hex}"); // return 0x-hex raw to the host
     Ok(serde_json::to_value(&record).unwrap())
-}
-
-/// The call an EVM `Transaction` makes: recipient, native value (wei) and
-/// calldata. `value_field` is the tx field the value was read from.
-pub(crate) struct EvmCall<'a> {
-    pub to: String,
-    pub value: BigInt,
-    pub value_field: Option<&'a Value>,
-    pub data: Vec<u8>,
-}
-
-/// Derive the `(to, value, data)` an EVM `Transaction` executes. The one place
-/// this is decided, shared by `Transaction:signAndSend` (what is signed) and
-/// `Transaction:simulate` (what is previewed) so the two cannot disagree:
-///   - value (wei) = the `value` significand, else the `amount` significand,
-///     else 0; an `erc20_transfer` always carries 0 (its amount is in the
-///     calldata);
-///   - data = the `0x`-prefixed hex `data`, required for an `erc20_transfer`.
-pub(crate) fn evm_call(tx: &Value) -> Result<EvmCall<'_>, ApiError> {
-    let is_erc20 = tx.get("type").and_then(Value::as_str) == Some("erc20_transfer");
-    let (value, value_field) = match [tx.get("value"), tx.get("amount")]
-        .into_iter()
-        .flatten()
-        .find_map(|f| amount_significand(Some(f)).map(|v| (v, f)))
-    {
-        Some((v, f)) if !is_erc20 => (v, Some(f)),
-        _ => (BigInt::from(0), None),
-    };
-    if value.sign() == num_bigint::Sign::Minus {
-        return Err(ApiError::new(400, "value must not be negative"));
-    }
-    let data = match tx.get("data").and_then(Value::as_str) {
-        Some(h) if !h.is_empty() => {
-            let h = h.strip_prefix("0x").ok_or_else(|| ApiError::new(400, "data must be 0x-prefixed"))?;
-            decode_hex(h)?
-        }
-        _ => Vec::new(),
-    };
-    if is_erc20 && data.is_empty() {
-        return Err(ApiError::new(400, "erc20_transfer requires encoded Data (0x transfer calldata)"));
-    }
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_string();
-    Ok(EvmCall { to, value, value_field, data })
 }
 
 /// Solana `Transaction:signAndSend` (Go `signAndSendSolana`): build the unsigned
@@ -764,21 +724,6 @@ fn rpc_hex_bigint_dec(rpc: &str, method: &str, params: Value) -> Result<String, 
     let hex = hex.strip_prefix("0x").unwrap_or(hex);
     let n = BigInt::parse_bytes(hex.as_bytes(), 16).ok_or_else(|| ApiError::new(502, format!("{method}: bad hex {hex}")))?;
     Ok(n.to_string())
-}
-
-fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
-    if s.len() % 2 != 0 {
-        return Err(ApiError::new(400, "odd-length hex"));
-    }
-    // Hex digits only — which also keeps the two-byte slices below on
-    // character boundaries (a non-ASCII string would panic there).
-    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(ApiError::new(400, "bad hex"));
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ApiError::new(400, "bad hex")))
-        .collect()
 }
 
 #[cfg(test)]

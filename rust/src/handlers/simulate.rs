@@ -298,7 +298,7 @@ async fn simulate_evm(rpc: &str, tx: &Value) -> Value {
     // (to, value, data) exactly as Transaction:signAndSend derives them — the
     // preview must be of the call that would be signed. A tx the signer would
     // refuse is reported as failing, with the signer's reason.
-    let evm_call = match super::transaction::evm_call(tx) {
+    let evm_call = match evm_call(tx) {
         Ok(c) => c,
         Err(e) => return json!({ "chain": "evm", "willRevert": true, "revertReason": e.message }),
     };
@@ -516,7 +516,7 @@ fn effect_from_decoded(from: &str, method: &str, args: &Value) -> Option<Value> 
 ///
 /// The selector is matched on the decoded calldata bytes — the same bytes the
 /// signer signs — so the spelling of the hex (`0x095EA7B3…`) cannot hide a call.
-fn decode_evm_call(call: &super::transaction::EvmCall<'_>) -> (String, Value) {
+fn decode_evm_call(call: &EvmCall<'_>) -> (String, Value) {
     let data = call.data.as_slice();
     let to = call.to.as_str();
     if data.is_empty() {
@@ -540,6 +540,66 @@ fn decode_evm_call(call: &super::transaction::EvmCall<'_>) -> (String, Value) {
         }
     }
     ("unknown".into(), json!({ "selector": format!("0x{}", hex_lower(selector)), "data": format!("0x{}", hex_lower(data)) }))
+}
+
+/// The call an EVM `Transaction` makes: recipient, native value (wei) and
+/// calldata. `value_field` is the tx field the value was read from.
+/// Lives here rather than in `transaction` (native-only) because simulate is
+/// also built for the browser.
+pub(crate) struct EvmCall<'a> {
+    pub to: String,
+    pub value: BigInt,
+    pub value_field: Option<&'a Value>,
+    pub data: Vec<u8>,
+}
+
+/// Derive the `(to, value, data)` an EVM `Transaction` executes. The one place
+/// this is decided, shared by `Transaction:signAndSend` (what is signed) and
+/// `Transaction:simulate` (what is previewed) so the two cannot disagree:
+///   - value (wei) = the `value` significand, else the `amount` significand,
+///     else 0; an `erc20_transfer` always carries 0 (its amount is in the
+///     calldata);
+///   - data = the `0x`-prefixed hex `data`, required for an `erc20_transfer`.
+pub(crate) fn evm_call(tx: &Value) -> Result<EvmCall<'_>, ApiError> {
+    let is_erc20 = tx.get("type").and_then(Value::as_str) == Some("erc20_transfer");
+    let (value, value_field) = match [tx.get("value"), tx.get("amount")]
+        .into_iter()
+        .flatten()
+        .find_map(|f| amount_bigint(Some(f)).map(|v| (v, f)))
+    {
+        Some((v, f)) if !is_erc20 => (v, Some(f)),
+        _ => (BigInt::from(0), None),
+    };
+    if value.sign() == num_bigint::Sign::Minus {
+        return Err(ApiError::new(400, "value must not be negative"));
+    }
+    let data = match tx.get("data").and_then(Value::as_str) {
+        Some(h) if !h.is_empty() => {
+            let h = h.strip_prefix("0x").ok_or_else(|| ApiError::new(400, "data must be 0x-prefixed"))?;
+            hex_bytes_strict(h)?
+        }
+        _ => Vec::new(),
+    };
+    if is_erc20 && data.is_empty() {
+        return Err(ApiError::new(400, "erc20_transfer requires encoded Data (0x transfer calldata)"));
+    }
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_string();
+    Ok(EvmCall { to, value, value_field, data })
+}
+
+/// Strict hex decode (no prefix): hex digits only, which also keeps the
+/// two-byte slices on character boundaries.
+pub(crate) fn hex_bytes_strict(s: &str) -> Result<Vec<u8>, ApiError> {
+    if s.len() % 2 != 0 {
+        return Err(ApiError::new(400, "odd-length hex"));
+    }
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::new(400, "bad hex"));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ApiError::new(400, "bad hex")))
+        .collect()
 }
 
 /// Parse a 64-byte ABI-encoded (address, uint256): the address as lowercase
@@ -628,7 +688,7 @@ fn extract_balance_changes(raw: &Value) -> Vec<Value> {
 }
 
 /// Non-blocking EVM approval warnings (recipient-is-contract, unlimited-approve).
-async fn evm_warnings(rpc: &str, tx: &Value, call: &super::transaction::EvmCall<'_>, data_hex: &str) -> Vec<Value> {
+async fn evm_warnings(rpc: &str, tx: &Value, call: &EvmCall<'_>, data_hex: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let typ = tx.get("type").and_then(Value::as_str).unwrap_or("");
     let to = call.to.as_str();

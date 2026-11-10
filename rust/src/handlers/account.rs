@@ -408,7 +408,14 @@ fn sign_tx_bitcoin(env: &Env, account: &crate::models::account::Account, params:
         outputs.push((address.to_string(), amount));
     }
 
-    let raw = crate::bitcoin::sign_transfer(env, &account.id, &unlock, &utxos, &outputs).map_err(ApiError::internal)?;
+    // With `Transaction.ChainId` the outputs must be addresses of that chain (an
+    // `ltc1q…` address on a BTC spend is refused). Without it the offline path
+    // has no chain context and the address network is auto-detected, as before.
+    let raw = match tx.get("ChainId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        Some(chain_id) => crate::bitcoin::sign_transfer_on_chain(env, &account.id, &unlock, chain_id, &utxos, &outputs)
+            .map_err(|e| ApiError::new(400, e.to_string()))?,
+        None => crate::bitcoin::sign_transfer(env, &account.id, &unlock, &utxos, &outputs).map_err(ApiError::internal)?,
+    };
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     Ok(serde_json::json!({ "raw": format!("0x{hex}") }))
 }
