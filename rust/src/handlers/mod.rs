@@ -108,12 +108,16 @@ pub(crate) fn fiat_currency(params: &Value) -> Option<&str> {
 }
 
 /// Resolve the node RPC URL for a network `kind` ("evm"/"solana"/"bitcoin"/"tron"): the
-/// `RPC` param wins; else the network [`network_for_kind`] picks. The endpoint
-/// always comes from `Network::resolved_rpc`, never a client-supplied URL.
+/// `RPC` param wins; else the network [`network_for_kind`] picks. An `RPC`
+/// override passes the same guard as a stored `Network.RPC`
+/// ([`validate_rpc_url`](crate::models::network::validate_rpc_url): https, or
+/// http on localhost/loopback, never an internal address); otherwise the
+/// endpoint comes from `Network::resolved_rpc`.
 /// Shared by the account send/balance and simulate paths so the browser
 /// (multi-chain, no single `@`) resolves the same way as native.
 pub(crate) fn resolve_rpc_for_kind(env: &Env, params: &Value, kind: &str) -> Result<String, ApiError> {
     if let Some(url) = params.get("RPC").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        crate::models::network::validate_rpc_url(url).map_err(|e| ApiError::new(400, e.to_string()))?;
         return Ok(url.to_owned());
     }
     network_for_kind(env, params, kind)?.resolved_rpc().map_err(ApiError::internal)
@@ -464,5 +468,24 @@ impl ApiError {
     /// Wrap a wltbase error as a 500.
     pub fn internal(e: impl std::fmt::Display) -> Self {
         ApiError::new(500, e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod rpc_override_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// An `RPC` override goes through the stored-RPC guard (audit F3).
+    #[test]
+    fn rpc_override_is_validated() {
+        let env = Env::init_memory().unwrap();
+        for bad in ["https://10.0.0.1/rpc", "http://example.com/rpc", "https://[::ffff:192.168.1.1]/", "file:///etc/passwd"] {
+            let err = resolve_rpc_for_kind(&env, &json!({ "RPC": bad }), "evm").unwrap_err();
+            assert_eq!(err.code, 400, "{bad}: {}", err.message);
+        }
+        for good in ["http://127.0.0.1:8545", "http://localhost:8545/x", "https://rpc.example/eth"] {
+            assert_eq!(resolve_rpc_for_kind(&env, &json!({ "RPC": good }), "evm").unwrap(), good);
+        }
     }
 }
