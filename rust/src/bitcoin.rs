@@ -228,9 +228,51 @@ pub struct HdAddress {
     pub clean: bool,
 }
 
+/// The highest HD child index the wallet accepts from a node, for both the
+/// `lastI` of `modchain_lookupTxoBIP32` and the index in a UTXO's `path`. The
+/// node is untrusted: an unbounded `lastI` would have [`scan_chain`] derive
+/// billions of addresses, or hand out a receive/change address at an index no
+/// later scan reaches. Far above any real wallet's usage, far below 2^31.
+pub const MAX_HD_INDEX: u32 = 100_000;
+
+/// The `lastI` (highest used index, -1 for an unused chain) of a
+/// `modchain_lookupTxoBIP32` reply. Absent means unused; anything that is not
+/// an integer in `-1..=MAX_HD_INDEX` is refused.
+fn parse_last_index(raw: &serde_json::Value) -> Result<i64> {
+    match raw.get("lastI") {
+        None | Some(serde_json::Value::Null) => Ok(-1),
+        Some(v) => v
+            .as_i64()
+            .filter(|i| (-1..=i64::from(MAX_HD_INDEX)).contains(i))
+            .ok_or_else(|| Error::Env(format!("modchain_lookupTxoBIP32: lastI {v} out of range (-1..={MAX_HD_INDEX})"))),
+    }
+}
+
+/// Parse an account-relative HD path `m/<chain>/<index>` as modchain reports it
+/// for a UTXO: `chain` must be 0 (receive) or 1 (change) and `index` at most
+/// [`MAX_HD_INDEX`], both plain decimal.
+fn parse_hd_path(path: &str) -> Result<(u32, u32)> {
+    let bad = || Error::Env(format!("invalid UTXO path {path:?} (want m/<0|1>/<index up to {MAX_HD_INDEX}>)"));
+    let mut parts = path.split('/');
+    let (Some("m"), Some(chain), Some(index), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+        return Err(bad());
+    };
+    let chain: u32 = match chain {
+        "0" => 0,
+        "1" => 1,
+        _ => return Err(bad()),
+    };
+    if index.is_empty() || !index.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    let index: u32 = index.parse().ok().filter(|i| *i <= MAX_HD_INDEX).ok_or_else(bad)?;
+    Ok((chain, index))
+}
+
 /// Derive addresses `0..=lastI+1` on the receive (`change=false`) or change
 /// chain (Go `scanChain`): `modchain_lookupTxoBIP32` gives `lastI` (the highest
-/// used index), and each index is derived + encoded, the last marked `clean`.
+/// used index, bounded by [`MAX_HD_INDEX`]), and each index is derived +
+/// encoded, the last marked `clean`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn scan_chain(
     rpc: &str,
@@ -243,7 +285,7 @@ pub fn scan_chain(
     let chain: u32 = if change { 1 } else { 0 };
     let base_path = format!("m/{chain}");
     let raw = crate::rpc::call(rpc, "modchain_lookupTxoBIP32", serde_json::json!([xpub, base_path, false]))?;
-    let last_i = raw.get("lastI").and_then(|v| v.as_i64()).unwrap_or(-1);
+    let last_i = parse_last_index(&raw)?;
     let mut out = Vec::new();
     for i in 0..=(last_i + 1) {
         let index = i as u32;
@@ -276,8 +318,8 @@ pub fn next_address(
     let base_path = format!("m/{chain}");
     let raw = crate::rpc::call(rpc, "modchain_lookupTxoBIP32", serde_json::json!([xpub, base_path, true]))?;
     // lastI = highest used index, -1 when the chain is entirely unused.
-    let last_i = raw.get("lastI").and_then(|v| v.as_i64()).unwrap_or(-1);
-    let next_index = (last_i + 1) as u32;
+    let last_i = parse_last_index(&raw)?;
+    let next_index = (last_i + 1) as u32; // 0..=MAX_HD_INDEX+1
     let child = crate::hdderive::derive_pub(account_pubkey, account_chaincode, &[chain, next_index])
         .map_err(|e| Error::Env(e.to_string()))?;
     let address = hd_address(&child, chain_id)?;
@@ -327,11 +369,18 @@ pub fn parse_native_utxos(raw: &serde_json::Value) -> Result<Vec<DiscoveredUtxo>
                 continue;
             }
             let amount_sats = t.get("amt").map(parse_btc_amount).transpose()?.unwrap_or(0);
+            // The path drives key derivation and the next change index, and it
+            // comes from the node: refuse one that isn't m/<0|1>/<bounded index>
+            // (a single-address lookup carries none).
+            let path = t.get("path").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+            if !path.is_empty() {
+                parse_hd_path(&path).map_err(|e| Error::Env(format!("modchain_assets: {txo}: {e}")))?;
+            }
             out.push(DiscoveredUtxo {
                 txo,
                 amount_sats,
                 height: t.get("height").and_then(|v| v.as_i64()).unwrap_or(0),
-                path: t.get("path").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
+                path,
                 script: t.get("script").and_then(|v| v.as_str()).unwrap_or("").to_owned(),
             });
         }
@@ -392,13 +441,26 @@ pub fn native_balance_satoshi(rpc: &str, lookup: &str) -> Result<u64> {
 }
 
 impl DiscoveredUtxo {
-    /// The HD chain (0=receive, 1=change) from the UTXO's path.
-    pub(crate) fn chain(&self) -> u32 {
-        self.path.split('/').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0)
+    /// The `(chain, index)` this UTXO's key is derived at below the account
+    /// xpub. A UTXO without a path (single-address lookup) is the account's
+    /// first receive address `m/0/0`; a path that isn't `m/<0|1>/<index up to
+    /// MAX_HD_INDEX>` is an error.
+    pub(crate) fn hd_path(&self) -> Result<(u32, u32)> {
+        if self.path.is_empty() {
+            return Ok((0, 0));
+        }
+        parse_hd_path(&self.path)
     }
-    /// The HD child index from the UTXO's path (last segment).
+    /// The HD chain (0=receive, 1=change) from the UTXO's path. An invalid
+    /// path reads as `m/0/0` — [`parse_native_utxos`] never yields one; code
+    /// that must not guess uses [`Self::hd_path`].
+    pub(crate) fn chain(&self) -> u32 {
+        self.hd_path().map(|(chain, _)| chain).unwrap_or(0)
+    }
+    /// The HD child index from the UTXO's path (last segment); see
+    /// [`Self::chain`] for an invalid path.
     pub(crate) fn child_index(&self) -> u32 {
-        self.path.rsplit('/').next().and_then(|s| s.parse().ok()).unwrap_or(0)
+        self.hd_path().map(|(_, index)| index).unwrap_or(0)
     }
     /// Per-input virtual size (Go `bitcoinTxo.vsize`) for fee estimation.
     fn vsize(&self) -> u64 {
@@ -436,10 +498,12 @@ pub(crate) fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64
 
 /// The next change (m/1) index (Go `nextChangeIndex`): highest used m/1 index +1.
 pub(crate) fn next_change_index(all: &[DiscoveredUtxo]) -> u32 {
+    // Only a valid m/1/<index ≤ MAX_HD_INDEX> path counts, so a node cannot
+    // push the change address to an index the wallet won't rediscover.
     let mut max: i64 = -1;
     for u in all {
-        if u.chain() == 1 {
-            max = max.max(u.child_index() as i64);
+        if let Ok((1, index)) = u.hd_path() {
+            max = max.max(i64::from(index));
         }
     }
     (max + 1) as u32
@@ -814,8 +878,9 @@ pub fn build_and_sign_from_utxos(
     let mut plans = Vec::with_capacity(selected.len());
     for u in &selected {
         let (txid, vout) = parse_txo_ref(&u.txo)?;
+        let (chain, index) = u.hd_path()?;
         let (child_pub, child_tweak) =
-            crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[u.chain(), u.child_index()])
+            crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[chain, index])
                 .map_err(|e| Error::Env(e.to_string()))?;
         let scheme = if u.script.is_empty() { "p2wpkh".to_owned() } else { u.script.clone() };
         plans.push(InputPlan {
@@ -949,7 +1014,8 @@ pub fn sign_raw_tx(
         let txid_hex: String = inp.txid.iter().map(|b| format!("{b:02x}")).collect();
         let reference = format!("{txid_hex}:{}", inp.vout);
         let u = owned.get(&reference).ok_or_else(|| Error::Env(format!("input {reference} is not owned by this account")))?;
-        let (child_pub, child_tweak) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[u.chain(), u.child_index()])
+        let (chain, index) = u.hd_path()?;
+        let (child_pub, child_tweak) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[chain, index])
             .map_err(|e| Error::Env(e.to_string()))?;
         let scheme = if u.script.is_empty() { "p2wpkh".to_owned() } else { u.script.clone() };
         plans.push(Plan { child_pub, tweak: combine_tweak(&account_il, &child_tweak), amount: u.amount_sats, scheme });
@@ -1247,6 +1313,71 @@ mod tests {
         assert!(sign_transfer_on_chain(&env, &a.id, &unlock, "bitcoin", &utxos, &[(ltc.clone(), 90_000)]).is_err());
         assert!(sign_transfer_on_chain(&env, &a.id, &unlock, "nonsense", &utxos, &[(a.address.clone(), 90_000)]).is_err());
         sign_transfer_on_chain(&env, &a.id, &unlock, "bitcoin", &utxos, &[(a.address.clone(), 90_000)]).expect("own-chain send");
+    }
+
+    #[test]
+    fn node_supplied_hd_indexes_are_bounded() {
+        let j = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap();
+        // lastI: absent/null = unused chain; otherwise an integer in -1..=MAX.
+        assert_eq!(parse_last_index(&j("{}")).unwrap(), -1);
+        assert_eq!(parse_last_index(&j(r#"{"lastI":null}"#)).unwrap(), -1);
+        assert_eq!(parse_last_index(&j(r#"{"lastI":-1}"#)).unwrap(), -1);
+        assert_eq!(parse_last_index(&j(r#"{"lastI":4}"#)).unwrap(), 4);
+        assert_eq!(parse_last_index(&j(r#"{"lastI":100000}"#)).unwrap(), 100_000);
+        for bad in ["100001", "3000000000", "-2", "18446744073709551615", "1.5", "\"7\"", "[1]"] {
+            assert!(parse_last_index(&j(&format!(r#"{{"lastI":{bad}}}"#))).is_err(), "lastI {bad}");
+        }
+
+        // UTXO paths: m/<0|1>/<index ≤ MAX>, nothing else.
+        assert_eq!(parse_hd_path("m/0/0").unwrap(), (0, 0));
+        assert_eq!(parse_hd_path("m/1/100000").unwrap(), (1, 100_000));
+        for bad in [
+            "m/1/100001", "m/1/2000000000", "m/1/4294967296", "m/2/0", "m/2147483648/0", "m/0'/0", "m/0/0'",
+            "m/0", "m/0/0/0", "0/0", "m//0", "m/0/", "m/0/+1", "m/0/ 1", "m/0/-1", "M/0/0", "m/0/é", "",
+        ] {
+            assert!(parse_hd_path(bad).is_err(), "path {bad:?}");
+        }
+
+        // A hostile path fails the whole modchain_assets reply rather than
+        // steering key derivation or the change index.
+        let assets = |path: &str| {
+            j(&format!(r#"{{"assets":[{{"asset":"NATIVE","txo":[{{"txo":"aa:0","amt":"0.001","path":"{path}","script":"p2wpkh"}}]}}]}}"#))
+        };
+        assert_eq!(parse_native_utxos(&assets("m/1/7")).unwrap()[0].hd_path().unwrap(), (1, 7));
+        assert!(parse_native_utxos(&assets("m/1/2000000000")).is_err());
+        assert!(parse_native_utxos(&assets("m/5/1")).is_err());
+        // No path at all (single-address lookup) is still the account's m/0/0.
+        let no_path = parse_native_utxos(&assets("")).unwrap();
+        assert_eq!(no_path[0].hd_path().unwrap(), (0, 0));
+
+        // A hand-built UTXO with a bad path never moves the change index, and
+        // the accessors don't hand its numbers out.
+        let utxo = |path: &str| DiscoveredUtxo { txo: "aa:0".into(), amount_sats: 1, height: 0, path: path.into(), script: String::new() };
+        assert_eq!(next_change_index(&[utxo("m/1/2"), utxo("m/0/9")]), 3);
+        assert_eq!(next_change_index(&[utxo("m/1/2"), utxo("m/1/2000000000"), utxo("m/1/4294967295")]), 3);
+        assert_eq!(next_change_index(&[]), 0);
+        let hostile = utxo("m/1/2000000000");
+        assert!(hostile.hd_path().is_err());
+        assert_eq!((hostile.chain(), hostile.child_index()), (0, 0));
+    }
+
+    #[test]
+    fn scan_and_next_address_refuse_an_absurd_last_index() {
+        let pk = any_pubkey();
+        let cc = [9u8; 32];
+        // Would otherwise loop over three billion derivations.
+        let rpc = mock_rpc(r#"{"lastI":3000000000}"#);
+        assert!(scan_chain(&rpc, "xpub", &pk, &cc, "bitcoin", false).is_err());
+        let rpc = mock_rpc(r#"{"lastI":3000000000}"#);
+        assert!(next_address(&rpc, "xpub", &pk, &cc, "bitcoin", false).is_err());
+        let rpc = mock_rpc(r#"{"lastI":100001}"#);
+        assert!(next_address(&rpc, "xpub", &pk, &cc, "bitcoin", true).is_err());
+        // In range still works.
+        let rpc = mock_rpc(r#"{"lastI":2}"#);
+        let (_, index, path) = next_address(&rpc, "xpub", &pk, &cc, "bitcoin", true).unwrap();
+        assert_eq!((index, path.as_str()), (3, "m/1/3"));
+        let rpc = mock_rpc(r#"{"lastI":1}"#);
+        assert_eq!(scan_chain(&rpc, "xpub", &pk, &cc, "bitcoin", false).unwrap().len(), 3);
     }
 
     #[test]
