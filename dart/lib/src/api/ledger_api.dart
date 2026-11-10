@@ -44,9 +44,7 @@ import 'airgap_api.dart' show AirgapKey;
 /// ```
 /// libwallet only returns a signature that verifies under the account's key
 /// over exactly what was requested; a device holding other keys is refused.
-///
-/// Device management (firmware updates, installing apps, the genuine check)
-/// is only implemented in the browser build, not through this API.
+
 class LedgerApi {
   final Transport _conn;
 
@@ -75,6 +73,67 @@ class LedgerApi {
   /// Close the open app and return to the dashboard (the device reconnects).
   Future<void> quitApp({LedgerLink? link}) =>
       _conn.request('Ledger:quitApp', 'POST', _link(link));
+
+  // ── Device management (the device must be on the dashboard) ──────────────
+
+  /// Model, firmware version and whether a firmware update is available.
+  Future<LedgerStatus> status({LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:status', 'POST', _link(link));
+    return LedgerStatus.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
+  /// Whether the manufacturer vouches for the device. The device asks the
+  /// user to allow the check.
+  Future<bool> genuineCheck({LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:genuineCheck', 'POST', _link(link));
+    return (data as Map)['genuine'] as bool? ?? false;
+  }
+
+  /// The installed apps. The device asks the user to allow the listing.
+  Future<List<LedgerApp>> installedApps({LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:apps', 'POST', _link(link));
+    return (data as List)
+        .map((a) => LedgerApp.fromJson(Map<String, dynamic>.from(a as Map)))
+        .toList();
+  }
+
+  /// The apps available for this device and firmware.
+  Future<List<LedgerApp>> catalog({LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:catalog', 'POST', _link(link));
+    return (data as List)
+        .map((a) => LedgerApp.fromJson(Map<String, dynamic>.from(a as Map)))
+        .toList();
+  }
+
+  /// Install the app [name] (and the app it depends on). Progress arrives as
+  /// `ledger:progress` events on `client.events`.
+  Future<void> installApp(String name, {LedgerLink? link}) => _conn
+      .request('Ledger:installApp', 'POST', {..._link(link), 'Name': name});
+
+  /// Remove the app [name]. Keys and funds are unaffected.
+  Future<void> uninstallApp(String name, {LedgerLink? link}) => _conn
+      .request('Ledger:uninstallApp', 'POST', {..._link(link), 'Name': name});
+
+  /// Step 1 of a firmware update: install the updater for [update] (from
+  /// [status]). The user confirms on the device, which then restarts — the
+  /// link has to be reopened. Returns whether [firmwareFlash] must follow.
+  Future<bool> firmwareUpdate(LedgerFirmwareUpdate update,
+      {LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:firmwareUpdate', 'POST',
+        {..._link(link), 'Update': update.handle});
+    return (data as Map)['flashMcu'] as bool? ?? false;
+  }
+
+  /// With the device in bootloader mode, flash the MCU or bootloader the new
+  /// firmware needs; repeat while [status] reports `bootloader`. Without
+  /// [update] (an interrupted update) the requirement is derived from the
+  /// device. Returns `mcu`, `bootloader`, or null when there was nothing to do.
+  Future<String?> firmwareFlash(
+      {LedgerFirmwareUpdate? update, LedgerLink? link}) async {
+    final data = await _conn.request('Ledger:firmwareFlash', 'POST',
+        {..._link(link), if (update != null) 'Update': update.handle});
+    return (data as Map)['flashed'] as String?;
+  }
 
   /// Read the keys of the app that is open on the device, for [count]
   /// accounts starting at [account]. Bitcoin: [scripts] selects the account
@@ -152,8 +211,6 @@ class LedgerApi {
   /// `{To, Amount, FeeRate?}`. [network] picks the network (default: the
   /// account chain's current/default one); [offline] skips the node, in which
   /// case the transaction must be complete and cannot be broadcast.
-  ///
-  /// Bitcoin signing is not available in the browser build.
   Future<LedgerSignedTransaction> signTransaction({
     required String account,
     required Map<String, dynamic> transaction,
@@ -303,6 +360,70 @@ class LedgerInfo {
         dashboard = j['dashboard'] as bool? ?? false,
         model = j['model'] as String?,
         firmware = j['firmware'] as String?;
+}
+
+/// An available firmware update.
+class LedgerFirmwareUpdate {
+  final String version;
+
+  /// The MCU / bootloader must be flashed after the updater (older models).
+  final bool flashMcu;
+
+  /// Opaque description passed back to libwallet.
+  final Map<String, dynamic> handle;
+
+  LedgerFirmwareUpdate.fromJson(Map<String, dynamic> j)
+      : version = j['version'] as String? ?? '',
+        flashMcu = j['flashMcu'] as bool? ?? false,
+        handle = Map<String, dynamic>.from((j['handle'] as Map?) ?? const {});
+}
+
+/// Result of [LedgerApi.status].
+class LedgerStatus {
+  final String? model;
+  final String firmware;
+
+  /// A firmware update is in progress: the device is in bootloader mode, or
+  /// running the updater.
+  final bool bootloader;
+  final bool updater;
+
+  /// The update available, if any.
+  final LedgerFirmwareUpdate? update;
+
+  /// Why the update check failed, when it did.
+  final String? updateError;
+
+  LedgerStatus.fromJson(Map<String, dynamic> j)
+      : model = j['model'] as String?,
+        firmware = j['firmware'] as String? ?? '',
+        bootloader = j['bootloader'] as bool? ?? false,
+        updater = j['updater'] as bool? ?? false,
+        update = j['update'] is Map
+            ? LedgerFirmwareUpdate.fromJson(
+                Map<String, dynamic>.from(j['update'] as Map))
+            : null,
+        updateError = j['updateError'] as String?;
+}
+
+/// An app, installed ([LedgerApi.installedApps]) or available
+/// ([LedgerApi.catalog]).
+class LedgerApp {
+  /// The name to pass to `openApp` / `installApp` / `uninstallApp`.
+  final String name;
+  final String? displayName;
+  final String? version;
+  final String? description;
+
+  /// The app this one needs installed first (catalog only).
+  final String? requires;
+
+  LedgerApp.fromJson(Map<String, dynamic> j)
+      : name = j['name'] as String? ?? '',
+        displayName = j['displayName'] as String?,
+        version = j['version'] as String?,
+        description = j['description'] as String?,
+        requires = j['requires'] as String?;
 }
 
 /// Keys read from the open app, ready for [LedgerApi.importKeys].

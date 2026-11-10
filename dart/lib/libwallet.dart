@@ -117,6 +117,9 @@ export 'src/api/ledger_api.dart'
         LedgerDevice,
         LedgerDevices,
         LedgerInfo,
+        LedgerStatus,
+        LedgerFirmwareUpdate,
+        LedgerApp,
         LedgerKeys,
         LedgerImportResult,
         LedgerSignedTransaction;
