@@ -1523,7 +1523,7 @@ async function backendRkCreate() {
   if (!backend.rk.resource) { err.textContent = 'Verify the 2FA code first.'; return; }
   const name = $('#bkRkName').value.trim() || 'Browser 2FA wallet';
   const pw = $('#bkRkPw').value;
-  if (pw.length < 6) { err.textContent = 'Password must be at least 6 characters.'; return; }
+  if (pw.length < 8) { err.textContent = 'Password must be at least 8 characters.'; return; }
   const btn = $('#bkRkCreate');
   btn.disabled = true; btn.textContent = 'Running keygen…';
   bkStatus('busy', 'TSS keygen (2FA)…');
@@ -1581,7 +1581,7 @@ async function backendRkCreatePasskey() {
   const name = $('#bkRkName').value.trim() || 'Browser 2FA wallet';
   const noPassword = !!($('#bkRkNoPassword') && $('#bkRkNoPassword').checked);
   const pw = $('#bkRkPw').value;
-  if (!noPassword && pw.length < 6) { err.textContent = 'Password must be at least 6 characters (or check “No password”).'; return; }
+  if (!noPassword && pw.length < 8) { err.textContent = 'Password must be at least 8 characters (or check “No password”).'; return; }
   const btn = $('#bkRkCreatePasskey');
   btn.disabled = true; btn.textContent = 'Waiting for passkey…';
   bkStatus('busy', 'passkey keygen (2FA)…');
@@ -2013,7 +2013,7 @@ async function backendCreateWallet() {
   const pw = $('#bkWalletPw').value;
   const err = $('#bkWalletErr');
   err.textContent = '';
-  if (!usePasskey && pw.length < 4) { err.textContent = 'Enter a share password (4+ characters).'; return; }
+  if (!usePasskey && pw.length < 8) { err.textContent = 'Enter a share password (8+ characters).'; return; }
 
   const btn = $('#bkCreateWallet');
   btn.disabled = true;
