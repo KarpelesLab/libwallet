@@ -155,17 +155,26 @@ pub fn bbqr_parts(data: &[u8], file_type: outscript::bbqr::FileType, max_part_le
     Ok(out)
 }
 
+/// Decode one BBQr part on its own: its header and body bytes (still deflated
+/// for `Z` — inflation needs the whole file).
+pub fn bbqr_decode_part(part: &str) -> Result<(outscript::bbqr::Header, Vec<u8>)> {
+    let mut buf = vec![0u8; part.len() + 8];
+    let (h, n) = outscript::bbqr::decode_part_to_slice(part, &mut buf).map_err(|e| Error::Env(format!("bbqr part: {e}")))?;
+    buf.truncate(n);
+    Ok((h, buf))
+}
+
 /// Reassemble a complete set of BBQr parts (any order) into `(file_type, data)`,
 /// inflating `Z` payloads through compcol.
 pub fn bbqr_join(parts: &[String]) -> Result<(outscript::bbqr::FileType, Vec<u8>)> {
-    use outscript::bbqr::{self, Encoding, Header};
+    use outscript::bbqr::{Encoding, Header};
     if parts.is_empty() {
         return Err(Error::Env("no BBQr parts".into()));
     }
     let mut decoded: Vec<Option<Vec<u8>>> = Vec::new();
     let mut first: Option<Header> = None;
     for p in parts {
-        let (h, body) = Header::parse(p).map_err(|e| Error::Env(format!("bbqr header: {e}")))?;
+        let (h, _) = Header::parse(p).map_err(|e| Error::Env(format!("bbqr header: {e}")))?;
         match &first {
             None => {
                 decoded = vec![None; h.num_parts as usize];
@@ -177,13 +186,17 @@ pub fn bbqr_join(parts: &[String]) -> Result<(outscript::bbqr::FileType, Vec<u8>
                 }
             }
         }
-        let mut buf = vec![0u8; body.len() + 8];
-        let (_, n) = bbqr::decode_part_to_slice(p, &mut buf).map_err(|e| Error::Env(format!("bbqr part: {e}")))?;
+        let (_, bytes) = bbqr_decode_part(p)?;
         let idx = h.index as usize;
         if idx >= decoded.len() {
             return Err(Error::Env("BBQr part index out of range".into()));
         }
-        decoded[idx] = Some(buf[..n].to_vec());
+        // The same part twice is fine (a looping animation); two different
+        // parts claiming one index is not — never let the last one win.
+        match &decoded[idx] {
+            Some(prev) if *prev != bytes => return Err(Error::Env(format!("BBQr part {idx} received twice with different content"))),
+            _ => decoded[idx] = Some(bytes),
+        }
     }
     let header = first.unwrap();
     let mut data = Vec::new();
@@ -207,10 +220,11 @@ pub fn unhex(s: &str) -> Result<Vec<u8>> {
     if s.len() % 2 != 0 {
         return Err(Error::Env("odd-length hex".into()));
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| Error::Env(format!("bad hex: {e}"))))
-        .collect()
+    // Digits only: `from_str_radix` on a 2-byte slice would also take a sign
+    // ("+f"), and slicing a non-ASCII string by byte offsets can land inside a
+    // character and panic.
+    let digit = |c: u8| (c as char).to_digit(16).map(|d| d as u8).ok_or_else(|| Error::Env("bad hex: invalid digit".into()));
+    s.as_bytes().chunks_exact(2).map(|p| Ok(digit(p[0])? << 4 | digit(p[1])?)).collect()
 }
 
 #[cfg(test)]
@@ -286,6 +300,17 @@ mod tests {
         let theirs = bbqr::split_with(&data, FileType::TRANSACTION, bbqr::Encoding::Zlib, 500).unwrap();
         let (ft, back) = bbqr_join(&theirs).unwrap();
         assert_eq!((ft, back), (FileType::TRANSACTION, data));
+    }
+
+    #[test]
+    fn unhex_accepts_only_hex_digits() {
+        assert_eq!(unhex("0x00ffAb").unwrap(), vec![0x00, 0xff, 0xab]);
+        assert_eq!(unhex(" deadBEEF ").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(unhex("").unwrap(), Vec::<u8>::new());
+        // A sign is not a digit; non-ASCII must error, not panic (AG-06).
+        for bad in ["+f", "-1", "0x+f", "f", "zz", "\u{e9}", "a\u{20ac}", "\u{20ac}a", "\u{1f600}", "0x\u{e9}\u{e9}", "1 2 "] {
+            assert!(unhex(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
