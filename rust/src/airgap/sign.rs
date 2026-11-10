@@ -460,8 +460,10 @@ pub struct Accepted {
 }
 
 /// Turn the signer's response into a signed transaction. `request_id` is
-/// needed only when the payload does not carry one (signed PSBTs, bare
-/// signatures); when both are present they must agree.
+/// required when the payload does not carry one (signed PSBTs, signed raw
+/// transactions, bare signatures); when both are present they must agree.
+/// Every answer is bound to a pending request: a payload with no matching
+/// pending request is refused, never finalized on its own.
 pub fn accept(env: &Env, payload: &Payload, request_id: Option<&str>) -> Result<Accepted> {
     match payload {
         Payload::Ur { ur_type, cbor } => {
@@ -539,23 +541,34 @@ fn accept_bytes(env: &Env, bytes: &[u8], request_id: Option<&str>) -> Result<Acc
     }
 }
 
+/// The pending bitcoin request a signed PSBT / raw transaction answers. These
+/// payloads carry no request id and — unlike an eth/sol signature, which is
+/// verified against the account key — nothing in them proves which account
+/// they spend from, so the *only* thing tying the signer's answer to what the
+/// user approved is the pending unsigned transaction. No pending request, no
+/// acceptance: a scanned PSBT/transaction that we did not ask for is never
+/// finalized or handed back for broadcast.
+fn pending_bitcoin(env: &Env, request_id: Option<&str>) -> Result<(Pending, Vec<u8>)> {
+    let rid = request_id.ok_or_else(|| Error::Env("signed bitcoin transaction carries no request-id: pass RequestId".into()))?;
+    let p = pending_load(env, rid)?.ok_or_else(|| Error::Env(format!("no pending request {rid} (expired?)")))?;
+    if p.chain != "bitcoin" {
+        return Err(Error::Env(format!("request {rid} is a {} request, not bitcoin", p.chain)));
+    }
+    let ours = super::unhex(p.unsigned.get("psbt").and_then(Json::as_str).unwrap_or(""))?;
+    Ok((p, ours))
+}
+
 fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Accepted> {
     use outscript::psbt::Psbt;
     let theirs = Psbt::parse(signed).map_err(|e| Error::Env(format!("signed psbt: {e}")))?;
-    // Combine with our unsigned PSBT when we have it (restores any records a
-    // signer dropped); otherwise finalize theirs alone.
-    let (combined, pending) = match request_id.map(|r| pending_load(env, r)).transpose()?.flatten() {
-        Some(p) => {
-            let ours_hex = p.unsigned.get("psbt").and_then(Json::as_str).unwrap_or("");
-            let ours = super::unhex(ours_hex)?;
-            let ours_p = Psbt::parse(&ours).map_err(|e| Error::Env(format!("pending psbt: {e}")))?;
-            if ours_p.unsigned_tx().txid() != theirs.unsigned_tx().txid() {
-                return Err(Error::Env("signed PSBT is for a different transaction than the pending request".into()));
-            }
-            (ours_p.combine_to_vec(&theirs).map_err(|e| Error::Env(format!("psbt combine: {e}")))?, Some(p))
-        }
-        None => (signed.to_vec(), None),
-    };
+    // Combine with our unsigned PSBT (restores any records a signer dropped).
+    // The signed PSBT must be for exactly the transaction we asked for.
+    let (pending, ours) = pending_bitcoin(env, request_id)?;
+    let ours_p = Psbt::parse(&ours).map_err(|e| Error::Env(format!("pending psbt: {e}")))?;
+    if ours_p.unsigned_tx().txid() != theirs.unsigned_tx().txid() {
+        return Err(Error::Env("signed PSBT is for a different transaction than the pending request".into()));
+    }
+    let combined = ours_p.combine_to_vec(&theirs).map_err(|e| Error::Env(format!("psbt combine: {e}")))?;
     let c = Psbt::parse(&combined).map_err(|e| Error::Env(format!("{e}")))?;
     let (finalized, done) = if c.is_finalized() { (combined.clone(), c.unsigned_tx().input_count()) } else { c.finalize_to_vec().map_err(|e| Error::Env(format!("psbt finalize: {e}")))? };
     let f = Psbt::parse(&finalized).map_err(|e| Error::Env(format!("{e}")))?;
@@ -563,6 +576,10 @@ fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Acc
         return Err(Error::Env(format!("PSBT not fully signed: {done}/{} inputs finalized", f.unsigned_tx().input_count())));
     }
     let raw = f.extract_tx_to_vec().map_err(|e| Error::Env(format!("psbt extract: {e}")))?;
+    // Belt and braces: what we hand back for broadcast is the pending tx.
+    if unsigned_txid(&raw)? != ours_p.unsigned_tx().txid() {
+        return Err(Error::Env("finalized transaction differs from the pending request".into()));
+    }
     let txid = {
         let h = outscript::hash::dsha256(&strip_witness(&raw).unwrap_or_else(|| raw.clone()));
         let mut t = h.to_vec();
@@ -570,14 +587,11 @@ fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Acc
         super::hex(&t)
     };
     use base64::Engine;
-    let (rid, account) = pending.as_ref().map(|p| (Some(p.request_id.clone()), p.account.clone())).unwrap_or((request_id.map(str::to_owned), String::new()));
-    if let Some(r) = &rid {
-        let _ = pending_delete(env, r);
-    }
+    let _ = pending_delete(env, &pending.request_id);
     Ok(Accepted {
-        request_id: rid,
+        request_id: Some(pending.request_id),
         chain: "bitcoin".into(),
-        account,
+        account: pending.account,
         raw: format!("0x{}", super::hex(&raw)),
         id: txid,
         signature: String::new(),
@@ -585,27 +599,54 @@ fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Acc
     })
 }
 
-/// A signer that returns the fully signed raw transaction (BBQr `T`).
+/// A signer that returns the fully signed raw transaction (BBQr `T`, or bare
+/// bytes). It is accepted only as the signed form of the pending request's
+/// transaction: with its scriptSigs and witnesses removed it must hash to the
+/// pending PSBT's unsigned-tx txid (same inputs, sequences, outputs, version
+/// and locktime). Anything else is refused and the request stays pending.
 fn accept_signed_raw_tx(env: &Env, raw: &[u8], request_id: Option<&str>) -> Result<Accepted> {
-    let pending = request_id.map(|r| pending_load(env, r)).transpose()?.flatten();
+    use outscript::psbt::Psbt;
+    let (pending, ours) = pending_bitcoin(env, request_id)?;
+    let ours_p = Psbt::parse(&ours).map_err(|e| Error::Env(format!("pending psbt: {e}")))?;
+    let tx = outscript::btctx::BtcTx::from_bytes(raw).map_err(|e| Error::Env(format!("signed transaction: {e}")))?;
+    if tx.to_bytes().len() != raw.len() {
+        return Err(Error::Env("signed transaction has trailing or non-canonical data".into()));
+    }
+    if unsigned_txid(raw)? != ours_p.unsigned_tx().txid() {
+        return Err(Error::Env("signed transaction is not the transaction of the pending request".into()));
+    }
+    if tx.inputs.iter().any(|i| i.script.is_empty() && i.witnesses.is_empty()) {
+        return Err(Error::Env("transaction is not fully signed".into()));
+    }
     let txid = {
         let h = outscript::hash::dsha256(&strip_witness(raw).unwrap_or_else(|| raw.to_vec()));
         let mut t = h.to_vec();
         t.reverse();
         super::hex(&t)
     };
-    if let Some(p) = &pending {
-        let _ = pending_delete(env, &p.request_id);
-    }
+    let _ = pending_delete(env, &pending.request_id);
     Ok(Accepted {
-        request_id: pending.as_ref().map(|p| p.request_id.clone()),
+        request_id: Some(pending.request_id),
         chain: "bitcoin".into(),
-        account: pending.map(|p| p.account).unwrap_or_default(),
+        account: pending.account,
         raw: format!("0x{}", super::hex(raw)),
         id: txid,
         signature: String::new(),
         psbt: None,
     })
+}
+
+/// The txid (display byte order) of `raw` with every scriptSig and witness
+/// removed — what a PSBT's unsigned transaction hashes to.
+fn unsigned_txid(raw: &[u8]) -> Result<[u8; 32]> {
+    let mut tx = outscript::btctx::BtcTx::from_bytes(raw).map_err(|e| Error::Env(format!("signed transaction: {e}")))?;
+    for i in &mut tx.inputs {
+        i.script.clear();
+        i.witnesses.clear();
+    }
+    let mut h = outscript::hash::dsha256(&tx.to_bytes());
+    h.reverse();
+    Ok(h)
 }
 
 /// The non-witness serialization of a segwit tx (for the txid), or None when
@@ -704,5 +745,120 @@ pub fn broadcast(url: &str, a: &Accepted) -> Result<Json> {
         "bitcoin" => crate::rpc::call(url, "sendrawtransaction", json!([a.raw.trim_start_matches("0x")])),
         "solana" => crate::rpc::call(url, "sendTransaction", json!([a.raw, { "encoding": "base58" }])),
         other => Err(Error::Env(format!("cannot broadcast {other}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use outscript::btcraw::{RawTx, RawTxIn, RawTxOut};
+    use outscript::psbt::Psbt;
+
+    const SPK: [u8; 22] = [0x00, 0x14, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7];
+    const RID: &str = "11111111-2222-4333-8444-555555555555";
+    const RID2: &str = "22222222-2222-4333-8444-555555555555";
+
+    fn ser(tx: &RawTx<'_>) -> Vec<u8> {
+        let mut buf = vec![0u8; tx.serialized_len()];
+        let n = tx.serialize_to_slice(&mut buf).unwrap();
+        buf.truncate(n);
+        buf
+    }
+
+    /// (unsigned PSBT, its unsigned tx, the same tx "signed" with a
+    /// p2wpkh-shaped witness).
+    fn tx_set(amount: u64) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let outs = [RawTxOut { amount, script: &SPK }];
+        let ins = [RawTxIn { txid: [0x11; 32], vout: 0, script_sig: &[], sequence: 0xffff_fffd, witness: &[] }];
+        let unsigned = RawTx { version: 2, inputs: &ins, outputs: &outs, locktime: 0 };
+        let psbt = Psbt::create_to_vec(&unsigned).unwrap();
+        let (sig, pk) = ([0x30u8; 71], [0x02u8; 33]);
+        let wit: [&[u8]; 2] = [&sig, &pk];
+        let sins = [RawTxIn { txid: [0x11; 32], vout: 0, script_sig: &[], sequence: 0xffff_fffd, witness: &wit }];
+        let signed = RawTx { version: 2, inputs: &sins, outputs: &outs, locktime: 0 };
+        (psbt, ser(&unsigned), ser(&signed))
+    }
+
+    fn pend(env: &Env, rid: &str, chain: &str, psbt: &[u8]) {
+        let p = Pending {
+            request_id: rid.into(),
+            account: "acct-test".into(),
+            chain: chain.into(),
+            unsigned: json!({ "psbt": crate::airgap::hex(psbt), "chainId": "bitcoin" }),
+            sign_data: crate::airgap::hex(psbt),
+            created: crate::now_rfc3339(),
+        };
+        pending_save(env, &p).unwrap();
+    }
+
+    #[test]
+    fn signed_raw_tx_must_be_the_pending_transaction() {
+        let env = Env::init_memory().unwrap();
+        let (psbt, unsigned, signed) = tx_set(50_000);
+        let (_, _, attacker) = tx_set(49_999); // same input, different output
+        pend(&env, RID, "bitcoin", &psbt);
+        let t = |data: &[u8]| Payload::Bbqr { file_type: 'T', data: data.to_vec() };
+
+        // No request id / unknown request id: refused.
+        assert!(accept(&env, &t(&signed), None).is_err());
+        assert!(accept(&env, &t(&signed), Some("99999999-2222-4333-8444-555555555555")).is_err());
+        // A different transaction: refused through every raw channel, and the
+        // request stays pending.
+        for p in [t(&attacker), Payload::Raw(crate::airgap::hex(&attacker)), Payload::Ur { ur_type: registry::UR_BYTES.into(), cbor: outscript::bcur::bytes_to_cbor(&attacker) }] {
+            let e = accept(&env, &p, Some(RID)).unwrap_err().to_string();
+            assert!(e.contains("not the transaction of the pending request"), "{e}");
+        }
+        // The right transaction but unsigned, or with trailing bytes: refused.
+        assert!(accept(&env, &t(&unsigned), Some(RID)).is_err());
+        let mut junk = signed.clone();
+        junk.push(0);
+        assert!(accept(&env, &t(&junk), Some(RID)).is_err());
+        // Garbage does not panic.
+        assert!(accept(&env, &t(&[0xff; 7]), Some(RID)).is_err());
+        assert!(pending_load(&env, RID).unwrap().is_some(), "failed attempts keep the request");
+
+        // A request of another chain is not a bitcoin request.
+        pend(&env, RID2, "ethereum", &psbt);
+        assert!(accept(&env, &t(&signed), Some(RID2)).is_err());
+
+        let ok = accept(&env, &t(&signed), Some(RID)).unwrap();
+        assert_eq!(ok.raw, format!("0x{}", crate::airgap::hex(&signed)));
+        assert_eq!(ok.account, "acct-test");
+        assert_eq!(ok.request_id.as_deref(), Some(RID));
+        assert!(pending_load(&env, RID).unwrap().is_none());
+    }
+
+    #[test]
+    fn psbt_without_matching_pending_request_is_refused() {
+        use base64::Engine;
+        let env = Env::init_memory().unwrap();
+        let (psbt, _, _) = tx_set(50_000);
+        let (other, _, _) = tx_set(1);
+        let payloads = || {
+            [
+                Payload::Bbqr { file_type: 'P', data: other.clone() },
+                Payload::Raw(base64::engine::general_purpose::STANDARD.encode(&other)),
+                Payload::Ur { ur_type: registry::UR_PSBT.into(), cbor: registry::psbt_to_cbor(&other) },
+            ]
+        };
+
+        // No pending request at all: never finalized standalone.
+        for pl in payloads() {
+            let e = accept(&env, &pl, None).unwrap_err().to_string();
+            assert!(e.contains("RequestId"), "{e}");
+            let e = accept(&env, &pl, Some(RID)).unwrap_err().to_string();
+            assert!(e.contains("no pending request"), "{e}");
+        }
+        // Pending, but for another transaction.
+        pend(&env, RID, "bitcoin", &psbt);
+        for pl in payloads() {
+            let e = accept(&env, &pl, Some(RID)).unwrap_err().to_string();
+            assert!(e.contains("different transaction"), "{e}");
+        }
+        // Pending for another chain.
+        pend(&env, RID2, "solana", &psbt);
+        let e = accept(&env, &Payload::Bbqr { file_type: 'P', data: psbt.clone() }, Some(RID2)).unwrap_err().to_string();
+        assert!(e.contains("not bitcoin"), "{e}");
+        assert!(pending_load(&env, RID).unwrap().is_some());
     }
 }

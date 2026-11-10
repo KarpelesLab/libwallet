@@ -175,8 +175,10 @@ class AirgapApi {
   /// Turn the signer's answer (`eth-signature`, `sol-signature`, a signed
   /// `crypto-psbt`/BBQr PSBT, or a bare hex/base64 signature) into a signed
   /// transaction. [requestId] is required when the answer carries none
-  /// (signed PSBTs, bare signatures). With [broadcast], the tx is sent through
-  /// [rpc]/[network] (or the chain's current network).
+  /// (signed PSBTs, signed raw bitcoin transactions, bare signatures): a
+  /// bitcoin answer is only accepted when it is the transaction of that
+  /// pending request, and is refused without one. With [broadcast], the tx
+  /// is sent through [rpc]/[network] (or the chain's current network).
   Future<AirgapSignedTransaction> submitSignature({
     String? decoderId,
     List<String>? frames,

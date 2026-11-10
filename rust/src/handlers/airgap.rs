@@ -10,7 +10,9 @@
 //!   DecoderId, Name?, EthAccounts?, Select?} → signer wallet + accounts.
 //! Signing: `Airgap:signRequest` {Account, Transaction, Transport?, RPC|Network?,
 //!   Offline?} → {requestId, parts, payload}; `Airgap:submitSignature`
-//!   {Payload|Parts|DecoderId, RequestId?, Broadcast?, RPC|Network?} → signed tx.
+//!   {Payload|Parts|DecoderId, RequestId?, Broadcast?, RPC|Network?} → signed tx
+//!   (RequestId is mandatory for bitcoin answers — signed PSBT / raw tx — which
+//!   carry none and are only accepted as the pending request's transaction).
 //!   `Airgap:pending` {RequestId} shows an outstanding request.
 
 use serde_json::{json, Value};
