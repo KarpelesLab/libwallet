@@ -119,6 +119,32 @@ fn hd_address_kind(chain_id: &str) -> Result<(&'static str, &'static str)> {
     }
 }
 
+/// The outscript network tag an OUTPUT address must parse under when spending
+/// on `chain_id`. outscript's plain `add_output` auto-detects the network from
+/// the address, so an `ltc1q…`/`tb1…`/Dogecoin address would be accepted on a
+/// BTC send (and vice versa) and the coins would go to the same hash on the
+/// wrong chain. Every Bitcoin-family chain the wallet supports has a tag, so an
+/// unknown chain is refused rather than falling back to auto-detection.
+/// (`bitcoin-cash` accepts cashaddr with or without its prefix and the legacy
+/// base58 form, which shares Bitcoin's version bytes.)
+pub(crate) fn output_network(chain_id: &str) -> Result<&'static str> {
+    match chain_id {
+        "bitcoin" => Ok("bitcoin"),
+        "litecoin" => Ok("litecoin"),
+        "monacoin" => Ok("monacoin"),
+        "dogecoin" => Ok("dogecoin"),
+        "bitcoin-cash" | "bitcoincash" => Ok("bitcoin-cash"),
+        other => Err(Error::Env(format!("unsupported bitcoin-family chainId: {other}"))),
+    }
+}
+
+/// Add an output paying `address`, which must be an address of `chain_id`.
+fn add_chain_output(tx: &mut BtcTx, chain_id: &str, address: &str, sats: u64) -> Result<()> {
+    let network = output_network(chain_id)?;
+    tx.add_net_output(network, address, sats)
+        .map_err(|e| Error::Env(format!("invalid {chain_id} address {address:?}: {e}")))
+}
+
 /// Encode a compressed secp256k1 pubkey as the HD receive/change address for
 /// `chain_id`, via outscript (P2WPKH/P2PKH per [`hd_address_kind`]).
 pub fn hd_address(pubkey_compressed: &[u8; 33], chain_id: &str) -> Result<String> {
@@ -574,10 +600,40 @@ fn sign_failed(signers: &[TssSigner], e: outscript::Error) -> Error {
 /// native-SegWit (P2WPKH) scriptPubKey from its key — this is the offline path
 /// the browser drives with only `{txid, vout, amount}` (no RPC, no script
 /// lookup), matching how `build_and_sign_auto` treats the account's own UTXOs.
+///
+/// This entry point has no chain context, so output addresses are parsed with
+/// outscript's network auto-detection: an address of ANOTHER Bitcoin-family
+/// chain is accepted. Callers that know the chain being spent must use
+/// [`sign_transfer_on_chain`], which refuses such an address.
 pub fn sign_transfer(
     env: &Env,
     account_id: &str,
     unlock: &[(String, String)],
+    utxos: &[Utxo],
+    outputs: &[(String, u64)],
+) -> Result<Vec<u8>> {
+    sign_transfer_inner(env, account_id, unlock, None, utxos, outputs)
+}
+
+/// [`sign_transfer`] for a known chain: every output address must be an address
+/// of `chain_id` (`bitcoin`, `litecoin`, `dogecoin`, `monacoin`,
+/// `bitcoin-cash`), so a send cannot be pointed at another chain's address.
+pub fn sign_transfer_on_chain(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    chain_id: &str,
+    utxos: &[Utxo],
+    outputs: &[(String, u64)],
+) -> Result<Vec<u8>> {
+    sign_transfer_inner(env, account_id, unlock, Some(chain_id), utxos, outputs)
+}
+
+fn sign_transfer_inner(
+    env: &Env,
+    account_id: &str,
+    unlock: &[(String, String)],
+    chain_id: Option<&str>,
     utxos: &[Utxo],
     outputs: &[(String, u64)],
 ) -> Result<Vec<u8>> {
@@ -616,7 +672,10 @@ pub fn sign_transfer(
         });
     }
     for (address, sats) in outputs {
-        tx.add_output(address, *sats).map_err(oserr)?;
+        match chain_id {
+            Some(chain_id) => add_chain_output(&mut tx, chain_id, address, *sats)?,
+            None => tx.add_output(address, *sats).map_err(oserr)?,
+        }
     }
 
     // The account's own P2WPKH scriptPubKey, derived once for self-spend inputs
@@ -805,7 +864,9 @@ pub fn build_and_sign_from_utxos(
             witnesses: Vec::new(),
         });
     }
-    tx.add_output(recipient, want_sats).map_err(oserr)?;
+    // The recipient must be an address of the chain being spent (not merely a
+    // parseable Bitcoin-family address); the change address is our own.
+    add_chain_output(&mut tx, chain_id, recipient, want_sats)?;
     if change > 546 {
         let change_addr = {
             let idx = next_change_index(all);
@@ -813,7 +874,7 @@ pub fn build_and_sign_from_utxos(
                 .map_err(|e| Error::Env(e.to_string()))?;
             hd_address(&child, chain_id)?
         };
-        tx.add_output(&change_addr, change).map_err(oserr)?;
+        add_chain_output(&mut tx, chain_id, &change_addr, change)?;
     }
 
     // 5. Sign every input under its own key + scheme.
@@ -1095,6 +1156,97 @@ mod tests {
         assert_eq!(parsed.outputs.len(), 2, "recipient + change");
         // Every input got a witness (p2wpkh) — signed successfully.
         assert!(parsed.inputs.iter().all(|i| !i.witnesses.is_empty()), "witnesses populated");
+    }
+
+    /// A valid compressed pubkey to encode addresses of every chain from.
+    fn any_pubkey() -> [u8; 33] {
+        crate::hdderive::derive_pubkey_for_path(&[7u8; 64], "secp256k1", "m/44'/0'/0'/0/0")
+            .unwrap()
+            .try_into()
+            .unwrap()
+    }
+
+    #[test]
+    fn outputs_must_be_addresses_of_the_chain_being_spent() {
+        // (chain id, an address of that chain) for every supported chain, in
+        // each address format the wallet hands out, plus a testnet address.
+        let pk = any_pubkey();
+        let own: Vec<(&str, String)> = vec![
+            ("bitcoin", address_for(&pk, "p2wpkh", "bitcoin").unwrap()),
+            ("bitcoin", address_for(&pk, "p2sh:p2wpkh", "bitcoin").unwrap()),
+            ("bitcoin", address_for(&pk, "p2pkh", "bitcoin").unwrap()),
+            ("litecoin", address_for(&pk, "p2wpkh", "litecoin").unwrap()),
+            ("litecoin", address_for(&pk, "p2pkh", "litecoin").unwrap()),
+            ("monacoin", address_for(&pk, "p2wpkh", "monacoin").unwrap()),
+            ("dogecoin", address_for(&pk, "p2pkh", "dogecoin").unwrap()),
+            ("bitcoin-cash", address_for(&pk, "p2pkh", "bitcoincash").unwrap()),
+        ];
+        for (chain, addr) in &own {
+            let mut tx = BtcTx::default();
+            add_chain_output(&mut tx, chain, addr, 1000).unwrap_or_else(|e| panic!("{chain} {addr}: {e}"));
+            // The HD address the wallet derives for a chain is always spendable to.
+            let hd = hd_address(&pk, chain).unwrap();
+            add_chain_output(&mut tx, chain, &hd, 1000).unwrap_or_else(|e| panic!("{chain} {hd}: {e}"));
+            assert_eq!(tx.outputs.len(), 2);
+        }
+        // An address of another chain is refused, whatever its script type.
+        // (bitcoin-cash legitimately shares Bitcoin's legacy base58 addresses.)
+        for (chain, _) in &own {
+            for (other, addr) in &own {
+                let shared_legacy = *chain == "bitcoin-cash" && *other == "bitcoin" && !addr.starts_with("bc1");
+                if chain == other || shared_legacy {
+                    continue;
+                }
+                let mut tx = BtcTx::default();
+                assert!(add_chain_output(&mut tx, chain, addr, 1000).is_err(), "{chain} send accepted {other} address {addr}");
+                assert!(tx.outputs.is_empty());
+            }
+        }
+        let testnet = address_for(&pk, "p2wpkh", "bitcoin-testnet").unwrap();
+        assert!(testnet.starts_with("tb1"));
+        for chain in ["bitcoin", "litecoin", "monacoin", "dogecoin", "bitcoin-cash"] {
+            assert!(add_chain_output(&mut BtcTx::default(), chain, &testnet, 1000).is_err(), "{chain} accepted {testnet}");
+        }
+        // No silent fallback to auto-detection for a chain we don't know.
+        let btc = &own[0].1;
+        assert!(add_chain_output(&mut BtcTx::default(), "bitcoin-testnet", btc, 1000).is_err());
+        assert!(add_chain_output(&mut BtcTx::default(), "", btc, 1000).is_err());
+    }
+
+    #[test]
+    fn btc_send_refuses_another_chains_recipient() {
+        let env = Env::init_memory().unwrap();
+        wallet::init(&env).unwrap();
+        account::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+        let unlock: Vec<(String, String)> = vec![
+            (w.keys[0].id.clone(), "passwordone".to_string()),
+            (w.keys[1].id.clone(), "passwordtwo".to_string()),
+            (w.keys[2].id.clone(), "passwordthree".to_string()),
+        ];
+        let all = vec![DiscoveredUtxo {
+            txo: format!("{}:0", "11".repeat(32)),
+            amount_sats: 100_000,
+            height: 1,
+            path: "m/0/0".into(),
+            script: "p2wpkh".into(),
+        }];
+        let ltc = address_for(&any_pubkey(), "p2wpkh", "litecoin").unwrap();
+        assert!(ltc.starts_with("ltc1"));
+
+        // Auto-input path: an LTC address on a BTC send (and a BTC one on LTC).
+        let err = build_and_sign_from_utxos(&env, &a.id, &unlock, "bitcoin", &ltc, 50_000, 5, &all).unwrap_err();
+        assert!(err.to_string().contains("invalid bitcoin address"), "{err}");
+        assert!(build_and_sign_from_utxos(&env, &a.id, &unlock, "litecoin", &a.address, 50_000, 5, &all).is_err());
+        build_and_sign_from_utxos(&env, &a.id, &unlock, "bitcoin", &a.address, 50_000, 5, &all).expect("own-chain send");
+
+        // Explicit-UTXO path with a chain.
+        let utxos = vec![Utxo { txid: [0x22; 32], vout: 0, amount: 100_000, script_pubkey: Vec::new() }];
+        assert!(sign_transfer_on_chain(&env, &a.id, &unlock, "bitcoin", &utxos, &[(ltc.clone(), 90_000)]).is_err());
+        assert!(sign_transfer_on_chain(&env, &a.id, &unlock, "nonsense", &utxos, &[(a.address.clone(), 90_000)]).is_err());
+        sign_transfer_on_chain(&env, &a.id, &unlock, "bitcoin", &utxos, &[(a.address.clone(), 90_000)]).expect("own-chain send");
     }
 
     #[test]
