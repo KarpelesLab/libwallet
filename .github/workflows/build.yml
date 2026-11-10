@@ -11,6 +11,10 @@ on:
     branches: [master]
     tags: ["v*"]
 
+# Least privilege by default; the release job below opts into contents: write.
+permissions:
+  contents: read
+
 jobs:
   build-linux:
     runs-on: ubuntu-latest
