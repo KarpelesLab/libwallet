@@ -140,6 +140,18 @@ function setConsoleMode(on) {
   const ls = $('#lockState');
   if (ls) ls.style.display = on ? 'none' : '';
   $('#bkBackToSetup')?.classList.toggle('hidden', !on);
+  $('#lgBackToSetup')?.classList.toggle('hidden', !on);
+}
+
+// The Ledger area works without a walletcore wallet too: same console mode,
+// landing on the Ledger tab.
+function openLedgerArea() {
+  setConsoleMode(true);
+  showScreen('dashboard');
+  $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'ledger'));
+  $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'ledger'));
+  backendOpen();
+  ledgerInit();
 }
 
 function openBackendConsole() {
@@ -938,6 +950,8 @@ function wireStaticEvents() {
   // Developer entry: open the on-device MPC backend console (passkeys / TSS)
   // without first creating a walletcore wallet; and the way back.
   $('#openBackendConsole').onclick = openBackendConsole;
+  $('#openLedgerArea').onclick = openLedgerArea;
+  $('#lgBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('choose'); };
   $('#bkBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('choose'); };
 
   // --- Create: word count toggle ---
@@ -1044,6 +1058,7 @@ function wireStaticEvents() {
     b.classList.add('on');
     $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
     if (b.dataset.tab === 'backend') backendOpen();
+    if (b.dataset.tab === 'ledger') { backendOpen(); ledgerInit(); }
   });
 
   wireBackendEvents();
@@ -1422,6 +1437,7 @@ function backendOpen() {
       let name = 'event';
       try { const e = JSON.parse(json); name = e.event || 'event'; } catch {}
       bkLog('evt', name + ' · ' + json);
+      if (name === 'ledger:progress') { try { ledgerProgress(JSON.parse(json).data); } catch {} }
     });
   } catch { /* callback wiring is best-effort */ }
 
@@ -2277,4 +2293,348 @@ function confirmRemove() {
       </div>
     </div>`);
   $('#confirmRemoveGo').onclick = removeWallet;
+}
+
+
+// ============================================================================
+// Ledger hardware wallets — device, apps, firmware, accounts, send.
+//
+// Everything goes through the libwallet backend's Ledger:* routes (WebHID
+// inside the wasm). The device runs one app at a time, so each operation first
+// makes sure the right one is open (ledgerEnsureApp) — quitting another app,
+// opening the one needed, and offering to install it when it is missing.
+// ============================================================================
+
+const LEDGER_APPS = { ethereum: 'Ethereum', bitcoin: 'Bitcoin', solana: 'Solana' };
+const LEDGER_DECIMALS = { ethereum: 18, solana: 9 };
+const LEDGER_SYMBOL = { ethereum: 'ETH', bitcoin: 'BTC', solana: 'SOL' };
+const ledger = { wired: false, connected: false, busy: false, wallet: null, accounts: [], update: null, installed: null };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function ledgerState(kind, text) {
+  $('#lgState').className = 'bk-status' + (kind ? ' ' + kind : '');
+  $('#lgStateText').textContent = text;
+}
+
+function ledgerEnable() {
+  const on = ledger.connected && !ledger.busy;
+  ['#lgRefresh', '#lgGenuine', '#lgAppsList', '#lgInstallOther'].forEach(id => { $(id).disabled = !on; });
+  $$('[data-lg-add]').forEach(b => { b.disabled = !on; });
+  $$('#lgNeeded button, #lgInstalled button, #lgAccounts button').forEach(b => { b.disabled = !on; });
+  $('#lgConnect').disabled = ledger.busy;
+  $('#lgSendBtn').disabled = !on || !ledger.accounts.some(a => LEDGER_DECIMALS[a.Type] != null);
+}
+
+// Run one user action: serialise them (the device does one thing at a time),
+// reflect busy state, and put a failure where the user is looking.
+async function ledgerRun(errSel, fn) {
+  if (ledger.busy) return;
+  ledger.busy = true; ledgerEnable();
+  $(errSel).textContent = '';
+  try { return await fn(); }
+  catch (e) {
+    $(errSel).textContent = e.code === 4001 ? 'Cancelled on the device.' : (e.message || String(e));
+  } finally {
+    ledger.busy = false; ledgerEnable();
+    $('#lgProgress').classList.add('hidden');
+  }
+}
+
+function ledgerProgress(d) {
+  if (!d) return;
+  const what = { install: 'Installing', uninstall: 'Removing', genuine: 'Checking', firmware: 'Updating firmware', flash: 'Flashing' }[d.op] || 'Working';
+  let text = `${what}${d.app ? ' ' + d.app : ''}…`;
+  if (d.type === 'permissionRequested') text = 'Allow the manager on your device to continue.';
+  if (d.type === 'warning' && d.message) text = d.message;
+  $('#lgProgress').classList.remove('hidden');
+  $('#lgProgressText').textContent = text;
+  if (d.type === 'progress' && typeof d.progress === 'number') $('#lgProgressBar').value = d.progress;
+}
+
+// Wait for the device to come back (it reconnects when an app opens or
+// closes), optionally until it runs `wantApp` ('' = the dashboard).
+async function ledgerWait(wantApp, tries = 20) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    await sleep(750);
+    try {
+      const info = await backendRequest('Ledger:info', 'POST', {});
+      if (wantApp == null || (wantApp === '' ? info.dashboard : info.app.name === wantApp)) return info;
+    } catch (e) { last = e; }
+  }
+  throw last || new Error('The device did not come back. Unlock it and try again.');
+}
+
+async function ledgerEnsureDashboard() {
+  const info = await backendRequest('Ledger:info', 'POST', {});
+  if (info.dashboard) return;
+  await backendRequest('Ledger:quitApp', 'POST', {});
+  await ledgerWait('');
+}
+
+function ledgerConfirm(title, text, action) {
+  return new Promise(resolve => {
+    openModal(`
+      <div class="card-pad stack" style="--gap:18px">
+        <div class="eyebrow">Ledger</div>
+        <h2 class="title">${esc(title)}</h2>
+        <p class="subtitle">${esc(text)}</p>
+        <div class="btn-row">
+          <button class="btn subtle" type="button" id="lgNo">Not now</button>
+          <button class="btn primary grow" type="button" id="lgYes">${esc(action)}</button>
+        </div>
+      </div>`);
+    $('#lgNo').onclick = () => { closeModal(); resolve(false); };
+    $('#lgYes').onclick = () => { closeModal(); resolve(true); };
+  });
+}
+
+// Make sure `name` is the app running on the device. A missing app is offered
+// for installation rather than reported as an error.
+async function ledgerEnsureApp(name) {
+  const info = await backendRequest('Ledger:info', 'POST', {});
+  if (info.app.name === name) return;
+  if (!info.dashboard) {
+    await backendRequest('Ledger:quitApp', 'POST', {});
+    await ledgerWait('');
+  }
+  try {
+    await backendRequest('Ledger:openApp', 'POST', { Name: name });
+  } catch (e) {
+    if (e.code !== 404) throw e;
+    const ok = await ledgerConfirm(`Install the ${name} app?`,
+      `Your device does not have the ${name} app, which is needed for this. It can be installed now; your device will ask you to allow it.`,
+      `Install ${name}`);
+    if (!ok) throw new Error(`The ${name} app is not installed on the device.`);
+    await backendRequest('Ledger:installApp', 'POST', { Name: name });
+    ledger.installed = null;
+    toast('ok', `${name} app installed`);
+    await backendRequest('Ledger:openApp', 'POST', { Name: name });
+  }
+  await ledgerWait(name);
+}
+
+function ledgerKv(rows) {
+  return rows.map(([k, v]) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
+}
+
+async function ledgerRefresh() {
+  const info = await backendRequest('Ledger:info', 'POST', {});
+  ledger.connected = true;
+  ledgerState('live', info.dashboard ? 'connected' : `${info.app.name} app open`);
+  const rows = [['Running', info.dashboard ? 'Dashboard' : `${info.app.name} ${info.app.version}`]];
+  $('#lgFirmware').classList.add('hidden');
+  ledger.update = null;
+  if (info.dashboard) {
+    // Firmware details and the update check are only available from the dashboard.
+    try {
+      const st = await backendRequest('Ledger:status', 'POST', {});
+      if (st.model) rows.push(['Model', st.model]);
+      rows.push(['Firmware', st.firmware + (st.bootloader ? ' (bootloader)' : st.updater ? ' (updating)' : '')]);
+      if (st.bootloader || st.updater) {
+        $('#lgFirmware').classList.remove('hidden');
+        $('#lgFirmwareText').textContent = 'A firmware update is in progress on this device.';
+        $('#lgFirmwareBtn').classList.add('hidden');
+        $('#lgFirmwareContinue').classList.remove('hidden');
+      } else if (st.update) {
+        ledger.update = st.update;
+        rows.push(['Update available', st.update.version]);
+        $('#lgFirmware').classList.remove('hidden');
+        $('#lgFirmwareText').textContent = `Firmware ${st.update.version} is available. Have your 24-word recovery phrase at hand before updating, and keep the device connected until it finishes.`;
+        $('#lgFirmwareBtn').classList.remove('hidden');
+        $('#lgFirmwareContinue').classList.add('hidden');
+      } else if (!st.updateError) {
+        rows.push(['Update', 'Up to date']);
+      }
+    } catch (e) { rows.push(['Firmware', 'unavailable: ' + (e.message || e)]); }
+  } else {
+    rows.push(['Firmware', 'Close the app on the device to see firmware details']);
+  }
+  $('#lgInfo').innerHTML = ledgerKv(rows);
+  $('#lgInfo').classList.remove('hidden');
+  ledgerRenderNeeded();
+}
+
+function ledgerRenderNeeded() {
+  const have = ledger.installed && new Set(ledger.installed.map(a => a.name));
+  $('#lgNeeded').innerHTML = Object.values(LEDGER_APPS).map(name => {
+    const state = !have ? 'Unknown' : have.has(name) ? 'Installed' : 'Not installed';
+    const action = have && have.has(name) ? '' : `<button class="btn ghost sm" type="button" data-lg-install="${esc(name)}">Install</button>`;
+    return `<div class="kv"><span class="k">${esc(name)}</span><span class="v">${esc(state)} ${action}</span></div>`;
+  }).join('');
+  $$('[data-lg-install]').forEach(b => { b.onclick = () => ledgerInstall(b.dataset.lgInstall); });
+  ledgerEnable();
+}
+
+function ledgerInstall(name) {
+  return ledgerRun('#lgAppsErr', async () => {
+    await ledgerEnsureDashboard();
+    await backendRequest('Ledger:installApp', 'POST', { Name: name });
+    if (ledger.installed && !ledger.installed.some(a => a.name === name)) ledger.installed.push({ name });
+    toast('ok', `${name} app installed`);
+    ledgerRenderNeeded(); ledgerRenderInstalled();
+  });
+}
+
+function ledgerRenderInstalled() {
+  if (!ledger.installed) return;
+  $('#lgInstalled').classList.remove('hidden');
+  $('#lgInstalled').innerHTML = ledger.installed.length
+    ? ledger.installed.map(a => `<div class="kv"><span class="k">${esc(a.displayName || a.name)}${a.version ? ' ' + esc(a.version) : ''}</span><span class="v"><button class="btn ghost sm" type="button" data-lg-remove="${esc(a.name)}">Remove</button></span></div>`).join('')
+    : '<div class="kv"><span class="k">No apps installed</span></div>';
+  $$('[data-lg-remove]').forEach(b => {
+    b.onclick = () => ledgerRun('#lgAppsErr', async () => {
+      const name = b.dataset.lgRemove;
+      if (!(await ledgerConfirm(`Remove the ${name} app?`, 'Removing an app does not affect your funds: your keys stay on the device and the app can be installed again.', 'Remove'))) return;
+      await ledgerEnsureDashboard();
+      await backendRequest('Ledger:uninstallApp', 'POST', { Name: name });
+      ledger.installed = ledger.installed.filter(a => a.name !== name);
+      ledgerRenderNeeded(); ledgerRenderInstalled();
+    });
+  });
+  ledgerEnable();
+}
+
+async function ledgerLoadCatalog() {
+  try {
+    const list = await backendRequest('Ledger:catalog', 'POST', {});
+    $('#lgCatalog').innerHTML = list.map(a => `<option value="${esc(a.name)}"></option>`).join('');
+  } catch { /* the catalog is a convenience */ }
+}
+
+function ledgerRenderAccounts() {
+  $('#lgAccounts').innerHTML = ledger.accounts.map(a => `
+    <div class="kv">
+      <span class="k">${esc(LEDGER_SYMBOL[a.Type] || a.Type)} · <span data-lg-bal="${esc(a.Id)}">…</span></span>
+      <span class="v">${esc(a.Address)} <button class="btn ghost sm" type="button" data-lg-verify="${esc(a.Id)}">Verify on device</button></span>
+    </div>`).join('');
+  $$('[data-lg-verify]').forEach(b => {
+    b.onclick = () => ledgerRun('#lgAcctErr', async () => {
+      const a = ledger.accounts.find(x => x.Id === b.dataset.lgVerify);
+      await ledgerEnsureApp(LEDGER_APPS[a.Type]);
+      toast('ok', 'Check the address on your device');
+      await backendRequest('Ledger:showAddress', 'POST', { Account: a.Id });
+      toast('ok', 'Address confirmed', a.Address);
+    });
+  });
+  const sendable = ledger.accounts.filter(a => LEDGER_DECIMALS[a.Type] != null);
+  $('#lgSendAccount').innerHTML = sendable.length
+    ? sendable.map(a => `<option value="${esc(a.Id)}">${esc(LEDGER_SYMBOL[a.Type])} · ${esc(short(a.Address, 10, 8))}</option>`).join('')
+    : '<option value="">Add an account first</option>';
+  ledgerEnable();
+  ledger.accounts.forEach(async a => {
+    const cell = $(`[data-lg-bal="${CSS.escape(a.Id)}"]`);
+    try {
+      const r = await backendRequest('Account:balance', 'POST', { Id: a.Id });
+      const dec = { ethereum: 18, bitcoin: 8, solana: 9 }[a.Type] ?? 0;
+      if (cell) cell.textContent = formatUnits(BigInt(r.balance ?? r.Balance ?? '0'), dec, 6);
+    } catch { if (cell) cell.textContent = 'balance unavailable'; }
+  });
+}
+
+function ledgerAddAccounts(app) {
+  return ledgerRun('#lgAcctErr', async () => {
+    await ledgerEnsureApp(app);
+    const keys = await backendRequest('Ledger:getKeys', 'POST', {});
+    const params = { Keys: keys.keys, Name: 'Ledger' };
+    if (keys.master_fingerprint) params.MasterFingerprint = keys.master_fingerprint;
+    if (ledger.wallet) params.Wallet = ledger.wallet;
+    const res = await backendRequest('Ledger:import', 'POST', params);
+    ledger.wallet = res.wallet.Id;
+    for (const a of res.accounts) if (!ledger.accounts.some(x => x.Id === a.Id)) ledger.accounts.push(a);
+    ledgerRenderAccounts();
+    toast('ok', res.accounts.length ? `${app} account added` : `${app} account already added`);
+  });
+}
+
+function ledgerSend() {
+  return ledgerRun('#lgSendErr', async () => {
+    const a = ledger.accounts.find(x => x.Id === $('#lgSendAccount').value);
+    if (!a) throw new Error('Choose an account.');
+    const to = $('#lgSendTo').value.trim();
+    if (!to) throw new Error('Enter a recipient address.');
+    const units = toBaseUnits($('#lgSendAmount').value, LEDGER_DECIMALS[a.Type]);
+    if (units <= 0n) throw new Error('Enter an amount.');
+    const tx = a.Type === 'ethereum' ? { to, value: units.toString() } : { to, amount: units.toString() };
+    await ledgerEnsureApp(LEDGER_APPS[a.Type]);
+    toast('ok', 'Review the transaction on your device');
+    const out = await backendRequest('Ledger:signTransaction', 'POST', { Account: a.Id, Transaction: tx, Broadcast: true });
+    $('#lgSendTo').value = ''; $('#lgSendAmount').value = '';
+    toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
+    setTimeout(ledgerRenderAccounts, 2500);
+  });
+}
+
+// Firmware update. Step 1 installs the updater and the device reboots; older
+// models then need their MCU / bootloader flashed while in bootloader mode,
+// where the device shows up as a different USB product — hence the explicit
+// "reconnect & continue" step with the browser's device picker.
+function ledgerFirmwareStart() {
+  return ledgerRun('#lgErr', async () => {
+    if (!ledger.update) return;
+    if (!(await ledgerConfirm(`Update firmware to ${ledger.update.version}?`,
+      'Make sure you have your 24-word recovery phrase. Do not unplug the device during the update. Apps may need to be reinstalled afterwards.',
+      'Update'))) return;
+    await ledgerEnsureDashboard();
+    const r = await backendRequest('Ledger:firmwareUpdate', 'POST', { Update: ledger.update.handle });
+    ledger.connected = false;
+    ledgerState('busy', 'restarting');
+    $('#lgFirmwareBtn').classList.add('hidden');
+    $('#lgFirmwareContinue').classList.remove('hidden');
+    $('#lgFirmwareText').textContent = r.flashMcu
+      ? 'The device is restarting in bootloader mode. When it is back, press "Reconnect & continue update" and select it again.'
+      : 'The device is installing the update and will restart. When it is back, press "Reconnect & continue update".';
+  });
+}
+
+function ledgerFirmwareContinue() {
+  return ledgerRun('#lgErr', async () => {
+    await backendRequest('Ledger:info', 'POST', { Request: true }).catch(() => {});
+    // Flash for as long as the device keeps coming back in bootloader mode.
+    for (let i = 0; i < 4; i++) {
+      const st = await backendRequest('Ledger:status', 'POST', {});
+      if (!st.bootloader) break;
+      await backendRequest('Ledger:firmwareFlash', 'POST', ledger.update ? { Update: ledger.update.handle } : {});
+      await sleep(4000);
+    }
+    await ledgerRefresh();
+  });
+}
+
+function ledgerInit() {
+  if (ledger.wired) return;
+  ledger.wired = true;
+  if (!('hid' in navigator)) {
+    $('#lgIntro').textContent = 'This browser cannot talk to USB devices (WebHID). Use Chrome, Edge or another Chromium browser on a computer.';
+    $('#lgConnect').disabled = true;
+    ledgerState('err', 'unsupported browser');
+    return;
+  }
+  ledgerRenderNeeded();
+  // The picker needs the click's user activation: request the device first.
+  $('#lgConnect').onclick = () => ledgerRun('#lgErr', async () => {
+    await backendRequest('Ledger:info', 'POST', { Request: true });
+    await ledgerRefresh();
+    ledgerLoadCatalog();
+  });
+  $('#lgRefresh').onclick = () => ledgerRun('#lgErr', ledgerRefresh);
+  $('#lgGenuine').onclick = () => ledgerRun('#lgErr', async () => {
+    await ledgerEnsureDashboard();
+    const r = await backendRequest('Ledger:genuineCheck', 'POST', {});
+    if (r.genuine) toast('ok', 'Device is genuine'); else toast('error', 'Genuine check failed', 'The manufacturer did not vouch for this device.');
+  });
+  $('#lgAppsList').onclick = () => ledgerRun('#lgAppsErr', async () => {
+    await ledgerEnsureDashboard();
+    toast('ok', 'Allow the listing on your device');
+    ledger.installed = await backendRequest('Ledger:apps', 'POST', {});
+    ledgerRenderNeeded(); ledgerRenderInstalled();
+  });
+  $('#lgInstallOther').onclick = () => {
+    const name = $('#lgAppName').value.trim();
+    if (name) ledgerInstall(name).then(() => { $('#lgAppName').value = ''; });
+  };
+  $$('[data-lg-add]').forEach(b => { b.onclick = () => ledgerAddAccounts(b.dataset.lgAdd); });
+  $('#lgSendBtn').onclick = ledgerSend;
+  $('#lgFirmwareBtn').onclick = ledgerFirmwareStart;
+  $('#lgFirmwareContinue').onclick = ledgerFirmwareContinue;
 }
