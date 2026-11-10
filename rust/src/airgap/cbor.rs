@@ -72,6 +72,15 @@ pub fn as_u64(v: &Value) -> Option<u64> {
         _ => None,
     }
 }
+/// An optional unsigned-integer map field that must fit `T`. Absent → `None`;
+/// present but negative, not an integer, or too large for `T` → an error
+/// (never a silent `as` truncation of a scanned value).
+pub fn opt_uint<T: TryFrom<u64>>(map: &Value, key: u64, what: &str) -> Result<Option<T>> {
+    match get(map, key) {
+        None => Ok(None),
+        Some(v) => as_u64(v).and_then(|n| T::try_from(n).ok()).map(Some).ok_or_else(|| Error::Env(format!("{what}: field {key} is not an unsigned integer in range"))),
+    }
+}
 pub fn as_bool(v: &Value) -> Option<bool> {
     match v {
         Value::Bool(b) => Some(*b),

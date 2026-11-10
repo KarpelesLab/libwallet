@@ -143,7 +143,8 @@ impl KeyPath {
             // Each component is `index, hardened` — a range `[lo, hi]` or a
             // wildcard `[]` as index is not a single key; reject those.
             let idx = match &comps[i] {
-                Value::Integer(_) => cbor::as_u64(&comps[i]).unwrap(),
+                // Negative (or > u64) integers are valid CBOR but not an index.
+                Value::Integer(_) => cbor::as_u64(&comps[i]).ok_or_else(|| Error::Env("keypath index out of range".into()))?,
                 Value::Array(a) if a.is_empty() => return Err(Error::Env("wildcard keypath components are not supported".into())),
                 _ => return Err(Error::Env("unsupported keypath component".into())),
             };
@@ -156,8 +157,8 @@ impl KeyPath {
         }
         Ok(Self {
             components,
-            source_fingerprint: cbor::get(v, 2).and_then(cbor::as_u64).map(|f| f as u32),
-            depth: cbor::get(v, 3).and_then(cbor::as_u64).map(|d| d as u8),
+            source_fingerprint: cbor::opt_uint::<u32>(v, 2, "keypath source-fingerprint")?,
+            depth: cbor::opt_uint::<u8>(v, 3, "keypath depth")?,
         })
     }
 }
@@ -184,8 +185,8 @@ impl CoinInfo {
     pub fn from_cbor(v: &Value) -> Result<Self> {
         let (v, _) = cbor::untag(v);
         Ok(Self {
-            coin_type: cbor::get(v, 1).and_then(cbor::as_u64).unwrap_or(0) as u32,
-            network: cbor::get(v, 2).and_then(cbor::as_u64).unwrap_or(0) as u32,
+            coin_type: cbor::opt_uint::<u32>(v, 1, "coin-info type")?.unwrap_or(0),
+            network: cbor::opt_uint::<u32>(v, 2, "coin-info network")?.unwrap_or(0),
         })
     }
 }
@@ -251,7 +252,7 @@ impl HdKey {
             use_info: cbor::get(v, 5).map(CoinInfo::from_cbor).transpose()?,
             origin: cbor::get(v, 6).map(KeyPath::from_cbor).transpose()?,
             children: cbor::get(v, 7).map(KeyPath::from_cbor).transpose()?,
-            parent_fingerprint: cbor::get(v, 8).and_then(cbor::as_u64).map(|f| f as u32),
+            parent_fingerprint: cbor::opt_uint::<u32>(v, 8, "hdkey parent-fingerprint")?,
             name: cbor::get(v, 9).and_then(cbor::as_text).map(str::to_owned),
             note: cbor::get(v, 10).and_then(cbor::as_text).map(str::to_owned),
         })
@@ -383,7 +384,7 @@ impl CryptoAccount {
     }
     pub fn from_cbor(v: &Value) -> Result<Self> {
         let (v, _) = cbor::untag(v);
-        let fp = cbor::get(v, 1).and_then(cbor::as_u64).unwrap_or(0) as u32;
+        let fp = cbor::opt_uint::<u32>(v, 1, "crypto-account master-fingerprint")?.unwrap_or(0);
         let outs = cbor::as_array(cbor::need(v, 2, "crypto-account")?).ok_or_else(|| Error::Env("output-descriptors not an array".into()))?;
         let mut outputs = Vec::new();
         for o in outs {
@@ -423,7 +424,7 @@ impl MultiAccounts {
         let (v, _) = cbor::untag(v);
         let keys = cbor::as_array(cbor::need(v, 2, "crypto-multi-accounts")?).ok_or_else(|| Error::Env("keys not an array".into()))?;
         Ok(Self {
-            master_fingerprint: cbor::get(v, 1).and_then(cbor::as_u64).unwrap_or(0) as u32,
+            master_fingerprint: cbor::opt_uint::<u32>(v, 1, "crypto-multi-accounts master-fingerprint")?.unwrap_or(0),
             keys: keys.iter().map(HdKey::from_cbor).collect::<Result<_>>()?,
             device: cbor::get(v, 3).and_then(cbor::as_text).map(str::to_owned),
             device_id: cbor::get(v, 4).and_then(cbor::as_text).map(str::to_owned),
@@ -729,6 +730,40 @@ mod tests {
         // BCR-2020-007 keypath example: m/44'/1'/1'/0/1 with fingerprint.
         let hex = super::super::hex(&cbor::to_bytes(&KeyPath::parse("m/44'/1'/1'/0/1").unwrap().to_cbor()).unwrap());
         assert_eq!(hex, "a1018a182cf501f501f500f401f4");
+    }
+
+    #[test]
+    fn scanned_integers_are_range_checked_not_truncated() {
+        use ciborium::value::Integer;
+        let neg = || Value::Integer(Integer::from(-1));
+        let big = || cbor::uint(0x1_0000_0001); // would truncate to 1 as u32
+        let path = |comps: Vec<Value>| MapBuilder::new().put(1, Value::Array(comps));
+
+        // AG-03: a negative keypath index is an error, not a panic.
+        assert!(KeyPath::from_cbor(&path(vec![neg(), Value::Bool(true)]).build()).is_err());
+        assert!(KeyPath::from_cbor(&path(vec![cbor::uint(u64::MAX), Value::Bool(false)]).build()).is_err());
+        assert!(KeyPath::from_cbor(&path(vec![cbor::uint(HARDENED as u64), Value::Bool(false)]).build()).is_err());
+        // The same through a whole scanned hdkey / multi-accounts body.
+        let hd = |origin: Value| MapBuilder::new().put(3, cbor::bytes(&[2; 33])).put(6, cbor::tagged(TAG_KEYPATH, origin)).build();
+        assert!(HdKey::from_cbor(&hd(path(vec![neg(), Value::Bool(true)]).build())).is_err());
+        let bytes = cbor::to_bytes(&MapBuilder::new().put(1, cbor::uint(1)).put(2, Value::Array(vec![cbor::tagged(TAG_HDKEY, hd(path(vec![neg(), Value::Bool(true)]).build()))])).build()).unwrap();
+        let _ = describe(UR_MULTI_ACCOUNTS, &bytes); // falls back to the dump
+        assert!(MultiAccounts::from_cbor(&cbor::from_bytes(&bytes).unwrap()).is_err());
+
+        // AG-11: fingerprints, depth, coin type, network must fit their type.
+        let ok = path(vec![cbor::uint(44), Value::Bool(true)]);
+        assert!(KeyPath::from_cbor(&path(vec![]).put(2, big()).build()).is_err());
+        assert!(KeyPath::from_cbor(&path(vec![]).put(2, neg()).build()).is_err());
+        assert!(KeyPath::from_cbor(&path(vec![]).put(3, cbor::uint(256)).build()).is_err());
+        let p = KeyPath::from_cbor(&ok.put(2, cbor::uint(u32::MAX as u64)).put(3, cbor::uint(255)).build()).unwrap();
+        assert_eq!((p.source_fingerprint, p.depth), (Some(u32::MAX), Some(255)));
+        assert!(CoinInfo::from_cbor(&MapBuilder::new().put(1, big()).build()).is_err());
+        assert!(CoinInfo::from_cbor(&MapBuilder::new().put(2, big()).build()).is_err());
+        assert_eq!(CoinInfo::from_cbor(&MapBuilder::new().build()).unwrap(), CoinInfo { coin_type: 0, network: 0 });
+        assert!(HdKey::from_cbor(&MapBuilder::new().put(3, cbor::bytes(&[2; 33])).put(8, big()).build()).is_err());
+        assert!(CryptoAccount::from_cbor(&MapBuilder::new().put(1, big()).put(2, Value::Array(vec![])).build()).is_err());
+        assert!(MultiAccounts::from_cbor(&MapBuilder::new().put(1, big()).put(2, Value::Array(vec![])).build()).is_err());
+        assert_eq!(MultiAccounts::from_cbor(&MapBuilder::new().put(2, Value::Array(vec![])).build()).unwrap().master_fingerprint, 0);
     }
 
     #[test]
