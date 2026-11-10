@@ -87,11 +87,60 @@
                 <p>Restore an existing 12 or 24-word BIP-39 wallet.</p>
               </span>
             </button>
+            <button class="choice" type="button" data-go="hardware">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="7" y="2.5" width="10" height="19" rx="2.5" stroke="currentColor" stroke-width="1.8"/><path d="M10 7h4M12 16.5v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+              </span>
+              <span>
+                <h4>Use a hardware wallet</h4>
+                <p>Ledger, Keystone, CatCard and Coldcard. Your keys stay on the device.</p>
+              </span>
+            </button>
           </div>
           <p class="foot">Works fully offline once loaded · open source</p>
           <p class="foot"><a href="./recover/bitfi.html">Recover a Bitfi wallet</a></p>
-          <p class="foot"><button type="button" class="ghost-btn" id="openLedgerArea">Use a Ledger hardware wallet →</button></p>
           <p class="foot"><button type="button" class="ghost-btn" id="openBackendConsole">Developer · on-device MPC backend (passkeys · TSS) →</button></p>
+        </div>
+      </div>
+
+      <!-- Step: hardware wallet — pick the device -->
+      <div class="card rise hidden" data-step="hardware">
+        <div class="card-pad stack" style="--gap:22px">
+          <div class="stack" style="--gap:10px">
+            <div class="eyebrow">Hardware wallet · keys stay on the device</div>
+            <h1 class="title">Which device do you have?</h1>
+            <p class="subtitle">This page only reads public keys and asks your device to sign what you review on its screen.</p>
+          </div>
+          <div class="choices">
+            <button class="choice" type="button" data-hw="ledger">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M9 3v5M15 3v5M7 8h10v4a5 5 0 01-10 0V8zM12 17v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span>
+                <h4>Ledger</h4>
+                <p>Nano, Stax or Flex over USB. Also manages apps and firmware.</p>
+              </span>
+            </button>
+            <button class="choice" type="button" data-hw="keystone">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18v2" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              </span>
+              <span>
+                <h4>Keystone</h4>
+                <p>Air-gapped, over QR codes. Works with other UR-compatible signers too.</p>
+              </span>
+            </button>
+            <button class="choice" type="button" data-hw="catcard">
+              <span class="ic" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><rect x="5" y="3" width="14" height="18" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8.5 7h7v4h-7zM9 15h.01M12 15h.01M15 15h.01M9 18h.01M12 18h.01M15 18h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <span>
+                <h4>CatCard · Coldcard</h4>
+                <p>Air-gapped, over QR codes (Q1) or files on a microSD card.</p>
+              </span>
+            </button>
+          </div>
+          <button class="btn subtle" type="button" data-back="choose">Back</button>
         </div>
       </div>
 
@@ -283,7 +332,7 @@
           <button class="on" data-tab="accounts" role="tab">Accounts</button>
           <button data-tab="send" role="tab">Send</button>
           <button data-tab="settings" role="tab">Settings</button>
-          <button data-tab="ledger" role="tab">Ledger</button>
+          <button data-tab="ledger" role="tab">Hardware</button>
           <button data-tab="backend" role="tab">Backend</button>
         </div>
 
@@ -355,6 +404,14 @@
         <!-- Ledger pane — hardware wallet: device, apps, firmware, accounts -->
         <div class="tabpane" data-pane="ledger">
           <button type="button" class="ghost-btn hidden" id="lgBackToSetup" style="margin-bottom:10px">← Back to wallet setup</button>
+
+          <div class="segmented" id="hwDevice" role="group" aria-label="Device" style="margin-bottom:18px">
+            <button type="button" data-hw="ledger" class="on">Ledger</button>
+            <button type="button" data-hw="keystone">Keystone</button>
+            <button type="button" data-hw="catcard">CatCard · Coldcard</button>
+          </div>
+
+          <div id="hwLedger">
 
           <div class="bk-block">
             <div class="section-head">
@@ -445,6 +502,55 @@
                 <div class="err-inline" id="lgSendErr"></div>
                 <button class="btn primary block" type="button" id="lgSendBtn" disabled>Review on device &amp; send</button>
                 <p class="subtitle">You review and approve the transaction on the device's screen; nothing is sent until you do.</p>
+              </div>
+            </div>
+          </div>
+          </div><!-- /#hwLedger -->
+
+          <!-- Air-gapped signers: Keystone (UR), CatCard / Coldcard (BBQr, files) -->
+          <div id="hwQr" class="hidden">
+            <div class="bk-block">
+              <div class="section-head">
+                <div class="eyebrow muted">Add accounts · <span id="qrDeviceName">Keystone</span></div>
+              </div>
+              <div class="asset">
+                <div class="form-grid">
+                  <p class="subtitle" id="qrImportHelp"></p>
+                  <div class="btn-row wrap">
+                    <button class="btn primary" type="button" id="qrScanKeys">Scan QR with camera</button>
+                    <label class="btn subtle" for="qrKeysFile">Upload file</label>
+                    <input type="file" id="qrKeysFile" class="hidden" />
+                  </div>
+                  <textarea class="textarea mono" id="qrKeysText" spellcheck="false" autocapitalize="off" placeholder="…or paste the export here (ur:…, B$…, xpub / zpub, descriptor, JSON)" style="min-height:80px"></textarea>
+                  <button class="btn subtle" type="button" id="qrKeysImport">Add from pasted text</button>
+                  <div class="err-inline" id="qrKeysErr"></div>
+                  <div id="qrAccounts"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="bk-block">
+              <div class="section-head">
+                <div class="eyebrow muted">Send · signed on the device</div>
+              </div>
+              <div class="asset">
+                <div class="form-grid">
+                  <div>
+                    <label class="field-label" for="qrSendAccount">From</label>
+                    <select class="input mono" id="qrSendAccount" style="font-size:12.5px"><option value="">Add an account first</option></select>
+                  </div>
+                  <div>
+                    <label class="field-label" for="qrSendTo">To</label>
+                    <input class="input mono" id="qrSendTo" placeholder="Recipient address" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div>
+                    <label class="field-label" for="qrSendAmount">Amount</label>
+                    <input class="input mono" id="qrSendAmount" placeholder="0.0" inputmode="decimal" autocomplete="off" />
+                  </div>
+                  <div class="err-inline" id="qrSendErr"></div>
+                  <button class="btn primary block" type="button" id="qrSendBtn" disabled>Create transaction to sign</button>
+                  <p class="subtitle">The unsigned transaction is shown as a QR code for your device. After you approve it there, scan the device's answer to send.</p>
+                </div>
               </div>
             </div>
           </div>

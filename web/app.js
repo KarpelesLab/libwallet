@@ -143,15 +143,15 @@ function setConsoleMode(on) {
   $('#lgBackToSetup')?.classList.toggle('hidden', !on);
 }
 
-// The Ledger area works without a walletcore wallet too: same console mode,
-// landing on the Ledger tab.
-function openLedgerArea() {
+// The hardware-wallet area works without a walletcore wallet too: same console
+// mode, landing on the Hardware tab with `device` selected.
+function openHardwareArea(device) {
   setConsoleMode(true);
   showScreen('dashboard');
   $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'ledger'));
   $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'ledger'));
   backendOpen();
-  ledgerInit();
+  hardwareSelect(device || 'ledger');
 }
 
 function openBackendConsole() {
@@ -950,8 +950,9 @@ function wireStaticEvents() {
   // Developer entry: open the on-device MPC backend console (passkeys / TSS)
   // without first creating a walletcore wallet; and the way back.
   $('#openBackendConsole').onclick = openBackendConsole;
-  $('#openLedgerArea').onclick = openLedgerArea;
-  $('#lgBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('choose'); };
+  $$('#screen-onboarding [data-hw]').forEach(b => { b.onclick = () => openHardwareArea(b.dataset.hw); });
+  $$('#hwDevice [data-hw]').forEach(b => { b.onclick = () => hardwareSelect(b.dataset.hw); });
+  $('#lgBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('hardware'); };
   $('#bkBackToSetup').onclick = () => { setConsoleMode(false); showScreen('onboarding'); goStep('choose'); };
 
   // --- Create: word count toggle ---
@@ -1058,7 +1059,7 @@ function wireStaticEvents() {
     b.classList.add('on');
     $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === b.dataset.tab));
     if (b.dataset.tab === 'backend') backendOpen();
-    if (b.dataset.tab === 'ledger') { backendOpen(); ledgerInit(); }
+    if (b.dataset.tab === 'ledger') { backendOpen(); hardwareSelect(hardware.device); }
   });
 
   wireBackendEvents();
@@ -2640,4 +2641,262 @@ function ledgerInit() {
   $('#lgSendBtn').onclick = ledgerSend;
   $('#lgFirmwareBtn').onclick = ledgerFirmwareStart;
   $('#lgFirmwareContinue').onclick = ledgerFirmwareContinue;
+}
+
+
+// ============================================================================
+// Hardware wallets — the device switcher, and air-gapped signers over QR.
+//
+// Each device kind is a profile: Ledger talks USB (the section above); the
+// others are air-gapped and share one flow through libwallet's Airgap:* routes
+// — read the key export (camera, file or paste), then for a send show the
+// unsigned request as an animated QR and read the device's answer back. A new
+// QR device is one more entry in HW_PROFILES.
+// ============================================================================
+
+const HW_PROFILES = {
+  ledger: { usb: true },
+  keystone: {
+    name: 'Keystone', transport: 'ur', files: false,
+    importHelp: 'On the Keystone, open the menu and choose "Connect Software Wallet", then show its QR code to your camera. Other signers that speak UR (crypto-account, crypto-hdkey) work the same way.',
+  },
+  catcard: {
+    name: 'CatCard · Coldcard', transport: 'bbqr', files: true,
+    importHelp: 'On a Q1, export the wallet as a QR code (Advanced → Export Wallet) and show it to your camera. On boards without a screen for QR, export to the microSD card and upload the file here.',
+  },
+};
+// Airgap Transaction shapes differ per chain (see docs): amounts in base units.
+const QR_DECIMALS = { ethereum: 18, bitcoin: 8, solana: 9 };
+const hardware = { device: 'ledger', wired: false, busy: false, wallets: {}, accounts: {} };
+
+function hardwareSelect(device) {
+  if (!HW_PROFILES[device]) device = 'ledger';
+  hardware.device = device;
+  $$('#hwDevice [data-hw]').forEach(b => b.classList.toggle('on', b.dataset.hw === device));
+  const usb = !!HW_PROFILES[device].usb;
+  $('#hwLedger').classList.toggle('hidden', !usb);
+  $('#hwQr').classList.toggle('hidden', usb);
+  if (usb) { ledgerInit(); return; }
+  qrInit();
+  const p = HW_PROFILES[device];
+  $('#qrDeviceName').textContent = p.name;
+  $('#qrImportHelp').textContent = p.importHelp;
+  $('#qrScanKeys').classList.toggle('hidden', !('BarcodeDetector' in window));
+  qrRenderAccounts();
+}
+
+async function qrRun(errSel, fn) {
+  if (hardware.busy) return;
+  hardware.busy = true;
+  $(errSel).textContent = '';
+  try { return await fn(); }
+  catch (e) { $(errSel).textContent = e.message || String(e); }
+  finally { hardware.busy = false; }
+}
+
+// --- Camera -----------------------------------------------------------------
+// Scan (possibly animated) QR codes into a libwallet decoder context until the
+// payload is complete. Resolves with the decoder id, or null when cancelled.
+async function qrScan(title) {
+  if (!('BarcodeDetector' in window)) throw new Error('This browser cannot scan QR codes. Paste the text or upload the file instead.');
+  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  const { Id: decoderId } = await backendRequest('Airgap:decoderNew', 'POST', {});
+  openModal(`
+    <div class="card-pad stack" style="--gap:16px">
+      <div class="eyebrow">Camera</div>
+      <h2 class="title">${esc(title)}</h2>
+      <video id="qrVideo" playsinline muted style="width:100%;border-radius:12px;background:#000"></video>
+      <progress id="qrScanBar" max="100" value="0" style="width:100%"></progress>
+      <div class="err-inline" id="qrScanErr"></div>
+      <button class="btn subtle" type="button" data-close>Cancel</button>
+    </div>`);
+  const video = $('#qrVideo');
+  video.srcObject = stream;
+  await video.play();
+  const seen = new Set();
+  try {
+    // The modal closing (Cancel, backdrop) ends the scan.
+    while ($('#qrVideo') === video) {
+      let codes = [];
+      try { codes = await detector.detect(video); } catch { /* frame not ready */ }
+      for (const c of codes) {
+        const text = c.rawValue;
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        try {
+          const p = await backendRequest('Airgap:decoderFeed', 'POST', { Id: decoderId, Part: text });
+          if ($('#qrScanBar')) $('#qrScanBar').value = p.percent ?? 0;
+          if (p.complete) { closeModal(); return decoderId; }
+        } catch (e) { if ($('#qrScanErr')) $('#qrScanErr').textContent = e.message || String(e); }
+      }
+      await sleep(120);
+    }
+    return null;
+  } finally {
+    stream.getTracks().forEach(t => t.stop());
+  }
+}
+
+// A file from the device: a binary PSBT becomes base64 (what libwallet takes
+// as a raw payload); anything else is text (JSON export, BBQr/UR frames, xpub).
+async function qrReadFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.length >= 5 && bytes[0] === 0x70 && bytes[1] === 0x73 && bytes[2] === 0x62 && bytes[3] === 0x74 && bytes[4] === 0xff) {
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
+  }
+  return new TextDecoder().decode(bytes).trim();
+}
+
+// --- Accounts ---------------------------------------------------------------
+function qrAccountsOf(device) { return hardware.accounts[device] || (hardware.accounts[device] = []); }
+
+async function qrImport(source) {
+  const p = HW_PROFILES[hardware.device];
+  const res = await backendRequest('Airgap:importKeys', 'POST', { ...source, Name: p.name });
+  hardware.wallets[hardware.device] = res.wallet.Id;
+  const list = qrAccountsOf(hardware.device);
+  for (const a of res.accounts) list.push(a);
+  qrRenderAccounts();
+  const skipped = (res.skipped || []).length;
+  toast('ok', `${res.accounts.length} account${res.accounts.length === 1 ? '' : 's'} added`, skipped ? `${skipped} key${skipped === 1 ? '' : 's'} not supported` : '');
+}
+
+function qrRenderAccounts() {
+  const list = qrAccountsOf(hardware.device);
+  $('#qrAccounts').innerHTML = list.map(a => `
+    <div class="kv">
+      <span class="k">${esc(LEDGER_SYMBOL[a.Type] || a.Type)} · <span data-qr-bal="${esc(a.Id)}">…</span></span>
+      <span class="v">${esc(a.Address)}</span>
+    </div>`).join('');
+  const sendable = list.filter(a => QR_DECIMALS[a.Type] != null);
+  $('#qrSendAccount').innerHTML = sendable.length
+    ? sendable.map(a => `<option value="${esc(a.Id)}">${esc(LEDGER_SYMBOL[a.Type])} · ${esc(short(a.Address, 10, 8))}</option>`).join('')
+    : '<option value="">Add an account first</option>';
+  $('#qrSendBtn').disabled = !sendable.length;
+  list.forEach(async a => {
+    const cell = $(`[data-qr-bal="${CSS.escape(a.Id)}"]`);
+    try {
+      const r = await backendRequest('Account:balance', 'POST', { Id: a.Id });
+      if (cell) cell.textContent = formatUnits(BigInt(r.balance ?? r.Balance ?? '0'), QR_DECIMALS[a.Type] ?? 0, 6);
+    } catch { if (cell) cell.textContent = 'balance unavailable'; }
+  });
+}
+
+// --- Send -------------------------------------------------------------------
+// Draw one QR code (rows of '0'/'1') on a canvas, with a quiet zone.
+function qrDraw(canvas, code) {
+  const quiet = 4, n = code.size + 2 * quiet;
+  const scale = Math.max(2, Math.floor(360 / n));
+  canvas.width = canvas.height = n * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  code.rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) if (row[x] === '1') ctx.fillRect((x + quiet) * scale, (y + quiet) * scale, scale, scale);
+  });
+}
+
+function qrSend() {
+  return qrRun('#qrSendErr', async () => {
+    const p = HW_PROFILES[hardware.device];
+    const a = qrAccountsOf(hardware.device).find(x => x.Id === $('#qrSendAccount').value);
+    if (!a) throw new Error('Choose an account.');
+    const to = $('#qrSendTo').value.trim();
+    if (!to) throw new Error('Enter a recipient address.');
+    const units = toBaseUnits($('#qrSendAmount').value, QR_DECIMALS[a.Type]);
+    if (units <= 0n) throw new Error('Enter an amount.');
+    const tx = a.Type === 'bitcoin' ? { To: to, Amount: Number(units) } : { to, value: units.toString() };
+    // Small frames scan reliably from a laptop screen.
+    const req = await backendRequest('Airgap:signRequest', 'POST',
+      { Account: a.Id, Transaction: tx, Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
+    const { codes } = await backendRequest('Airgap:qr', 'POST', { Parts: req.parts });
+    qrShowRequest(p, a, req, codes);
+  });
+}
+
+function qrShowRequest(profile, account, req, codes) {
+  const canScan = 'BarcodeDetector' in window;
+  const psbt = req.payload && req.payload.psbt;
+  openModal(`
+    <div class="card-pad stack" style="--gap:16px">
+      <div class="eyebrow">${esc(profile.name)} · step 1 of 2</div>
+      <h2 class="title">Scan with your device</h2>
+      <canvas id="qrCanvas" style="width:100%;max-width:360px;margin:0 auto;border-radius:10px"></canvas>
+      <p class="subtitle">${codes.length > 1 ? `Animated QR · ${codes.length} frames. ` : ''}Review and approve the transaction on the device, then bring its answer back.</p>
+      <div class="err-inline" id="qrReqErr"></div>
+      <div class="btn-row wrap">
+        ${canScan ? '<button class="btn primary grow" type="button" id="qrAnswerScan">Scan the signed answer</button>' : ''}
+        <label class="btn subtle" for="qrAnswerFile">Upload signed file</label>
+        <input type="file" id="qrAnswerFile" class="hidden" />
+        ${profile.files && psbt ? '<button class="btn subtle" type="button" id="qrPsbtSave">Save .psbt for microSD</button>' : ''}
+      </div>
+      <textarea class="textarea mono" id="qrAnswerText" spellcheck="false" placeholder="…or paste the signed answer" style="min-height:64px"></textarea>
+      <div class="btn-row">
+        <button class="btn subtle" type="button" data-close>Cancel</button>
+        <button class="btn subtle grow" type="button" id="qrAnswerPaste">Send pasted answer</button>
+      </div>
+    </div>`);
+  const canvas = $('#qrCanvas');
+  let frame = 0;
+  qrDraw(canvas, codes[0]);
+  const timer = setInterval(() => {
+    if ($('#qrCanvas') !== canvas) { clearInterval(timer); return; }
+    frame = (frame + 1) % codes.length;
+    qrDraw(canvas, codes[frame]);
+  }, 280);
+
+  const submit = async source => {
+    const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id, Broadcast: true });
+    clearInterval(timer);
+    closeModal();
+    $('#qrSendTo').value = ''; $('#qrSendAmount').value = '';
+    toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
+    setTimeout(qrRenderAccounts, 2500);
+  };
+  const guard = fn => async () => {
+    try { await fn(); } catch (e) { if ($('#qrReqErr')) $('#qrReqErr').textContent = e.message || String(e); else toast('error', 'Could not send', e.message || String(e)); }
+  };
+  if (canScan) $('#qrAnswerScan').onclick = guard(async () => {
+    clearInterval(timer);
+    const decoderId = await qrScan('Scan the signed answer');
+    if (decoderId) await submit({ DecoderId: decoderId });
+    else qrShowRequest(profile, account, req, codes); // cancelled: back to the request
+  });
+  $('#qrAnswerFile').onchange = guard(async e => { const f = e.target.files[0]; if (f) await submit({ Payload: await qrReadFile(f) }); });
+  $('#qrAnswerPaste').onclick = guard(async () => {
+    const t = $('#qrAnswerText').value.trim();
+    if (!t) throw new Error('Paste the signed answer first.');
+    await submit({ Payload: t });
+  });
+  if ($('#qrPsbtSave')) $('#qrPsbtSave').onclick = () => {
+    const bin = atob(psbt), bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    const link = el('a'); link.href = url; link.download = 'unsigned.psbt'; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+}
+
+function qrInit() {
+  if (hardware.wired) return;
+  hardware.wired = true;
+  $('#qrScanKeys').onclick = () => qrRun('#qrKeysErr', async () => {
+    const decoderId = await qrScan('Scan the key export');
+    if (decoderId) await qrImport({ DecoderId: decoderId });
+  });
+  $('#qrKeysFile').onchange = e => qrRun('#qrKeysErr', async () => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) await qrImport({ Payload: await qrReadFile(f) });
+  });
+  $('#qrKeysImport').onclick = () => qrRun('#qrKeysErr', async () => {
+    const t = $('#qrKeysText').value.trim();
+    if (!t) throw new Error('Paste the export first.');
+    await qrImport({ Payload: t });
+    $('#qrKeysText').value = '';
+  });
+  $('#qrSendBtn').onclick = qrSend;
 }
