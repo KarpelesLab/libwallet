@@ -174,29 +174,76 @@ impl TypedData {
                 Ok(keccak256(&hex_decode(s)?).to_vec())
             }
             "bool" => Ok(pad_left32(&[bool_to_byte(val)])),
-            "address" => {
-                let s = val.as_str().unwrap_or("");
-                Ok(pad_left32(&hex_decode(s)?))
-            }
+            // An absent field keeps encoding as the zero address; a value that
+            // is there must be exactly 20 bytes — never truncated to fit.
+            "address" => match val {
+                Value::Null => Ok(vec![0u8; 32]),
+                _ => {
+                    let s = val.as_str().ok_or("address value must be a hex string")?;
+                    Ok(pad_left32(&hex_exact(s, 20).ok_or("address value must be exactly 20 bytes of hex")?))
+                }
+            },
             _ if typ.starts_with("uint") => {
+                let bits = int_bits(&typ[4..]).ok_or_else(|| format!("unsupported EIP-712 type: {typ}"))?;
                 let n = bigint_from_val(val).ok_or_else(|| format!("invalid value for {typ}"))?;
                 if n.sign() == Sign::Minus {
                     return Err(format!("negative value for unsigned {typ}"));
                 }
+                if n >= (BigInt::from(1) << bits) {
+                    return Err(format!("value out of range for {typ}"));
+                }
                 Ok(encode_uint256(&n))
             }
             _ if typ.starts_with("int") => {
+                let bits = int_bits(&typ[3..]).ok_or_else(|| format!("unsupported EIP-712 type: {typ}"))?;
                 let n = bigint_from_val(val).ok_or_else(|| format!("invalid value for {typ}"))?;
+                let bound = BigInt::from(1) << (bits - 1);
+                if n >= bound || n < -bound {
+                    return Err(format!("value out of range for {typ}"));
+                }
                 Ok(encode_int256(&n))
             }
             _ if typ.starts_with("bytes") => {
-                // Fixed-size bytesN — right-padded.
-                let s = val.as_str().unwrap_or("");
-                Ok(pad_right32(&hex_decode(s)?))
+                // Fixed-size bytesN (1 ≤ N ≤ 32) — right-padded. As for an
+                // address: absent encodes as zero, present must be exactly N bytes.
+                let n = decimal(&typ[5..]).filter(|n| (1..=32).contains(n)).ok_or_else(|| format!("unsupported EIP-712 type: {typ}"))?;
+                match val {
+                    Value::Null => Ok(vec![0u8; 32]),
+                    _ => {
+                        let s = val.as_str().ok_or_else(|| format!("{typ} value must be a hex string"))?;
+                        Ok(pad_right32(&hex_exact(s, n).ok_or_else(|| format!("{typ} value must be exactly {n} bytes of hex"))?))
+                    }
+                }
             }
             other => Err(format!("unsupported EIP-712 type: {other}")),
         }
     }
+}
+
+/// A canonical decimal number (digits only, no leading zero or sign).
+fn decimal(s: &str) -> Option<usize> {
+    if s.is_empty() || s.len() > 3 || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// The bit width named by the suffix of a `uintN` / `intN` type: a multiple of
+/// 8 from 8 to 256. A bare `uint` / `int` is the 256-bit alias signers accept.
+fn int_bits(suffix: &str) -> Option<usize> {
+    if suffix.is_empty() {
+        return Some(256);
+    }
+    decimal(suffix).filter(|n| n % 8 == 0 && (8..=256).contains(n))
+}
+
+/// Decode a 0x-prefixed (or bare) hex string of exactly `len` bytes.
+fn hex_exact(s: &str, len: usize) -> Option<Vec<u8>> {
+    let digits = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if digits.len() != len * 2 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    hex_decode(digits).ok()
 }
 
 fn format_type(name: &str, fields: &[Field]) -> String {
@@ -419,6 +466,74 @@ mod tests {
         };
         assert!(doc(10).hash().is_ok());
         assert!(doc(40).hash().unwrap_err().contains("nested deeper"));
+    }
+
+    // Audit M8: atomic values are encoded only when they fit their type — an
+    // over-long address or bytesN is not truncated, an out-of-range integer is
+    // not masked, and a made-up width is not a type.
+    #[test]
+    fn atomic_values_must_fit_their_type() {
+        let td = parse(MAIL).unwrap();
+        let enc = |typ: &str, val: Value| td.encode_value(typ, &val, 0).map(|b| hex(&b));
+        let j = |v: &str| Value::String(v.to_owned());
+        let addr = "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826";
+        let word = |h: &str| format!("{h:0>64}");
+
+        assert_eq!(enc("address", j(addr)).unwrap(), word(&addr[2..].to_lowercase()));
+        assert_eq!(enc("address", j(&addr[2..])).unwrap(), word(&addr[2..].to_lowercase()));
+        for bad in [
+            format!("0xdeadbeef{}", &addr[2..]), // 24 bytes: used to keep the last 20
+            addr[..40].to_owned(),               // 19 bytes
+            addr[..41].to_owned(),               // odd length
+            String::new(),
+            "0x".to_owned(),
+            format!("0x{}zz", &addr[2..40]),
+            format!("0x{}\u{e9}", &addr[2..40]),
+        ] {
+            assert!(enc("address", j(&bad)).is_err(), "address {bad:?} accepted");
+        }
+        assert!(enc("address", serde_json::json!(1)).is_err());
+
+        assert_eq!(enc("bytes4", j("0xa9059cbb")).unwrap(), format!("a9059cbb{}", "0".repeat(56)));
+        assert_eq!(enc("bytes32", j(&format!("0x{}", "ab".repeat(32)))).unwrap(), "ab".repeat(32));
+        assert_eq!(enc("bytes1", j("0xff")).unwrap(), format!("ff{}", "0".repeat(62)));
+        for (typ, val) in [
+            ("bytes4", "0xa9059cbb00".to_owned()),          // too long
+            ("bytes4", "0xa9059c".to_owned()),              // too short
+            ("bytes32", format!("0x{}", "ab".repeat(33))),  // used to keep the first 32
+            ("bytes4", "0xa9059cb".to_owned()),             // odd
+            ("bytes4", String::new()),
+        ] {
+            assert!(enc(typ, j(&val)).is_err(), "{typ} {val:?} accepted");
+        }
+        for typ in ["bytes0", "bytes33", "bytes04", "bytes4x", "bytes-1", "bytes+4", "bytes\u{e9}"] {
+            assert!(enc(typ, j("0x")).unwrap_err().contains("unsupported"), "{typ}");
+        }
+
+        assert_eq!(enc("uint8", serde_json::json!(255)).unwrap(), word("ff"));
+        assert_eq!(enc("uint256", j(&format!("0x{}", "f".repeat(64)))).unwrap(), "f".repeat(64));
+        assert_eq!(enc("uint", j("7")).unwrap(), word("7"));
+        assert_eq!(enc("int8", serde_json::json!(-128)).unwrap(), format!("{}80", "f".repeat(62)));
+        assert_eq!(enc("int8", serde_json::json!(127)).unwrap(), word("7f"));
+        assert_eq!(enc("int256", j("-1")).unwrap(), "f".repeat(64));
+        for (typ, val) in [
+            ("uint8", serde_json::json!(256)),
+            ("uint8", serde_json::json!(-1)),
+            ("uint256", j(&format!("0x1{}", "0".repeat(64)))), // 2^256: used to wrap to 0
+            ("uint160", j(&format!("0x1{}", "0".repeat(40)))),
+            ("int8", serde_json::json!(128)),
+            ("int8", serde_json::json!(-129)),
+            ("int256", j(&format!("0x8{}", "0".repeat(63)))), // 2^255
+        ] {
+            assert!(enc(typ, val.clone()).unwrap_err().contains("out of range") || typ == "uint8" && val == serde_json::json!(-1), "{typ} {val}");
+        }
+        for typ in ["uint7", "uint0", "uint264", "uint08", "uintx", "uint256x", "int12", "int512", "interface", "integer"] {
+            assert!(enc(typ, serde_json::json!(1)).unwrap_err().contains("unsupported"), "{typ}");
+        }
+
+        // Kept as they were (compat): an absent address / bytesN field is zero.
+        assert_eq!(enc("address", Value::Null).unwrap(), "0".repeat(64));
+        assert_eq!(enc("bytes32", Value::Null).unwrap(), "0".repeat(64));
     }
 
     #[test]
