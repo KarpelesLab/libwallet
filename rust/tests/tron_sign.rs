@@ -146,6 +146,13 @@ fn mnemonic_tron_account_is_tronlinks_and_signs() {
         let (_, signed) = tron::sign_transfer(&env, a, &unlock, &trx, &block()).unwrap();
         assert_eq!(recovered_signer(&signed), a.address);
     }
+
+    // A block time so large that timestamp + expiration window would wrap is
+    // refused before signing (not turned into an already-expired/odd tx).
+    let trx = Transfer::Trx { to: USDT.into(), amount: 1 };
+    let far = RefBlock { timestamp: u64::MAX - 5, ..block() };
+    let err = tron::sign_transfer(&env, &a0, &unlock, &trx, &far).unwrap_err().to_string();
+    assert!(err.contains("timestamp out of range"), "{err}");
 }
 
 #[test]

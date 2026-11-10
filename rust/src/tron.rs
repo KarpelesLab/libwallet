@@ -168,6 +168,41 @@ pub fn parse_ref_block(v: &Value) -> Result<RefBlock> {
     Ok(RefBlock { height, id, timestamp })
 }
 
+/// How far a node's head-block time may sit from the local clock before a send
+/// refuses to anchor on it. A transaction takes its timestamp and expiration
+/// from that block, and the network accepts an expiration up to 24h ahead — so
+/// a node reporting a future time would have us sign a transfer that stays
+/// broadcastable for a day instead of [`EXPIRATION_MS`]. Generous enough for
+/// block lag and ordinary clock drift; with it the signed transaction expires
+/// at most `MAX_BLOCK_SKEW_MS + EXPIRATION_MS` from now.
+pub const MAX_BLOCK_SKEW_MS: u64 = 10 * 60 * 1000;
+
+/// Refuse a reference block whose time is more than [`MAX_BLOCK_SKEW_MS`] from
+/// `now_ms` (local clock, ms since the epoch), either way: ahead stretches the
+/// validity window, behind means a stalled node whose transaction would
+/// already be expired.
+pub fn check_block_time(block: &RefBlock, now_ms: u64) -> Result<()> {
+    let skew = block.timestamp.abs_diff(now_ms);
+    if skew > MAX_BLOCK_SKEW_MS {
+        let dir = if block.timestamp > now_ms { "ahead of" } else { "behind" };
+        return Err(Error::Env(format!(
+            "tron node block time is {}s {dir} this device's clock; refusing to sign (check the node, or the device date and time)",
+            skew / 1000
+        )));
+    }
+    Ok(())
+}
+
+/// The reference block of a `getnowblock` reply just fetched from a node,
+/// checked against the local clock ([`check_block_time`]). The network sends
+/// use this; [`parse_ref_block`] alone is for a block the caller vouches for.
+fn fresh_ref_block(v: &Value) -> Result<RefBlock> {
+    let block = parse_ref_block(v)?;
+    let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
+    check_block_time(&block, now_ms)?;
+    Ok(block)
+}
+
 /// The `triggerconstantcontract` body for a read-only call of `contract`.
 pub fn constant_call_body(owner: &str, contract: &str, selector: &str, parameter: &[u8]) -> Value {
     json!({
@@ -354,7 +389,7 @@ pub fn trc20_view(base: &str, contract: &str, selector: &str) -> Result<Vec<u8>>
 /// Build, sign and broadcast `transfer`, returning `(txid hex, signed bytes)`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn send(env: &Env, account: &Account, unlock: &[(String, String)], base: &str, transfer: &Transfer) -> Result<(String, Vec<u8>)> {
-    let block = parse_ref_block(&post(base, "getnowblock", &json!({}))?)?;
+    let block = fresh_ref_block(&post(base, "getnowblock", &json!({}))?)?;
     let (txid, signed) = sign_transfer(env, account, unlock, transfer, &block)?;
     let hash = parse_broadcast(&post(base, "broadcasthex", &broadcast_body(&signed))?, &txid)?;
     Ok((hash, signed))
@@ -362,7 +397,7 @@ pub fn send(env: &Env, account: &Account, unlock: &[(String, String)], base: &st
 
 /// Async twin of [`send`].
 pub async fn send_async(env: &Env, account: &Account, unlock: &[(String, String)], base: &str, transfer: &Transfer) -> Result<(String, Vec<u8>)> {
-    let block = parse_ref_block(&post_async(base, "getnowblock", &json!({})).await?)?;
+    let block = fresh_ref_block(&post_async(base, "getnowblock", &json!({})).await?)?;
     let (txid, signed) = sign_transfer(env, account, unlock, transfer, &block)?;
     let hash = parse_broadcast(&post_async(base, "broadcasthex", &broadcast_body(&signed)).await?, &txid)?;
     Ok((hash, signed))
@@ -433,6 +468,38 @@ mod tests {
         assert!(parse_constant_result(&json!({ "constant_result": ["aé1"] })).is_err());
         let bad = json!({ "result": false, "code": "X", "message": "aé1" });
         assert!(parse_broadcast(&bad, &[0; 32]).unwrap_err().to_string().contains("aé1"));
+    }
+
+    #[test]
+    fn node_block_time_must_be_near_the_local_clock() {
+        let now: u64 = 1_800_000_000_000;
+        let at = |timestamp: u64| RefBlock { height: 1, id: [0; 32], timestamp };
+        // Block lag and drift inside the window pass, both ways.
+        assert!(check_block_time(&at(now), now).is_ok());
+        assert!(check_block_time(&at(now - 3_000), now).is_ok());
+        assert!(check_block_time(&at(now - MAX_BLOCK_SKEW_MS), now).is_ok());
+        assert!(check_block_time(&at(now + MAX_BLOCK_SKEW_MS), now).is_ok());
+        // A node dating its head ~24h ahead (to stretch the tx's validity).
+        let err = check_block_time(&at(now + 24 * 3600 * 1000 - EXPIRATION_MS), now).unwrap_err();
+        assert!(err.to_string().contains("ahead of"), "{err}");
+        assert!(check_block_time(&at(now + MAX_BLOCK_SKEW_MS + 1), now).is_err());
+        assert!(check_block_time(&at(u64::MAX), now).is_err());
+        // A stalled node.
+        let err = check_block_time(&at(now - MAX_BLOCK_SKEW_MS - 1), now).unwrap_err();
+        assert!(err.to_string().contains("behind"), "{err}");
+        assert!(check_block_time(&at(0), now).is_err());
+
+        // The fetch-side wrapper applies it against the real clock.
+        let reply = |timestamp: u64| {
+            json!({
+                "blockID": "00000000052c1ba35c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+                "block_header": { "raw_data": { "number": 86_777_763u64, "timestamp": timestamp } }
+            })
+        };
+        let real_now = chrono::Utc::now().timestamp_millis() as u64;
+        assert_eq!(fresh_ref_block(&reply(real_now - 3_000)).unwrap().timestamp, real_now - 3_000);
+        assert!(fresh_ref_block(&reply(real_now + 23 * 3600 * 1000)).is_err());
+        assert!(fresh_ref_block(&reply(1_600_000_000_000)).is_err());
     }
 
     #[test]
