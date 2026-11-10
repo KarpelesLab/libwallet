@@ -1800,7 +1800,12 @@ fn mnemonic_share_seed(payload: &[u8]) -> Result<(Vec<u8>, String)> {
 /// pubkey. Self-verifies against `expect_pub` (the account's pubkey).
 fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], path: &str, expect_pub: &str, msg: &[u8]) -> Result<Vec<u8>> {
     let (wk_id, secret) = unlock.first().ok_or_else(|| Error::Env("exactly one Key required".into()))?;
-    let wk = wallet.keys.iter().find(|k| &k.id == wk_id).unwrap_or(&wallet.keys[0]);
+    let wk = wallet
+        .keys
+        .iter()
+        .find(|k| &k.id == wk_id)
+        .or_else(|| wallet.keys.first())
+        .ok_or_else(|| Error::Env("wallet has no keys".into()))?;
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
     let uuid = xid.uuid().as_bytes().to_vec();
     let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid)?;
