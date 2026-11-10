@@ -41,12 +41,29 @@ pub fn parse(data: &str) -> Result<TypedData, String> {
     if !td.types.contains_key(&td.primary_type) {
         return Err(format!("primaryType {} not found in types", td.primary_type));
     }
+    td.check_limits()?;
     Ok(td)
 }
 
+/// The most struct types a typed-data document may declare. Real ones use a
+/// handful; the cap bounds the work a dApp-supplied document can demand.
+pub const MAX_TYPES: usize = 256;
+
+/// How deep a value may nest (structs within structs, arrays within arrays).
+/// Encoding recurses once per level, so this bounds the stack it uses.
+pub const MAX_DEPTH: usize = 32;
+
 impl TypedData {
+    fn check_limits(&self) -> Result<(), String> {
+        if self.types.len() > MAX_TYPES {
+            return Err(format!("too many types: {} (at most {MAX_TYPES})", self.types.len()));
+        }
+        Ok(())
+    }
+
     /// The EIP-712 signable digest: `keccak256("\x19\x01" || domainSep || hashStruct(message))`.
     pub fn hash(&self) -> Result<[u8; 32], String> {
+        self.check_limits()?;
         let domain_sep = self.hash_struct("EIP712Domain", &self.domain)?;
         let msg_hash = self.hash_struct(&self.primary_type, &self.message)?;
         let mut raw = vec![0x19u8, 0x01];
@@ -57,8 +74,16 @@ impl TypedData {
 
     /// `keccak256(typeHash || encodeData(value))`.
     fn hash_struct(&self, type_name: &str, data: &Map<String, Value>) -> Result<[u8; 32], String> {
+        self.hash_struct_at(type_name, data, 0)
+    }
+
+    /// [`Self::hash_struct`] for a struct nested `depth` levels down.
+    fn hash_struct_at(&self, type_name: &str, data: &Map<String, Value>, depth: usize) -> Result<[u8; 32], String> {
+        if depth > MAX_DEPTH {
+            return Err(format!("value nested deeper than {MAX_DEPTH} levels"));
+        }
         let type_hash = self.type_hash(type_name)?;
-        let encoded = self.encode_data(type_name, data)?;
+        let encoded = self.encode_data(type_name, data, depth)?;
         let mut raw = Vec::with_capacity(32 + encoded.len());
         raw.extend_from_slice(&type_hash);
         raw.extend_from_slice(&encoded);
@@ -83,36 +108,47 @@ impl TypedData {
         Ok(result)
     }
 
+    /// Every struct type reachable from `type_name` (itself included). Walks
+    /// the type graph with an explicit stack: the chain of types is as long as
+    /// the dApp cares to make it, so it must not be walked by recursion.
     fn find_deps(&self, type_name: &str, deps: &mut BTreeSet<String>) {
-        if deps.contains(type_name) {
-            return;
-        }
-        let Some(fields) = self.types.get(type_name) else { return };
-        deps.insert(type_name.to_owned());
-        for f in fields {
-            let base = strip_array_suffix(&f.typ);
-            if self.types.contains_key(base) {
-                self.find_deps(base, deps);
+        let mut pending = vec![type_name];
+        while let Some(name) = pending.pop() {
+            if deps.contains(name) {
+                continue;
+            }
+            let Some(fields) = self.types.get(name) else { continue };
+            deps.insert(name.to_owned());
+            for f in fields {
+                let base = strip_array_suffix(&f.typ);
+                if self.types.contains_key(base) && !deps.contains(base) {
+                    pending.push(base);
+                }
             }
         }
     }
 
-    fn encode_data(&self, type_name: &str, data: &Map<String, Value>) -> Result<Vec<u8>, String> {
+    fn encode_data(&self, type_name: &str, data: &Map<String, Value>, depth: usize) -> Result<Vec<u8>, String> {
         let fields = self.types.get(type_name).ok_or_else(|| format!("type {type_name} not found"))?;
         let mut encoded = Vec::new();
         for field in fields {
             let val = data.get(&field.name).unwrap_or(&Value::Null);
             let enc = self
-                .encode_value(&field.typ, val)
+                .encode_value(&field.typ, val, depth)
                 .map_err(|e| format!("field {type_name}.{}: {e}", field.name))?;
             encoded.extend_from_slice(&enc);
         }
         Ok(encoded)
     }
 
-    fn encode_value(&self, typ: &str, val: &Value) -> Result<Vec<u8>, String> {
+    /// Encode one value of type `typ`, itself `depth` levels down. Arrays and
+    /// structs recurse one level deeper, up to [`MAX_DEPTH`].
+    fn encode_value(&self, typ: &str, val: &Value, depth: usize) -> Result<Vec<u8>, String> {
         // Array types (T[] / T[N]) → keccak of concatenated member encodings.
         if let Some((elem, fixed_len)) = array_elem_type(typ) {
+            if depth >= MAX_DEPTH {
+                return Err(format!("value nested deeper than {MAX_DEPTH} levels"));
+            }
             let arr = val.as_array().ok_or_else(|| format!("expected array for {typ}"))?;
             if let Some(n) = fixed_len {
                 if arr.len() != n {
@@ -121,14 +157,14 @@ impl TypedData {
             }
             let mut inner = Vec::new();
             for item in arr {
-                inner.extend_from_slice(&self.encode_value(&elem, item)?);
+                inner.extend_from_slice(&self.encode_value(&elem, item, depth + 1)?);
             }
             return Ok(keccak256(&inner).to_vec());
         }
         // Referenced struct types → hashStruct.
         if self.types.contains_key(typ) {
             let m = val.as_object().ok_or_else(|| format!("expected object for struct type {typ}"))?;
-            return Ok(self.hash_struct(typ, m)?.to_vec());
+            return Ok(self.hash_struct_at(typ, m, depth + 1)?.to_vec());
         }
         // Atomic types.
         match typ {
@@ -323,6 +359,66 @@ mod tests {
         assert_eq!(hex(&td.hash_struct("EIP712Domain", &td.domain).unwrap()), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
         // The full signable digest.
         assert_eq!(hex(&td.hash().unwrap()), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
+    }
+
+    /// `T0(T1 next)`, `T1(T2 next)`, … `T{n-1}(uint256 x)`.
+    fn chained_types(n: usize) -> HashMap<String, Vec<Field>> {
+        (0..n)
+            .map(|i| {
+                let field = if i + 1 < n {
+                    Field { name: "next".into(), typ: format!("T{}", i + 1) }
+                } else {
+                    Field { name: "x".into(), typ: "uint256".into() }
+                };
+                (format!("T{i}"), vec![field])
+            })
+            .collect()
+    }
+
+    // Audit M7: a dApp-supplied chain of types is walked without recursion (a
+    // long one used to overflow the stack and abort the process), and a
+    // document declaring an absurd number of types is refused outright.
+    #[test]
+    fn long_type_chains_neither_overflow_nor_pass() {
+        let big = TypedData {
+            types: chained_types(100_000),
+            primary_type: "T0".into(),
+            domain: Map::new(),
+            message: Map::new(),
+        };
+        let mut deps = BTreeSet::new();
+        big.find_deps("T0", &mut deps);
+        assert_eq!(deps.len(), 100_000);
+        assert!(big.hash().unwrap_err().contains("too many types"));
+
+        let fields = |i: usize| if i + 1 < 300 { format!(r#"[{{"name":"next","type":"T{}"}}]"#, i + 1) } else { r#"[{"name":"x","type":"uint256"}]"#.to_owned() };
+        let types: Vec<String> = (0..300).map(|i| format!(r#""T{i}":{}"#, fields(i))).collect();
+        let doc = format!(r#"{{"types":{{{}}},"primaryType":"T0","domain":{{}},"message":{{}}}}"#, types.join(","));
+        assert!(parse(&doc).unwrap_err().contains("too many types"));
+
+        // Within the cap the chain still encodes, dependencies sorted.
+        let ok = TypedData { types: chained_types(3), primary_type: "T0".into(), domain: Map::new(), message: Map::new() };
+        assert_eq!(ok.encode_type("T0").unwrap(), "T0(T1 next)T1(T2 next)T2(uint256 x)");
+    }
+
+    // Audit M7: values nest only so deep.
+    #[test]
+    fn value_nesting_is_capped() {
+        let doc = |levels: usize| {
+            let mut v = serde_json::json!({ "children": [] });
+            for _ in 0..levels {
+                v = serde_json::json!({ "children": [v] });
+            }
+            let td = serde_json::json!({
+                "types": { "EIP712Domain": [], "Node": [{ "name": "children", "type": "Node[]" }] },
+                "primaryType": "Node",
+                "domain": {},
+                "message": v,
+            });
+            parse(&td.to_string()).unwrap()
+        };
+        assert!(doc(10).hash().is_ok());
+        assert!(doc(40).hash().unwrap_err().contains("nested deeper"));
     }
 
     #[test]
