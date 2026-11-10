@@ -83,6 +83,12 @@ impl WasmBroker {
             let r = match &jm.data { tsslib::tss::Payload::Json(v) => v.as_str().unwrap_or("").to_string(), _ => String::new() };
             return Err(if r.is_empty() { "remote participant reported an unspecified failure".into() } else { r });
         }
+        // Untrusted network input: only a known remote party may be the sender.
+        // A frame claiming the local party (or an unknown / missing one) is
+        // dropped rather than handed to the local party.
+        if crate::reshare_common::check_inbound_sender(jm.from.as_ref(), |id| id == self.self_id, |id| self.peers.contains_key(id)).is_err() {
+            return Ok(());
+        }
         self.dispatch_inbound(jm);
         Ok(())
     }

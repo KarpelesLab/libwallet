@@ -72,6 +72,40 @@ pub fn build_party_ids<'a>(
     Ok((sorted, by_moniker, me_idx))
 }
 
+/// Gate for a TSS frame that arrived from OUTSIDE the process (the Spot
+/// `walletsign` channel) before it is handed to an in-process party. The
+/// claimed sender must be present and must be one of the ceremony's remote
+/// parties:
+///
+/// - a frame claiming a LOCAL party as its sender is refused — a local party's
+///   messages never arrive from the network, the brokers treat "from == self"
+///   as an outbound message (re-dispatching it, which a `from == to == local`
+///   frame turns into unbounded recursion), and accepting it would let the
+///   network speak as one in-process party to another;
+/// - a frame from an id that is not a registered remote party, or with no
+///   sender at all, has no place in the ceremony.
+///
+/// `is_local` / `is_remote` answer for a tss `PartyId.id`. This checks the
+/// sender the frame CLAIMS; it does not bind it to the Spot peer that
+/// delivered it.
+pub fn check_inbound_sender(
+    from: Option<&PartyId>,
+    is_local: impl Fn(&str) -> bool,
+    is_remote: impl Fn(&str) -> bool,
+) -> std::result::Result<(), String> {
+    let id = match from {
+        Some(f) if !f.id.is_empty() => f.id.as_str(),
+        _ => return Err("inbound tss frame has no sender".into()),
+    };
+    if is_local(id) {
+        return Err(format!("inbound tss frame claims local party {id} as its sender"));
+    }
+    if !is_remote(id) {
+        return Err(format!("inbound tss frame from unknown party {id}"));
+    }
+    Ok(())
+}
+
 /// Open a locally-held (Plain/Password/StoreKey) FROST share to its JSON.
 #[allow(clippy::ptr_arg)]
 pub fn open_local_share(wk: &crate::models::wallet::WalletKey, material: &str) -> Result<String> {

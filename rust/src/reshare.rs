@@ -140,8 +140,19 @@ impl Hub {
     }
 
     /// Route a message that arrived from outside the process (Go `deliver`):
-    /// only local parties are candidates.
+    /// only local parties are candidates, and only a registered remote party
+    /// may be the sender. The frame is untrusted network input: one claiming a
+    /// local party as its sender would be taken for that party's own outbound
+    /// message by [`LocalBroker::receive`] and re-dispatched (endlessly when it
+    /// is also addressed to that party), or impersonate one local party to
+    /// another — see [`crate::reshare_common::check_inbound_sender`].
     fn deliver(&self, msg: &JsonMessage) -> BrokerResult {
+        // Each guard is dropped at the end of its closure (before any receive).
+        crate::reshare_common::check_inbound_sender(
+            msg.from.as_ref(),
+            |id| self.local.lock().unwrap().contains_key(id),
+            |id| self.remote.lock().unwrap().contains_key(id),
+        )?;
         let from_id = msg.from.as_ref().map(|f| f.id.clone());
         if let Some(to) = msg.to.as_ref() {
             let lb = self.local.lock().unwrap().get(&to.id).cloned(); // guard dropped before receive
@@ -318,6 +329,8 @@ impl WdronePeer {
             return;
         }
         if let Some(hub) = self.hub.upgrade() {
+            // A frame the hub refuses (no / local / unknown sender, unknown
+            // target) is dropped, like any other stray traffic on the channel.
             let _ = hub.deliver(&jm);
         }
     }
@@ -1028,6 +1041,93 @@ pub fn join_sign(
         return Err(Error::Env(format!("joinSign: expected 64-byte signature, got {}", sig.signature.len())));
     }
     Ok(sig.signature)
+}
+
+/// Audit KC-02: frames arriving from the network must not be able to pose as
+/// an in-process party.
+#[cfg(test)]
+#[allow(deprecated)] // `JsonMessage`, as in the rest of this module
+mod inbound_sender_tests {
+    use super::*;
+    use crate::reshare_common::check_inbound_sender;
+    use std::sync::atomic::AtomicUsize;
+
+    struct Counter(AtomicUsize);
+    impl MessageReceiver for Counter {
+        fn receive(&self, _msg: &JsonMessage) -> BrokerResult {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn party(id: &str) -> PartyId {
+        PartyId::new(id.to_string(), id.to_string(), id.as_bytes().to_vec())
+    }
+
+    fn frame(from: Option<&str>, to: Option<&str>) -> JsonMessage {
+        let v = json!({
+            "type": "round1",
+            "from": from.map(|f| serde_json::to_value(party(f)).unwrap()),
+            "to": to.map(|t| serde_json::to_value(party(t)).unwrap()),
+            "data": {},
+        });
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// A hub with two local parties, each with a counting `round1` handler.
+    fn hub_ab() -> (Arc<Hub>, Arc<Counter>, Arc<Counter>) {
+        let hub = Hub::new();
+        let (ca, cb) = (Arc::new(Counter(AtomicUsize::new(0))), Arc::new(Counter(AtomicUsize::new(0))));
+        hub.add_local(&party("a")).connect("round1", ca.clone());
+        hub.add_local(&party("b")).connect("round1", cb.clone());
+        (hub, ca, cb)
+    }
+
+    #[test]
+    fn inbound_frame_from_a_local_party_is_refused_without_recursing() {
+        let (hub, ca, cb) = hub_ab();
+        // from == to == a local party: used to bounce between LocalBroker::
+        // receive and Hub::dispatch until the stack overflowed.
+        assert!(hub.deliver(&frame(Some("a"), Some("a"))).is_err());
+        // One local party impersonated towards another, directly and by broadcast.
+        assert!(hub.deliver(&frame(Some("a"), Some("b"))).is_err());
+        assert!(hub.deliver(&frame(Some("a"), None)).is_err());
+        assert_eq!((ca.0.load(Ordering::SeqCst), cb.0.load(Ordering::SeqCst)), (0, 0));
+    }
+
+    #[test]
+    fn inbound_frame_from_an_unknown_or_missing_sender_is_refused() {
+        let (hub, ca, cb) = hub_ab();
+        assert!(hub.deliver(&frame(Some("stranger"), Some("a"))).is_err());
+        assert!(hub.deliver(&frame(Some("stranger"), None)).is_err());
+        assert!(hub.deliver(&frame(None, Some("a"))).is_err());
+        assert!(hub.deliver(&frame(None, None)).is_err());
+        assert!(hub.deliver(&frame(Some(""), Some("b"))).is_err());
+        assert_eq!((ca.0.load(Ordering::SeqCst), cb.0.load(Ordering::SeqCst)), (0, 0));
+    }
+
+    #[test]
+    fn local_parties_still_talk_to_each_other_through_the_hub() {
+        let (hub, ca, cb) = hub_ab();
+        // Outbound from a (its own broker sees from == self and dispatches).
+        let a = hub.local.lock().unwrap().get("a").cloned().unwrap();
+        a.receive(&frame(Some("a"), Some("b"))).unwrap();
+        a.receive(&frame(Some("a"), None)).unwrap();
+        assert_eq!((ca.0.load(Ordering::SeqCst), cb.0.load(Ordering::SeqCst)), (0, 2));
+    }
+
+    #[test]
+    fn only_a_registered_remote_party_passes_the_sender_check() {
+        let local = |id: &str| id == "a" || id == "b";
+        let remote = |id: &str| id == "wdrone";
+        assert!(check_inbound_sender(Some(&party("wdrone")), local, remote).is_ok());
+        assert!(check_inbound_sender(Some(&party("a")), local, remote).is_err());
+        assert!(check_inbound_sender(Some(&party("stranger")), local, remote).is_err());
+        assert!(check_inbound_sender(Some(&party("")), local, remote).is_err());
+        assert!(check_inbound_sender(None, local, remote).is_err());
+        // An id registered on both sides is still treated as local.
+        assert!(check_inbound_sender(Some(&party("a")), local, |_| true).is_err());
+    }
 }
 
 #[cfg(test)]
