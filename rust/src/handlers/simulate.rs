@@ -121,19 +121,30 @@ pub(crate) fn tx_account(env: &Env, tx: &Value) -> Result<crate::models::account
 /// Bitcoin simulate: decode the built `raw` tx into its inputs/outputs (Go
 /// `simulateBitcoin`, decode-from-raw path). The UTXO dry-run preview (no raw)
 /// needs the build machinery and is deferred; here we surface the native
-/// transfer decode plus, when `raw` is present, the on-wire shape.
+/// transfer decode or, when `raw` is present, the on-wire shape.
+///
+/// The two are exclusive. `to`/`amount` describe a transfer still to be built;
+/// once `raw` is given, the bytes are what would be signed and nothing ties
+/// them to those fields — echoing them as `decodedMethod: native_transfer`
+/// would label whatever the raw tx does as that benign transfer. With `raw`
+/// only what is read from it (inputs, outputs, size) is reported.
 fn simulate_bitcoin(tx: &Value) -> Value {
     let mut out = json!({ "chain": "bitcoin" });
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
-    if !to.is_empty() {
-        if let Some(amt) = amount_bigint(tx.get("amount")) {
-            out["decodedMethod"] = json!("native_transfer");
-            out["decodedArgs"] = json!({ "to": to, "amount": amount_string(tx.get("amount"), &amt) });
+    let Some(raw) = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty()) else {
+        let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+        if !to.is_empty() {
+            if let Some(amt) = amount_bigint(tx.get("amount")) {
+                out["decodedMethod"] = json!("native_transfer");
+                out["decodedArgs"] = json!({ "to": to, "amount": amount_string(tx.get("amount"), &amt) });
+            }
         }
-    }
-
-    let raw = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty()).and_then(decode_tx_bytes);
-    let Some(raw) = raw else { return out };
+        return out;
+    };
+    let Some(raw) = decode_tx_bytes(raw) else {
+        out["willRevert"] = json!(true);
+        out["revertReason"] = json!("bitcoin tx raw is not base64 or 0x-hex");
+        return out;
+    };
 
     match outscript::btctx::BtcTx::from_bytes(&raw) {
         Ok(btx) => {
@@ -181,16 +192,11 @@ async fn simulate_solana(env: &Env, params: &Value, tx: &Value) -> ApiResult {
     let rpc = super::resolve_rpc_for_kind(env, params, "solana")?;
     if let Some(raw) = tx.get("raw").and_then(Value::as_str).filter(|s| !s.is_empty()) {
         let raw = decode_tx_bytes(raw).ok_or_else(|| ApiError::new(400, "solana tx raw is not base64 or 0x-hex"))?;
-        let mut out = run_solana_simulation(&rpc, &raw, false).await;
-        // Decode a native transfer from the tx shape (Go simulateSolana tail).
-        if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
-            out["decodedMethod"] = json!("native_transfer");
-            out["decodedArgs"] = json!({
-                "to": tx.get("to").and_then(Value::as_str).unwrap_or(""),
-                "amount": amount_string(tx.get("amount"), &amt),
-            });
-        }
-        return Ok(out);
+        // No decodedMethod/decodedArgs here: the caller's `to`/`amount` are not
+        // derived from these bytes, and echoing them would label whatever the
+        // raw transaction does as a benign native transfer. The node's
+        // simulation of the bytes themselves (logs, units, revert) is the result.
+        return Ok(run_solana_simulation(&rpc, &raw, false).await);
     }
 
     let account = tx_account(env, tx)?;
@@ -934,8 +940,10 @@ mod tests {
         assert_eq!(out["willRevert"], false);
         assert_eq!(out["unitsConsumed"], 1234);
         assert_eq!(out["logs"][0], "Program log: ok");
-        assert_eq!(out["decodedMethod"], "native_transfer");
-        assert_eq!(out["decodedArgs"]["amount"], "1000");
+        // Audit L4: the caller's to/amount are not read from `raw`, so they
+        // are not presented as its decode.
+        assert!(out.get("decodedMethod").is_none(), "{out}");
+        assert!(out.get("decodedArgs").is_none(), "{out}");
     }
 
     fn insert_network(env: &Env, kind: &str, chain: &str) {
@@ -986,12 +994,23 @@ mod tests {
         });
         let out = simulate(&env, &params).unwrap();
         assert_eq!(out["chain"], "bitcoin");
-        assert_eq!(out["decodedMethod"], "native_transfer");
+        // Audit L4: with `raw`, only what the bytes say is reported — the
+        // caller's to/amount are not echoed as a native_transfer decode.
+        assert!(out.get("decodedMethod").is_none(), "{out}");
+        assert!(out.get("decodedArgs").is_none(), "{out}");
         assert_eq!(out["bitcoinOutputs"][0]["amount"], 100000000u64);
         assert_eq!(out["bitcoinInputs"][0]["txid"], "1111111111111111111111111111111111111111111111111111111111111111");
         assert_eq!(out["bitcoinInputs"][0]["vout"], 0);
         assert_eq!(out["bitcoinFee"], 1234);
         assert_eq!(out["bitcoinVSize"], 60);
+
+        // Without `raw` the fields describe the transfer to build.
+        let out = simulate(&env, &json!({ "to": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", "amount": { "v": "100000000", "e": 0 } })).unwrap();
+        assert_eq!(out["decodedMethod"], "native_transfer");
+        // A `raw` that can't be read is a failure, not a fallback to the fields.
+        let out = simulate(&env, &json!({ "to": "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", "amount": "1", "raw": "0xzz" })).unwrap();
+        assert!(out.get("decodedMethod").is_none(), "{out}");
+        assert_eq!(out["willRevert"], true);
     }
 
     #[test]
