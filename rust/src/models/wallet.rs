@@ -758,6 +758,28 @@ pub fn promote(
     }
     let imported = &wallet.keys[0];
 
+    // A mnemonic-keep wallet's seed-derived accounts sit at hardened paths whose
+    // keys are re-derived from the seed at sign time (IL Null). Promote keeps
+    // only the BIP-32 master key (as a threshold key, which cannot derive
+    // hardened children) and drops the sealed seed, so any such account would
+    // sign for the wrong address with the seed gone. Refuse — as the ed25519
+    // leg does — and point at promoteMnemonic, which migrates each chain's own
+    // key. Accounts that are the master key itself (null path) or a
+    // non-hardened IL tweak of it keep signing correctly and are allowed.
+    if imported.schema == "mnemonic" {
+        let accounts = crate::models::account::for_wallet(env, &wallet.id)?;
+        let seed_derived = |a: &crate::models::account::Account| {
+            let null_path = a.path.is_empty() || a.path == "m";
+            !null_path && (a.il.is_null() || a.path.contains(['\'', 'h', 'H']))
+        };
+        if let Some(a) = accounts.iter().find(|a| seed_derived(a)) {
+            return Err(Error::Env(format!(
+                "Promote: this mnemonic wallet has accounts at seed-derived paths (e.g. {} at {:?}) that a threshold key cannot sign for — use Wallet:promoteMnemonic to migrate them",
+                a.id, a.path
+            )));
+        }
+    }
+
     // Recover the source 1-of-1 DKLs key from the imported share.
     let src_uuid = Xuid::new("wkey");
     let src_key: tsslib::dklstss::Key = match imported.schema.as_str() {
