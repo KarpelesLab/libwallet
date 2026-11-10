@@ -193,6 +193,11 @@ pub fn set_current(env: &Env, params: &Value) -> ApiResult {
         .get("Id")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::new(400, "Id required"))?;
+    // "@" means "the current network": storing it as the selection would make
+    // the selection refer to itself (and an empty id selects nothing).
+    if id.is_empty() || id == "@" {
+        return Err(ApiError::new(400, "invalid network Id"));
+    }
     env.set_current("network", id).map_err(ApiError::internal)?;
     Ok(serde_json::json!({ "network": id }))
 }

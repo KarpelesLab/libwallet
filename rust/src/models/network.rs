@@ -499,14 +499,23 @@ pub fn make_default_networks(env: &Env) -> Result<()> {
 /// and a plain stored id.
 pub fn fetch(env: &Env, id: &str) -> Result<Option<Network>> {
     if id == "@" {
-        if let Some(cur) = env.get_current("network")? {
-            // Resolve the current selection the same way as a direct fetch:
-            // a stored id via by_id, an ephemeral "type.chainId" via the split.
-            return fetch(env, &cur);
-        }
-        // Default when nothing is selected: Ethereum mainnet (ephemeral).
-        return Ok(Some(ephemeral("evm", "1")));
+        // Resolve the current selection the same way as a direct fetch (a
+        // stored id via by_id, an ephemeral "type.chainId" via the split) but
+        // never re-enter this branch: a stored "@" (or empty) value would
+        // otherwise recurse until the stack overflows — on every launch, since
+        // the selection is persisted. Such a value counts as "nothing selected".
+        return match env.get_current("network")? {
+            Some(cur) if !cur.is_empty() && cur != "@" => fetch_concrete(env, &cur),
+            // Default when nothing is selected: Ethereum mainnet (ephemeral).
+            _ => Ok(Some(ephemeral("evm", "1"))),
+        };
     }
+    fetch_concrete(env, id)
+}
+
+/// [`fetch`] for anything but the "@" shortcut: "type.chainId" (ephemeral) or
+/// a plain stored id.
+fn fetch_concrete(env: &Env, id: &str) -> Result<Option<Network>> {
     if let Some((kind, chain)) = id.split_once('.') {
         return Ok(Some(ephemeral(kind, chain)));
     }
