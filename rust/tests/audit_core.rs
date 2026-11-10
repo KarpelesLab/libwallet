@@ -128,6 +128,65 @@ fn currency_decimals_are_bounded() {
     }
 }
 
+// --- F7: the event sink may replace itself from inside a delivery ----------
+
+#[test]
+fn event_sink_can_reregister_from_inside_the_callback() {
+    use std::sync::{Arc, Mutex};
+
+    let env = Arc::new(Env::init_memory().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (done_tx, done_rx) = channel::<()>();
+
+    let (env2, seen2) = (env.clone(), seen.clone());
+    let t = std::thread::spawn(move || {
+        let (env3, seen3) = (env2.clone(), seen2.clone());
+        env2.set_event_sink(Some(Box::new(move |json: &str| {
+            seen3.lock().unwrap().push(format!("first:{json}"));
+            // Swap in a new sink, and emit, from inside the delivery.
+            let seen4 = seen3.clone();
+            env3.set_event_sink(Some(Box::new(move |json: &str| {
+                seen4.lock().unwrap().push(format!("second:{json}"));
+            })));
+            env3.broadcast("nested");
+        })));
+        env2.broadcast("a");
+        env2.broadcast("b");
+        // Break the Env -> sink -> Env cycle.
+        env2.set_event_sink(None);
+        env2.broadcast("dropped");
+        done_tx.send(()).unwrap();
+    });
+    // A deadlock would hang here forever; fail instead.
+    done_rx.recv_timeout(Duration::from_secs(20)).expect("broadcast deadlocked");
+    t.join().unwrap();
+    assert_eq!(*seen.lock().unwrap(), ["first:a", "second:nested", "second:b"]);
+}
+
+#[test]
+fn clearing_the_event_sink_waits_for_a_delivery_in_flight() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let env = Arc::new(Env::init_memory().unwrap());
+    let (entered_tx, entered_rx) = channel::<()>();
+    let finished = Arc::new(AtomicBool::new(false));
+    let finished2 = finished.clone();
+    let entered_tx = std::sync::Mutex::new(entered_tx);
+    env.set_event_sink(Some(Box::new(move |_json: &str| {
+        entered_tx.lock().unwrap().send(()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        finished2.store(true, Ordering::SeqCst);
+    })));
+    let env2 = env.clone();
+    let t = std::thread::spawn(move || env2.broadcast("slow"));
+    entered_rx.recv_timeout(Duration::from_secs(20)).expect("sink invoked");
+    // Returns only once the slow delivery is over: nothing fires after a clear.
+    env.set_event_sink(None);
+    assert!(finished.load(Ordering::SeqCst), "sink still running after it was cleared");
+    t.join().unwrap();
+}
+
 // --- F5: the data dir and database files are owner-only -------------------
 
 #[cfg(unix)]

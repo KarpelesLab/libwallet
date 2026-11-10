@@ -55,7 +55,14 @@ struct WcRuntime {
 pub struct Env {
     pub data_dir: PathBuf,
     db: Db,
-    event_sink: Mutex<Option<EventSink>>,
+    /// Shared so `broadcast` can clone it out of the lock and invoke it with
+    /// the lock released (the sink may re-register itself from inside a call).
+    event_sink: Mutex<Option<std::sync::Arc<EventSink>>>,
+    /// Held while the sink runs: deliveries stay serialized, and replacing or
+    /// clearing the sink from another thread waits for an in-flight delivery
+    /// (so no event reaches a sink after it was cleared). Skipped by calls made
+    /// from inside the sink itself — see [`SINK_ACTIVE`].
+    sink_call: Mutex<()>,
     // The networking/cross-device machinery below is native-only. The browser
     // build runs single-threaded with no Spot/WalletConnect transport (and its
     // approval flow is driven directly by the user, not a blocking channel).
@@ -82,6 +89,31 @@ pub struct Env {
     /// Unique per Env for the life of the process: scopes the vault's unlock
     /// cache, so one session's unlock never unlocks another's entries.
     vault_scope: u64,
+}
+
+thread_local! {
+    /// The Envs (by `vault_scope`) whose event sink is running on this thread
+    /// right now — how a call made from inside a sink recognises itself and
+    /// skips `sink_call`, which its own delivery already holds.
+    static SINK_ACTIVE: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Marks an Env's sink as running on this thread for the guard's lifetime.
+struct SinkActive;
+
+impl SinkActive {
+    fn enter(scope: u64) -> SinkActive {
+        SINK_ACTIVE.with(|s| s.borrow_mut().push(scope));
+        SinkActive
+    }
+}
+
+impl Drop for SinkActive {
+    fn drop(&mut self) {
+        SINK_ACTIVE.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
 }
 
 static NEXT_VAULT_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -126,6 +158,7 @@ impl Env {
             data_dir: dir,
             db,
             event_sink: Mutex::new(None),
+            sink_call: Mutex::new(()),
             wc: Mutex::new(None),
             request_waiters: Mutex::new(std::collections::HashMap::new()),
             spot: Mutex::new(None),
@@ -149,6 +182,7 @@ impl Env {
             data_dir: PathBuf::new(),
             db: Db::open_memory()?,
             event_sink: Mutex::new(None),
+            sink_call: Mutex::new(()),
             #[cfg(not(target_arch = "wasm32"))]
             wc: Mutex::new(None),
             #[cfg(not(target_arch = "wasm32"))]
@@ -400,15 +434,37 @@ impl Env {
 }
 
 impl Env {
-    /// Register (or, with None, clear) the host event sink.
+    /// Whether this thread is currently inside this Env's event sink.
+    fn in_sink(&self) -> bool {
+        SINK_ACTIVE.with(|s| s.borrow().contains(&self.vault_scope))
+    }
+
+    /// Take the delivery lock, unless this thread already holds it by being
+    /// inside the sink. A sink that panicked must not wedge event delivery.
+    fn sink_call_lock(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
+        if self.in_sink() {
+            return None;
+        }
+        Some(self.sink_call.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Register (or, with None, clear) the host event sink. Waits for a
+    /// delivery in flight on another thread; safe to call from inside the sink.
     pub fn set_event_sink(&self, sink: Option<EventSink>) {
-        *self.event_sink.lock().unwrap() = sink;
+        let _delivery = self.sink_call_lock();
+        *self.event_sink.lock().unwrap() = sink.map(std::sync::Arc::new);
     }
 
     /// Push a server-side event JSON to the host, if a sink is registered.
     /// Mirrors Go apirouter.BroadcastJson.
     pub fn broadcast(&self, event_json: &str) {
-        if let Some(sink) = self.event_sink.lock().unwrap().as_ref() {
+        let _delivery = self.sink_call_lock();
+        // Clone the sink out and release its lock before calling it: a sink
+        // that (re)registers or clears the sink from inside the callback would
+        // otherwise deadlock (native) / panic (wasm) on the held mutex.
+        let sink = self.event_sink.lock().unwrap().clone();
+        if let Some(sink) = sink {
+            let _active = SinkActive::enter(self.vault_scope);
             sink(event_json);
         }
     }
