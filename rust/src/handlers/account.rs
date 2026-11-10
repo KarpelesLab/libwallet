@@ -506,16 +506,18 @@ pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result
             let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_owned();
             let value_dec = tx.get("value").and_then(Value::as_str).unwrap_or("0");
             let value_hex = format!("0x{:x}", value_dec.parse::<u128>().unwrap_or(0));
-            // A node that can't estimate leaves the plain-transfer 21000; one
-            // that answers must answer with a quantity.
-            let est = match crate::rpc::call_async(
-                url,
-                "eth_estimateGas",
-                serde_json::json!([{ "from": address, "to": to, "value": value_hex }]),
-            )
-            .await
-            {
+            // The estimate is for the call being signed — calldata included.
+            let data = tx.get("data").and_then(Value::as_str).filter(|d| !d.is_empty() && *d != "0x").map(str::to_owned);
+            let mut call = serde_json::json!({ "from": address, "to": to, "value": value_hex });
+            if let Some(d) = &data {
+                call["data"] = serde_json::json!(d);
+            }
+            // A node that can't estimate leaves the plain-transfer 21000 — which
+            // only a transaction without calldata can run on; one that answers
+            // must answer with a quantity.
+            let est = match crate::rpc::call_async(url, "eth_estimateGas", serde_json::json!([call])).await {
                 Ok(g) => u64_from_reply("eth_estimateGas", &g)?,
+                Err(e) if data.is_some() => return Err(ApiError::new(400, format!("estimate gas: {e}"))),
                 Err(_) => 21000,
             };
             tx.insert("gas".into(), serde_json::json!(est));
@@ -1608,6 +1610,55 @@ mod balance_tests {
         )
         .unwrap_err();
         assert_eq!(err.code, 502, "{}", err.message);
+    }
+
+    // Audit L7: the gas estimate is asked for the call that gets signed, calldata
+    // included — and a contract call the node can't estimate isn't sent on the
+    // 21000 a plain transfer costs.
+    #[test]
+    fn ethereum_gas_estimate_covers_the_calldata() {
+        let data = "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000aa00000000000000000000000000000000000000000000000000000000000003e8";
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = seen.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { break };
+                let mut buf = [0u8; 8192];
+                let n = s.read(&mut buf).unwrap_or(0);
+                log.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let body = r#"{"jsonrpc":"2.0","id":1,"result":"0xea60"}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        let tx = serde_json::json!({
+            "to": "0x00000000000000000000000000000000000000bb", "value": "0", "data": data,
+            "nonce": 0, "gasPrice": "1", "chainId": 1,
+        });
+        let filled = crate::rt::block_on(evm_fill(
+            "0x1111111111111111111111111111111111111111",
+            &url,
+            &serde_json::json!({ "Transaction": tx }),
+        ))
+        .unwrap();
+        assert_eq!(filled["Transaction"]["gas"], 60000);
+        let reqs = seen.lock().unwrap();
+        assert_eq!(reqs.len(), 1, "{reqs:?}");
+        assert!(reqs[0].contains("eth_estimateGas") && reqs[0].contains(data), "{}", reqs[0]);
+        drop(reqs);
+
+        // No node to estimate against: a plain transfer keeps 21000, a call fails.
+        let dead = "http://127.0.0.1:1";
+        let plain = serde_json::json!({ "Transaction": { "to": "0x00000000000000000000000000000000000000bb", "value": "1", "nonce": 0, "gasPrice": "1" } });
+        assert_eq!(crate::rt::block_on(evm_fill("0x11", dead, &plain)).unwrap()["Transaction"]["gas"], 21000);
+        let err = crate::rt::block_on(evm_fill("0x11", dead, &serde_json::json!({ "Transaction": tx }))).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
     }
 
     // EVM signAndSend end to end through native block_on: autofill nonce / gas /

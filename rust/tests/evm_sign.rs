@@ -144,6 +144,59 @@ fn chain_id_zero_is_refused() {
     assert!(build_unsigned(&req(1, false)).is_ok());
 }
 
+/// Audit L7: only an ethereum account signs an EVM transaction, and only to a
+/// well-formed recipient — 20 bytes, with a valid EIP-55 checksum when written
+/// in mixed case.
+#[test]
+fn sign_tx_checks_account_kind_and_recipient() {
+    use libwallet::evm::validate_to;
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create(&env, "EVM", "secp256k1", &kds).unwrap();
+    let eth = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let tron = account::create(&env, &w.id, "", "tron", 0).unwrap();
+    let unlock: Vec<(String, String)> =
+        vec![(w.keys[0].id.clone(), "passwordone".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
+    let req = |to: &str, data: Vec<u8>| EvmTxRequest {
+        nonce: 0,
+        gas: 21000,
+        max_fee: "20000000000".to_string(),
+        max_priority: "0".to_string(),
+        to: to.to_string(),
+        value: "1".to_string(),
+        data,
+        chain_id: 1,
+        eip1559: false,
+    };
+    let good = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"; // EIP-55 spec vector
+
+    let err = sign_tx(&env, &tron.id, &unlock, &req(good, vec![])).unwrap_err().to_string();
+    assert!(err.contains("ethereum-account-only"), "{err}");
+
+    for to in [good.to_string(), good.to_lowercase(), format!("0x{}", good[2..].to_uppercase())] {
+        let raw = sign_tx(&env, &eth.id, &unlock, &req(&to, vec![])).unwrap_or_else(|e| panic!("{to}: {e}"));
+        assert_eq!(recover_sender(&raw).unwrap().to_lowercase(), eth.address.to_lowercase());
+    }
+    for to in [
+        "",                                              // missing
+        "0x",                                            // creation without init code
+        "5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",      // no prefix
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAe",     // 19.5 bytes
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed00",  // 21 bytes
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeg",    // not hex
+        "0x5AAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",    // one letter's case flipped
+        "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1Be\u{e9}d", // non-ASCII
+    ] {
+        assert!(validate_to(to, &[]).is_err(), "{to:?} accepted");
+        assert!(sign_tx(&env, &eth.id, &unlock, &req(to, vec![])).is_err(), "{to:?} signed");
+    }
+    // Contract creation: an empty recipient with init code.
+    assert!(validate_to("0x", &[0x60, 0x00]).is_ok());
+    sign_tx(&env, &eth.id, &unlock, &req("0x", vec![0x60, 0x00])).unwrap();
+}
+
 /// A 2-of-3 wallet signs with ANY two shares — whichever pair the caller holds,
 /// in any order — and recovers to the account; a single share is refused.
 #[test]

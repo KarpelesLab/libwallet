@@ -48,6 +48,10 @@ pub fn sign_tx(
 ) -> Result<Vec<u8>> {
     let acct = account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
+    if acct.kind != "ethereum" {
+        return Err(Error::Env("EVM transaction signing is ethereum-account-only".into()));
+    }
+    validate_to(&req.to, &req.data)?;
     let tweak = il_to_tweak(&acct.il)?;
 
     let tx = build_unsigned(req)?;
@@ -55,7 +59,52 @@ pub fn sign_tx(
     let digest = keccak256(&sign_bytes);
     let (r, s, v) = wallet::dkls_sign_digest_at(env, &acct.wallet, unlock, &acct.path, &tweak, &digest)?;
     let (s, v) = normalize_low_s(s, v);
-    attach_signature(tx, &r, &s, v)
+    let raw = attach_signature(tx, &r, &s, v)?;
+    // Never hand back a transaction the account didn't sign: the serialized tx
+    // must recover to the account's own address.
+    let sender = recover_sender(&raw)?;
+    if !sender.eq_ignore_ascii_case(&acct.address) {
+        return Err(Error::Env(format!(
+            "signed transaction recovers to {sender}, not the account address {}",
+            acct.address
+        )));
+    }
+    Ok(raw)
+}
+
+/// Check a transaction's `to`: a `0x`-prefixed 20-byte hex address whose EIP-55
+/// checksum must hold when it is written in mixed case (all-lowercase and
+/// all-uppercase carry no checksum). A bare `0x` — contract creation — is only
+/// accepted together with init code in `data`; without it the transaction would
+/// send its value to nobody.
+pub fn validate_to(to: &str, data: &[u8]) -> Result<()> {
+    let digits = to
+        .strip_prefix("0x")
+        .ok_or_else(|| Error::Env("transaction `to` must be a 0x-prefixed address".into()))?;
+    if digits.is_empty() {
+        if data.is_empty() {
+            return Err(Error::Env("transaction `to` is required (contract creation needs data)".into()));
+        }
+        return Ok(());
+    }
+    if digits.len() != 40 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Env(format!("transaction `to` {to:?} is not a 20-byte hex address")));
+    }
+    let has_upper = digits.bytes().any(|b| b.is_ascii_uppercase());
+    let has_lower = digits.bytes().any(|b| b.is_ascii_lowercase());
+    if has_upper && has_lower {
+        let mut addr = [0u8; 20];
+        for (i, pair) in digits.as_bytes().chunks(2).enumerate() {
+            // Both are ASCII hex digits (checked above).
+            let hi = (pair[0] as char).to_digit(16).unwrap_or(0) as u8;
+            let lo = (pair[1] as char).to_digit(16).unwrap_or(0) as u8;
+            addr[i] = (hi << 4) | lo;
+        }
+        if outscript::address::eip55(&addr) != to {
+            return Err(Error::Env(format!("transaction `to` {to:?} has a bad EIP-55 checksum")));
+        }
+    }
+    Ok(())
 }
 
 /// The unsigned transaction for `req` (legacy EIP-155 or EIP-1559). Its
