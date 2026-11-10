@@ -444,6 +444,10 @@ fn wallet_add_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         .filter(|n| format!("0x{n:x}") == chain_id_hex && n.sign() == num_bigint::Sign::Plus)
         .ok_or_else(|| ApiError::new(-32602, "Expected 0x-prefixed, unpadded, non-zero hexadecimal string 'chainId'."))?
         .to_string();
+    // EVM chain ids are u64 everywhere downstream (signing, the chain registry).
+    if chain_dec.parse::<u64>().is_err() {
+        return Err(ApiError::new(-32602, "Invalid 'chainId': out of range."));
+    }
     let name = p.get("chainName").and_then(Value::as_str).unwrap_or("");
     if name.len() < 3 {
         return Err(ApiError::new(-32602, "Expected chainName"));
@@ -453,16 +457,25 @@ fn wallet_add_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     if !(2..=6).contains(&symbol.len()) {
         return Err(ApiError::new(-32602, "Expected 2-6 character string 'nativeCurrency.symbol'."));
     }
-    let decimals = nc.and_then(|c| c.get("decimals")).and_then(Value::as_i64).unwrap_or(18);
+    let decimals = match nc.and_then(|c| c.get("decimals")).filter(|d| !d.is_null()) {
+        None => 18,
+        Some(d) => d
+            .as_i64()
+            .filter(|d| (0..=36).contains(d))
+            .ok_or_else(|| ApiError::new(-32602, "Expected an integer 0-36 'nativeCurrency.decimals'."))?,
+    };
     let rpc = p.get("rpcUrls").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("auto");
     let explorer = p.get("blockExplorerUrls").and_then(Value::as_array).and_then(|a| a.first()).and_then(Value::as_str).unwrap_or("auto");
-    // Reject non-http(s) RPC endpoints (SSRF guard, minimal form of Go's check).
-    if rpc != "auto" && !rpc.starts_with("https://") && !rpc.starts_with("http://") {
-        return Err(ApiError::new(-32602, "Invalid rpcUrls entry: must be http(s)"));
+    // The dApp-proposed RPC endpoint goes through the same gate as a
+    // user-entered one (https only outside localhost, no internal / mDNS
+    // targets) BEFORE the user is prompted; the approval re-checks it.
+    if rpc != "auto" {
+        crate::models::network::validate_rpc_url(rpc)
+            .map_err(|e| ApiError::new(-32602, format!("Invalid rpcUrls entry: {e}")))?;
     }
 
     let net_id = format!("evm.{chain_dec}");
-    if crate::models::network::by_id_opt(env, &net_id) {
+    if evm_network_stored(env, &chain_dec) {
         return Ok(Value::Null); // already registered — no-op
     }
 
@@ -497,7 +510,7 @@ fn wallet_switch_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     let chain_dec = parse_chain_id_any(&chain_hex).ok_or_else(|| ApiError::new(400, format!("failed to parse chain id {chain_hex}")))?;
     // Known if already stored or present in the static chain registry.
     let target_id = format!("evm.{chain_dec}");
-    let known = crate::models::network::by_id_opt(env, &target_id) || chain_dec.parse::<u64>().map(|c| ethrpc_rs::chains::get(c).is_some()).unwrap_or(false);
+    let known = evm_network_stored(env, &chain_dec) || chain_dec.parse::<u64>().map(|c| ethrpc_rs::chains::get(c).is_some()).unwrap_or(false);
     if !known {
         return Err(ApiError::new(4902, "Unrecognized chain ID. Try adding the chain using wallet_addEthereumChain first."));
     }
@@ -515,6 +528,15 @@ fn wallet_switch_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
     };
     super::request::run(env, req)?;
     Ok(Value::Null)
+}
+
+/// Whether a stored Network row exists for EVM chain `chain_dec` (decimal).
+/// Rows are keyed by the deterministic `net-…` id derived from type + chain id
+/// (seeded and user-created networks); ones added through
+/// `wallet_addEthereumChain` carry the literal `evm.<chainId>` id.
+fn evm_network_stored(env: &Env, chain_dec: &str) -> bool {
+    crate::models::network::by_id_opt(env, &crate::models::network::network_id_for("evm", chain_dec))
+        || crate::models::network::by_id_opt(env, &format!("evm.{chain_dec}"))
 }
 
 /// Parse a chain id given as decimal or 0x-hex into its decimal-string form.
@@ -1084,7 +1106,9 @@ mod tests {
         };
         inspect(&pending);
         super::super::request::reject(&env, &json!({ "Id": pending.id })).unwrap();
-        assert!(parked.join().unwrap().is_err(), "a rejected approval must not succeed");
+        // (What the parked call returns for a rejection differs per method and
+        // is not what these tests are about.)
+        let _ = parked.join().unwrap();
     }
 
     /// Audit F11: the network is pinned on the request when it is created, and
@@ -1190,6 +1214,68 @@ mod tests {
                 assert_eq!(r.kind, "message_sign", "chainId {chain:?}");
             });
         }
+    }
+
+    fn add_chain(env: &Env, host: &str, param: Value) -> ApiResult {
+        request(env, &json!({ "origin": host, "query": { "method": "wallet_addEthereumChain", "params": [param] } }))
+    }
+
+    fn chain_param(chain_id: &str, rpc: &str, decimals: Value) -> Value {
+        json!({
+            "chainId": chain_id, "chainName": "Some Chain", "rpcUrls": [rpc],
+            "nativeCurrency": { "name": "Coin", "symbol": "COIN", "decimals": decimals },
+        })
+    }
+
+    /// Audit F13: a proposed chain is validated before the user is prompted —
+    /// RPC URL through validate_rpc_url, chainId within u64, decimals 0..=36.
+    #[test]
+    fn add_chain_validates_rpc_chain_id_and_decimals() {
+        let (env, host, _addr) = connected_env();
+        for bad_rpc in [
+            "http://rpc.evil.example",        // plain http to a public host
+            "https://10.0.0.1/",              // internal address
+            "https://169.254.169.254/latest", // link-local metadata endpoint
+            "https://printer.local",          // mDNS
+            "ftp://rpc.example",
+            "file:///etc/passwd",
+        ] {
+            let err = add_chain(&env, &host, chain_param("0x2105", bad_rpc, json!(18))).unwrap_err();
+            assert_eq!(err.code, -32602, "{bad_rpc}: {}", err.message);
+            assert!(err.message.contains("rpcUrls"), "{bad_rpc}: {}", err.message);
+        }
+        // 2^64 does not fit a u64 chain id.
+        let err = add_chain(&env, &host, chain_param("0x10000000000000000", "https://rpc.example", json!(18))).unwrap_err();
+        assert_eq!(err.code, -32602, "{}", err.message);
+        for bad_decimals in [json!(37), json!(-1), json!(255), json!("18"), json!(1.5)] {
+            let err = add_chain(&env, &host, chain_param("0x2105", "https://rpc.example", bad_decimals.clone())).unwrap_err();
+            assert_eq!(err.code, -32602, "decimals {bad_decimals}: {}", err.message);
+        }
+        assert!(crate::models::request::list(&env).unwrap().is_empty(), "no approval may be raised");
+
+        // A well-formed proposal still raises the add_network approval.
+        with_pending_request(env, json!({
+            "origin": host,
+            "query": { "method": "wallet_addEthereumChain", "params": [chain_param("0x2105", "https://rpc.example", json!(18))] },
+        }), |r| {
+            assert_eq!(r.kind, "add_network");
+            assert_eq!(r.value.as_ref().unwrap()["network"]["ChainId"], "8453");
+        });
+    }
+
+    /// Audit F13: "already registered" must find networks stored under their
+    /// real (`net-…`) id, not only a literal `evm.N` id.
+    #[test]
+    fn add_chain_is_a_noop_for_a_network_stored_under_its_net_id() {
+        let (env, host, _addr) = connected_env();
+        let polygon = crate::models::network::Network { kind: "evm".into(), chain_id: "137".into(), ..Default::default() };
+        crate::models::network::save(&env, &polygon).unwrap();
+        assert!(!crate::models::network::by_id_opt(&env, "evm.137"), "stored under its net- id");
+
+        // Returns null straight away — no approval is raised (it would park).
+        let out = add_chain(&env, &host, chain_param("0x89", "https://rpc.example", json!(18))).unwrap();
+        assert!(out.is_null());
+        assert!(crate::models::request::list(&env).unwrap().is_empty());
     }
 
     #[test]

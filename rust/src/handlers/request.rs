@@ -225,6 +225,13 @@ fn approve_add_network(env: &Env, req: &Request) -> Result<(), ApiError> {
         .and_then(|v| v.get("network"))
         .ok_or_else(|| ApiError::new(400, "add_network: missing network in Value"))?;
     let g = |k: &str| net_json.get(k).and_then(Value::as_str).unwrap_or("").to_owned();
+    let currency_decimals = match net_json.get("CurrencyDecimals").filter(|d| !d.is_null()) {
+        None => 18,
+        Some(d) => d
+            .as_i64()
+            .filter(|d| (0..=36).contains(d))
+            .ok_or_else(|| ApiError::new(400, "add_network: CurrencyDecimals must be an integer 0-36"))?,
+    };
     let network = crate::models::network::Network {
         id: g("Id"),
         kind: g("Type"),
@@ -232,10 +239,23 @@ fn approve_add_network(env: &Env, req: &Request) -> Result<(), ApiError> {
         name: g("Name"),
         rpc: g("RPC"),
         currency_symbol: g("CurrencySymbol"),
-        currency_decimals: net_json.get("CurrencyDecimals").and_then(Value::as_i64).unwrap_or(18),
+        currency_decimals,
         block_explorer: g("BlockExplorer"),
         ..Default::default()
     };
+    // `network::save` is the raw row writer and validates nothing, so the
+    // proposal is re-checked here, at the moment it becomes a stored network:
+    // whatever is in the request row, only an EVM network with a u64 chain id
+    // and an RPC endpoint that passes the RPC-URL gate ("" / "auto" excepted)
+    // is persisted.
+    if network.kind != "evm" {
+        return Err(ApiError::new(400, "add_network: only EVM networks can be added"));
+    }
+    if !network.chain_id.parse::<u64>().is_ok_and(|c| c > 0) {
+        return Err(ApiError::new(400, "add_network: invalid chain id"));
+    }
+    crate::models::network::validate_network_rpc(&network.rpc)
+        .map_err(|e| ApiError::new(400, format!("add_network: {e}")))?;
     crate::models::network::save(env, &network).map_err(ApiError::internal)
 }
 
@@ -539,6 +559,44 @@ mod tests {
         assert_eq!(status(&env, "req-1"), "pending");
         assert!(claim(&env, "req-1").is_ok());
         assert_eq!(claim(&env, "req-missing").unwrap_err().code, 400); // no waiter
+    }
+
+    /// Audit F13: the approve arm re-validates the proposed network instead of
+    /// writing whatever the request row holds.
+    #[test]
+    fn approve_add_network_revalidates_the_proposal() {
+        let env = env();
+        crate::models::network::init(&env).unwrap();
+        let proposal = |patch: Value| {
+            let mut network = json!({
+                "Id": "evm.8453", "Type": "evm", "ChainId": "8453", "Name": "Base",
+                "RPC": "https://rpc.example", "CurrencySymbol": "ETH", "CurrencyDecimals": 18, "BlockExplorer": "auto",
+            });
+            for (k, v) in patch.as_object().unwrap() {
+                network[k] = v.clone();
+            }
+            Request { kind: "add_network".into(), value: Some(json!({ "network": network })), ..Default::default() }
+        };
+        for bad in [
+            json!({ "RPC": "http://rpc.evil.example" }),
+            json!({ "RPC": "https://192.168.1.1" }),
+            json!({ "RPC": "https://169.254.169.254" }),
+            json!({ "RPC": "gopher://rpc.example" }),
+            json!({ "ChainId": "18446744073709551616" }),
+            json!({ "ChainId": "0" }),
+            json!({ "ChainId": "abc" }),
+            json!({ "CurrencyDecimals": 37 }),
+            json!({ "CurrencyDecimals": -1 }),
+            json!({ "Type": "bitcoin" }),
+        ] {
+            let err = approve_add_network(&env, &proposal(bad.clone())).unwrap_err();
+            assert_eq!(err.code, 400, "{bad}: {}", err.message);
+            assert!(!crate::models::network::by_id_opt(&env, "evm.8453"), "{bad} was saved");
+        }
+        // Valid proposals (a concrete https endpoint, or the "auto" sentinel) are saved.
+        approve_add_network(&env, &proposal(json!({ "RPC": "auto" }))).unwrap();
+        approve_add_network(&env, &proposal(json!({}))).unwrap();
+        assert!(crate::models::network::by_id_opt(&env, "evm.8453"));
     }
 
     /// Wait for `run_with_timeout` (on another thread) to persist its row.
