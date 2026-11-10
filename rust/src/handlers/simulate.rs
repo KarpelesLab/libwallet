@@ -286,19 +286,25 @@ fn base64_std(b: &[u8]) -> String {
 }
 
 async fn simulate_evm(rpc: &str, tx: &Value) -> Value {
-    let (decoded_method, decoded_args) = decode_evm_call(tx);
+    // (to, value, data) exactly as Transaction:signAndSend derives them — the
+    // preview must be of the call that would be signed. A tx the signer would
+    // refuse is reported as failing, with the signer's reason.
+    let evm_call = match super::transaction::evm_call(tx) {
+        Ok(c) => c,
+        Err(e) => return json!({ "chain": "evm", "willRevert": true, "revertReason": e.message }),
+    };
+    let (decoded_method, decoded_args) = decode_evm_call(&evm_call);
 
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+    let to = evm_call.to.as_str();
     let from = tx.get("from").and_then(Value::as_str).unwrap_or("");
-    let data_hex = strip_hex(tx.get("data").and_then(Value::as_str).unwrap_or(""));
+    let data_hex = hex_lower(&evm_call.data);
 
     let mut call = json!({ "to": to, "data": format!("0x{data_hex}") });
     if !from.is_empty() {
         call["from"] = json!(from);
     }
-    // eth_call value comes from tx.Value (Go simulateEVM), not tx.Amount.
-    if let Some(v) = amount_bigint(tx.get("value")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
-        call["value"] = json!(format!("0x{v:x}"));
+    if evm_call.value.sign() == num_bigint::Sign::Plus {
+        call["value"] = json!(format!("0x{:x}", evm_call.value));
     }
     if let Some(g) = tx.get("gas").and_then(Value::as_u64).filter(|g| *g > 0) {
         call["gas"] = json!(format!("0x{g:x}"));
@@ -353,7 +359,7 @@ async fn simulate_evm(rpc: &str, tx: &Value) -> Value {
         balance_changes = extract_balance_changes(&raw);
     }
 
-    let warnings = evm_warnings(rpc, tx, &data_hex).await;
+    let warnings = evm_warnings(rpc, tx, &evm_call, &data_hex).await;
 
     // Assemble the SimulationResult with Go's omitempty semantics.
     let mut out = json!({ "chain": "evm", "willRevert": will_revert });
@@ -496,12 +502,14 @@ fn effect_from_decoded(from: &str, method: &str, args: &Value) -> Option<Value> 
 
 /// Recognize the ERC-20 transfer/approve shape and a plain native transfer.
 /// Returns (decodedMethod, decodedArgs).
-fn decode_evm_call(tx: &Value) -> (String, Value) {
-    let data = strip_hex(tx.get("data").and_then(Value::as_str).unwrap_or(""));
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
+fn decode_evm_call(call: &super::transaction::EvmCall<'_>) -> (String, Value) {
+    let data = hex_lower(&call.data);
+    let to = call.to.as_str();
     if data.is_empty() {
-        if let Some(amt) = amount_bigint(tx.get("amount")).filter(|v| v.sign() == num_bigint::Sign::Plus) {
-            return ("native_transfer".into(), json!({ "to": to, "amount": amount_string(tx.get("amount"), &amt) }));
+        // The amount shown is the value the call carries (tx.value, else
+        // tx.amount — whichever the signer uses), never the other field.
+        if call.value.sign() == num_bigint::Sign::Plus {
+            return ("native_transfer".into(), json!({ "to": to, "amount": amount_string(call.value_field, &call.value) }));
         }
         return (String::new(), Value::Null);
     }
@@ -613,12 +621,11 @@ fn extract_balance_changes(raw: &Value) -> Vec<Value> {
 }
 
 /// Non-blocking EVM approval warnings (recipient-is-contract, unlimited-approve).
-async fn evm_warnings(rpc: &str, tx: &Value, data_hex: &str) -> Vec<Value> {
+async fn evm_warnings(rpc: &str, tx: &Value, call: &super::transaction::EvmCall<'_>, data_hex: &str) -> Vec<Value> {
     let mut out = Vec::new();
     let typ = tx.get("type").and_then(Value::as_str).unwrap_or("");
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("");
-    let has_value = amount_bigint(tx.get("amount")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false)
-        || amount_bigint(tx.get("value")).map(|v| v.sign() == num_bigint::Sign::Plus).unwrap_or(false);
+    let to = call.to.as_str();
+    let has_value = call.value.sign() == num_bigint::Sign::Plus;
 
     if (typ == "transfer" || typ == "evm") && !to.is_empty() && has_value && data_hex.is_empty() && is_contract(rpc, to).await {
         out.push(json!({
@@ -727,6 +734,70 @@ mod tests {
             }
         });
         format!("http://{addr}")
+    }
+
+    /// A node answering every call with `result_json`, recording the requests.
+    fn mock_rpc_log(result_json: &'static str) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(mut s) = conn else { break };
+                let mut buf = [0u8; 8192];
+                let n = s.read(&mut buf).unwrap_or(0);
+                log.lock().unwrap().push(String::from_utf8_lossy(&buf[..n]).into_owned());
+                let body = format!(r#"{{"jsonrpc":"2.0","id":1,"result":{result_json}}}"#);
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    // Audit M5: the simulated call carries the value the signer would send —
+    // tx.value, else the tx.amount significand, and 0 for an erc20_transfer.
+    #[test]
+    fn simulate_evm_previews_the_value_that_gets_signed() {
+        let env = Env::init_memory().unwrap();
+        let to = "0x00000000000000000000000000000000000000bb";
+        let sim = |tx: Value| {
+            let (rpc, seen) = mock_rpc_log(r#""0x""#);
+            let mut p = tx;
+            p["RPC"] = json!(rpc);
+            let out = simulate(&env, &p).unwrap();
+            let reqs = seen.lock().unwrap().clone();
+            (out, reqs)
+        };
+
+        // amount only: the signer sends it as the value, so the preview must too.
+        let (out, reqs) = sim(json!({ "type": "evm", "to": to, "amount": { "v": "1000", "e": 0 } }));
+        assert!(reqs.iter().any(|r| r.contains("debug_traceCall") && r.contains(r#""value":"0x3e8""#)), "{reqs:?}");
+        assert_eq!(out["decodedMethod"], "native_transfer");
+        assert_eq!(out["decodedArgs"]["amount"], "1000");
+
+        // value wins over amount, in the call and in the decode.
+        let (out, reqs) = sim(json!({ "type": "evm", "to": to, "value": "7", "amount": "1000" }));
+        assert!(reqs.iter().any(|r| r.contains(r#""value":"0x7""#)), "{reqs:?}");
+        assert!(!reqs.iter().any(|r| r.contains("0x3e8")), "{reqs:?}");
+        assert_eq!(out["decodedArgs"]["amount"], "7");
+
+        // erc20_transfer: the amount is in the calldata; no native value.
+        let data = format!("0xa9059cbb{:0>64}{:0>64}", "aa", "3e8");
+        let (out, reqs) = sim(json!({ "type": "erc20_transfer", "to": to, "amount": "1000", "data": data }));
+        assert!(!reqs.iter().any(|r| r.contains(r#""value""#)), "{reqs:?}");
+        assert_eq!(out["decodedMethod"], "erc20_transfer");
+
+        // What the signer refuses is not previewed as something else.
+        let (out, reqs) = sim(json!({ "type": "erc20_transfer", "to": to, "amount": "1000" }));
+        assert!(reqs.is_empty(), "{reqs:?}");
+        assert_eq!(out["willRevert"], true);
+        assert!(out["revertReason"].as_str().unwrap().contains("erc20_transfer requires"), "{out}");
     }
 
     #[test]

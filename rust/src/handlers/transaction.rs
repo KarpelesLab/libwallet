@@ -260,24 +260,9 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     }
     let chain_id: u64 = net.chain_id.parse().map_err(|_| ApiError::new(400, "non-numeric EVM chain id"))?;
 
-    // Value (wei) = tx.value else tx.amount significand; erc20/data carries 0.
-    let is_erc20 = typ == "erc20_transfer";
-    let value = if is_erc20 {
-        BigInt::from(0)
-    } else {
-        amount_significand(tx.get("value")).or_else(|| amount_significand(tx.get("amount"))).unwrap_or_else(|| BigInt::from(0))
-    };
-    let data = match tx.get("data").and_then(Value::as_str) {
-        Some(h) if !h.is_empty() => {
-            let h = h.strip_prefix("0x").ok_or_else(|| ApiError::new(400, "data must be 0x-prefixed"))?;
-            decode_hex(h)?
-        }
-        _ => Vec::new(),
-    };
-    if is_erc20 && data.is_empty() {
-        return Err(ApiError::new(400, "erc20_transfer requires encoded Data (0x transfer calldata)"));
-    }
-    let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_string();
+    // (to, value, data) — derived by the same helper Transaction:simulate
+    // previews, so what is simulated is what gets signed.
+    let EvmCall { to, value, data, .. } = evm_call(tx)?;
 
     // Backfill nonce / gas / fee from the node when the caller didn't pin them.
     let nonce = match tx.get("nonce").and_then(Value::as_u64) {
@@ -375,6 +360,49 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     record.raw = format!("0x{raw_hex}"); // return 0x-hex raw to the host
     Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// The call an EVM `Transaction` makes: recipient, native value (wei) and
+/// calldata. `value_field` is the tx field the value was read from.
+pub(crate) struct EvmCall<'a> {
+    pub to: String,
+    pub value: BigInt,
+    pub value_field: Option<&'a Value>,
+    pub data: Vec<u8>,
+}
+
+/// Derive the `(to, value, data)` an EVM `Transaction` executes. The one place
+/// this is decided, shared by `Transaction:signAndSend` (what is signed) and
+/// `Transaction:simulate` (what is previewed) so the two cannot disagree:
+///   - value (wei) = the `value` significand, else the `amount` significand,
+///     else 0; an `erc20_transfer` always carries 0 (its amount is in the
+///     calldata);
+///   - data = the `0x`-prefixed hex `data`, required for an `erc20_transfer`.
+pub(crate) fn evm_call(tx: &Value) -> Result<EvmCall<'_>, ApiError> {
+    let is_erc20 = tx.get("type").and_then(Value::as_str) == Some("erc20_transfer");
+    let (value, value_field) = match [tx.get("value"), tx.get("amount")]
+        .into_iter()
+        .flatten()
+        .find_map(|f| amount_significand(Some(f)).map(|v| (v, f)))
+    {
+        Some((v, f)) if !is_erc20 => (v, Some(f)),
+        _ => (BigInt::from(0), None),
+    };
+    if value.sign() == num_bigint::Sign::Minus {
+        return Err(ApiError::new(400, "value must not be negative"));
+    }
+    let data = match tx.get("data").and_then(Value::as_str) {
+        Some(h) if !h.is_empty() => {
+            let h = h.strip_prefix("0x").ok_or_else(|| ApiError::new(400, "data must be 0x-prefixed"))?;
+            decode_hex(h)?
+        }
+        _ => Vec::new(),
+    };
+    if is_erc20 && data.is_empty() {
+        return Err(ApiError::new(400, "erc20_transfer requires encoded Data (0x transfer calldata)"));
+    }
+    let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_string();
+    Ok(EvmCall { to, value, value_field, data })
 }
 
 /// Solana `Transaction:signAndSend` (Go `signAndSendSolana`): build the unsigned
@@ -746,4 +774,28 @@ fn decode_hex(s: &str) -> Result<Vec<u8>, ApiError> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ApiError::new(400, "bad hex")))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Audit M5: one derivation of (to, value, data) for signing and simulation.
+    #[test]
+    fn evm_call_value_and_data_rules() {
+        let v = |tx: Value| evm_call(&tx).map(|c| (c.value.to_string(), c.data.clone()));
+        assert_eq!(v(json!({ "amount": { "v": "1000", "e": 0 } })).unwrap().0, "1000");
+        assert_eq!(v(json!({ "value": "7", "amount": "1000" })).unwrap().0, "7");
+        assert_eq!(v(json!({ "value": { "v": "0" }, "amount": "1000" })).unwrap().0, "0");
+        assert_eq!(v(json!({})).unwrap().0, "0");
+        // erc20_transfer: value 0 whatever amount says, and calldata is required.
+        let data = "0xA9059CBB00";
+        assert_eq!(
+            v(json!({ "type": "erc20_transfer", "amount": "1000", "value": "5", "data": data })).unwrap(),
+            ("0".to_string(), vec![0xa9, 0x05, 0x9c, 0xbb, 0x00])
+        );
+        assert!(v(json!({ "type": "erc20_transfer", "amount": "1000" })).is_err());
+        assert!(v(json!({ "data": "a9059cbb" })).is_err(), "data needs its 0x prefix");
+        assert!(v(json!({ "value": "-1" })).is_err());
+    }
 }
