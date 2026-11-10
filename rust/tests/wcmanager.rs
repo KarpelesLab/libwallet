@@ -105,7 +105,7 @@ fn full_session_handshake() {
 
     // The dApp derives the SAME session key and decrypts the wallet's settle —
     // proving the X25519 + HKDF agreement is correct end to end.
-    let session_sym = wc::derive_sym_key(&dapp_priv, &wallet_pub);
+    let session_sym = wc::derive_sym_key(&dapp_priv, &wallet_pub).unwrap();
     assert_eq!(wc::derive_topic(&session_sym), session_topic);
 
     let sent = relay.sent();

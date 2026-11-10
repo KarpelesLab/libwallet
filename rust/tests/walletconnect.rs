@@ -43,7 +43,7 @@ fn type1_asymmetric_roundtrip() {
     let nonce: [u8; 12] = seq(7, 12).try_into().unwrap();
 
     let (env, sender_pub) =
-        wc::seal_type1_with_nonce(&recipient_pub, &sender_priv, &nonce, b"session propose");
+        wc::seal_type1_with_nonce(&recipient_pub, &sender_priv, &nonce, b"session propose").unwrap();
     assert_eq!(sender_pub, wc::x25519_public(&sender_priv));
 
     // Recipient decrypts with its private key and recovers the sender's pubkey.
@@ -53,8 +53,8 @@ fn type1_asymmetric_roundtrip() {
 
     // Both sides derive the same per-message symKey (ECDH symmetry).
     assert_eq!(
-        wc::derive_sym_key(&sender_priv, &recipient_pub),
-        wc::derive_sym_key(&recipient_priv, &sender_pub)
+        wc::derive_sym_key(&sender_priv, &recipient_pub).unwrap(),
+        wc::derive_sym_key(&recipient_priv, &sender_pub).unwrap()
     );
 }
 
@@ -175,7 +175,7 @@ fn process_inbound_classifies_and_guards() {
     let recipient_priv: [u8; 32] = seq(1, 32).try_into().unwrap();
     let recipient_pub = wc::x25519_public(&recipient_priv);
     let sender_priv: [u8; 32] = seq(200, 32).try_into().unwrap();
-    let (type1, _) = wc::seal_type1_with_nonce(&recipient_pub, &sender_priv, &nonce, req);
+    let (type1, _) = wc::seal_type1_with_nonce(&recipient_pub, &sender_priv, &nonce, req).unwrap();
     // Active: no private key -> rejected.
     assert!(wc::process_inbound(&sym, Some(&recipient_priv), true, &type1).is_err());
     // Pre-settle: private key supplied -> opens (it's a propose-time path).
@@ -323,4 +323,46 @@ fn parse_pairing_uri_validates() {
     assert!(wc::parse_pairing_uri(&format!("wc:{topic}@1?symKey={sym_hex}")).is_err());
     assert!(wc::parse_pairing_uri(&format!("wc:deadbeef@2?symKey={sym_hex}")).is_err());
     assert!(wc::parse_pairing_uri(&format!("wc:{topic}@2?relay-protocol=irn")).is_err());
+}
+
+/// Audit F1: a small-order peer point makes X25519 return all-zero for ANY
+/// private key, so the HKDF'd envelope key would be a public constant. Such
+/// points must be rejected rather than keyed on.
+#[test]
+fn small_order_peer_points_are_rejected() {
+    let wallet_priv: [u8; 32] = seq(1, 32).try_into().unwrap();
+    let nonce: [u8; 12] = seq(7, 12).try_into().unwrap();
+
+    // The canonical small-order encodings: 0, 1, and the two order-8 points.
+    let mut one = [0u8; 32];
+    one[0] = 1;
+    let order8_a: [u8; 32] = [
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
+        0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+    ];
+    let order8_b: [u8; 32] = [
+        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef, 0x5b,
+        0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f, 0x11, 0x57,
+    ];
+    for low in [[0u8; 32], one, order8_a, order8_b] {
+        assert!(wc::derive_sym_key(&wallet_priv, &low).is_err(), "accepted low-order point {low:02x?}");
+        assert!(wc::seal_type1_with_nonce(&low, &wallet_priv, &nonce, b"x").is_err());
+    }
+
+    // The attack: a Type-1 envelope whose senderPub is the zero point, sealed
+    // under the constant HKDF(0^32) key anyone can compute. It authenticated
+    // before the fix; it must now be refused before any decryption happens.
+    let mut forged_key = [0u8; 32];
+    purecrypto::kdf::hkdf::<purecrypto::hash::Sha256>(&[], &[0u8; 32], &[], &mut forged_key);
+    let aead = purecrypto::cipher::ChaCha20Poly1305::new(&forged_key);
+    let mut ct = br#"{"id":1,"jsonrpc":"2.0","method":"wc_sessionPropose","params":{}}"#.to_vec();
+    let tag = aead.encrypt(&nonce, &[], &mut ct);
+    let mut raw = vec![0x01];
+    raw.extend_from_slice(&[0u8; 32]);
+    raw.extend_from_slice(&nonce);
+    raw.extend_from_slice(&ct);
+    raw.extend_from_slice(&tag);
+    let forged = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw);
+    let err = wc::open_envelope(None, Some(&wallet_priv), &forged).unwrap_err();
+    assert!(format!("{err}").contains("small-order"), "got: {err}");
 }

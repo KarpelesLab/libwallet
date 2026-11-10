@@ -56,15 +56,15 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let sym: [u8; 32] = b64url_decode(&s.sym_key)?
             .try_into()
             .map_err(|_| Error::Env("session symKey not 32 bytes".into()))?;
-        // A settled session only accepts Type-0; before settle, offer the
-        // proposal private key for the Type-1 sessionPropose.
+        // Only Type-0 (symmetric) envelopes are accepted, on every topic. Nothing
+        // in the wallet-side Sign flow is Type-1: `wc_sessionPropose` arrives
+        // Type-0 under the pairing symKey, and the wallet's proposal public key
+        // is not disclosed to anyone until the approve response, after which all
+        // traffic is Type-0 on the session topic. Offering the proposal private
+        // key here would only let a frame bypass the pairing symKey (the sole
+        // thing authenticating the dApp), so it is never offered.
         let active = s.state == "active";
-        let self_priv: Option<[u8; 32]> = if active {
-            None
-        } else {
-            b64url_decode(&s.self_priv).ok().and_then(|v| v.try_into().ok())
-        };
-        let inbound = wc::process_inbound(&sym, self_priv.as_ref(), active, &message)?;
+        let inbound = wc::process_inbound(&sym, None, active, &message)?;
         // Track the pending proposal so a later reject can address it.
         if let wc::WcInbound::Propose { id, .. } = &inbound {
             self.pending_proposals.insert(topic.clone(), *id);
@@ -104,7 +104,9 @@ impl<T: wc::RelayTransport> WcManager<T> {
             .ok_or_else(|| Error::Env("proposal missing proposer.publicKey".into()))?;
         let peer_pub = wc::decode_pubkey32(peer_pub_str)
             .ok_or_else(|| Error::Env("bad proposer publicKey".into()))?;
-        let session_sym = wc::derive_sym_key(&self_priv, &peer_pub);
+        // Fails for a small-order proposer key (all-zero shared secret), which
+        // would otherwise settle the session under a publicly computable key.
+        let session_sym = wc::derive_sym_key(&self_priv, &peer_pub)?;
         let session_topic = wc::derive_topic(&session_sym);
 
         let namespaces = wc::build_namespaces(proposal, accounts, methods, events);

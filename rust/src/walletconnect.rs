@@ -133,23 +133,33 @@ pub fn decode_pubkey32(s: &str) -> Option<[u8; 32]> {
 
 /// Derive the per-message symKey for a Type-1 envelope: `HKDF-SHA256(X25519(priv,
 /// peerPub))` with empty salt/info (Go `deriveSymKey`).
-pub fn derive_sym_key(priv_key: &[u8; 32], peer_pub: &[u8; 32]) -> [u8; 32] {
+///
+/// Fails when the X25519 output is all-zero (RFC 7748 §6.1): that is what a
+/// small-order peer point yields for ANY private key, so accepting it would make
+/// the derived key a public constant an attacker can compute without knowing
+/// either private key.
+pub fn derive_sym_key(priv_key: &[u8; 32], peer_pub: &[u8; 32]) -> Result<[u8; 32]> {
     let shared = x25519(priv_key, peer_pub);
+    // Constant-time all-zero check: fold every byte, branch once on the result.
+    if shared.iter().fold(0u8, |acc, b| acc | b) == 0 {
+        return Err(Error::Env("x25519: small-order peer public key (all-zero shared secret)".into()));
+    }
     let mut out = [0u8; 32];
     purecrypto::kdf::hkdf::<purecrypto::hash::Sha256>(&[], &shared, &[], &mut out);
-    out
+    Ok(out)
 }
 
 /// Seal a Type-1 (asymmetric) envelope from `sender_priv` to `peer_pub` with an
-/// explicit nonce. Returns `(base64 envelope, sender public key)`.
+/// explicit nonce. Returns `(base64 envelope, sender public key)`; fails for a
+/// small-order `peer_pub` (see [`derive_sym_key`]).
 pub fn seal_type1_with_nonce(
     peer_pub: &[u8; 32],
     sender_priv: &[u8; 32],
     nonce: &[u8; 12],
     plaintext: &[u8],
-) -> (String, [u8; 32]) {
+) -> Result<(String, [u8; 32])> {
     let sender_pub = x25519_public(sender_priv);
-    let sym_key = derive_sym_key(sender_priv, peer_pub);
+    let sym_key = derive_sym_key(sender_priv, peer_pub)?;
     let aead = ChaCha20Poly1305::new(&sym_key);
     let mut buf = plaintext.to_vec();
     let tag = aead.encrypt(nonce, &[], &mut buf);
@@ -159,7 +169,7 @@ pub fn seal_type1_with_nonce(
     env.extend_from_slice(nonce);
     env.extend_from_slice(&buf);
     env.extend_from_slice(&tag);
-    (base64::engine::general_purpose::STANDARD.encode(env), sender_pub)
+    Ok((base64::engine::general_purpose::STANDARD.encode(env), sender_pub))
 }
 
 /// Decrypt a base64 envelope (Go `openEnvelope`). Type-0 needs `sym_key`;
@@ -195,7 +205,7 @@ pub fn open_envelope(
             }
             let sender_pub: [u8; 32] = buf[1..1 + 32].try_into().unwrap();
             let nonce: [u8; 12] = buf[1 + 32..1 + 32 + NONCE_SIZE].try_into().unwrap();
-            let key = derive_sym_key(priv_key, &sender_pub);
+            let key = derive_sym_key(priv_key, &sender_pub)?;
             let (ct, tag) = split_ct_tag(&buf[1 + 32 + NONCE_SIZE..])?;
             let pt = decrypt(&key, &nonce, ct, tag)?;
             Ok((pt, Some(sender_pub)))
