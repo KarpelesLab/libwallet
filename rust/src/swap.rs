@@ -1104,25 +1104,31 @@ pub fn solana_native_mint_or_addr(addr: &str) -> String {
 /// price drift in the seconds between quote and execute leaves it a hair under
 /// the approved minimum on a perfectly honest fill (the field case: 713177 vs
 /// 713274, 0.0136%). We therefore relax the floor by one slippage band:
-/// `floor = min_amount_out × (10_000 − slippageBps) / 10_000`. No-op when
-/// `min_receive` is blank / unparseable or the quote carries no minimum.
+/// `floor = min_amount_out × (10_000 − slippageBps) / 10_000`. No-op when the
+/// quote carries no minimum; when it does, a blank / unparseable `min_receive`
+/// FAILS CLOSED — the provider response is untrusted, and omitting the field
+/// must not be a way around the tripwire.
 pub fn okx_assert_min_receive(
     min_amount_out: Option<&BigInt>,
     slippage_bps: u16,
     min_receive: &str,
 ) -> Result<()> {
-    let mr = min_receive.trim();
-    if mr.is_empty() {
-        return Ok(());
-    }
-    let got = match BigInt::parse_bytes(mr.as_bytes(), 10) {
-        Some(g) => g,
-        None => return Ok(()),
-    };
     let min_out = match min_amount_out {
         Some(m) => m,
         None => return Ok(()),
     };
+    let mr = min_receive.trim();
+    let got = Some(mr)
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10))
+        .ok_or_else(|| {
+            // Worded without the field name: this is a malformed provider
+            // response, not the slippage breach the handler keys on.
+            Error::Env(format!(
+                "okx: swap response carries no usable min-receive amount ({mr:?}); \
+                 refusing to sign without the approved floor {min_out} being checked"
+            ))
+        })?;
     // floor = MinAmountOut × (10_000 − slippageBps) / 10_000 — relax the
     // approved minimum by one slippage band to absorb quote→execute drift.
     let slip = normalize_slippage(slippage_bps) as i64;

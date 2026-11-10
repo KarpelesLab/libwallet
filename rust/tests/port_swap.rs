@@ -68,9 +68,15 @@ fn min_receive_tolerates_drift() {
     assert!(swap::okx_assert_min_receive(Some(&q(713274)), 50, "709706").is_err());
     // Order-of-magnitude shortfall a tampered response would produce.
     assert!(swap::okx_assert_min_receive(Some(&q(713274)), 50, "400000").is_err());
-    // Absent / unparseable field is a no-op.
-    assert!(swap::okx_assert_min_receive(Some(&q(713274)), 50, "").is_ok());
-    assert!(swap::okx_assert_min_receive(Some(&q(713274)), 50, "   ").is_ok());
+    // Absent / unparseable field fails closed when the quote has a minimum
+    // (audit F2): omitting it must not bypass the tripwire.
+    for bad in ["", "   ", "lots", "-1", "0x10", "1.5"] {
+        let err = swap::okx_assert_min_receive(Some(&q(713274)), 50, bad).unwrap_err().to_string();
+        assert!(err.contains("no usable min-receive amount"), "{bad:?}: {err}");
+    }
+    // ...but stays a no-op when there is no quote minimum to enforce.
+    assert!(swap::okx_assert_min_receive(None, 50, "").is_ok());
+    assert!(swap::okx_assert_min_receive(None, 50, "lots").is_ok());
     // No quote minimum is a no-op.
     assert!(swap::okx_assert_min_receive(None, 50, "1").is_ok());
 }

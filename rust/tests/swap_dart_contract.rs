@@ -625,6 +625,7 @@ fn evm_execute_rejects_swap_tx_to_unapproved_router() {
         // A tampered response pointing at another contract.
         "Crypto/Okx:swap" => json!([{ "tx": {
             "to": "0x9999999999999999999999999999999999999999", "value": "0", "data": "0xab", "gas": "1", "gasPrice": "1",
+            "minReceiveAmount": "4975000000000000",
         }}]),
         "eth_call" => json!(format!("0x{}", "f".repeat(64))), // allowance already max
         other => panic!("unexpected mock call {other}"),
@@ -644,6 +645,43 @@ fn evm_execute_rejects_swap_tx_to_unapproved_router() {
     let r = request(h, "Swap:execute", json!({ "quoteId": q["quoteId"], "Keys": w.keys, "Backend": mock }));
     assert_eq!(r["result"], "error");
     assert!(r["error"].as_str().unwrap().contains("does not match approved spender"), "{r}");
+    assert!(seen_for(&seen, "Crypto/Okx:broadcastTransaction").is_empty(), "nothing may be broadcast");
+    LibwalletDestroy(h);
+}
+
+// ── audit F2 (partial): a swap tx without minReceiveAmount is not signed ────
+
+#[test]
+fn evm_execute_rejects_swap_tx_without_min_receive() {
+    let token = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+    let router = "0x1111111111111111111111111111111111111111";
+    let h = new_env();
+    let w = create_wallet(h, "secp256k1", "ethereum");
+    let (mock, seen) = mock_server(Box::new(move |route, params| match route {
+        "Crypto/Okx:quote" => okx_quote_entry(params, 1, 2000),
+        "Crypto/Okx:supportedChains" => json!([{ "chainIndex": "1", "dexTokenApproveAddress": router }]),
+        // Right router, but the min-receive the quote's floor is checked
+        // against has been dropped from the response.
+        "Crypto/Okx:swap" => json!([{ "tx": {
+            "to": router, "value": "0", "data": "0xab", "gas": "120000", "gasPrice": "20000000000",
+        }}]),
+        "eth_call" => json!(format!("0x{}", "f".repeat(64))), // allowance already max
+        other => panic!("unexpected mock call {other}"),
+    }));
+    use_network(h, "evm", "1", &mock);
+    let q = ok(request(
+        h,
+        "Swap:quote",
+        json!({
+            "tokenIn": { "address": token, "decimals": 6 },
+            "tokenOut": { "address": "NATIVE", "decimals": 18 },
+            "amountIn": "10000000",
+            "Backend": mock,
+        }),
+    ));
+    let r = request(h, "Swap:execute", json!({ "quoteId": q["quoteId"], "Keys": w.keys, "Backend": mock }));
+    assert_eq!(r["result"], "error");
+    assert!(r["error"].as_str().unwrap().contains("no usable min-receive amount"), "{r}");
     assert!(seen_for(&seen, "Crypto/Okx:broadcastTransaction").is_empty(), "nothing may be broadcast");
     LibwalletDestroy(h);
 }
