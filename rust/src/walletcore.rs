@@ -83,6 +83,11 @@ fn from_hex(s: &str) -> R<Vec<u8>> {
     if s.len() % 2 != 0 {
         return Err("hex string has odd length".into());
     }
+    // Only ASCII hex digits: this also keeps the two-byte slices below on
+    // char boundaries (a multi-byte character would make the slice panic).
+    if !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("bad hex: non-hexadecimal character".into());
+    }
     (0..s.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|e| format!("bad hex: {e}")))
@@ -416,6 +421,20 @@ mod tests {
     // The BIP-39 passphrase is part of the seed, so it yields a wholly different
     // wallet — and derivation and signing must agree on it, or the web wallet
     // would show one address and sign with another's key.
+    // Audit KC-11: hex input is untrusted (it comes from the page); a
+    // multi-byte character must be an error, never a slicing panic.
+    #[test]
+    fn from_hex_rejects_non_hex_without_panicking() {
+        assert_eq!(from_hex("0x00ff").unwrap(), vec![0x00, 0xff]);
+        assert_eq!(from_hex("ABcd").unwrap(), vec![0xab, 0xcd]);
+        assert_eq!(from_hex("").unwrap(), Vec::<u8>::new());
+        // "é" is two bytes: even byte length, but not sliceable per byte pair.
+        for bad in ["aé1", "é", "0xé0é", "€0", "zz", "+1", "0x1", " 0"] {
+            assert!(from_hex(bad).is_err(), "{bad:?}");
+        }
+        assert!(hex_32("é".repeat(32).as_str()).is_err());
+    }
+
     #[test]
     fn passphrase_derives_a_different_wallet_and_signs_for_it() {
         let plain = derive_addresses(M, "").unwrap();
