@@ -814,8 +814,9 @@ pub fn promote(
         return Err(Error::Env("promote produced a share with a different group pubkey".into()));
     }
 
-    // Seal each new share per its KeyDescription (RemoteKey uploads to the wdrone).
-    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    // Seal each new share per its KeyDescription (RemoteKey uploads to the
+    // wdrone — last, once every local share is sealed; see seal_committee).
+    let mut pending: Vec<PendingShare> = Vec::with_capacity(new_keys.len());
     for (wk_id, kd) in new_wk_ids.iter().zip(new_keys) {
         let uuid = wk_id.uuid();
         let uuid_bytes = uuid.as_bytes();
@@ -825,17 +826,9 @@ pub fn promote(
             .map(|(_, k)| k)
             .ok_or_else(|| Error::Env("reshare produced no share for a new key".into()))?;
         let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
-        let (data, key_field) = seal_share_full(env, "secp256k1", "dkls23", kd, uuid_bytes, share_json.as_bytes())?;
-        wkeys.push(WalletKey {
-            id: wk_id.to_string(),
-            wallet: wallet.id.clone(),
-            kind: kd.kind.clone(),
-            schema: "dkls23".into(),
-            key: key_field,
-            data,
-            generation: wallet.generation + 1,
-        });
+        pending.push(PendingShare { id: wk_id.to_string(), uuid: uuid_bytes.to_vec(), kd, json: share_json });
     }
+    let wkeys = seal_committee(env, &wallet.id, "secp256k1", "dkls23", wallet.generation + 1, &pending)?;
 
     // Swap the committee in place; advance protocol + threshold, keep pubkey/cc.
     replace_wallet_keys(env, &wallet, &wkeys)?;
@@ -881,7 +874,7 @@ fn promote_frost(
         return Err(Error::Env("promote produced a share with a different group pubkey".into()));
     }
 
-    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    let mut pending: Vec<PendingShare> = Vec::with_capacity(new_keys.len());
     for (wk_id, kd) in new_wk_ids.iter().zip(new_keys) {
         let uuid = wk_id.uuid();
         let uuid_bytes = uuid.as_bytes();
@@ -891,17 +884,9 @@ fn promote_frost(
             .map(|(_, k)| k)
             .ok_or_else(|| Error::Env("split produced no share for a new key".into()))?;
         let share_json = key.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
-        let (data, key_field) = seal_share_full(env, "ed25519", "frost", kd, uuid_bytes, share_json.as_bytes())?;
-        wkeys.push(WalletKey {
-            id: wk_id.to_string(),
-            wallet: wallet.id.clone(),
-            kind: kd.kind.clone(),
-            schema: "frost".into(),
-            key: key_field,
-            data,
-            generation: wallet.generation + 1,
-        });
+        pending.push(PendingShare { id: wk_id.to_string(), uuid: uuid_bytes.to_vec(), kd, json: share_json });
     }
+    let wkeys = seal_committee(env, &wallet.id, "ed25519", "frost", wallet.generation + 1, &pending)?;
 
     replace_wallet_keys(env, wallet, &wkeys)?;
     env.exec(
@@ -1379,6 +1364,60 @@ pub(crate) fn seal_share_full(
     }
 }
 
+/// One share of a new committee waiting to be sealed by [`seal_committee`].
+struct PendingShare<'a> {
+    /// The new WalletKey id (its UUID is the party key + Password salt).
+    id: String,
+    uuid: Vec<u8>,
+    kd: &'a KeyDescription,
+    /// The share's JSON (the plaintext to seal).
+    json: String,
+}
+
+/// Seal a whole new committee into WalletKey rows of `wallet_id`, in the order
+/// of `pending`.
+///
+/// Sealing a RemoteKey share uploads it (`setGeneratedKey`), overwriting the
+/// share the backend holds for that session — irreversible from here. So the
+/// work is done in two passes: every local recipient (Password / StoreKey /
+/// Plain) is resolved and sealed first, and only when all of those succeeded
+/// are the RemoteKey shares uploaded. A bad local descriptor (short password,
+/// locked vault token, malformed StoreKey pubkey, unknown type) then fails the
+/// operation before the server-side share is touched, instead of leaving it
+/// out of sync with the unchanged local committee.
+fn seal_committee(
+    env: &Env,
+    wallet_id: &str,
+    curve_out: &str,
+    protocol: &str,
+    generation: u64,
+    pending: &[PendingShare<'_>],
+) -> Result<Vec<WalletKey>> {
+    let mut sealed: Vec<Option<(Vec<u8>, String)>> = vec![None; pending.len()];
+    for remote_pass in [false, true] {
+        for (slot, p) in sealed.iter_mut().zip(pending) {
+            if (p.kd.kind == "RemoteKey") != remote_pass {
+                continue;
+            }
+            *slot = Some(seal_share_full(env, curve_out, protocol, p.kd, &p.uuid, p.json.as_bytes())?);
+        }
+    }
+    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(pending.len());
+    for (p, s) in pending.iter().zip(sealed) {
+        let (data, key_field) = s.ok_or_else(|| Error::Env("share was not sealed".into()))?;
+        wkeys.push(WalletKey {
+            id: p.id.clone(),
+            wallet: wallet_id.to_owned(),
+            kind: p.kd.kind.clone(),
+            schema: protocol.into(),
+            key: key_field,
+            data,
+            generation,
+        });
+    }
+    Ok(wkeys)
+}
+
 /// The configured `walletinfo:clientId`, if set. Native sends it as the
 /// `Sec-ClientId` header (Go `withClientID`); the browser (over Spot) merges it
 /// into the request params as `client_id` — either way it selects the
@@ -1498,7 +1537,11 @@ pub fn persist_reshared_frost(
     new_parties: &[PartyId],
     new_shares: &std::collections::HashMap<String, Key>,
 ) -> Result<()> {
-    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    if new_wk_ids.len() != new_keys.len() || new_parties.len() != new_keys.len() {
+        return Err(Error::Env("reshare: new committee descriptors/ids/parties differ in length".into()));
+    }
+    // Check EVERY new share before sealing any (a RemoteKey seal uploads).
+    let mut pending: Vec<PendingShare> = Vec::with_capacity(new_keys.len());
     for (i, kd) in new_keys.iter().enumerate() {
         let party = &new_parties[i];
         let share = new_shares
@@ -1509,18 +1552,9 @@ pub fn persist_reshared_frost(
             return Err(Error::Env("reshare produced a share with a different group pubkey".into()));
         }
         let json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
-        let uuid = new_wk_ids[i].uuid();
-        let (data, key_field) = seal_share_full(env, &wallet.curve, "frost", kd, uuid.as_bytes(), json.as_bytes())?;
-        wkeys.push(WalletKey {
-            id: new_wk_ids[i].to_string(),
-            wallet: wallet.id.clone(),
-            kind: kd.kind.clone(),
-            schema: "frost".into(),
-            key: key_field,
-            data,
-            generation: wallet.generation + 1,
-        });
+        pending.push(PendingShare { id: new_wk_ids[i].to_string(), uuid: new_wk_ids[i].uuid().as_bytes().to_vec(), kd, json });
     }
+    let wkeys = seal_committee(env, &wallet.id, &wallet.curve, "frost", wallet.generation + 1, &pending)?;
     replace_wallet_keys(env, wallet, &wkeys)
 }
 
@@ -1535,7 +1569,11 @@ pub fn persist_reshared_dkls(
     new_parties: &[PartyId],
     new_shares: &std::collections::HashMap<String, tsslib::dklstss::Key>,
 ) -> Result<()> {
-    let mut wkeys: Vec<WalletKey> = Vec::with_capacity(new_keys.len());
+    if new_wk_ids.len() != new_keys.len() || new_parties.len() != new_keys.len() {
+        return Err(Error::Env("reshare: new committee descriptors/ids/parties differ in length".into()));
+    }
+    // Check EVERY new share before sealing any (a RemoteKey seal uploads).
+    let mut pending: Vec<PendingShare> = Vec::with_capacity(new_keys.len());
     for (i, kd) in new_keys.iter().enumerate() {
         let party = &new_parties[i];
         let share = new_shares
@@ -1546,18 +1584,9 @@ pub fn persist_reshared_dkls(
             return Err(Error::Env("reshare produced a share with a different group pubkey".into()));
         }
         let json = share.to_json().map_err(|e| Error::Env(format!("{e:?}")))?;
-        let uuid = new_wk_ids[i].uuid();
-        let (data, key_field) = seal_share_full(env, &wallet.curve, "dkls23", kd, uuid.as_bytes(), json.as_bytes())?;
-        wkeys.push(WalletKey {
-            id: new_wk_ids[i].to_string(),
-            wallet: wallet.id.clone(),
-            kind: kd.kind.clone(),
-            schema: "dkls23".into(),
-            key: key_field,
-            data,
-            generation: wallet.generation + 1,
-        });
+        pending.push(PendingShare { id: new_wk_ids[i].to_string(), uuid: new_wk_ids[i].uuid().as_bytes().to_vec(), kd, json });
     }
+    let wkeys = seal_committee(env, &wallet.id, &wallet.curve, "dkls23", wallet.generation + 1, &pending)?;
     replace_wallet_keys(env, wallet, &wkeys)
 }
 
