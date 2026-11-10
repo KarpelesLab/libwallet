@@ -374,19 +374,55 @@ impl<T: wc::RelayTransport> WcManager<T> {
 
 /// Format an inbound WalletConnect message as a host event JSON (broadcast by
 /// the relay reader thread so the host UI can react to proposals/requests).
-pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
-    let (kind, body) = match msg {
-        wc::WcInbound::Propose { id, params } => ("wc_sessionPropose", serde_json::json!({ "id": id, "params": params })),
-        wc::WcInbound::Request { id, method, chain_id, params } => (
-            "wc_sessionRequest",
-            serde_json::json!({ "id": id, "method": method, "chainId": chain_id, "params": params }),
+///
+/// Proposals and requests use the event names and flat shapes the Dart client
+/// subscribes to (`wc_session_propose` → `WcSessionProposal`,
+/// `wc_session_request` → `WcSessionRequest`); `peer_metadata` is the session's
+/// stored dApp metadata, when there is any.
+pub fn inbound_event_with(topic: &str, msg: &wc::WcInbound, peer_metadata: serde_json::Value) -> String {
+    let (kind, data) = match msg {
+        wc::WcInbound::Propose { id, params } => (
+            "wc_session_propose",
+            serde_json::json!({
+                "pairingTopic": topic,
+                "proposalId": id,
+                "proposer": params.get("proposer").and_then(|p| p.get("metadata")).cloned().unwrap_or_else(|| serde_json::json!({})),
+                "proposal": params,
+            }),
         ),
-        wc::WcInbound::Settle { id } => ("wc_sessionSettle", serde_json::json!({ "id": id })),
-        wc::WcInbound::Delete { id } => ("wc_sessionDelete", serde_json::json!({ "id": id })),
-        wc::WcInbound::Response { id, error } => ("wc_response", serde_json::json!({ "id": id, "error": error })),
-        wc::WcInbound::Other { id, method } => ("wc_other", serde_json::json!({ "id": id, "method": method })),
+        wc::WcInbound::Request { id, method, chain_id, params } => (
+            "wc_session_request",
+            serde_json::json!({
+                "topic": topic,
+                "id": id,
+                "method": method,
+                "chainId": chain_id,
+                "params": params,
+                "peerMetadata": peer_metadata,
+            }),
+        ),
+        wc::WcInbound::Settle { id } => ("wc_sessionSettle", serde_json::json!({ "topic": topic, "payload": { "id": id } })),
+        wc::WcInbound::Delete { id } => ("wc_sessionDelete", serde_json::json!({ "topic": topic, "payload": { "id": id } })),
+        wc::WcInbound::Response { id, error } => ("wc_response", serde_json::json!({ "topic": topic, "payload": { "id": id, "error": error } })),
+        wc::WcInbound::Other { id, method } => ("wc_other", serde_json::json!({ "topic": topic, "payload": { "id": id, "method": method } })),
     };
-    crate::response::event(kind, serde_json::json!({ "topic": topic, "payload": body }))
+    crate::response::event(kind, data)
+}
+
+/// [`inbound_event_with`] without session metadata.
+pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
+    inbound_event_with(topic, msg, serde_json::json!({}))
+}
+
+/// [`inbound_event_with`], taking the dApp metadata from the stored session.
+pub fn inbound_event_for(env: &Env, topic: &str, msg: &wc::WcInbound) -> String {
+    let meta = wc_session::fetch_by_topic(env, topic)
+        .ok()
+        .flatten()
+        .and_then(|row| serde_json::from_str::<serde_json::Value>(&row.peer_metadata).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    inbound_event_with(topic, msg, meta)
 }
 
 /// The current Unix time in seconds (session / pairing expiry checks).

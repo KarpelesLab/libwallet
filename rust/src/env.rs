@@ -351,7 +351,7 @@ impl Env {
                 };
                 let got = mgr.lock().unwrap().pump(&env);
                 if let Ok(Some((topic, msg))) = got {
-                    env.broadcast(&crate::wcmanager::inbound_event(&topic, &msg));
+                    env.broadcast(&crate::wcmanager::inbound_event_for(&env, &topic, &msg));
                 }
                 drop(env);
                 std::thread::sleep(Duration::from_millis(50));

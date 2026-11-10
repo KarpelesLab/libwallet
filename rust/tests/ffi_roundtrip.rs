@@ -1042,17 +1042,18 @@ fn walletconnect_ffi_pair_and_approve_over_loopback() {
     for _ in 0..40 {
         if let Ok(ev) = rx.recv_timeout(Duration::from_millis(200)) {
             let j: serde_json::Value = serde_json::from_str(&ev).unwrap();
-            if j["event"] == "wc_sessionPropose" {
+            if j["event"] == "wc_session_propose" {
                 proposal_event = Some(j);
                 break;
             }
         }
     }
     let pe = proposal_event.expect("sessionPropose event delivered");
-    assert_eq!(pe["data"]["payload"]["id"], 100);
+    assert_eq!(pe["data"]["proposalId"], 100);
+    assert_eq!(pe["data"]["pairingTopic"], topic);
 
     // Approve the proposal — publishes settle + response.
-    let proposal = &pe["data"]["payload"]["params"];
+    let proposal = &pe["data"]["proposal"];
     let approve = request(
         h,
         &format!(

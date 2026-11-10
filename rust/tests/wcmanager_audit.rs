@@ -358,7 +358,32 @@ fn session_request_carries_chain_id() {
     assert_eq!(chain_id, "eip155:1");
     assert_eq!(method, "personal_sign");
     let ev: serde_json::Value = serde_json::from_str(&libwallet::wcmanager::inbound_event(&topic, &msg)).unwrap();
-    assert!(ev.to_string().contains(r#""chainId":"eip155:1""#), "event lacks chainId: {ev}");
+    // The event is the one the Dart client subscribes to, in its flat shape.
+    assert_eq!(ev["event"], "wc_session_request", "{ev}");
+    assert_eq!(ev["data"]["topic"], topic.as_str(), "{ev}");
+    assert_eq!(ev["data"]["id"], 1, "{ev}");
+    assert_eq!(ev["data"]["method"], "personal_sign", "{ev}");
+    assert_eq!(ev["data"]["chainId"], "eip155:1", "{ev}");
+    assert!(ev["data"]["peerMetadata"].is_object(), "{ev}");
+}
+
+/// A proposal reaches the host as `wc_session_propose` with the fields the Dart
+/// `WcSessionProposal` reads.
+#[test]
+fn session_proposal_event_matches_the_dart_contract() {
+    let msg = wc::WcInbound::Propose {
+        id: 7,
+        params: serde_json::json!({
+            "proposer": { "publicKey": "ab", "metadata": { "name": "dApp", "url": "https://dapp.example", "icons": [] } },
+            "requiredNamespaces": {},
+        }),
+    };
+    let ev: serde_json::Value = serde_json::from_str(&libwallet::wcmanager::inbound_event("pt", &msg)).unwrap();
+    assert_eq!(ev["event"], "wc_session_propose", "{ev}");
+    assert_eq!(ev["data"]["pairingTopic"], "pt", "{ev}");
+    assert_eq!(ev["data"]["proposalId"], 7, "{ev}");
+    assert_eq!(ev["data"]["proposer"]["name"], "dApp", "{ev}");
+    assert!(ev["data"]["proposal"]["requiredNamespaces"].is_object(), "{ev}");
 }
 
 /// A request for a chain or method outside the approved namespaces is answered
