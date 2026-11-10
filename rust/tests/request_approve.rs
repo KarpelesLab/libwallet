@@ -174,7 +174,10 @@ fn chain_switch_approve_switches_current_network() {
     assert_eq!(approved["result"], "success", "{approved}");
     assert_eq!(approved["data"]["Type"], "chain_switch");
     assert_eq!(approved["data"]["Status"], "accepted");
-    assert_eq!(approved["data"]["Result"]["network"], "evm.137");
+    // Polygon is a seeded network, so the selection is its stored row (whose
+    // RPC and metadata then apply), not the ephemeral `evm.137` reference.
+    let polygon = libwallet::models::network::network_id_for("evm", "137");
+    assert_eq!(approved["data"]["Result"]["network"], polygon.as_str());
 
     // The parked Web3 call returns now that the switch has been applied.
     let done = rx.recv_timeout(Duration::from_secs(10)).expect("web3 returned");

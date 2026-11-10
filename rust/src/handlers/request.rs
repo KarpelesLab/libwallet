@@ -32,6 +32,18 @@ pub fn run(env: &Env, req: Request) -> Result<Request, ApiError> {
     run_with_timeout(env, req, APPROVAL_TIMEOUT)
 }
 
+/// [`run`] for a caller acting on a dApp's behalf: only an approval is a
+/// success. A rejection (or any other terminal status) is the EIP-1193 "user
+/// rejected" error, so a dApp is never told that a connect / chain switch /
+/// signature it was refused went through.
+pub fn run_approved(env: &Env, req: Request) -> Result<Request, ApiError> {
+    let out = run(env, req)?;
+    if out.status != "accepted" {
+        return Err(ApiError::new(4001, "User rejected the request."));
+    }
+    Ok(out)
+}
+
 fn run_with_timeout(env: &Env, mut req: Request, timeout: Duration) -> Result<Request, ApiError> {
     if req.id.is_empty() {
         req.id = xuid::Xuid::new("req").to_string();
@@ -232,8 +244,11 @@ fn approve_add_network(env: &Env, req: &Request) -> Result<(), ApiError> {
             .filter(|d| (0..=36).contains(d))
             .ok_or_else(|| ApiError::new(400, "add_network: CurrencyDecimals must be an integer 0-36"))?,
     };
+    // The row is keyed by the deterministic id for its type + chain id, like
+    // every other stored network. (The proposal's own `evm.<chainId>` id is the
+    // ephemeral-reference form: a row stored under it is never read back.)
     let network = crate::models::network::Network {
-        id: g("Id"),
+        id: crate::models::network::network_id_for("evm", &g("ChainId")),
         kind: g("Type"),
         chain_id: g("ChainId"),
         name: g("Name"),
@@ -256,7 +271,26 @@ fn approve_add_network(env: &Env, req: &Request) -> Result<(), ApiError> {
     }
     crate::models::network::validate_network_rpc(&network.rpc)
         .map_err(|e| ApiError::new(400, format!("add_network: {e}")))?;
+    // A dApp may add a chain, never replace one the wallet already has.
+    if crate::models::network::by_id_opt(env, &network.id) {
+        return Err(ApiError::new(400, "add_network: this chain is already registered"));
+    }
     crate::models::network::save(env, &network).map_err(ApiError::internal)
+}
+
+/// The network id a `chain_switch` to `target` selects. A `evm.<chainId>`
+/// reference is ephemeral — it resolves from the chain registry alone — so when
+/// a stored row exists for that chain (seeded, user-created, or added through
+/// `wallet_addEthereumChain`) its id is selected instead and the row's RPC and
+/// metadata apply.
+fn stored_network_target(env: &Env, target: &str) -> String {
+    if let Some(chain) = target.strip_prefix("evm.") {
+        let id = crate::models::network::network_id_for("evm", chain);
+        if crate::models::network::by_id_opt(env, &id) {
+            return id;
+        }
+    }
+    target.to_owned()
 }
 
 /// Apply an approved `chain_switch`: set the current network to the target
@@ -271,6 +305,7 @@ fn approve_chain_switch(env: &Env, req: &Request, params: &Value) -> Result<(), 
         .map(str::to_owned)
         .or_else(|| req.value.as_ref().and_then(|v| v.get("targetNetwork")).and_then(Value::as_str).map(str::to_owned))
         .ok_or_else(|| ApiError::new(400, "chain_switch: no target network"))?;
+    let target = stored_network_target(env, &target);
     env.set_current("network", &target).map_err(ApiError::internal)?;
     // Record the applied selection on the request for the host.
     if let Ok(Some(mut r)) = request::fetch(env, &req.id) {
@@ -571,6 +606,7 @@ mod tests {
     fn approve_add_network_revalidates_the_proposal() {
         let env = env();
         crate::models::network::init(&env).unwrap();
+        let stored_id = crate::models::network::network_id_for("evm", "8453");
         let proposal = |patch: Value| {
             let mut network = json!({
                 "Id": "evm.8453", "Type": "evm", "ChainId": "8453", "Name": "Base",
@@ -595,12 +631,26 @@ mod tests {
         ] {
             let err = approve_add_network(&env, &proposal(bad.clone())).unwrap_err();
             assert_eq!(err.code, 400, "{bad}: {}", err.message);
-            assert!(!crate::models::network::by_id_opt(&env, "evm.8453"), "{bad} was saved");
+            assert!(!crate::models::network::by_id_opt(&env, &stored_id), "{bad} was saved");
         }
         // Valid proposals (a concrete https endpoint, or the "auto" sentinel) are saved.
-        approve_add_network(&env, &proposal(json!({ "RPC": "auto" }))).unwrap();
+        approve_add_network(&env, &proposal(json!({ "ChainId": "8454", "RPC": "auto" }))).unwrap();
         approve_add_network(&env, &proposal(json!({}))).unwrap();
-        assert!(crate::models::network::by_id_opt(&env, "evm.8453"));
+        // Stored under the deterministic id, so it can be read back …
+        let stored = crate::models::network::fetch(&env, &stored_id).unwrap().expect("stored row");
+        assert_eq!(stored.rpc, "https://rpc.example");
+        assert!(!crate::models::network::by_id_opt(&env, "evm.8453"), "saved under the ephemeral id");
+        // … a second proposal for the same chain cannot replace it …
+        let err = approve_add_network(&env, &proposal(json!({ "RPC": "https://other.example" }))).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
+        assert_eq!(crate::models::network::fetch(&env, &stored_id).unwrap().unwrap().rpc, "https://rpc.example");
+        // … and switching to the chain selects the stored row (and its RPC).
+        let switch = Request { id: "req-sw".into(), kind: "chain_switch".into(), value: Some(json!({ "targetNetwork": "evm.8453" })), ..Default::default() };
+        approve_chain_switch(&env, &switch, &json!({})).unwrap();
+        let current = crate::models::network::fetch(&env, "@").unwrap().unwrap();
+        assert_eq!(current.resolved_rpc().unwrap(), "https://rpc.example");
+        // A chain with no stored row keeps the ephemeral reference.
+        assert_eq!(stored_network_target(&env, "evm.999999"), "evm.999999");
     }
 
     /// Audit F14: non-ASCII input must be rejected, not panic on a char boundary.
@@ -666,6 +716,30 @@ mod tests {
         let out = runner.join().unwrap().expect("accepted, not timed out");
         assert_eq!(out.status, "accepted");
         assert_eq!(status(&env, "req-p"), "accepted");
+    }
+
+    /// A rejection is the EIP-1193 "user rejected" error, never a success the
+    /// Web3 caller could report to the dApp; an approval still returns the row.
+    #[test]
+    fn rejected_request_is_an_error_for_the_caller() {
+        let env = env();
+        for (id, approve_it) in [("req-no", false), ("req-yes", true)] {
+            let runner = {
+                let env = env.clone();
+                std::thread::spawn(move || run_approved(&env, Request { id: id.into(), kind: "test".into(), ..Default::default() }))
+            };
+            wait_for_row(&env, id);
+            let params = json!({ "Id": id });
+            if approve_it {
+                approve(&env, &params).unwrap();
+                assert_eq!(runner.join().unwrap().expect("approved").status, "accepted");
+            } else {
+                reject(&env, &params).unwrap();
+                let err = runner.join().unwrap().unwrap_err();
+                assert_eq!(err.code, 4001, "{}", err.message);
+                assert_eq!(status(&env, id), "rejected");
+            }
+        }
     }
 
     /// A failed approval (claim released) after the timeout fired lets the

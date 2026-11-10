@@ -225,7 +225,7 @@ fn mpurse_sign_raw_tx(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         value: Some(json!({ "method": "mpurse_signRawTransaction", "chain": "bitcoin", "raw": tx_hex })),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
 }
 
@@ -282,7 +282,7 @@ fn mpurse_send_asset(
         value: Some(json!({ "method": "mpurse_sendAsset", "chain": "bitcoin", "raw": unsigned_hex })),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     let signed = out
         .result
         .as_ref()
@@ -351,7 +351,7 @@ fn mpurse_sign_message(env: &Env, host: &str, net: &crate::models::network::Netw
         value: Some(value),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
@@ -426,7 +426,7 @@ fn personal_sign(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         value: Some(value),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
@@ -490,7 +490,7 @@ fn wallet_add_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         value: Some(json!({ "method": "wallet_addEthereumChain", "network": network })),
         ..Default::default()
     };
-    super::request::run(env, req)?;
+    super::request::run_approved(env, req)?;
     Ok(Value::Null)
 }
 
@@ -526,14 +526,14 @@ fn wallet_switch_chain(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         value: Some(value),
         ..Default::default()
     };
-    super::request::run(env, req)?;
+    super::request::run_approved(env, req)?;
     Ok(Value::Null)
 }
 
 /// Whether a stored Network row exists for EVM chain `chain_dec` (decimal).
 /// Rows are keyed by the deterministic `net-…` id derived from type + chain id
-/// (seeded and user-created networks); ones added through
-/// `wallet_addEthereumChain` carry the literal `evm.<chainId>` id.
+/// (seeded, user-created and `wallet_addEthereumChain` networks); rows added
+/// by older versions carry the literal `evm.<chainId>` id.
 fn evm_network_stored(env: &Env, chain_dec: &str) -> bool {
     crate::models::network::by_id_opt(env, &crate::models::network::network_id_for("evm", chain_dec))
         || crate::models::network::by_id_opt(env, &format!("evm.{chain_dec}"))
@@ -604,7 +604,7 @@ fn solana_sign_message(env: &Env, host: &str, q_params: &[Value]) -> ApiResult {
         value: Some(value),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
@@ -633,7 +633,7 @@ fn solana_sign_tx(env: &Env, host: &str, method: &str, q_params: &[Value]) -> Ap
         value: Some(value),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
 }
 
@@ -704,7 +704,7 @@ fn sign_typed_data(env: &Env, host: &str, method: &str, q_params: &[Value]) -> A
         value: Some(value),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "sign approval produced no result"))
 }
 
@@ -788,7 +788,7 @@ fn eth_send_transaction(env: &Env, host: &str, q_params: &[Value]) -> ApiResult 
         value: Some(json!({ "method": "eth_sendTransaction", "chain": "evm" })),
         ..Default::default()
     };
-    let out = super::request::run(env, req)?;
+    let out = super::request::run_approved(env, req)?;
     out.result.ok_or_else(|| ApiError::new(500, "transaction approval produced no result"))
 }
 
@@ -814,7 +814,7 @@ fn connect_request(env: &Env, host: &str, method: &str, family: &str, perms: &[S
         value: Some(value),
         ..Default::default()
     };
-    super::request::run(env, req)?;
+    super::request::run_approved(env, req)?;
     Ok(())
 }
 
