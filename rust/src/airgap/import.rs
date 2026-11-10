@@ -308,7 +308,7 @@ fn parse_origin(s: &str) -> Result<(Option<u32>, KeyPath)> {
 }
 
 /// `[origin]xpub…` or bare `xpub…` → a bitcoin/ethereum hdkey-shaped key.
-fn key_from_extended(env: &Env, text: &str, script_hint: Option<&str>) -> Result<DiscoveredKey> {
+pub(crate) fn key_from_extended(env: &Env, text: &str, script_hint: Option<&str>) -> Result<DiscoveredKey> {
     let t = text.trim();
     let (origin, key_str) = match t.strip_prefix('[') {
         Some(rest) => {
@@ -548,6 +548,18 @@ pub struct ImportOptions {
     pub eth_accounts: Option<u32>,
     /// Only import keys whose `path` is in this list (default: all usable).
     pub select_paths: Option<Vec<String>>,
+    /// The signer wallet's protocol: `airgap` (default) or `ledger`.
+    pub protocol: Option<String>,
+    /// Add the accounts to this existing signer wallet (same protocol) instead
+    /// of creating one — a device exports one app's keys at a time. Keys the
+    /// wallet already holds are left alone.
+    pub wallet: Option<String>,
+}
+
+/// Whether `protocol` names a wallet whose keys live on an external signer
+/// (watch-only accounts + the key provenance in `airgap:account:<id>`).
+pub fn is_signer_protocol(protocol: &str) -> bool {
+    matches!(protocol, "airgap" | "ledger")
 }
 
 /// Result of [`import`].
@@ -577,38 +589,67 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
     let skipped: Vec<DiscoveredKey> = export.keys.iter().filter(|k| k.chain == "unsupported").cloned().collect();
 
     let now = crate::now_rfc3339();
-    let name = opts
-        .name
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| export.device.clone())
-        .unwrap_or_else(|| "Air-gapped signer".into());
-    let wallet = Wallet {
-        id: Xuid::new("wlt").to_string(),
-        name,
-        curve: String::new(), // mixed: each account records its own curve
-        protocol: "airgap".into(),
-        threshold: 0,
-        generation: 0,
-        pubkey: String::new(),
-        chaincode: String::new(),
-        created: now.clone(),
-        modified: now.clone(),
-        keys: Vec::new(),
+    let protocol = opts.protocol.as_deref().unwrap_or("airgap");
+    if !is_signer_protocol(protocol) {
+        return Err(Error::Env(format!("{protocol} is not an external-signer wallet protocol")));
+    }
+    let default_name = if protocol == "ledger" { "Ledger" } else { "Air-gapped signer" };
+    // Existing accounts of the wallet being extended: (kind, address) pairs to
+    // skip, and how many accounts each chain already has (for index / naming).
+    let mut existing: std::collections::HashSet<(String, String)> = Default::default();
+    let mut index_for: std::collections::HashMap<String, i64> = Default::default();
+    let (wallet, signer) = match opts.wallet.as_deref().filter(|w| !w.is_empty()) {
+        Some(wid) => {
+            let wallet = crate::models::wallet::fetch(env, wid)?.ok_or_else(|| Error::Env(format!("wallet {wid} not found")))?;
+            if wallet.protocol != protocol {
+                return Err(Error::Env(format!("wallet {wid} is a {} wallet, not {protocol}", wallet.protocol)));
+            }
+            for a in crate::models::account::list(env)?.into_iter().filter(|a| a.wallet == wid) {
+                let idx = index_for.entry(a.kind.clone()).or_insert(0);
+                *idx = (*idx).max(a.index + 1);
+                existing.insert((a.kind, a.address));
+            }
+            let signer = wallet_signer(env, wid)?.unwrap_or_default();
+            (wallet, signer)
+        }
+        None => {
+            let name = opts
+                .name
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| export.device.clone())
+                .unwrap_or_else(|| default_name.into());
+            let wallet = Wallet {
+                id: Xuid::new("wlt").to_string(),
+                name,
+                curve: String::new(), // mixed: each account records its own curve
+                protocol: protocol.into(),
+                threshold: 0,
+                generation: 0,
+                pubkey: String::new(),
+                chaincode: String::new(),
+                created: now.clone(),
+                modified: now.clone(),
+                keys: Vec::new(),
+            };
+            crate::models::wallet::persist(env, &wallet)?;
+            let signer = SignerInfo {
+                master_fingerprint: export.master_fingerprint.clone().or_else(|| usable.iter().find_map(|k| k.master_fingerprint.clone())),
+                device: export.device.clone(),
+                device_id: export.device_id.clone(),
+                version: export.version.clone(),
+                format: export.format.clone(),
+            };
+            env.config_set(&format!("airgap:wallet:{}", wallet.id), &serde_json::to_vec(&signer).map_err(|e| Error::Env(e.to_string()))?)?;
+            (wallet, signer)
+        }
     };
-    crate::models::wallet::persist(env, &wallet)?;
-    let signer = SignerInfo {
-        master_fingerprint: export.master_fingerprint.clone().or_else(|| usable.iter().find_map(|k| k.master_fingerprint.clone())),
-        device: export.device.clone(),
-        device_id: export.device_id.clone(),
-        version: export.version.clone(),
-        format: export.format.clone(),
-    };
-    env.config_set(&format!("airgap:wallet:{}", wallet.id), &serde_json::to_vec(&signer).map_err(|e| Error::Env(e.to_string()))?)?;
 
     let mut accounts = Vec::new();
-    let mut index_for: std::collections::HashMap<String, i64> = Default::default();
     let mut push = |env: &Env, chain: &str, curve: &str, path: String, pubkey: &[u8], chaincode: Option<&[u8]>, address: String, script: &str, k: &DiscoveredKey, label: Option<&str>| -> Result<()> {
+        if !existing.insert((chain.to_owned(), address.clone())) {
+            return Ok(()); // already in the wallet
+        }
         let idx = index_for.entry(chain.to_owned()).or_insert(0);
         let index = *idx;
         *idx += 1;
@@ -665,8 +706,10 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
             _ => {}
         }
     }
-    if let Some(first) = accounts.first() {
-        env.set_current("account", &first.id)?;
+    if opts.wallet.is_none() {
+        if let Some(first) = accounts.first() {
+            env.set_current("account", &first.id)?;
+        }
     }
     Ok(Imported { wallet, accounts, skipped })
 }

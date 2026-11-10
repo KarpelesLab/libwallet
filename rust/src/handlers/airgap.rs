@@ -157,6 +157,7 @@ pub fn import_keys(env: &Env, params: &Value) -> ApiResult {
         name: str_param(params, "Name").map(str::to_owned),
         eth_accounts: params.get("EthAccounts").and_then(Value::as_u64).map(|n| n as u32),
         select_paths: params.get("Select").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()),
+        ..Default::default()
     };
     let imported = import::import(env, &export, &opts).map_err(bad)?;
     env.broadcast(&crate::response::event("wallet:created", json!({ "id": imported.wallet.id, "protocol": "airgap", "imported": true })));

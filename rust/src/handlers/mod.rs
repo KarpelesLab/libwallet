@@ -6,6 +6,7 @@
 // account::balance_impl / sign_and_send_impl directly, not through route().
 pub(crate) mod account;
 mod airgap;
+pub(crate) mod ledger;
 #[cfg(not(target_arch = "wasm32"))]
 mod asset;
 #[cfg(not(target_arch = "wasm32"))]
@@ -368,6 +369,10 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         #[cfg(not(target_arch = "wasm32"))]
         "Account:allAddresses" => account::all_addresses(&handle.env, params),
         "Account:addressFormats" => account::address_formats(&handle.env, params),
+        // Ledger hardware wallets (see handlers/ledger.rs). The browser awaits
+        // the same router from dispatch::handle_parsed_async.
+        #[cfg(not(target_arch = "wasm32"))]
+        p if p.starts_with("Ledger:") => crate::rt::block_on(ledger::route(&handle.env, &p["Ledger:".len()..], params)),
         // Air-gapped signer interop (QR payload strings; see handlers/airgap.rs).
         "Airgap:decoderNew" => airgap::decoder_new(&handle.env, params),
         "Airgap:decoderFeed" => airgap::decoder_feed(&handle.env, params),

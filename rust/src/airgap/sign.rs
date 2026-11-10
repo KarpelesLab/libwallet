@@ -109,8 +109,8 @@ fn b64url_decode(s: &str) -> Result<Vec<u8>> {
 fn load_airgap_account(env: &Env, account_id: &str) -> Result<(Account, AccountKeyInfo)> {
     let account = crate::models::account::fetch(env, account_id)?.ok_or_else(|| Error::Env("account not found".into()))?;
     let wallet = crate::models::wallet::fetch(env, &account.wallet)?.ok_or_else(|| Error::Env("wallet not found".into()))?;
-    if wallet.protocol != "airgap" {
-        return Err(Error::Env(format!("account {account_id} is not on an air-gapped signer wallet (protocol {})", wallet.protocol)));
+    if !super::import::is_signer_protocol(&wallet.protocol) {
+        return Err(Error::Env(format!("account {account_id} is not on an external signer wallet (protocol {})", wallet.protocol)));
     }
     let info = account_key_info(env, account_id)?.unwrap_or(AccountKeyInfo { master_fingerprint: None, path: account.path.clone(), script: String::new(), curve: account.curve.clone() });
     Ok((account, info))
@@ -558,7 +558,7 @@ fn pending_bitcoin(env: &Env, request_id: Option<&str>) -> Result<(Pending, Vec<
     Ok((p, ours))
 }
 
-fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Accepted> {
+pub(crate) fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) -> Result<Accepted> {
     use outscript::psbt::Psbt;
     let theirs = Psbt::parse(signed).map_err(|e| Error::Env(format!("signed psbt: {e}")))?;
     // Combine with our unsigned PSBT (restores any records a signer dropped).

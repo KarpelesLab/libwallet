@@ -24,6 +24,10 @@ jobs:
         with:
           workspaces: rust
 
+      # The Ledger USB transport (lsdk → hidapi) links libudev on Linux.
+      - name: Install libudev headers
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
       - name: Build
         run: cargo build --verbose
 

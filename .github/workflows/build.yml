@@ -28,6 +28,10 @@ jobs:
       - name: Compute libwallet version metadata
         run: .github/scripts/version-env.sh
 
+      # The Ledger USB transport (lsdk → hidapi) links libudev on Linux.
+      - name: Install libudev headers
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
       - name: Build cdylib for Linux (Dart FFI)
         working-directory: rust
         run: |

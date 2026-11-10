@@ -129,6 +129,8 @@ async fn handle_parsed_async(handle: &Handle, req: &mut Request) -> String {
         ("Bitfi:balances", _) => crate::handlers::bitfi::balances(&req.params).await,
         ("Bitfi:prepareSend", _) => crate::handlers::bitfi::prepare_send(&req.params).await,
         ("Bitfi:broadcast", _) => crate::handlers::bitfi::broadcast(&req.params).await,
+        // Ledger devices over WebHID (or a host-relayed APDU bridge).
+        (p, _) if p.starts_with("Ledger:") => crate::handlers::ledger::route(&handle.env, &p["Ledger:".len()..], &req.params).await,
         ("Transaction:simulate", _) => crate::handlers::simulate::simulate_impl(&handle.env, &req.params).await,
         _ => return route_bound(handle, req),
     };
