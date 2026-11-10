@@ -44,14 +44,17 @@ bs58 = "0.5"
 #
 # 0.10 gates the raw secp256k1 / edwards25519 APIs (hdderive, tss, solana_spl,
 # names) behind the hazmat features; they used to arrive via tsslib.
-purecrypto = { version = "0.10.1", features = ["hazmat-secp256k1", "hazmat-edwards25519"] }
+# 0.10.5 is what outscript 0.2.8 actually needs (its edwards25519 hazmat API:
+# FieldElement, from_affine, double_scalar_mul_base_vartime), though it only
+# declares ^0.10.
+purecrypto = { version = "0.10.5", features = ["hazmat-secp256k1", "hazmat-edwards25519"] }
 # BIP-39 requires the mnemonic AND the passphrase to be UTF-8 NFKD before they
 # reach PBKDF2. Pure Rust, builds on wasm.
 unicode-normalization = "0.1.25"
 # 0.2.5 adds DerSignature::from_rs_low_s, which is how an external signer
 # (our TSS committee) hands back an ECDSA signature; 0.2.6 adds Tron addresses
-# and transactions (tron / trontx).
-outscript = "0.2.7"
+# and transactions (tron / trontx). 0.2.8 marks EvmTx #[non_exhaustive].
+outscript = "0.2.8"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # graphitesql (pure-Rust SQLite) is declared per-target: native uses the default
 # std + filesystem VFS; the browser drops `std` (default-features = false) so its

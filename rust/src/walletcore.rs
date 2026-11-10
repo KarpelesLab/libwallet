@@ -266,18 +266,17 @@ pub fn sign_evm_tx(mnemonic: &str, passphrase: &str, tx_json: &str) -> R<String>
         BigInt::from(0)
     };
 
-    let mut tx = EvmTx {
-        nonce: p.nonce,
-        gas: p.gas,
-        gas_fee_cap,
-        gas_tip_cap,
-        to: p.to,
-        value: dec_bigint(&p.value)?,
-        data: if p.data.is_empty() { Vec::new() } else { from_hex(&p.data)? },
-        chain_id: p.chain_id,
-        tx_type: if eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy },
-        ..Default::default()
-    };
+    // EvmTx is #[non_exhaustive]: start from the default and set the fields.
+    let mut tx = EvmTx::default();
+    tx.nonce = p.nonce;
+    tx.gas = p.gas;
+    tx.gas_fee_cap = gas_fee_cap;
+    tx.gas_tip_cap = gas_tip_cap;
+    tx.to = p.to;
+    tx.value = dec_bigint(&p.value)?;
+    tx.data = if p.data.is_empty() { Vec::new() } else { from_hex(&p.data)? };
+    tx.chain_id = p.chain_id;
+    tx.tx_type = if eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy };
     tx.sign(&key).map_err(|e| e.to_string())?;
     Ok(format!("0x{}", to_hex(&tx.to_bytes().map_err(|e| e.to_string())?)))
 }

@@ -117,18 +117,18 @@ pub fn validate_to(to: &str, data: &[u8]) -> Result<()> {
 /// `v = chain_id*2 + 35 + parity` to fit a u64.
 pub fn build_unsigned(req: &EvmTxRequest) -> Result<EvmTx> {
     check_chain_id(req.chain_id)?;
-    Ok(EvmTx {
-        nonce: req.nonce,
-        gas: req.gas,
-        gas_fee_cap: parse_dec(&req.max_fee)?,
-        gas_tip_cap: if req.eip1559 { parse_dec(&req.max_priority)? } else { BigInt::from(0) },
-        to: req.to.clone(),
-        value: parse_dec(&req.value)?,
-        data: req.data.clone(),
-        chain_id: req.chain_id,
-        tx_type: if req.eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy },
-        ..Default::default()
-    })
+    // EvmTx is #[non_exhaustive]: start from the default and set the fields.
+    let mut tx = EvmTx::default();
+    tx.nonce = req.nonce;
+    tx.gas = req.gas;
+    tx.gas_fee_cap = parse_dec(&req.max_fee)?;
+    tx.gas_tip_cap = if req.eip1559 { parse_dec(&req.max_priority)? } else { BigInt::from(0) };
+    tx.to = req.to.clone();
+    tx.value = parse_dec(&req.value)?;
+    tx.data = req.data.clone();
+    tx.chain_id = req.chain_id;
+    tx.tx_type = if req.eip1559 { EvmTxType::Eip1559 } else { EvmTxType::Legacy };
+    Ok(tx)
 }
 
 /// The largest chain id whose legacy `v` (`chain_id*2 + 35 + parity`) fits a u64.
