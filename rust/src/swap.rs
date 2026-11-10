@@ -855,6 +855,12 @@ pub fn encode_erc20_approve(spender: &str, amount: &BigInt) -> Result<String> {
             hexs.len()
         )));
     }
+    // The spender can come from the backend: require plain ASCII hex before
+    // slicing by byte offset (a multi-byte char would panic the slice below,
+    // and `from_str_radix` alone accepts a leading '+').
+    if !hexs.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Env("erc20 approve spender must be 40 ASCII hex chars".into()));
+    }
     let addr = (0..40)
         .step_by(2)
         .map(|i| u8::from_str_radix(&hexs[i..i + 2], 16))

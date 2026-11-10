@@ -262,6 +262,29 @@ fn encode_erc20_approve_calldata() {
     assert!(swap::encode_erc20_approve("0x1111111111111111111111111111111111111111", &BigInt::from(-1)).is_err());
 }
 
+// ── audit F14: a backend-supplied spender must be 40 ASCII hex chars ────────
+
+#[test]
+fn encode_erc20_approve_rejects_non_ascii_hex_spender() {
+    use num_bigint::BigInt;
+    let one = BigInt::from(1);
+    // 40 BYTES after 0x but multi-byte UTF-8: slicing by byte offset used to
+    // panic on a char boundary. 20 two-byte chars, and an odd-offset mix.
+    let two_byte = format!("0x{}", "\u{e9}".repeat(20));
+    assert_eq!(two_byte.len(), 42);
+    assert!(swap::encode_erc20_approve(&two_byte, &one).is_err());
+    let mixed = format!("0x1{}1", "\u{e9}".repeat(19));
+    assert_eq!(mixed.len(), 42);
+    assert!(swap::encode_erc20_approve(&mixed, &one).is_err());
+    // 40 ASCII chars that aren't all hex digits ('+f' parses under from_str_radix).
+    assert!(swap::encode_erc20_approve(&format!("0x{}", "+f".repeat(20)), &one).is_err());
+    assert!(swap::encode_erc20_approve(&format!("0x{}", "zz".repeat(20)), &one).is_err());
+    // Missing prefix / wrong length still error; a well-formed address works.
+    assert!(swap::encode_erc20_approve(&"1".repeat(40), &one).is_err());
+    assert!(swap::encode_erc20_approve(&format!("0x{}", "1".repeat(41)), &one).is_err());
+    assert!(swap::encode_erc20_approve(&format!("0x{}", "aB".repeat(20)), &one).is_ok());
+}
+
 /// One-shot mock serving a KLB envelope wrapping `data_json`.
 fn mock(data_json: &str) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
