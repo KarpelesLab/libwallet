@@ -80,6 +80,8 @@ ciborium = "0.2"
 # Ethereum / Bitcoin / Solana app clients. The transports are per-target below
 # (USB HID on desktop, WebHID in the browser); everywhere — including iOS and
 # Android, which have neither — the host can relay APDUs itself ("bridge").
+# lsdk's own `manager` feature (reqwest + tokio-tungstenite) is deliberately
+# not used: device management (src/ledger/manage.rs) runs on rsurl instead.
 lsdk = { version = "0.0.1", default-features = false, features = ["apps"] }
 compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
 
@@ -127,11 +129,7 @@ chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 graphitesql = { version = "0.1.7", default-features = false }
 uuid = { version = "1", features = ["js"] }
 rsurl = { version = "0.1.19", default-features = false, features = ["purecrypto-tls"] }
-# `manager` adds the device-management side for the web app's Ledger area:
-# genuine check, app catalog / install / uninstall and firmware updates,
-# through the vendor's manager API (fetch) and HSM channel (WebSocket). It is
-# browser-only: natively it would pull reqwest + a second TLS stack.
-lsdk = { version = "0.0.1", default-features = false, features = ["apps", "webhid", "manager"] }
+lsdk = { version = "0.0.1", default-features = false, features = ["apps", "webhid"] }
 # spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).

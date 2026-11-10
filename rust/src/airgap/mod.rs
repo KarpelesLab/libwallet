@@ -31,8 +31,8 @@ pub mod cbor;
 pub mod decoder;
 pub mod import;
 pub mod registry;
-// Sign requests need the blocking RPC client + runtime: native only.
-#[cfg(not(target_arch = "wasm32"))]
+// Building and accepting requests is target-independent; only the optional
+// "ask the node" shortcuts inside need the blocking RPC client (native).
 pub mod sign;
 
 use crate::{Error, Result};

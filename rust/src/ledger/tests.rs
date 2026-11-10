@@ -330,6 +330,32 @@ fn solana_message_is_signed_and_bound_to_the_account() {
 }
 
 #[test]
+fn bitcoin_spend_reaches_the_device_and_leaves_nothing_pending_on_failure() {
+    let env = env();
+    let account = import_app(&env, "Bitcoin", None).accounts.remove(0);
+    let (account, info) = load_account(&env, &account.id).unwrap();
+    let tx = json!({
+        "To": account.address, "Amount": 10_000, "FeeRate": 2,
+        "UTXOs": [{ "txo": format!("{}:0", "11".repeat(32)), "amount_sats": 100_000, "path": "m/0/0", "script": "p2wpkh" }],
+        // Not the transaction that txid names: must be ignored, not embedded.
+        "PrevTxs": { "11".repeat(32): "00" },
+    });
+    // The simulated app does not speak the PSBT protocol: the spend is built,
+    // the device is asked (SIGN_PSBT), and its refusal is reported.
+    let device = Device::new(FakeLedger::new("Bitcoin", MNEMONIC));
+    let err = run(sign_transaction(&env, &device, &account, &info, &json!({ "Transaction": tx, "Offline": true }))).unwrap_err();
+    assert_eq!(err.code, 502, "{}", err.message);
+    assert!(device.transport().sent.borrow().iter().any(|a| a[0] == 0xe1 && a[1] == 0x04), "the device was not asked to sign");
+
+    // Other chains are not the Bitcoin app's business; no UTXOs and no node is an error.
+    let mut ltc = tx.clone();
+    ltc["ChainId"] = json!("litecoin");
+    assert_eq!(run(sign_transaction(&env, &device, &account, &info, &json!({ "Transaction": ltc, "Offline": true }))).unwrap_err().code, 400);
+    let err = run(sign_transaction(&env, &device, &account, &info, &json!({ "Transaction": { "To": account.address, "Amount": 1 }, "Offline": true }))).unwrap_err();
+    assert_eq!(err.code, 400, "{}", err.message);
+}
+
+#[test]
 fn bridge_relays_apdus_through_the_host() {
     use std::sync::{Arc, Mutex};
     let env = Arc::new(env());

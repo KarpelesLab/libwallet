@@ -79,8 +79,10 @@ Ledger:signMessage     {Account, Message: <base64>}
   explicit `RPC` the caller supplies `chainId`.
 - **Solana** `{to, amount, asset?}`, or a ready `{message}` (base58 / base64)
   that names the account as a signer.
-- **Bitcoin** `{To, Amount, FeeRate?}` — built as a PSBT and signed under the
-  account's default wallet policy. Not available in the browser build.
+- **Bitcoin** `{To, Amount, FeeRate?}` (satoshi) — built as a PSBT and signed
+  under the account's default wallet policy. The account's UTXOs and, when the
+  node serves them, the previous transactions of the inputs are fetched first,
+  so the device can verify the amounts it shows.
 
 With `Offline: true` no node is contacted: the transaction must be complete
 and cannot be broadcast. `Broadcast: true` sends it after signing.
@@ -97,10 +99,10 @@ device holding other keys (or another passphrase) is refused with code 409.
 Error codes: 404 no device / app not installed, 409 wrong app or wrong device,
 423 device locked, 4001 refused on the device, 408 bridge timeout.
 
-## Device management (browser build)
+## Device management
 
-The web wallet's Ledger area also manages the device, through the vendor's
-manager API and HSM channel. These routes exist in the browser build only and
+The device can also be managed, through the vendor's manager API and HSM
+channel (both reached with rsurl, natively and in the browser). These routes
 need the dashboard:
 
 ```

@@ -31,6 +31,18 @@ use super::Transport;
 use crate::models::account::Account;
 use crate::{Env, Error, Result};
 
+/// A blocking JSON-RPC call to the chain node. The browser cannot block, so
+/// there the caller must supply what the node would have (the UTXOs, the
+/// nonce and fees, the blockhash) — the Ledger path does, fetching it async.
+#[cfg(not(target_arch = "wasm32"))]
+fn node_call(url: &str, method: &str, params: Json) -> Result<Json> {
+    crate::rpc::call(url, method, params)
+}
+#[cfg(target_arch = "wasm32")]
+fn node_call(_url: &str, method: &str, _params: Json) -> Result<Json> {
+    Err(Error::Env(format!("{method}: no blocking node access in this build — supply the data in the Transaction")))
+}
+
 const PENDING_TTL: Duration = Duration::from_secs(24 * 3600);
 
 /// An unsigned request awaiting the signer, as stored in the cache.
@@ -172,7 +184,7 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
             .collect::<Result<_>>()?,
         _ => {
             let url = rpc.ok_or_else(|| Error::Env("no RPC: pass Transaction.UTXOs or an RPC/network to discover them".into()))?;
-            crate::bitcoin::list_utxos(url, &account.xpub()?)?
+            crate::bitcoin::parse_native_utxos(&node_call(url, "modchain_assets", json!([account.xpub()?]))?)?
         }
     };
     if all.is_empty() {
@@ -236,16 +248,24 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
         if let Some(r) = &i.redeem {
             psbt = with_psbt(&psbt, |p, out| p.set_redeem_script(n, r, out))?;
         }
-        if i.scheme == "p2pkh" {
-            // Legacy inputs need the whole previous transaction; fetch it when a
-            // node is available (bitcoind-style getrawtransaction).
-            if let Some(url) = rpc {
-                let txid_hex = super::hex(&i.txid);
-                if let Ok(Json::String(h)) = crate::rpc::call(url, "getrawtransaction", json!([txid_hex])) {
-                    if let Ok(prev) = super::unhex(&h) {
-                        psbt = with_psbt(&psbt, |p, out| p.set_non_witness_utxo(n, &prev, out))?;
-                    }
-                }
+        // The whole previous transaction (`non_witness_utxo`): required for a
+        // legacy input, and what lets a signer check a segwit input's amount.
+        // Taken from `Transaction.PrevTxs` ({txid: raw hex}) when the caller
+        // has it — only if it really is that transaction — else, for a legacy
+        // input, fetched when a node is available (bitcoind getrawtransaction).
+        if i.scheme != "p2tr" {
+            let txid_hex = super::hex(&i.txid);
+            let supplied = tx.get("PrevTxs").and_then(|m| m.get(&txid_hex)).and_then(Json::as_str).and_then(|h| super::unhex(h).ok()).filter(|prev| is_tx(prev, &i.txid));
+            let prev = match (supplied, rpc) {
+                (Some(prev), _) => Some(prev),
+                (None, Some(url)) if i.scheme == "p2pkh" => match node_call(url, "getrawtransaction", json!([txid_hex])) {
+                    Ok(Json::String(h)) => super::unhex(&h).ok(),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(prev) = prev {
+                psbt = with_psbt(&psbt, |p, out| p.set_non_witness_utxo(n, &prev, out))?;
             }
         }
         if i.scheme == "p2tr" {
@@ -299,6 +319,11 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
     })
 }
 
+/// Whether `raw` is the transaction `txid` names (either byte order).
+fn is_tx(raw: &[u8], txid: &[u8; 32]) -> bool {
+    unsigned_txid(raw).is_ok_and(|id| id == *txid || id.iter().rev().eq(txid.iter()))
+}
+
 /// Apply one `*_to_slice` PSBT updater into a fresh Vec.
 fn with_psbt<F>(psbt: &[u8], f: F) -> Result<Vec<u8>>
 where
@@ -319,7 +344,13 @@ fn build_ethereum(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json
     let tx = match rpc {
         Some(url) => {
             let params = json!({ "Transaction": tx });
+            #[cfg(not(target_arch = "wasm32"))]
             let filled = crate::rt::block_on(crate::handlers::account::evm_fill(&account.address, url, &params)).map_err(|e| Error::Env(e.message))?;
+            #[cfg(target_arch = "wasm32")]
+            let filled: Json = {
+                let _ = (url, &params);
+                return Err(Error::Env("no blocking node access in this build — supply a complete Transaction".into()));
+            };
             filled["Transaction"].clone()
         }
         None => tx.clone(),
@@ -392,7 +423,7 @@ fn build_solana(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json, 
             Some(b) => b.to_owned(),
             None => {
                 let url = rpc.ok_or_else(|| Error::Env("Transaction.recentBlockhash required (or pass RPC/Network to fetch it)".into()))?;
-                let bh = crate::rpc::call(url, "getLatestBlockhash", json!([]))?;
+                let bh = node_call(url, "getLatestBlockhash", json!([]))?;
                 bh.get("value").and_then(|v| v.get("blockhash")).and_then(Json::as_str).ok_or_else(|| Error::Env("no blockhash in response".into()))?.to_owned()
             }
         };
@@ -741,9 +772,9 @@ fn accept_sol(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
 /// Broadcast an accepted transaction through the chain's node.
 pub fn broadcast(url: &str, a: &Accepted) -> Result<Json> {
     match a.chain.as_str() {
-        "ethereum" => crate::rpc::call(url, "eth_sendRawTransaction", json!([a.raw])),
-        "bitcoin" => crate::rpc::call(url, "sendrawtransaction", json!([a.raw.trim_start_matches("0x")])),
-        "solana" => crate::rpc::call(url, "sendTransaction", json!([a.raw, { "encoding": "base58" }])),
+        "ethereum" => node_call(url, "eth_sendRawTransaction", json!([a.raw])),
+        "bitcoin" => node_call(url, "sendrawtransaction", json!([a.raw.trim_start_matches("0x")])),
+        "solana" => node_call(url, "sendTransaction", json!([a.raw, { "encoding": "base58" }])),
         other => Err(Error::Env(format!("cannot broadcast {other}"))),
     }
 }

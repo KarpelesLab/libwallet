@@ -17,7 +17,6 @@
 //! signature must verify over the built message, and a Bitcoin PSBT goes
 //! through the same pending-request binding as an air-gapped signer's answer.
 
-#[cfg(target_arch = "wasm32")]
 pub mod manage;
 pub mod transport;
 
@@ -457,24 +456,60 @@ pub async fn sign_solana<T: Transport>(env: &Env, device: &Device<T>, account: &
     Ok(out)
 }
 
+/// At most this many previous transactions are fetched for one spend.
+const MAX_PREV_TXS: usize = 50;
+
 /// `Ledger:signTransaction` for a Bitcoin account: the PSBT is built exactly
 /// as for an air-gapped signer and kept as the pending request; the device
 /// signs it under the account's default wallet policy, and the answer goes
 /// through the air-gap acceptance — it must be that pending transaction,
 /// fully signed — before anything is returned or broadcast.
-#[cfg(not(target_arch = "wasm32"))]
+///
+/// What the builder needs from the node is fetched here, async, so the same
+/// code runs natively and in the browser: the account's UTXOs, and — best
+/// effort — the previous transactions of the inputs it will spend, which let
+/// the device verify the amounts it shows.
 pub async fn sign_bitcoin<T: Transport>(env: &Env, device: &Device<T>, account: &Account, info: &AccountKeyInfo, params: &Value) -> ApiResult {
     use base64::Engine;
     use lsdk::apps::btc::wallet::WalletPolicy;
-    let tx = params.get("Transaction").ok_or_else(|| bad("Transaction required"))?;
+    let mut tx = params.get("Transaction").cloned().filter(Value::is_object).ok_or_else(|| bad("Transaction required"))?;
     if tx.get("ChainId").and_then(Value::as_str).is_some_and(|c| c != "bitcoin") {
         return Err(bad("the Ledger Bitcoin app signs for bitcoin only"));
     }
     let (kind, key) = btc_policy(account, info)?;
     let rpc = rpc_for(env, params, "bitcoin")?;
+
+    if tx.get("UTXOs").and_then(Value::as_array).map_or(true, |a| a.is_empty()) {
+        let url = rpc.as_deref().ok_or_else(|| bad("no node: pass Transaction.UTXOs, or a Network to discover them"))?;
+        let xpub = account.xpub().map_err(ApiError::internal)?;
+        let assets = crate::rpc::call_async(url, "modchain_assets", json!([xpub])).await.map_err(ApiError::internal)?;
+        let all = crate::bitcoin::parse_native_utxos(&assets).map_err(ApiError::internal)?;
+        tx["UTXOs"] = Value::Array(all.iter().map(|u| json!({ "txo": u.txo, "amount_sats": u.amount_sats, "height": u.height, "path": u.path, "script": u.script })).collect());
+
+        // The previous transactions of the inputs the builder will pick. The
+        // builder only uses one that hashes to the input's txid.
+        let want = tx.get("Amount").or_else(|| tx.get("amount")).and_then(Value::as_u64).unwrap_or(0);
+        let fee_rate = tx.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
+        if let Ok((selected, _)) = crate::bitcoin::select_utxos(&all, want, fee_rate) {
+            let mut prev = serde_json::Map::new();
+            for u in selected.iter().take(MAX_PREV_TXS) {
+                let Some((txid, _)) = u.txo.split_once(':') else { continue };
+                if prev.contains_key(txid) {
+                    continue;
+                }
+                if let Ok(Value::String(raw)) = crate::rpc::call_async(url, "getrawtransaction", json!([txid])).await {
+                    prev.insert(txid.to_owned(), Value::String(raw));
+                }
+            }
+            if !prev.is_empty() && tx.get("PrevTxs").is_none() {
+                tx["PrevTxs"] = Value::Object(prev);
+            }
+        }
+    }
     require_app(device, "Bitcoin").await?;
 
-    let built = crate::airgap::sign::build_request(env, &account.id, tx, &Default::default(), rpc.as_deref()).map_err(|e| bad(e.to_string()))?;
+    // The node was already consulted: the builder works from the Transaction.
+    let built = crate::airgap::sign::build_request(env, &account.id, &tx, &Default::default(), None).map_err(|e| bad(e.to_string()))?;
     let rid = built.request_id.clone();
     let signed = async {
         let psbt = built.payload.get("psbt").and_then(Value::as_str).and_then(|b| base64::engine::general_purpose::STANDARD.decode(b).ok()).ok_or_else(|| ApiError::new(500, "no PSBT was built"))?;
@@ -498,7 +533,7 @@ pub async fn sign_bitcoin<T: Transport>(env: &Env, device: &Device<T>, account: 
     out["summary"] = built.payload.get("summary").cloned().unwrap_or(Value::Null);
     if wants_broadcast(params) {
         let url = rpc.ok_or_else(|| bad("Broadcast needs an RPC/Network (not Offline)"))?;
-        out["broadcast"] = crate::airgap::sign::broadcast(&url, &accepted).map_err(ApiError::internal)?;
+        out["broadcast"] = crate::rpc::call_async(&url, "sendrawtransaction", json!([accepted.raw.trim_start_matches("0x")])).await.map_err(ApiError::internal)?;
     }
     Ok(out)
 }
@@ -509,10 +544,7 @@ pub async fn sign_transaction<T: Transport>(env: &Env, device: &Device<T>, accou
     match account.kind.as_str() {
         "ethereum" => sign_evm(env, device, account, info, params).await,
         "solana" => sign_solana(env, device, account, info, params).await,
-        #[cfg(not(target_arch = "wasm32"))]
         "bitcoin" => sign_bitcoin(env, device, account, info, params).await,
-        #[cfg(target_arch = "wasm32")]
-        "bitcoin" => Err(ApiError::new(501, "Ledger Bitcoin signing is not available in the browser build yet")),
         other => Err(bad(format!("Ledger signing is not supported for {other} accounts"))),
     }
 }

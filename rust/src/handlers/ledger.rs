@@ -19,7 +19,7 @@
 //!   Ledger:quitApp                   → back to the dashboard
 //!   Ledger:status | apps | catalog | installApp {Name} | uninstallApp {Name}
 //!     | genuineCheck | firmwareUpdate {Update} | firmwareFlash {Update?}
-//!                                    → device management (browser build only)
+//!                                    → device management
 //!   Ledger:apduResponse {Id, Data|Error}
 //!                                    → the host's answer to a `ledger:apdu`
 //!                                      event (bridge transport)
@@ -87,8 +87,7 @@ pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
             device.quit_app().await.map_err(ledger::lerr)?;
             Ok(json!({ "quit": true }))
         }
-        // Device management (browser build only — see ledger/manage.rs).
-        #[cfg(target_arch = "wasm32")]
+        // Device management (see ledger/manage.rs).
         "status" | "apps" | "catalog" | "installApp" | "uninstallApp" | "genuineCheck" | "firmwareUpdate" | "firmwareFlash" => {
             use ledger::manage;
             let name = || str_param(params, "Name").ok_or_else(|| ApiError::new(400, "Name required"));
@@ -103,10 +102,6 @@ pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
                 "firmwareUpdate" => manage::firmware_update(env, &device, params).await,
                 _ => manage::firmware_flash(env, &device, params).await,
             }
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        "status" | "apps" | "catalog" | "installApp" | "uninstallApp" | "genuineCheck" | "firmwareUpdate" | "firmwareFlash" => {
-            Err(ApiError::new(501, "Ledger device management (apps, firmware, genuine check) is only available in the browser build"))
         }
         other => Err(ApiError::not_found(&format!("Ledger:{other}"))),
     }
