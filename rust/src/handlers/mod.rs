@@ -5,7 +5,7 @@
 // pub(crate): the wasm async dispatcher (dispatch::handle_request_async) calls
 // account::balance_impl / sign_and_send_impl directly, not through route().
 pub(crate) mod account;
-mod airgap;
+pub(crate) mod airgap;
 pub(crate) mod ledger;
 #[cfg(not(target_arch = "wasm32"))]
 mod asset;
@@ -386,8 +386,8 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Airgap:signRequest" => airgap::sign_request(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Airgap:submitSignature" => airgap::submit_signature(&handle.env, params),
-        #[cfg(not(target_arch = "wasm32"))]
         "Airgap:pending" => airgap::pending(&handle.env, params),
+        "Airgap:qr" => airgap::qr(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Network:testRPC" => network::test_rpc(&handle.env, params),

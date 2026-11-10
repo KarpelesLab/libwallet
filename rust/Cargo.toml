@@ -84,6 +84,9 @@ ciborium = "0.2"
 # not used: device management (src/ledger/manage.rs) runs on rsurl instead.
 lsdk = { version = "0.0.1", default-features = false, features = ["apps"] }
 compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
+# QR code modules for the air-gap frames (Airgap:qr), for hosts — the web
+# wallet — without a renderer of their own. Pure Rust, no dependencies.
+qrcodegen = "1.8"
 
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.

@@ -456,9 +456,6 @@ pub async fn sign_solana<T: Transport>(env: &Env, device: &Device<T>, account: &
     Ok(out)
 }
 
-/// At most this many previous transactions are fetched for one spend.
-const MAX_PREV_TXS: usize = 50;
-
 /// `Ledger:signTransaction` for a Bitcoin account: the PSBT is built exactly
 /// as for an air-gapped signer and kept as the pending request; the device
 /// signs it under the account's default wallet policy, and the answer goes
@@ -481,30 +478,7 @@ pub async fn sign_bitcoin<T: Transport>(env: &Env, device: &Device<T>, account: 
 
     if tx.get("UTXOs").and_then(Value::as_array).map_or(true, |a| a.is_empty()) {
         let url = rpc.as_deref().ok_or_else(|| bad("no node: pass Transaction.UTXOs, or a Network to discover them"))?;
-        let xpub = account.xpub().map_err(ApiError::internal)?;
-        let assets = crate::rpc::call_async(url, "modchain_assets", json!([xpub])).await.map_err(ApiError::internal)?;
-        let all = crate::bitcoin::parse_native_utxos(&assets).map_err(ApiError::internal)?;
-        tx["UTXOs"] = Value::Array(all.iter().map(|u| json!({ "txo": u.txo, "amount_sats": u.amount_sats, "height": u.height, "path": u.path, "script": u.script })).collect());
-
-        // The previous transactions of the inputs the builder will pick. The
-        // builder only uses one that hashes to the input's txid.
-        let want = tx.get("Amount").or_else(|| tx.get("amount")).and_then(Value::as_u64).unwrap_or(0);
-        let fee_rate = tx.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
-        if let Ok((selected, _)) = crate::bitcoin::select_utxos(&all, want, fee_rate) {
-            let mut prev = serde_json::Map::new();
-            for u in selected.iter().take(MAX_PREV_TXS) {
-                let Some((txid, _)) = u.txo.split_once(':') else { continue };
-                if prev.contains_key(txid) {
-                    continue;
-                }
-                if let Ok(Value::String(raw)) = crate::rpc::call_async(url, "getrawtransaction", json!([txid])).await {
-                    prev.insert(txid.to_owned(), Value::String(raw));
-                }
-            }
-            if !prev.is_empty() && tx.get("PrevTxs").is_none() {
-                tx["PrevTxs"] = Value::Object(prev);
-            }
-        }
+        tx = crate::handlers::airgap::prefill_bitcoin(account, &tx, url).await?;
     }
     require_app(device, "Bitcoin").await?;
 

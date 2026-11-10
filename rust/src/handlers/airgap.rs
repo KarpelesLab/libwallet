@@ -11,6 +11,7 @@
 //! Signing: `Airgap:signRequest` {Account, Transaction, Transport?, RPC|Network?,
 //!   Offline?} → {requestId, parts, payload}; `Airgap:submitSignature`
 //!   {Payload|Parts|DecoderId, RequestId?, Broadcast?, RPC|Network?} → signed tx
+//! Display: `Airgap:qr` {Text|Parts} → QR modules, for hosts without a renderer.
 //!   (RequestId is mandatory for bitcoin answers — signed PSBT / raw tx — which
 //!   carry none and are only accepted as the pending request's transaction).
 //!   `Airgap:pending` {RequestId} shows an outstanding request.
@@ -166,9 +167,13 @@ pub fn import_keys(env: &Env, params: &Value) -> ApiResult {
     Ok(j)
 }
 
-// ── Signing (native: needs the blocking RPC client) ──────────────────────────
+// ── Signing ──────────────────────────────────────────────────────────────────
+//
+// What a request needs from the node — nonce and fees, UTXOs, a blockhash — is
+// fetched here, async, and put into the Transaction; the builder then works
+// from the Transaction alone. So the same code runs natively (driven by
+// `rt::block_on`) and in the browser (awaited).
 
-#[cfg(not(target_arch = "wasm32"))]
 fn framing_from_params(params: &Value) -> Result<airgap::sign::Framing, ApiError> {
     Ok(airgap::sign::Framing {
         transport: Transport::parse(str_param(params, "Transport").unwrap_or("")).map_err(bad)?,
@@ -181,7 +186,6 @@ fn framing_from_params(params: &Value) -> Result<airgap::sign::Framing, ApiError
 /// The node to use: `RPC` > `Network` (id or `type.chainId`) > the current /
 /// default network for the account's chain — unless `Offline: true`, in which
 /// case none (the Transaction must then be complete).
-#[cfg(not(target_arch = "wasm32"))]
 fn rpc_from_params(env: &Env, params: &Value, account_kind: &str) -> Result<Option<String>, ApiError> {
     if params.get("Offline").and_then(Value::as_bool) == Some(true) {
         return Ok(None);
@@ -200,43 +204,111 @@ fn rpc_from_params(env: &Env, params: &Value, account_kind: &str) -> Result<Opti
     Ok(super::resolve_rpc_for_kind(env, params, want).ok())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn sign_request(env: &Env, params: &Value) -> ApiResult {
+/// At most this many previous transactions are fetched for one spend.
+const MAX_PREV_TXS: usize = 50;
+
+/// A bitcoin `Transaction` with what the PSBT builder would ask the node for:
+/// the account's `UTXOs` (unless given) and — best effort — `PrevTxs`, the
+/// previous transactions of the inputs the builder will pick, which let a
+/// signer verify the amounts it shows. The builder only embeds a previous
+/// transaction that hashes to its input's txid.
+pub(crate) async fn prefill_bitcoin(account: &crate::models::account::Account, tx: &Value, url: &str) -> Result<Value, ApiError> {
+    let mut tx = tx.clone();
+    if !tx.is_object() {
+        return Err(ApiError::new(400, "Transaction must be an object"));
+    }
+    if tx.get("UTXOs").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
+        return Ok(tx);
+    }
+    let xpub = account.xpub().map_err(ApiError::internal)?;
+    let assets = crate::rpc::call_async(url, "modchain_assets", json!([xpub])).await.map_err(ApiError::internal)?;
+    let all = crate::bitcoin::parse_native_utxos(&assets).map_err(ApiError::internal)?;
+    tx["UTXOs"] = Value::Array(all.iter().map(|u| json!({ "txo": u.txo, "amount_sats": u.amount_sats, "height": u.height, "path": u.path, "script": u.script })).collect());
+
+    let want = tx.get("Amount").or_else(|| tx.get("amount")).and_then(Value::as_u64).unwrap_or(0);
+    let fee_rate = tx.get("FeeRate").and_then(Value::as_u64).unwrap_or(10);
+    if tx.get("PrevTxs").is_none() {
+        if let Ok((selected, _)) = crate::bitcoin::select_utxos(&all, want, fee_rate) {
+            let mut prev = serde_json::Map::new();
+            for u in selected.iter().take(MAX_PREV_TXS) {
+                let Some((txid, _)) = u.txo.split_once(':') else { continue };
+                if prev.contains_key(txid) {
+                    continue;
+                }
+                if let Ok(Value::String(raw)) = crate::rpc::call_async(url, "getrawtransaction", json!([txid])).await {
+                    prev.insert(txid.to_owned(), Value::String(raw));
+                }
+            }
+            if !prev.is_empty() {
+                tx["PrevTxs"] = Value::Object(prev);
+            }
+        }
+    }
+    Ok(tx)
+}
+
+/// The account's `Transaction`, completed from the node `url` (when there is
+/// one) so the request builder needs nothing more.
+async fn prefill(env: &Env, account: &crate::models::account::Account, params: &Value, tx: &Value, url: Option<&str>) -> Result<Value, ApiError> {
+    let Some(url) = url else { return Ok(tx.clone()) };
+    match account.kind.as_str() {
+        "bitcoin" => prefill_bitcoin(account, tx, url).await,
+        "ethereum" => {
+            let mut p = json!({ "Transaction": tx });
+            // The EVM chain id is the signature's replay domain: it is pinned
+            // from the Network model, never asked of the node. With an explicit
+            // `RPC` there is no Network to vouch for the chain, so the caller
+            // must supply chainId itself.
+            if str_param(params, "RPC").is_none() {
+                if let Some(net) = str_param(params, "Network") {
+                    p["Network"] = json!(net);
+                }
+                p = super::account::evm_pin_chain_id(env, &p)?;
+            }
+            let filled = super::account::evm_fill(&account.address, url, &p).await?;
+            Ok(filled["Transaction"].clone())
+        }
+        "solana" => {
+            let mut tx = tx.clone();
+            let prebuilt = tx.get("message").or_else(|| tx.get("Message")).is_some();
+            if !prebuilt && tx.get("recentBlockhash").is_none() && tx.is_object() {
+                let bh = crate::rpc::call_async(url, "getLatestBlockhash", json!([])).await.map_err(ApiError::internal)?;
+                let bh = bh.get("value").and_then(|v| v.get("blockhash")).and_then(Value::as_str).ok_or_else(|| ApiError::new(502, "no blockhash in the node's answer"))?;
+                tx["recentBlockhash"] = json!(bh);
+            }
+            Ok(tx)
+        }
+        _ => Ok(tx.clone()),
+    }
+}
+
+pub async fn sign_request_impl(env: &Env, params: &Value) -> ApiResult {
     let account_id = str_param(params, "Account").or_else(|| str_param(params, "Id")).ok_or_else(|| ApiError::new(400, "Account required"))?;
     let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
     let account = crate::models::account::fetch(env, account_id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "account not found"))?;
     let rpc = rpc_from_params(env, params, &account.kind)?;
     let framing = framing_from_params(params)?;
-    // The EVM chain id is the signature's replay domain: it is pinned from the
-    // Network model, never asked of the node. With an explicit `RPC` there is no
-    // Network to vouch for the chain, so the caller must supply chainId itself.
-    let pinned;
-    let tx = if account.kind == "ethereum" && rpc.is_some() && str_param(params, "RPC").is_none() {
-        let mut p = json!({ "Transaction": tx });
-        if let Some(net) = str_param(params, "Network") {
-            p["Network"] = json!(net);
-        }
-        pinned = super::account::evm_pin_chain_id(env, &p)?;
-        &pinned["Transaction"]
-    } else {
-        tx
-    };
-    let built = airgap::sign::build_request(env, account_id, tx, &framing, rpc.as_deref()).map_err(bad)?;
+    let tx = prefill(env, &account, params, tx, rpc.as_deref()).await?;
+    let built = airgap::sign::build_request(env, account_id, &tx, &framing, None).map_err(bad)?;
     let mut j = serde_json::to_value(&built).unwrap();
     j["count"] = json!(built.parts.len());
     Ok(j)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn submit_signature(env: &Env, params: &Value) -> ApiResult {
+pub async fn submit_signature_impl(env: &Env, params: &Value) -> ApiResult {
     let payload = payload_from_params(env, params)?;
     let request_id = str_param(params, "RequestId");
     let accepted = airgap::sign::accept(env, &payload, request_id).map_err(bad)?;
     let mut j = serde_json::to_value(&accepted).unwrap();
     if params.get("Broadcast").and_then(Value::as_bool) == Some(true) {
         let url = rpc_from_params(env, params, &accepted.chain)?.ok_or_else(|| ApiError::new(400, "Broadcast needs an RPC/Network (not Offline)"))?;
-        let res = airgap::sign::broadcast(&url, &accepted).map_err(|e| ApiError::new(502, e.to_string()))?;
-        j["broadcast"] = res;
+        let (method, args) = match accepted.chain.as_str() {
+            "ethereum" => ("eth_sendRawTransaction", json!([accepted.raw])),
+            "bitcoin" => ("sendrawtransaction", json!([accepted.raw.trim_start_matches("0x")])),
+            "solana" => ("sendTransaction", json!([accepted.raw, { "encoding": "base58" }])),
+            other => return Err(ApiError::new(400, format!("cannot broadcast {other}"))),
+        };
+        j["broadcast"] = crate::rpc::call_async(&url, method, args).await.map_err(|e| ApiError::new(502, e.to_string()))?;
     }
     if let Some(id) = str_param(params, "DecoderId") {
         let _ = decoder::store_delete(env, id);
@@ -245,10 +317,92 @@ pub fn submit_signature(env: &Env, params: &Value) -> ApiResult {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub fn sign_request(env: &Env, params: &Value) -> ApiResult {
+    crate::rt::block_on(sign_request_impl(env, params))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn submit_signature(env: &Env, params: &Value) -> ApiResult {
+    crate::rt::block_on(submit_signature_impl(env, params))
+}
+
 pub fn pending(env: &Env, params: &Value) -> ApiResult {
     let rid = str_param(params, "RequestId").ok_or_else(|| ApiError::new(400, "RequestId required"))?;
     match airgap::sign::pending_load(env, rid).map_err(ApiError::internal)? {
         Some(p) => Ok(serde_json::to_value(p).unwrap()),
         None => Err(ApiError::new(404, "no such pending request (expired?)")),
+    }
+}
+
+// ── QR rendering ─────────────────────────────────────────────────────────────
+
+/// At most this many frames are rendered per call.
+const MAX_QR_FRAMES: usize = 512;
+
+/// `Airgap:qr` {Text | Parts: […], Ecc?: "L"|"M"|"Q"|"H"} — the QR code
+/// modules for each frame, for hosts without a QR renderer of their own:
+/// `{codes: [{size, rows: ["0110…", …]}]}` (`1` = dark). UR and BBQr frames
+/// are uppercase alphanumeric, which QR encodes compactly.
+pub fn qr(_env: &Env, params: &Value) -> ApiResult {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let frames: Vec<&str> = match (str_param(params, "Text"), params.get("Parts").and_then(Value::as_array)) {
+        (Some(t), _) => vec![t],
+        (None, Some(a)) => a.iter().filter_map(Value::as_str).collect(),
+        (None, None) => return Err(ApiError::new(400, "Text or Parts required")),
+    };
+    if frames.is_empty() || frames.len() > MAX_QR_FRAMES {
+        return Err(ApiError::new(400, format!("1-{MAX_QR_FRAMES} frames required")));
+    }
+    let ecc = match str_param(params, "Ecc").unwrap_or("L") {
+        "L" => QrCodeEcc::Low,
+        "M" => QrCodeEcc::Medium,
+        "Q" => QrCodeEcc::Quartile,
+        "H" => QrCodeEcc::High,
+        other => return Err(ApiError::new(400, format!("unknown Ecc {other:?}"))),
+    };
+    let mut codes = Vec::with_capacity(frames.len());
+    for f in frames {
+        let code = QrCode::encode_text(f, ecc).map_err(|_| ApiError::new(400, "frame too long for one QR code: use shorter parts (MaxFragmentLen / MaxPartLen)"))?;
+        let size = code.size();
+        let rows: Vec<String> = (0..size).map(|y| (0..size).map(|x| if code.get_module(x, y) { '1' } else { '0' }).collect()).collect();
+        codes.push(json!({ "size": size, "rows": rows }));
+    }
+    Ok(json!({ "codes": codes }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qr_modules_are_square_and_bounded() {
+        let env = Env::init_memory().unwrap();
+        let out = qr(&env, &json!({ "Parts": ["UR:BYTES/HDCXLKAHSSQZ", "B$2P0100ABCDEF"] })).unwrap();
+        let codes = out["codes"].as_array().unwrap();
+        assert_eq!(codes.len(), 2);
+        for c in codes {
+            let size = c["size"].as_u64().unwrap() as usize;
+            let rows = c["rows"].as_array().unwrap();
+            assert_eq!(rows.len(), size);
+            assert!(rows.iter().all(|r| r.as_str().unwrap().len() == size && r.as_str().unwrap().bytes().all(|b| b == b'0' || b == b'1')));
+            // Top-left finder pattern: a dark 7-module bar.
+            assert!(rows[0].as_str().unwrap().starts_with("1111111"));
+        }
+        // Uppercase alphanumeric frames encode compactly: version 1 or 2.
+        assert!(codes[0]["size"].as_u64().unwrap() <= 25);
+        assert!(qr(&env, &json!({})).is_err());
+        assert!(qr(&env, &json!({ "Text": "x", "Ecc": "Z" })).is_err());
+        assert!(qr(&env, &json!({ "Text": "A".repeat(8000) })).is_err());
+    }
+
+    /// The bitcoin prefill leaves a Transaction that already carries its UTXOs
+    /// alone (no node is contacted).
+    #[test]
+    fn prefill_keeps_supplied_utxos() {
+        let account: crate::models::account::Account = serde_json::from_value(json!({ "Id": "acct-x", "Type": "bitcoin" })).unwrap();
+        let tx = json!({ "To": "bc1q", "Amount": 1, "UTXOs": [{ "txo": "00:0", "amount_sats": 5 }] });
+        let out = crate::rt::block_on(prefill_bitcoin(&account, &tx, "http://127.0.0.1:1")).unwrap();
+        assert_eq!(out, tx);
+        assert!(crate::rt::block_on(prefill_bitcoin(&account, &json!("nope"), "http://127.0.0.1:1")).is_err());
     }
 }
