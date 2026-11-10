@@ -404,8 +404,11 @@ pub fn list_utxos(rpc: &str, xpub: &str) -> Result<Vec<DiscoveredUtxo>> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn max_sendable_sats(rpc: &str, xpub: &str, fee_rate: u64) -> Result<(u64, u64, u64, Vec<String>)> {
     let utxos = list_utxos(rpc, xpub)?;
-    let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
-    let fee = estimate_vsize(&utxos, 1) * fee_rate; // one recipient, no change
+    let total = utxos
+        .iter()
+        .try_fold(0u64, |acc, u| acc.checked_add(u.amount_sats))
+        .ok_or_else(|| Error::Env("utxo total overflows".into()))?;
+    let fee = fee_sats(&utxos, 1, fee_rate)?; // one recipient, no change
     let max = total.saturating_sub(fee);
     Ok((total, fee, max, utxos.into_iter().map(|u| u.txo).collect()))
 }
@@ -475,7 +478,16 @@ impl DiscoveredUtxo {
 /// Estimated vsize of a tx with `ins` inputs and `outs` outputs (Go
 /// `estimateMixedTxVSize`): 11 overhead + 31/output + per-input vsize.
 pub(crate) fn estimate_vsize(ins: &[DiscoveredUtxo], outs: u64) -> u64 {
-    11 + outs * 31 + ins.iter().map(|u| u.vsize()).sum::<u64>()
+    ins.iter().fold(outs.saturating_mul(31).saturating_add(11), |acc, u| acc.saturating_add(u.vsize()))
+}
+
+/// The fee (satoshi) for a tx of `ins` and `outs` outputs at `fee_rate` sat/vB.
+/// The rate is caller-supplied (ultimately a node's estimate), so a product
+/// that does not fit is an error rather than a wrapped, tiny fee.
+pub(crate) fn fee_sats(ins: &[DiscoveredUtxo], outs: u64, fee_rate: u64) -> Result<u64> {
+    estimate_vsize(ins, outs)
+        .checked_mul(fee_rate)
+        .ok_or_else(|| Error::Env(format!("fee overflows at {fee_rate} sat/vB")))
 }
 
 /// Greedy largest-first coin selection (Go `selectUTXOs`): add UTXOs until the
@@ -486,10 +498,12 @@ pub(crate) fn select_utxos(all: &[DiscoveredUtxo], want_sats: u64, fee_rate: u64
     let mut total: u64 = 0;
     let mut out: Vec<DiscoveredUtxo> = Vec::new();
     for u in sorted {
-        total += u.amount_sats;
+        // Amounts come from the node and the rate from the caller: no wrapping.
+        total = total.checked_add(u.amount_sats).ok_or_else(|| Error::Env("utxo total overflows".into()))?;
         out.push(u);
-        let fee = estimate_vsize(&out, 2) * fee_rate;
-        if total >= want_sats + fee {
+        let fee = fee_sats(&out, 2, fee_rate)?;
+        let need = want_sats.checked_add(fee).ok_or_else(|| Error::Env("amount + fee overflows".into()))?;
+        if total >= need {
             return Ok((out, total));
         }
     }
@@ -860,11 +874,11 @@ pub fn build_and_sign_from_utxos(
     let (selected, total_in) = select_utxos(all, want_sats, fee_rate_sat_vb)?;
 
     // 2. Fee + change (dust threshold 546 sat), 2-output size estimate.
-    let fee = estimate_vsize(&selected, 2) * fee_rate_sat_vb;
-    if total_in < want_sats + fee {
-        return Err(Error::Env(format!("insufficient funds: {total_in} < {want_sats} + fee {fee}")));
-    }
-    let change = total_in - want_sats - fee;
+    let fee = fee_sats(&selected, 2, fee_rate_sat_vb)?;
+    let change = want_sats
+        .checked_add(fee)
+        .and_then(|need| total_in.checked_sub(need))
+        .ok_or_else(|| Error::Env(format!("insufficient funds: {total_in} < {want_sats} + fee {fee}")))?;
 
     // 3. Per-input signer: derive each input's key + combined tweak.
     struct InputPlan {
@@ -1378,6 +1392,23 @@ mod tests {
         assert_eq!((index, path.as_str()), (3, "m/1/3"));
         let rpc = mock_rpc(r#"{"lastI":1}"#);
         assert_eq!(scan_chain(&rpc, "xpub", &pk, &cc, "bitcoin", false).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn fee_and_amount_arithmetic_does_not_wrap() {
+        let utxo = |sats: u64| DiscoveredUtxo { txo: format!("{}:0", "11".repeat(32)), amount_sats: sats, height: 1, path: "m/0/0".into(), script: "p2wpkh".into() };
+        // A fee rate whose product with the vsize wraps u64 to something small.
+        assert!(fee_sats(&[utxo(1)], 2, u64::MAX / 2).is_err());
+        assert_eq!(fee_sats(&[utxo(1)], 2, 5).unwrap(), (11 + 62 + 68) * 5);
+        assert!(select_utxos(&[utxo(100_000)], 1_000, u64::MAX / 2).is_err());
+        // want + fee wrapping past zero must not look affordable.
+        assert!(select_utxos(&[utxo(100_000)], u64::MAX - 10, 5).is_err());
+        // Node-reported amounts whose sum wraps.
+        assert!(select_utxos(&[utxo(u64::MAX - 5), utxo(100)], u64::MAX - 1, 0).is_err());
+        // The ordinary case is unchanged.
+        let (sel, total) = select_utxos(&[utxo(100_000), utxo(5_000)], 50_000, 5).unwrap();
+        assert_eq!((sel.len(), total), (1, 100_000));
+        assert_eq!(estimate_vsize(&[], u64::MAX), u64::MAX);
     }
 
     #[test]

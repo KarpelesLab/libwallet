@@ -161,12 +161,14 @@ fn build_bitcoin_history_tx(
     let (mut received, mut sent_out, mut total_out) = (0u64, 0u64, 0u64);
     let mut payee: Option<String> = None;
     for o in data.get("vout").and_then(Value::as_array).into_iter().flatten() {
+        // Indexer-supplied values: a sum that does not fit is not a real
+        // transaction, so the row is dropped rather than wrapped.
         let sats = o.get("value").and_then(btc_value_sats).unwrap_or(0);
-        total_out += sats;
+        total_out = total_out.checked_add(sats)?;
         match vout_address(o) {
-            Some(a) if ours.contains(&norm_btc_addr(&a)) => received += sats,
+            Some(a) if ours.contains(&norm_btc_addr(&a)) => received = received.checked_add(sats)?,
             other => {
-                sent_out += sats;
+                sent_out = sent_out.checked_add(sats)?;
                 if payee.is_none() {
                     payee = other;
                 }
@@ -189,7 +191,7 @@ fn build_bitcoin_history_tx(
         any_ours = true;
         let prev = i.get("txid").and_then(Value::as_str).unwrap_or("");
         match i.get("vout").and_then(Value::as_u64).and_then(|n| prevout(prev, n)) {
-            Some(v) => spent += v,
+            Some(v) => spent = spent.checked_add(v)?,
             None => (all_ours_known, spent_known) = (false, false),
         }
     }
@@ -565,6 +567,15 @@ mod tests {
         assert!(row(&v.to_string(), &[]).is_none());
         let mut v: Value = serde_json::from_str(FUND).unwrap();
         v["vout"][4]["scriptPubKey"]["address"] = json!("bc1qn2l34ludly8pe0h0dfwpjgysfu65d2ypgsu7ce");
+        assert!(row(&v.to_string(), &[]).is_none());
+    }
+
+    #[test]
+    fn overflowing_output_values_drop_the_row() {
+        // Two outputs of ~1.8e11 BTC each: their satoshi sum does not fit u64.
+        let mut v: Value = serde_json::from_str(FUND).unwrap();
+        v["vout"][0]["value"] = json!("0xffffffffffffffff");
+        v["vout"][1]["value"] = json!("0xffffffffffffffff");
         assert!(row(&v.to_string(), &[]).is_none());
     }
 

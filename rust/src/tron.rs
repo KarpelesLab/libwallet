@@ -137,7 +137,7 @@ pub fn free_bandwidth(v: &Value) -> u64 {
     let get = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
     let free = get("freeNetLimit").saturating_sub(get("freeNetUsed"));
     let staked = get("NetLimit").saturating_sub(get("NetUsed"));
-    free + staked
+    free.saturating_add(staked)
 }
 
 /// A recent block to anchor a transaction on.
@@ -270,9 +270,13 @@ pub fn sign_transfer(
             )
         }
     };
+    let expiration = block
+        .timestamp
+        .checked_add(EXPIRATION_MS)
+        .ok_or_else(|| Error::Env("tron reference block timestamp out of range".into()))?;
     let tx = TronTx {
         timestamp: block.timestamp,
-        expiration: block.timestamp + EXPIRATION_MS,
+        expiration,
         fee_limit,
         ..TronTx::new(contract)
     }
@@ -404,6 +408,13 @@ mod tests {
         let e = crate::hdderive::evm_address(&pk).unwrap();
         assert!(t.starts_with('T') && t.len() == 34);
         assert_eq!(hex(&parse_address(&t).unwrap()[1..]), e[2..].to_ascii_lowercase());
+    }
+
+    #[test]
+    fn free_bandwidth_saturates() {
+        let v = json!({ "freeNetLimit": u64::MAX, "NetLimit": u64::MAX });
+        assert_eq!(free_bandwidth(&v), u64::MAX);
+        assert_eq!(free_bandwidth(&json!({ "freeNetLimit": 600, "freeNetUsed": 100, "NetLimit": 50 })), 550);
     }
 
     #[test]

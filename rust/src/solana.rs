@@ -267,10 +267,12 @@ pub fn compute_solana_max_sendable(
     recipient_rent: u64,
     recipient_exists: bool,
 ) -> (u64, u64, Option<String>) {
+    // Fee and rents are caller/RPC-supplied: saturate, so an absurd value reads
+    // as "nothing sendable" instead of wrapping into a small reserve.
     let reserved = if recipient_exists {
-        fee + sender_rent
+        fee.saturating_add(sender_rent)
     } else {
-        fee + sender_rent + recipient_rent
+        fee.saturating_add(sender_rent).saturating_add(recipient_rent)
     };
     if balance <= reserved {
         let mut reason = format!(
@@ -340,6 +342,19 @@ pub async fn resolve_max_lamports(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn max_sendable_reserve_saturates() {
+        // A fee/rent that would wrap the reserve to a small number must not
+        // leave almost the whole balance "sendable".
+        let (max, reserved, reason) = compute_solana_max_sendable(1_000_000_000, u64::MAX, 890_880, 890_880, false);
+        assert_eq!((max, reserved), (0, u64::MAX));
+        assert!(reason.is_some());
+        let (max, _, reason) = compute_solana_max_sendable(1_000_000_000, 5_000, u64::MAX, 0, true);
+        assert_eq!(max, 0);
+        assert!(reason.is_some());
+        assert_eq!(compute_solana_max_sendable(1_000_000_000, 5_000, 890_880, 0, true).0, 1_000_000_000 - 895_880);
+    }
 
     #[test]
     fn transfer_message_layout() {
