@@ -361,8 +361,8 @@ function renderAccounts() {
         <div class="balance"><span class="loading" data-bal="${chain}">—</span></div>
       </div>
       <div class="addr-row">
-        <span class="addr" title="${addr}">${addr}</span>
-        <button class="copy" type="button" data-copy="${addr}">
+        <span class="addr" title="${esc(addr)}">${esc(addr)}</span>
+        <button class="copy" type="button" data-copy="${esc(addr)}">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a2 2 0 012-2h10" stroke="currentColor" stroke-width="1.8"/></svg>
           Copy
         </button>
@@ -1195,20 +1195,19 @@ async function deriveMpcAddresses() {
 
 // Enter the REAL dashboard (Accounts/Send/Settings) backed by the MPC committee.
 // Reuses renderAccounts / refreshAllBalances by populating session.addresses —
-// from the stored record when present, else derived live.
+// always derived live from the restored wallet.
 async function enterMpcDashboard() {
   session.mnemonic = null;      // MPC has no single mnemonic
   session.passphrase = null;    // (nor a BIP-39 passphrase)
   session.mpc = true;           // dashboard is backed by the MPC committee
   session.balances = {};
-  const rec = readMpcRecord();
   // Always derive: this populates session.mpcAccounts (the Account Ids committee
-  // send needs), which the cached record does not carry. Prefer the cached
-  // addresses for render when present (identical values, saves nothing now but
-  // keeps the fast-path contract), else use the freshly derived ones.
+  // send needs), which the cached record does not carry. Display the freshly
+  // derived addresses, never the record's cached copy: localStorage is shared
+  // with every other site on this origin, so a cached address is not trusted
+  // to be the one this wallet actually controls.
   await loadChainMeta();
-  const derived = await deriveMpcAddresses();
-  session.addresses = (rec && rec.addresses) ? rec.addresses : derived;
+  session.addresses = await deriveMpcAddresses();
   setConsoleMode(false);        // all wallet tabs visible
   applyMpcGuards();
   // Default to the Accounts tab.
@@ -1331,7 +1330,7 @@ async function mpcUnlock() {
     $('#bkCreateAccount').disabled = false;
     refreshSignAccounts();
     // Land in the real MPC dashboard (Accounts/Send/Settings), not the console.
-    // Addresses come from the stored record, or are derived on the spot.
+    // Addresses are derived on the spot from the restored wallet.
     await enterMpcDashboard();
     toast('ok', 'Wallet unlocked', 'Your on-device MPC wallet was restored and is ready to sign.');
   } catch (e) {
