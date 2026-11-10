@@ -126,8 +126,12 @@ fn execute_evm_signs_and_broadcasts() {
         r#"{"result":"success","data":[{"orderId":"ord-evm"}]}"#.to_string(),
         r#"{"result":"success","data":[{"orders":[{"orderId":"ord-evm","txStatus":"2","txHash":"0xLANDED"}]}]}"#.to_string(),
     ]);
-    // Node is used only for the nonce now (broadcast goes through OKX).
-    let node = mock_multi(vec![r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string()]);
+    // Node is used only for the nonce and its gas price, which bounds the
+    // provider's (broadcast goes through OKX).
+    let node = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
+    ]);
     let token_in = TokenRef { address: "0xIN".into(), symbol: "IN".into(), decimals: 18 };
     let token_out = TokenRef { address: "0xOUT".into(), symbol: "OUT".into(), decimals: 6 };
 
@@ -367,5 +371,121 @@ fn get_quote_amount_in_is_the_requested_amount() {
     for bad in ["abc", "-5", "1.5", "+7"] {
         let err = quote_with_echo(r#"{"fromTokenAmount":"1000","toTokenAmount":"2000000"}"#, bad).unwrap_err();
         assert!(err.to_string().contains("bad amountIn"), "{bad}: {err}");
+    }
+}
+
+// ── audit F8: provider-supplied gas / gasPrice / chain id are bounded ───────
+
+#[test]
+fn provider_gas_is_checked_and_capped() {
+    // +50% headroom, as before.
+    assert_eq!(swap::okx_checked_gas("1", "120000").unwrap(), 180_000);
+    assert_eq!(swap::okx_checked_gas("1", "").unwrap(), 0);
+    // Exactly at the ceiling passes; one step over does not.
+    assert_eq!(swap::okx_checked_gas("1", "20000000").unwrap(), swap::OKX_EVM_MAX_GAS);
+    assert!(swap::okx_checked_gas("1", "20000001").is_err());
+    // `gas * 3` used to overflow u64 (panic in debug, wrap in release).
+    assert!(swap::okx_checked_gas("1", &u64::MAX.to_string()).is_err());
+    assert!(swap::okx_checked_gas("5000", &u64::MAX.to_string()).is_err());
+    // Not a plain decimal.
+    for bad in ["-1", "0x5208", "1e9", "99999999999999999999999"] {
+        assert!(swap::okx_checked_gas("1", bad).is_err(), "{bad}");
+    }
+    // Mantle's gas units are not Ethereum's: only the arithmetic is checked.
+    assert_eq!(swap::okx_checked_gas("5000", "2000000000").unwrap(), 3_000_000_000);
+}
+
+#[test]
+fn provider_gas_price_is_capped_to_the_node_price() {
+    use num_bigint::BigInt;
+    let node = BigInt::from(20_000_000_000u64); // 20 gwei
+    assert_eq!(swap::okx_checked_gas_price("20000000000", &node).unwrap(), "20000000000");
+    assert_eq!(swap::okx_checked_gas_price("", &node).unwrap(), "0");
+    // Up to 10x the node price is tolerated, not more.
+    assert_eq!(swap::okx_checked_gas_price("200000000000", &node).unwrap(), "200000000000");
+    assert!(swap::okx_checked_gas_price("200000000001", &node).is_err());
+    assert!(swap::okx_checked_gas_price("1000000000000000000", &node).is_err());
+    for bad in ["-1", "0x4a817c800", "cheap"] {
+        assert!(swap::okx_checked_gas_price(bad, &node).is_err(), "{bad}");
+    }
+}
+
+/// An EVM account + its unlock creds in a fresh in-memory env.
+fn evm_account() -> (libwallet::Env, String, Vec<(String, String)>) {
+    use libwallet::models::{account, wallet};
+    use libwallet::sign::KeyDescription;
+    let env = libwallet::Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds: Vec<KeyDescription> = ["a", "b", "c"]
+        .iter()
+        .map(|p| KeyDescription { kind: "Password".into(), key: format!("password{p}"), id: String::new() })
+        .collect();
+    let w = wallet::create(&env, "EVM", "secp256k1", &kds).unwrap();
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let unlock = w.keys.iter().zip(["a", "b", "c"]).map(|(k, p)| (k.id.clone(), format!("password{p}"))).collect();
+    (env, a.id, unlock)
+}
+
+/// Run `execute_evm` against a provider `/swap` tx (and nothing else on the OKX
+/// side, so reaching the broadcast fails) with the node at 20 gwei.
+fn execute_evm_with_tx(chain_id: &str, tx: &str) -> Result<serde_json::Value, libwallet::Error> {
+    let (env, account_id, unlock) = evm_account();
+    let okx = mock_multi(vec![format!(r#"{{"result":"success","data":[{{"tx":{tx}}}]}}"#)]);
+    let node = mock_multi(vec![
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x3"}"#.to_string(),
+        r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
+    ]);
+    swap::execute_evm(
+        &env, &account_id, &unlock, None, &okx, &node, chain_id, &token("0xIN", "IN", 18), &token("0xOUT", "OUT", 6),
+        "1000000000000000000", 50, true, "q_test",
+    )
+}
+
+#[test]
+fn execute_evm_refuses_inflated_gas_price_and_gas() {
+    let to = "0x1111111111111111111111111111111111111111";
+    // 1 ETH per gas against a 20 gwei node.
+    let err = execute_evm_with_tx(
+        "1",
+        &format!(r#"{{"to":"{to}","value":"0","data":"0xabcdef","gas":"120000","gasPrice":"1000000000000000000"}}"#),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("gasPrice") && err.contains("node gas price"), "{err}");
+    // A gas limit whose +50% headroom overflows u64.
+    let err = execute_evm_with_tx(
+        "1",
+        &format!(r#"{{"to":"{to}","value":"0","data":"0xabcdef","gas":"18446744073709551615","gasPrice":"1"}}"#),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("not a usable gas limit"), "{err}");
+}
+
+#[test]
+fn execute_evm_refuses_non_numeric_chain_id() {
+    // Used to sign for chain id 1 (mainnet) via `parse().unwrap_or(1)`.
+    let (env, account_id, unlock) = evm_account();
+    let err = swap::execute_evm(
+        &env, &account_id, &unlock, None, "http://unused.invalid", "http://unused.invalid", "mainnet",
+        &token("0xIN", "IN", 18), &token("0xOUT", "OUT", 6), "1000000000000000000", 50, true, "q_test",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("non-numeric EVM chain id"), "{err}");
+}
+
+#[test]
+fn execute_evm_refuses_malformed_call_data() {
+    let to = "0x1111111111111111111111111111111111111111";
+    for data in ["0xabc", "0x+a", "0x\u{e9}\u{e9}"] {
+        let err = execute_evm_with_tx(
+            "1",
+            &format!(r#"{{"to":"{to}","value":"0","data":"{data}","gas":"120000","gasPrice":"20000000000"}}"#),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("bad tx data hex"), "{data}: {err}");
     }
 }

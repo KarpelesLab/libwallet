@@ -519,6 +519,10 @@ pub fn execute_evm_guarded(
         return Err(Error::Env("swap execute is EVM-only here".into()));
     }
     let chain_index = okx_chain_index("evm", chain_id)?;
+    // Never fall back to another chain (mainnet) for the EIP-155 signature.
+    let evm_chain_id: u64 = chain_id
+        .parse()
+        .map_err(|_| Error::Env(format!("okx: non-numeric EVM chain id {chain_id:?}")))?;
 
     // 1. Fetch the swap tx from the authenticated OKX proxy.
     let params = json!({
@@ -543,17 +547,29 @@ pub fn execute_evm_guarded(
     // Tripwires: the /swap tx is signed as-is, so it must still match the quote.
     guard.check(tx, slippage_bps)?;
     let value =tx.get("value").and_then(Value::as_str).unwrap_or("0").to_owned();
-    let gas_price = tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0").to_owned();
-    let gas: u64 = tx.get("gas").and_then(Value::as_str).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let gas = gas * 3 / 2; // +50% headroom (OKX guidance)
+    // The provider's gas / gasPrice are untrusted: bound both before signing.
+    let gas = okx_checked_gas(chain_id, tx.get("gas").and_then(Value::as_str).unwrap_or(""))?;
+    let provider_gas_price = tx.get("gasPrice").and_then(Value::as_str).unwrap_or("0");
 
     // 2. Nonce.
     let nonce_hex = crate::rpc::call(rpc, "eth_getTransactionCount", json!([acct.address, "pending"]))?;
     let nonce_hex = nonce_hex.as_str().unwrap_or("0x0");
     let nonce = u64::from_str_radix(nonce_hex.strip_prefix("0x").unwrap_or(nonce_hex), 16).unwrap_or(0);
 
+    // 2b. The node's own gas price bounds the provider's.
+    let node_gp = crate::rpc::call(rpc, "eth_gasPrice", json!([]))?;
+    let node_gp = node_gp.as_str().unwrap_or("");
+    let node_gp = Some(node_gp.strip_prefix("0x").unwrap_or(node_gp))
+        .filter(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .and_then(|h| BigInt::parse_bytes(h.as_bytes(), 16))
+        .ok_or_else(|| Error::Env("okx: node returned no usable eth_gasPrice".into()))?;
+    let gas_price = okx_checked_gas_price(provider_gas_price, &node_gp)?;
+
     // 3. Build + sign a legacy tx.
     let data_hex = tx_data.strip_prefix("0x").unwrap_or(tx_data);
+    if data_hex.len() % 2 != 0 || !data_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(Error::Env("bad tx data hex: not an even-length hex string".into()));
+    }
     let call_data = (0..data_hex.len())
         .step_by(2)
         .map(|i| u8::from_str_radix(data_hex.get(i..i + 2).unwrap_or(""), 16))
@@ -567,7 +583,7 @@ pub fn execute_evm_guarded(
         to: to.to_owned(),
         value,
         data: call_data,
-        chain_id: chain_id.parse().unwrap_or(1),
+        chain_id: evm_chain_id,
         eip1559: false,
     };
     let raw = crate::evm::sign_tx(env, account_id, unlock, &req)?;
@@ -595,6 +611,69 @@ pub fn execute_evm_guarded(
         hash = bres.tx_hash;
     }
     Ok(json!({ "chain": "evm", "hash": hash, "orderId": bres.order_id, "quoteId": quote_id, "raw": format!("0x{raw_hex}") }))
+}
+
+/// Hard ceiling on the gas limit of a provider-built swap tx, after the +50%
+/// headroom: 30M, the Ethereum block gas limit scale. A real swap needs a few
+/// hundred thousand gas (low millions on Arbitrum / zkSync), so nothing honest
+/// comes near it.
+pub const OKX_EVM_MAX_GAS: u64 = 30_000_000;
+
+/// How far above the node's own `eth_gasPrice` the provider's `gasPrice` may
+/// sit. Generous (a provider adds a priority premium and the two are sampled
+/// moments apart), while still stopping a tampered response from burning the
+/// account's native balance in fees.
+pub const OKX_EVM_GAS_PRICE_NODE_MULTIPLE: u32 = 10;
+
+/// EVM chains whose gas units aren't comparable to Ethereum's, so
+/// [`OKX_EVM_MAX_GAS`] can't apply: Mantle (5000) folds the L1 data fee into
+/// the gas limit, giving ordinary transactions limits far beyond 30M.
+fn okx_gas_cap_exempt(chain_id: &str) -> bool {
+    chain_id == "5000"
+}
+
+/// The gas limit to sign for a provider-supplied `gas` (decimal string): +50%
+/// headroom per OKX guidance, with checked arithmetic and the
+/// [`OKX_EVM_MAX_GAS`] ceiling. A blank value keeps the historical `0`.
+pub fn okx_checked_gas(chain_id: &str, provider_gas: &str) -> Result<u64> {
+    let g = provider_gas.trim();
+    if g.is_empty() {
+        return Ok(0);
+    }
+    let gas = Some(g)
+        .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|v| v.checked_mul(3))
+        .map(|v| v / 2)
+        .ok_or_else(|| Error::Env(format!("okx: swap tx gas {g:?} is not a usable gas limit")))?;
+    if gas > OKX_EVM_MAX_GAS && !okx_gas_cap_exempt(chain_id) {
+        return Err(Error::Env(format!(
+            "okx: swap tx gas limit {gas} exceeds the {OKX_EVM_MAX_GAS} sanity ceiling"
+        )));
+    }
+    Ok(gas)
+}
+
+/// The gas price (wei, decimal) to sign for a provider-supplied `gasPrice`:
+/// it must be a non-negative decimal no higher than
+/// [`OKX_EVM_GAS_PRICE_NODE_MULTIPLE`] × the node's current `eth_gasPrice`.
+/// A blank value keeps the historical `0`.
+pub fn okx_checked_gas_price(provider_gas_price: &str, node_gas_price: &BigInt) -> Result<String> {
+    let p = provider_gas_price.trim();
+    if p.is_empty() {
+        return Ok("0".into());
+    }
+    let got = Some(p)
+        .filter(|s| s.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10))
+        .ok_or_else(|| Error::Env(format!("okx: swap tx gasPrice {p:?} is not a decimal wei amount")))?;
+    let limit = node_gas_price * BigInt::from(OKX_EVM_GAS_PRICE_NODE_MULTIPLE);
+    if got > limit {
+        return Err(Error::Env(format!(
+            "okx: swap tx gasPrice {got} exceeds {OKX_EVM_GAS_PRICE_NODE_MULTIPLE}x the node gas price {node_gas_price}"
+        )));
+    }
+    Ok(got.to_string())
 }
 
 /// Decode an OKX Solana `tx.data` blob (Go `okxDecodeSolanaTxData`): try base58
