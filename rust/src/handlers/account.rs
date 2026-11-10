@@ -1158,7 +1158,8 @@ pub fn utxos(env: &Env, params: &Value) -> ApiResult {
     let rpc = rpc_for_network(params, &net)?;
     let xpub = account.xpub().map_err(ApiError::internal)?;
     let utxos = crate::bitcoin::list_utxos(&rpc, &xpub).map_err(ApiError::internal)?;
-    let total: u64 = utxos.iter().map(|u| u.amount_sats).sum();
+    // The amounts are the node's claims: add them without overflowing.
+    let total: u64 = utxos.iter().fold(0u64, |sum, u| sum.saturating_add(u.amount_sats));
     Ok(serde_json::json!({ "utxos": utxos, "count": utxos.len(), "total_sats": total }))
 }
 
@@ -1595,6 +1596,29 @@ mod balance_tests {
             tx["chainId"] = cid.clone();
             assert!(evm_request_from_tx(&tx).is_err(), "chainId {cid} accepted");
         }
+    }
+
+    // Audit L2: UTXO amounts are the node's claims; totalling them must not
+    // overflow (a panic in debug builds, a wrapped total in release).
+    #[test]
+    fn utxo_total_saturates() {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        crate::models::network::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "BTC", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "bitcoin", 0).unwrap();
+        // Two outputs of 1e11 BTC (1e19 sat) each: their sum exceeds u64::MAX.
+        let url = mock_rpc_dispatch(&[(
+            "modchain_assets",
+            r#"{"assets":[{"asset":"NATIVE","txo":[
+                {"txo":"1111111111111111111111111111111111111111111111111111111111111111:0","amt":"100000000000.00000000","path":"m/0/0","script":"p2wpkh"},
+                {"txo":"2222222222222222222222222222222222222222222222222222222222222222:0","amt":"100000000000.00000000","path":"m/0/1","script":"p2wpkh"}]}]}"#,
+        )]);
+        let out = utxos(&env, &serde_json::json!({ "Id": a.id, "RPC": url, "Network": "bitcoin.bitcoin" })).unwrap();
+        assert_eq!(out["count"], 2, "{out}");
+        assert_eq!(out["total_sats"], u64::MAX, "{out}");
     }
 
     // Audit L1: hex that isn't hex is an error, not a slicing panic.
