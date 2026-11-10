@@ -327,3 +327,45 @@ fn get_quote_no_route_errors() {
     );
     assert!(err.is_err(), "no route must error");
 }
+
+// ── audit F7: the quote's amountIn is the requested amount, never the echo ──
+
+fn quote_with_echo(entry: &str, requested: &str) -> Result<swap::Quote, libwallet::Error> {
+    let base = mock(entry);
+    swap::get_quote(None, &base, "evm", "1", token("NATIVE", "ETH", 18), token("0xOUT", "OUT", 6), requested, 50)
+}
+
+#[test]
+fn get_quote_rejects_tampered_from_token_amount() {
+    // Asked for 0.1 ETH; the (untrusted) provider answers for 10 ETH. That
+    // amount would drive Swap:execute, so the quote must be refused.
+    let err = quote_with_echo(
+        r#"{"fromTokenAmount":"10000000000000000000","toTokenAmount":"2000000"}"#,
+        "100000000000000000",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("does not match the requested amount"), "{err}");
+    // A present-but-garbage echo is a mismatch too.
+    assert!(quote_with_echo(r#"{"fromTokenAmount":"lots","toTokenAmount":"2000000"}"#, "100000000000000000").is_err());
+}
+
+#[test]
+fn get_quote_amount_in_is_the_requested_amount() {
+    // No echo at all: the requested amount is used.
+    let q = quote_with_echo(r#"{"toTokenAmount":"2000000"}"#, "100000000000000000").unwrap();
+    assert_eq!(q.amount_in.value().unwrap().to_string(), "100000000000000000");
+    // A matching echo is fine.
+    let q = quote_with_echo(
+        r#"{"fromTokenAmount":"100000000000000000","toTokenAmount":"2000000"}"#,
+        "100000000000000000",
+    )
+    .unwrap();
+    assert_eq!(q.amount_in.value().unwrap().to_string(), "100000000000000000");
+    // The requested amount must itself be a positive base-unit integer — the
+    // provider's echo no longer papers over a malformed request.
+    for bad in ["abc", "-5", "1.5", "+7"] {
+        let err = quote_with_echo(r#"{"fromTokenAmount":"1000","toTokenAmount":"2000000"}"#, bad).unwrap_err();
+        assert!(err.to_string().contains("bad amountIn"), "{bad}: {err}");
+    }
+}

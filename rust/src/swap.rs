@@ -798,6 +798,27 @@ pub fn encode_erc20_approve(spender: &str, amount: &BigInt) -> Result<String> {
     Ok(out)
 }
 
+/// The quote's input amount: always the amount the CALLER requested, never the
+/// provider's echo. The quote response is untrusted and its `amountIn` later
+/// drives `Swap:execute` (the swap amount, the native `tx.value` the
+/// [`ExecuteGuard`] expects, the approval amount), so a provider
+/// `fromTokenAmount` that is present but differs from the request is an error
+/// rather than a silent substitution.
+fn okx_checked_amount_in(requested: &str, from_token_amount: &str) -> Result<BigInt> {
+    let want = Some(requested)
+        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|s| BigInt::parse_bytes(s.as_bytes(), 10))
+        .filter(|v| v.sign() == num_bigint::Sign::Plus)
+        .ok_or_else(|| Error::Env("okx: bad amountIn".into()))?;
+    let echoed = from_token_amount.trim();
+    if !echoed.is_empty() && BigInt::parse_bytes(echoed.as_bytes(), 10).as_ref() != Some(&want) {
+        return Err(Error::Env(format!(
+            "okx: quote fromTokenAmount {echoed:?} does not match the requested amount {want}"
+        )));
+    }
+    Ok(want)
+}
+
 fn native_decimals(kind: &str) -> i64 {
     if kind == "solana" {
         9
@@ -841,9 +862,7 @@ pub fn get_quote(
     };
     let entry: OkxQuoteEntry = serde_json::from_value(entry_val).unwrap_or_default();
 
-    let amount_in_bi = BigInt::parse_bytes(entry.from_token_amount.as_bytes(), 10)
-        .or_else(|| BigInt::parse_bytes(amount_in.as_bytes(), 10))
-        .ok_or_else(|| Error::Env("okx: bad amountIn".into()))?;
+    let amount_in_bi = okx_checked_amount_in(amount_in, &entry.from_token_amount)?;
     if entry.to_token_amount.is_empty() || entry.to_token_amount == "0" {
         return Err(Error::Env(format!(
             "okx: no route for {amount_in} {from_addr} -> {to_addr} on chain {chain_index}"
