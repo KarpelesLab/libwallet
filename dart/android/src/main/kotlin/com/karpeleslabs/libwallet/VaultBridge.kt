@@ -232,12 +232,23 @@ object VaultBridge {
         val latch = CountDownLatch(1)
         var result: ByteArray? = null
         var error: String? = null
+        // Guards [result], [shown] and [abandoned] between this thread and
+        // the UI thread once this thread may stop waiting (the timeout).
+        val lock = Any()
+        var shown: BiometricPrompt? = null
+        var abandoned = false
         act.runOnUiThread {
             try {
                 val prompt = BiometricPrompt(act, ContextCompat.getMainExecutor(act), object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(r: BiometricPrompt.AuthenticationResult) {
                         try {
-                            result = r.cryptoObject?.cipher?.doFinal(wrapped) ?: throw IllegalStateException("no cipher after authentication")
+                            // Nobody is waiting after a timeout: don't release
+                            // the data key into an array no one will zero.
+                            synchronized(lock) {
+                                if (!abandoned) {
+                                    result = r.cryptoObject?.cipher?.doFinal(wrapped) ?: throw IllegalStateException("no cipher after authentication")
+                                }
+                            }
                         } catch (e: Exception) {
                             error = "unlocking the vault key failed: ${e.message}"
                         }
@@ -258,19 +269,34 @@ object VaultBridge {
                 } else {
                     builder.setAllowedAuthenticators(BIOMETRIC_STRONG).setNegativeButtonText("Cancel")
                 }
-                pending = prompt
-                prompt.authenticate(builder.build(), BiometricPrompt.CryptoObject(cipher))
+                val show = synchronized(lock) {
+                    if (!abandoned) shown = prompt
+                    !abandoned
+                }
+                if (show) {
+                    pending = prompt
+                    prompt.authenticate(builder.build(), BiometricPrompt.CryptoObject(cipher))
+                }
             } catch (e: Exception) {
                 error = "could not show the authentication prompt: ${e.message}"
                 latch.countDown()
             }
         }
         val answered = latch.await(PROMPT_TIMEOUT_MINUTES, TimeUnit.MINUTES)
-        pending = null
-        if (!answered) {
-            cancelPending()
-            throw IllegalStateException("timed out waiting for authentication")
+        // This call's own prompt (not whatever [pending] holds by now). On a
+        // timeout the call is abandoned under the lock: a success that already
+        // ran has its data key zeroed here, a later one skips the decryption.
+        val prompt = synchronized(lock) {
+            if (!answered) {
+                abandoned = true
+                result?.fill(0)
+                result = null
+            }
+            shown
         }
+        if (!answered && prompt != null) act.runOnUiThread { prompt.cancelAuthentication() }
+        if (prompt != null && pending === prompt) pending = null
+        if (!answered) throw IllegalStateException("timed out waiting for authentication")
         error?.let { throw IllegalStateException(it) }
         return result!!
     }
