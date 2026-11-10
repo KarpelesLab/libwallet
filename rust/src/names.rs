@@ -14,7 +14,100 @@ const SEL_RESOLVER: [u8; 4] = [0x01, 0x78, 0xb8, 0xbf];
 /// `addr(bytes32)` selector.
 const SEL_ADDR: [u8; 4] = [0x3b, 0x3b, 0x57, 0xde];
 
-/// EIP-137 namehash of a domain.
+/// Unicode format characters (general category Cf) and variation selectors:
+/// invisible, so a name carrying one renders like another name while hashing
+/// to a different node. Listed by hand — no category tables in this crate.
+fn is_invisible_format_char(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD                  // soft hyphen
+        | 0x034F                // combining grapheme joiner
+        | 0x0600..=0x0605
+        | 0x061C                // arabic letter mark
+        | 0x06DD
+        | 0x070F
+        | 0x0890..=0x0891
+        | 0x08E2
+        | 0x115F..=0x1160       // hangul fillers
+        | 0x17B4..=0x17B5
+        | 0x180B..=0x180F       // mongolian selectors / vowel separator
+        | 0x200B..=0x200F       // zero width space/joiners, LRM/RLM
+        | 0x202A..=0x202E       // bidi embeddings/overrides
+        | 0x2060..=0x206F       // word joiner, invisible operators, bidi isolates
+        | 0x3164                // hangul filler
+        | 0xFE00..=0xFE0F       // variation selectors
+        | 0xFEFF                // BOM / zero width no-break space
+        | 0xFFA0                // halfwidth hangul filler
+        | 0xFFF9..=0xFFFB       // interlinear annotation
+        | 0x110BD
+        | 0x110CD
+        | 0x13430..=0x1343F
+        | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A
+        | 0xE0000..=0xE0FFF     // tags, variation selectors supplement
+    )
+}
+
+/// Normalize an ENS name before hashing — a conservative interim for ENSIP-15,
+/// whose full mapping/validity tables this crate does not carry.
+///
+/// The name is trimmed, NFC-normalized and lowercased. It is then REFUSED
+/// (rather than hashed as typed) when a label is empty or holds whitespace, a
+/// control character, an invisible format character or variation selector
+/// (zero-width joiners, bidi controls, BOM…), a character that is still
+/// uppercase after case folding, or a compatibility form (fullwidth letters,
+/// ligatures, alternative full stops — anything NFKC would rewrite). Those are
+/// exactly the inputs where hashing the raw string yields a different node
+/// than the name the user reads, i.e. somebody else's registration.
+///
+/// What comes back is the string that gets hashed. Plain ASCII and ordinary
+/// Unicode names pass unchanged apart from case; some names valid under
+/// ENSIP-15 (emoji sequences that need a ZWJ or U+FE0F) are refused.
+pub fn normalize_ens_name(name: &str) -> Result<String> {
+    use unicode_normalization::UnicodeNormalization;
+    let bad = |why: &str| Error::Env(format!("unsupported ENS name {name:?}: {why}"));
+
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(bad("empty name"));
+    }
+    let folded: String = trimmed.nfc().collect::<String>().to_lowercase().nfc().collect();
+    // Folding must be a fixed point, or the hash would depend on how many
+    // times the name went through it.
+    if folded.to_lowercase().nfc().collect::<String>() != folded {
+        return Err(bad("unstable under case folding"));
+    }
+    if !folded.nfkc().eq(folded.chars()) {
+        return Err(bad("contains a compatibility character (fullwidth, ligature or similar)"));
+    }
+    for label in folded.split('.') {
+        if label.is_empty() {
+            return Err(bad("empty label"));
+        }
+        for c in label.chars() {
+            if c.is_whitespace() {
+                return Err(bad("contains whitespace"));
+            }
+            if c.is_control() {
+                return Err(bad("contains a control character"));
+            }
+            if is_invisible_format_char(c) {
+                return Err(bad("contains an invisible format character"));
+            }
+            if c.is_uppercase() {
+                return Err(bad("contains a character with no lowercase form"));
+            }
+            // Full stops other than '.' (ideographic and its variants).
+            if matches!(c, '\u{3002}' | '\u{FF0E}' | '\u{FF61}' | '\u{2024}') {
+                return Err(bad("contains an alternative full stop"));
+            }
+        }
+    }
+    Ok(folded)
+}
+
+/// EIP-137 namehash of a domain, hashing `name` exactly as given: callers
+/// normalize first ([`normalize_ens_name`]; [`resolve_ens`] does).
 pub fn namehash(name: &str) -> [u8; 32] {
     let mut node = [0u8; 32];
     if !name.is_empty() {
@@ -30,7 +123,10 @@ pub fn namehash(name: &str) -> [u8; 32] {
 }
 
 /// Resolve an ENS name to a lowercase 0x-address, or an error if unregistered.
+/// The name is normalized first ([`normalize_ens_name`]) and refused when that
+/// fails, so the node looked up is always the one for the name as displayed.
 pub fn resolve_ens(rpc_url: &str, name: &str) -> Result<String> {
+    let name = &normalize_ens_name(name)?;
     let node = namehash(name);
 
     // registry.resolver(node) -> resolver address (last 20 bytes of the return).
