@@ -149,7 +149,7 @@ fn process_inbound_classifies_and_guards() {
     let nonce: [u8; 12] = seq(60, 12).try_into().unwrap();
 
     // A wc_sessionRequest carrying personal_sign.
-    let req = br#"{"id":11,"jsonrpc":"2.0","method":"wc_sessionRequest","params":{"request":{"method":"personal_sign","params":["0xdeadbeef","0xacct"]}}}"#;
+    let req = br#"{"id":11,"jsonrpc":"2.0","method":"wc_sessionRequest","params":{"request":{"method":"personal_sign","params":["0xdeadbeef","0xacct"]},"chainId":"eip155:1"}}"#;
     let env = wc::seal_type0_with_nonce(&sym, &nonce, req);
     let got = wc::process_inbound(&sym, None, true, &env).unwrap();
     assert_eq!(
@@ -157,6 +157,7 @@ fn process_inbound_classifies_and_guards() {
         wc::WcInbound::Request {
             id: 11,
             method: "personal_sign".into(),
+            chain_id: "eip155:1".into(),
             params: serde_json::json!(["0xdeadbeef", "0xacct"]),
         }
     );
@@ -365,4 +366,32 @@ fn small_order_peer_points_are_rejected() {
     let forged = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw);
     let err = wc::open_envelope(None, Some(&wallet_priv), &forged).unwrap_err();
     assert!(format!("{err}").contains("small-order"), "got: {err}");
+}
+
+/// Audit F4: a session request is checked against the approved namespaces.
+#[test]
+fn request_violation_enforces_approved_namespaces() {
+    let ns = r#"{"eip155":{"accounts":["eip155:1:0xabc","eip155:137:0xabc"],"methods":["personal_sign"],"events":[],"chains":["eip155:1"]}}"#;
+    // Approved chain (via `chains`, or via an approved account) + method.
+    assert_eq!(wc::request_violation(ns, "eip155:1", "personal_sign"), None);
+    assert_eq!(wc::request_violation(ns, "eip155:137", "personal_sign"), None);
+    // Chain not approved: other chain, other namespace, a prefix look-alike, none.
+    let bad_chain = Some((wc::ERR_UNSUPPORTED_CHAINS, "Unsupported chains"));
+    assert_eq!(wc::request_violation(ns, "eip155:56", "personal_sign"), bad_chain);
+    assert_eq!(wc::request_violation(ns, "solana:mainnet", "personal_sign"), bad_chain);
+    assert_eq!(wc::request_violation(ns, "eip155:13", "personal_sign"), bad_chain);
+    assert_eq!(wc::request_violation(ns, "", "personal_sign"), bad_chain);
+    // Method not approved.
+    assert_eq!(
+        wc::request_violation(ns, "eip155:1", "eth_sendTransaction"),
+        Some((wc::ERR_UNSUPPORTED_METHODS, "Unsupported methods"))
+    );
+    // A namespace keyed by the CAIP-2 chain itself.
+    let keyed = r#"{"eip155:1":{"accounts":["eip155:1:0xabc"],"methods":["personal_sign"],"events":[]}}"#;
+    assert_eq!(wc::request_violation(keyed, "eip155:1", "personal_sign"), None);
+    assert_eq!(wc::request_violation(keyed, "eip155:137", "personal_sign"), bad_chain);
+    // Legacy rows (nothing recorded / unparseable) are not enforced.
+    for legacy in ["", "{}", "null", "not json", "[]"] {
+        assert_eq!(wc::request_violation(legacy, "eip155:56", "eth_sendTransaction"), None, "{legacy:?}");
+    }
 }

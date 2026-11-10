@@ -89,6 +89,17 @@ impl<T: wc::RelayTransport> WcManager<T> {
             wc::WcInbound::Request { .. } if !active => {
                 return Err(Error::Env("wc_sessionRequest on a pairing topic dropped".into()));
             }
+            // …and only for the chains + methods that session approved. Anything
+            // else is answered here with the WalletConnect error and never
+            // reaches the host.
+            wc::WcInbound::Request { id, method, chain_id, .. } => {
+                if let Some((code, msg)) = wc::request_violation(&s.namespaces, chain_id, method) {
+                    let rpc = wc::build_jsonrpc_error(*id, code, msg);
+                    let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+                    self.client.publish(&topic, &env0, wc::TAG_SESSION_RESPONSE, 0)?;
+                    return Ok(None);
+                }
+            }
             // The peer ended the session (Go `handleSessionDelete`): tear it
             // down locally so its keys stop being accepted.
             wc::WcInbound::Delete { .. } => {
@@ -320,9 +331,10 @@ impl<T: wc::RelayTransport> WcManager<T> {
 pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
     let (kind, body) = match msg {
         wc::WcInbound::Propose { id, params } => ("wc_sessionPropose", serde_json::json!({ "id": id, "params": params })),
-        wc::WcInbound::Request { id, method, params } => {
-            ("wc_sessionRequest", serde_json::json!({ "id": id, "method": method, "params": params }))
-        }
+        wc::WcInbound::Request { id, method, chain_id, params } => (
+            "wc_sessionRequest",
+            serde_json::json!({ "id": id, "method": method, "chainId": chain_id, "params": params }),
+        ),
         wc::WcInbound::Settle { id } => ("wc_sessionSettle", serde_json::json!({ "id": id })),
         wc::WcInbound::Delete { id } => ("wc_sessionDelete", serde_json::json!({ "id": id })),
         wc::WcInbound::Response { id, error } => ("wc_response", serde_json::json!({ "id": id, "error": error })),

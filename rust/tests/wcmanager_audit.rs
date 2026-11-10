@@ -344,3 +344,64 @@ fn frame_kind_must_match_row_state() {
     s.p.relay.deliver_rpc(&s.topic, &s.sym, proposal(7, &other_pub));
     assert!(s.p.mgr.pump(&s.p.env).is_err(), "wc_sessionPropose accepted on a settled session");
 }
+
+// ── F4: approved-namespace enforcement ───────────────────────────────────────
+
+/// The request's CAIP-2 chain is carried through to the classified message and
+/// the host event.
+#[test]
+fn session_request_carries_chain_id() {
+    let mut s = established(30);
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:1", "personal_sign"));
+    let (topic, msg) = s.p.mgr.pump(&s.p.env).unwrap().unwrap();
+    let wc::WcInbound::Request { chain_id, method, .. } = &msg else { panic!("expected Request") };
+    assert_eq!(chain_id, "eip155:1");
+    assert_eq!(method, "personal_sign");
+    let ev: serde_json::Value = serde_json::from_str(&libwallet::wcmanager::inbound_event(&topic, &msg)).unwrap();
+    assert!(ev.to_string().contains(r#""chainId":"eip155:1""#), "event lacks chainId: {ev}");
+}
+
+/// A request for a chain or method outside the approved namespaces is answered
+/// with the WalletConnect error and never forwarded to the host.
+#[test]
+fn requests_outside_approved_namespaces_are_auto_rejected() {
+    let mut s = established(31);
+    let errors = |s: &Session| -> Vec<serde_json::Value> {
+        s.p.relay.published(&s.topic, &s.sym).into_iter().filter(|m| m.get("error").is_some()).collect()
+    };
+
+    // Unapproved chain (the session is eip155:1 only).
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(41, "eip155:56", "personal_sign"));
+    assert!(s.p.mgr.pump(&s.p.env).unwrap().is_none(), "unapproved chain was forwarded");
+    let e = errors(&s);
+    assert_eq!(e.len(), 1);
+    assert_eq!(e[0]["id"], 41);
+    assert_eq!(e[0]["error"]["code"], 5100);
+
+    // Unapproved method (the proposal asked for personal_sign + eth_sendTransaction).
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(42, "eip155:1", "eth_signTypedData_v4"));
+    assert!(s.p.mgr.pump(&s.p.env).unwrap().is_none(), "unapproved method was forwarded");
+    let e = errors(&s);
+    assert_eq!(e.len(), 2);
+    assert_eq!(e[1]["id"], 42);
+    assert_eq!(e[1]["error"]["code"], 5101);
+
+    // An approved chain + method still goes through, with no error published.
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(43, "eip155:1", "eth_sendTransaction"));
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { id: 43, .. }))));
+    assert_eq!(errors(&s).len(), 2);
+}
+
+/// A legacy session row with no recorded namespaces keeps forwarding requests.
+#[test]
+fn legacy_session_without_namespaces_forwards() {
+    let mut s = established(32);
+    s.p.env
+        .exec(
+            r#"UPDATE "WalletConnect" SET "Namespaces" = '' WHERE "Topic" = ?1"#,
+            vec![libwallet::SqlValue::Text(s.topic.clone())],
+        )
+        .unwrap();
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:56", "eth_signTypedData_v4"));
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { .. }))));
+}

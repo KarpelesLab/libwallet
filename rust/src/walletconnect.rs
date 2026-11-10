@@ -423,7 +423,9 @@ pub enum WcInbound {
     /// `wc_sessionSettle` — the peer confirms the session.
     Settle { id: i64 },
     /// `wc_sessionRequest` — a signing/RPC request within a session.
-    Request { id: i64, method: String, params: serde_json::Value },
+    /// `chain_id` is the CAIP-2 chain the dApp is calling against
+    /// (`params.chainId`, e.g. `eip155:1`); empty when the peer omitted it.
+    Request { id: i64, method: String, chain_id: String, params: serde_json::Value },
     /// `wc_sessionDelete` — the peer ends the session.
     Delete { id: i64 },
     /// A JSON-RPC reply to one of our requests.
@@ -465,11 +467,68 @@ pub fn process_inbound(
         "wc_sessionRequest" => WcInbound::Request {
             id,
             method: params.get("request").and_then(|r| r.get("method")).and_then(|m| m.as_str()).unwrap_or("").to_owned(),
+            chain_id: params.get("chainId").and_then(|c| c.as_str()).unwrap_or("").to_owned(),
             params: params.get("request").and_then(|r| r.get("params")).cloned().unwrap_or(serde_json::Value::Null),
         },
         "wc_sessionDelete" => WcInbound::Delete { id },
         other => WcInbound::Other { id, method: other.to_owned() },
     })
+}
+
+/// WalletConnect v2 error: the request targets a chain the session did not
+/// approve (`UNSUPPORTED_CHAINS`).
+pub const ERR_UNSUPPORTED_CHAINS: i64 = 5100;
+/// WalletConnect v2 error: the request uses a method the session did not
+/// approve (`UNSUPPORTED_METHODS`).
+pub const ERR_UNSUPPORTED_METHODS: i64 = 5101;
+
+/// Check a `wc_sessionRequest` against the session's approved namespaces (the
+/// JSON stored at approval: `{<namespace>: {accounts, methods, events, chains}}`,
+/// where the key may also be a full CAIP-2 chain). Returns the WalletConnect
+/// error `(code, message)` to answer with when the request's chain or method is
+/// outside what was approved, or `None` when it is allowed.
+///
+/// Rows whose namespaces are empty or unparseable (sessions stored before
+/// namespaces were recorded) are not enforced — `None` — so they keep working.
+pub fn request_violation(namespaces_json: &str, chain_id: &str, method: &str) -> Option<(i64, &'static str)> {
+    use serde_json::Value;
+    const BAD_CHAIN: (i64, &str) = (ERR_UNSUPPORTED_CHAINS, "Unsupported chains");
+    const BAD_METHOD: (i64, &str) = (ERR_UNSUPPORTED_METHODS, "Unsupported methods");
+
+    let parsed: Value = serde_json::from_str(namespaces_json).ok()?;
+    let namespaces = parsed.as_object().filter(|m| !m.is_empty())?;
+
+    let entry = match namespaces.get(chain_id) {
+        // Namespace keyed by the chain itself (`"eip155:1": {…}`).
+        Some(e) => e,
+        None => {
+            let namespace = chain_id.split(':').next().unwrap_or("");
+            let Some(e) = namespaces.get(namespace) else { return Some(BAD_CHAIN) };
+            // The chain must be one the approval names, either in `chains` or
+            // through an approved CAIP-10 account on it. An entry carrying
+            // neither list cannot be judged and is left alone.
+            let chains = e.get("chains").and_then(Value::as_array);
+            let accounts = e.get("accounts").and_then(Value::as_array);
+            if chains.is_some() || accounts.is_some() {
+                let in_chains = chains.is_some_and(|c| c.iter().any(|v| v.as_str() == Some(chain_id)));
+                let in_accounts = accounts.is_some_and(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .any(|acct| acct.strip_prefix(chain_id).is_some_and(|rest| rest.starts_with(':')))
+                });
+                if !in_chains && !in_accounts {
+                    return Some(BAD_CHAIN);
+                }
+            }
+            e
+        }
+    };
+    if let Some(methods) = entry.get("methods").and_then(Value::as_array) {
+        if !methods.iter().any(|m| m.as_str() == Some(method)) {
+            return Some(BAD_METHOD);
+        }
+    }
+    None
 }
 
 /// A JSON-RPC 2.0 success reply `{id, jsonrpc, result}` (Go response payload).
