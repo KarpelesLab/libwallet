@@ -212,6 +212,10 @@ Notes:
   user types it. Don't store it, don't log it, and clear the input field.
 - `Vault/<id>:changePassword {Password, NewPassword}` re-seals the entry under
   a new password. Save the new blob afterwards.
+- `Vault:load` never replaces an entry. Loading the blob an entry already holds
+  is a no-op, so loading at every startup is fine. A different blob with the
+  same id (an older or newer one of the same entry, say) is refused: delete the
+  entry first (`DELETE Vault/<id>`), then load.
 - Argon2id defaults to 64 MiB × 3 passes (about a second in a browser). A host on
   weak hardware can lower it with `Kdf: {MemoryKiB, Iterations}` at creation,
   but not below OWASP's floor of 19 MiB × 2.
@@ -227,7 +231,13 @@ Notes:
 - A **device passcode** must be set for `userPresence` entries to be usable
   (`capabilities().biometry == 'none'` otherwise).
 - Keys are `WhenUnlockedThisDeviceOnly`. They are never in iCloud Keychain,
-  never in a backup, never restored to a new phone, and **deleted with the app**.
+  never in a backup and never restored to a new phone.
+- **Uninstalling the app loses every secure entry, but not because iOS deletes
+  the keys.** Keychain and Secure Enclave items generally survive an uninstall.
+  What goes with the app is its data, including the sealed envelopes in
+  `sql.db`, and a key without its envelope opens nothing: the secret is
+  unrecoverable and the key is left orphaned in the keychain. Don't count on a
+  reinstall either finding or having erased anything.
 - The simulator has a Secure Enclave on recent runtimes; older ones use the
   Keychain fallback. Builds must be signed, ad-hoc being enough for the simulator
   (`CODE_SIGNING_ALLOWED=NO` builds have no keychain access).
@@ -310,7 +320,16 @@ request strings once a request is answered. Some copies are outside its reach:
 - **Policy enforcement.** `userPresence` is enforced by the Secure Enclave or
   Keystore, so even libwallet can't skip it. `cacheSeconds` and `exportable`
   are enforced by libwallet and sealed into the entry, so they can't be loosened
-  from outside.
+  from outside: an edited row no longer opens, an unlocked secret is only reused
+  for the exact envelope it came out of, and `Vault:load` refuses a blob whose
+  id is already taken by a different entry.
+- **Device transfer is not gated by `exportable`.** `Wallet:exportToDevice`
+  with a vault-held share (`DeviceShares: [{wallet_key_id, vault}]` on confirm)
+  unseals the entry and sends its secret, sealed to the paired device, whatever
+  the entry's `exportable` says. `exportable` only governs `Vault:export`, which
+  hands the secret to the host app. The unseal follows the entry's usual rules
+  (a `userPresence` prompt, unless the entry is already unlocked), so confirm a
+  transfer only on the user's say-so.
 
 ## Endpoint reference
 
@@ -328,7 +347,7 @@ For hosts calling the request API directly (browser, native bridges):
 | `Vault/<id>:status` | – | `{Unlocked}` |
 | `Vault/<id>:export` | `{Password?, Reason?}` | `{Secret}` (exportable entries only) |
 | `Vault/<id>:blob` | – | `{Blob}` (password entries) |
-| `Vault:load` | `{Blob}` | entry |
+| `Vault:load` | `{Blob}` | entry (refused if the id exists with different contents) |
 | `Vault/<id>:changePassword` | `{Password, NewPassword, Kdf?}` | entry |
 
 An entry is `{Id, Label, Kind, Backend, Provider, Public?, Policy, Created}`.
