@@ -636,7 +636,24 @@ fn sign_typed_data(env: &Env, host: &str, method: &str, q_params: &[Value]) -> A
         other => other.to_string(),
     };
     // Validate it up front so a malformed payload fails before the prompt.
-    crate::eip712::parse(&typed_data_str).map_err(|e| ApiError::new(400, e))?;
+    let typed = crate::eip712::parse(&typed_data_str).map_err(|e| ApiError::new(400, e))?;
+
+    // A domain bound to a chain must be bound to the ACTIVE one (MetaMask
+    // behaviour): otherwise a page can have the user sign, while looking at one
+    // network, a permit/order that is only valid on another. The active chain is
+    // the EVM network eth_sendTransaction would use. A domain without chainId is
+    // chain-agnostic by construction and is left alone.
+    if let Some(c) = typed.domain.get("chainId").filter(|c| !c.is_null()) {
+        let net = super::network_for_kind(env, &json!({}), "evm")?;
+        let active = parse_chain_id_any(&net.chain_id);
+        let want = chain_id_value(c);
+        if want.is_none() || want != active {
+            return Err(ApiError::new(
+                -32602,
+                format!("Provided chainId {c} must match the active chainId {}", net.chain_id),
+            ));
+        }
+    }
 
     let conn = crate::models::connected_site::for_host(env, host).map_err(ApiError::internal)?;
     if conn.is_empty() {
@@ -1122,6 +1139,57 @@ mod tests {
         with_pending_request(env, body, |r| {
             assert_eq!(r.transaction.as_ref().unwrap()["data"], "0xAB");
         });
+    }
+
+    fn typed_data(chain_id: Option<Value>) -> Value {
+        let mut domain_type = vec![json!({ "name": "name", "type": "string" })];
+        let mut domain = json!({ "name": "Test" });
+        if let Some(c) = chain_id {
+            domain_type.push(json!({ "name": "chainId", "type": "uint256" }));
+            domain["chainId"] = c;
+        }
+        json!({
+            "types": { "EIP712Domain": domain_type, "Mail": [{ "name": "contents", "type": "string" }] },
+            "primaryType": "Mail",
+            "domain": domain,
+            "message": { "contents": "hi" },
+        })
+    }
+
+    /// Audit F12: typed data whose domain names another chain is refused before
+    /// any prompt, whatever form the chainId takes.
+    #[test]
+    fn sign_typed_data_rejects_a_foreign_domain_chain_id() {
+        let (env, host, addr) = connected_env();
+        for method in ["eth_signTypedData_v4", "eth_signTypedData_v3", "eth_signTypedData"] {
+            for wrong in [json!(137), json!("137"), json!("0x89"), json!("bogus")] {
+                // Both the object and the JSON-string spelling of params[1].
+                for td in [typed_data(Some(wrong.clone())), json!(typed_data(Some(wrong.clone())).to_string())] {
+                    let err = request(&env, &json!({
+                        "origin": host, "query": { "method": method, "params": [addr, td] },
+                    })).unwrap_err();
+                    assert_eq!(err.code, -32602, "{method} chainId {wrong}: {}", err.message);
+                    assert!(err.message.contains("must match the active chainId"), "{}", err.message);
+                }
+            }
+        }
+        assert!(crate::models::request::list(&env).unwrap().is_empty(), "no approval may be raised");
+    }
+
+    /// The active chain (as number, decimal string or hex string) and a
+    /// chain-less domain still reach the approval prompt.
+    #[test]
+    fn sign_typed_data_accepts_the_active_chain_and_chainless_domains() {
+        for chain in [Some(json!(1)), Some(json!("1")), Some(json!("0x1")), None] {
+            let (env, host, addr) = connected_env();
+            let body = json!({
+                "origin": host,
+                "query": { "method": "eth_signTypedData_v4", "params": [addr, typed_data(chain.clone())] },
+            });
+            with_pending_request(env, body, |r| {
+                assert_eq!(r.kind, "message_sign", "chainId {chain:?}");
+            });
+        }
     }
 
     #[test]
