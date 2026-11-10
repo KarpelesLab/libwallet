@@ -527,6 +527,16 @@ fn parse_chain_id_any(s: &str) -> Option<String> {
     Some(n.to_string())
 }
 
+/// A chain id given as a JSON number or a decimal / 0x-hex string, in its
+/// decimal-string form (dApps send all three shapes).
+fn chain_id_value(v: &Value) -> Option<String> {
+    match v {
+        Value::Number(n) => n.as_u64().map(|n| n.to_string()),
+        Value::String(s) => parse_chain_id_any(s.trim()),
+        _ => None,
+    }
+}
+
 /// `solana_signMessage` params [{message: base64, pubkey?: base58}] — raise a
 /// `message_sign` approval (solana family); the approve arm FROST-signs and the
 /// Result carries {signature, publicKey}.
@@ -673,12 +683,43 @@ fn eth_send_transaction(env: &Env, host: &str, q_params: &[Value]) -> ApiResult 
         return Err(ApiError::new(400, "eth_sendTransaction: from address is not a connected account for this origin"));
     }
 
+    // Pin the network NOW: the approval must sign on the chain the dApp made
+    // the request against, not on whatever network happens to be current when
+    // the user taps approve (it can change in between — e.g. an approved
+    // wallet_switchEthereumChain). This resolves the same network
+    // transaction::sign_and_send would pick for an unpinned EVM tx.
+    let net = super::network_for_kind(env, &json!({}), "evm")?;
+    let pinned = if net.id.is_empty() { format!("{}.{}", net.kind, net.chain_id) } else { net.id.clone() };
+
+    // A dApp-supplied chainId must name that chain; a mismatch means the dApp
+    // and the wallet disagree about where this transaction is going.
+    if let Some(c) = raw_tx.get("chainId").filter(|c| !c.is_null()) {
+        let active = parse_chain_id_any(&net.chain_id);
+        let want = chain_id_value(c);
+        if want.is_none() || want != active {
+            return Err(ApiError::new(
+                -32602,
+                format!("eth_sendTransaction: chainId {c} does not match the active chain {}", net.chain_id),
+            ));
+        }
+    }
+
+    // Calldata: `input` is the spec name, `data` the legacy one; accept either,
+    // but refuse a transaction that carries two different payloads.
+    let data = match (raw_tx.get("data").and_then(Value::as_str), raw_tx.get("input").and_then(Value::as_str)) {
+        (Some(d), Some(i)) if !d.eq_ignore_ascii_case(i) => {
+            return Err(ApiError::new(-32602, "eth_sendTransaction: data and input are both set and differ"));
+        }
+        (Some(d), _) => Some(d),
+        (None, i) => i,
+    };
+
     // Normalize hex quantities to the shape transaction::sign_and_send expects.
-    let mut tx = json!({ "type": "evm", "from": from });
+    let mut tx = json!({ "type": "evm", "from": from, "network": pinned });
     if let Some(to) = raw_tx.get("to").and_then(Value::as_str) {
         tx["to"] = json!(to);
     }
-    if let Some(d) = raw_tx.get("data").and_then(Value::as_str) {
+    if let Some(d) = data {
         tx["data"] = json!(d);
     }
     if let Some(v) = raw_tx.get("value").and_then(Value::as_str).and_then(hex_qty_dec) {
@@ -883,6 +924,7 @@ mod tests {
         env.exec(r#"DELETE FROM "Network""#, vec![]).unwrap(); // drop seeded built-ins; this test controls its own networks
         crate::models::account::init(&env).unwrap();
         crate::models::connected_site::init(&env).unwrap();
+        crate::models::request::init(&env).unwrap();
 
         env.exec(
             r#"INSERT INTO "Network" ("Id","Type","ChainId","Name","RPC","CurrencySymbol","CurrencyDecimals","BlockExplorer","TestNet","Priority","Created","Updated") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)"#,
@@ -1002,6 +1044,84 @@ mod tests {
             "query": { "method": "eth_blockNumber", "params": [] },
         })).unwrap_err();
         assert_ne!(err.code, 4200, "eth_blockNumber was not relayed: {}", err.message);
+    }
+
+    /// Run a `Web3:request` that parks on an approval, hand the pending Request
+    /// row to `inspect`, then reject it so the parked call returns.
+    fn with_pending_request(env: Env, body: Value, inspect: impl FnOnce(&crate::models::request::Request)) {
+        let env = std::sync::Arc::new(env);
+        let parked = {
+            let env = env.clone();
+            std::thread::spawn(move || request(&env, &body))
+        };
+        let mut pending = None;
+        for _ in 0..400 {
+            pending = crate::models::request::list(&env).unwrap().into_iter().find(|r| env.request_pending(&r.id));
+            if pending.is_some() || parked.is_finished() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let Some(pending) = pending else {
+            panic!("no approval was raised: {:?}", parked.join().unwrap().map_err(|e| e.message));
+        };
+        inspect(&pending);
+        super::super::request::reject(&env, &json!({ "Id": pending.id })).unwrap();
+        assert!(parked.join().unwrap().is_err(), "a rejected approval must not succeed");
+    }
+
+    /// Audit F11: the network is pinned on the request when it is created, and
+    /// `input` is accepted as the calldata field.
+    #[test]
+    fn eth_send_transaction_pins_network_and_accepts_input() {
+        let (env, host, addr) = connected_env();
+        let body = json!({ "origin": host, "query": { "method": "eth_sendTransaction", "params": [{
+            "from": addr, "to": "0x2222222222222222222222222222222222222222",
+            "value": "0x1", "input": "0xa9059cbb", "chainId": "0x1",
+        }] } });
+        with_pending_request(env, body, |r| {
+            assert_eq!(r.kind, "transaction_sign");
+            let tx = r.transaction.as_ref().expect("Transaction");
+            assert_eq!(tx["network"], "evm.1", "network must be pinned at request time: {tx}");
+            assert_eq!(tx["data"], "0xa9059cbb", "input must be carried as data: {tx}");
+            assert_eq!(tx["value"], "1");
+        });
+    }
+
+    /// Audit F11: a dApp chainId that is not the active chain is refused before
+    /// any prompt; number / decimal / hex forms of the right one are accepted.
+    #[test]
+    fn eth_send_transaction_checks_chain_id_and_calldata_fields() {
+        let (env, host, addr) = connected_env();
+        let send = |extra: Value| {
+            let mut tx = json!({ "from": addr, "to": "0x2222222222222222222222222222222222222222" });
+            for (k, v) in extra.as_object().unwrap() {
+                tx[k] = v.clone();
+            }
+            request(&env, &json!({ "origin": host, "query": { "method": "eth_sendTransaction", "params": [tx] } }))
+        };
+        for wrong in [json!("0x89"), json!(137), json!("137"), json!("nope"), json!({})] {
+            let err = send(json!({ "chainId": wrong })).unwrap_err();
+            assert_eq!(err.code, -32602, "chainId {wrong}: {}", err.message);
+            assert!(err.message.contains("chainId"), "{}", err.message);
+        }
+        // data + input that disagree.
+        let err = send(json!({ "data": "0x01", "input": "0x02" })).unwrap_err();
+        assert_eq!(err.code, -32602);
+        assert!(err.message.contains("data and input"), "{}", err.message);
+        assert!(crate::models::request::list(&env).unwrap().is_empty(), "no approval may be raised");
+
+        // The accepted chainId spellings, and identical data/input (any case).
+        assert_eq!(chain_id_value(&json!(1)).as_deref(), Some("1"));
+        assert_eq!(chain_id_value(&json!("1")).as_deref(), Some("1"));
+        assert_eq!(chain_id_value(&json!("0x1")).as_deref(), Some("1"));
+        assert_eq!(chain_id_value(&json!("0X89")).as_deref(), Some("137"));
+        let body = json!({ "origin": host, "query": { "method": "eth_sendTransaction", "params": [{
+            "from": addr, "data": "0xAB", "input": "0xab", "chainId": 1,
+        }] } });
+        with_pending_request(env, body, |r| {
+            assert_eq!(r.transaction.as_ref().unwrap()["data"], "0xAB");
+        });
     }
 
     #[test]
