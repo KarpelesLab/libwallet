@@ -62,7 +62,12 @@ pub fn sign_tx(
 /// `sign_bytes()` is the signing preimage: for legacy the EIP-155 RLP, for
 /// type-2 `0x02 || rlp(...)` — exactly what an external signer's
 /// `eth-sign-request` carries as sign-data.
+///
+/// A zero chain id is refused: a legacy tx signed with it carries a pre-EIP-155
+/// signature, valid on every chain. So is one too large for the legacy
+/// `v = chain_id*2 + 35 + parity` to fit a u64.
 pub fn build_unsigned(req: &EvmTxRequest) -> Result<EvmTx> {
+    check_chain_id(req.chain_id)?;
     Ok(EvmTx {
         nonce: req.nonce,
         gas: req.gas,
@@ -77,10 +82,27 @@ pub fn build_unsigned(req: &EvmTxRequest) -> Result<EvmTx> {
     })
 }
 
+/// The largest chain id whose legacy `v` (`chain_id*2 + 35 + parity`) fits a u64.
+const MAX_CHAIN_ID: u64 = (u64::MAX - 36) / 2;
+
+fn check_chain_id(chain_id: u64) -> Result<()> {
+    if chain_id == 0 {
+        return Err(Error::Env("chain id is required (0 would sign a transaction replayable on every chain)".into()));
+    }
+    if chain_id > MAX_CHAIN_ID {
+        return Err(Error::Env(format!("chain id {chain_id} is out of range")));
+    }
+    Ok(())
+}
+
 /// Attach an ECDSA signature (`r`, low-`s`, recovery `parity` 0/1) to an
 /// unsigned tx and serialize it. Legacy EIP-155: v = chain_id*2 + 35 + parity;
 /// EIP-1559: v = parity.
 pub fn attach_signature(mut tx: EvmTx, r: &[u8], s: &[u8], parity: u8) -> Result<Vec<u8>> {
+    if parity > 1 {
+        return Err(Error::Env(format!("bad signature parity {parity}")));
+    }
+    check_chain_id(tx.chain_id)?;
     tx.signed = true;
     tx.r = BigInt::from_bytes_be(Sign::Plus, r);
     tx.s = BigInt::from_bytes_be(Sign::Plus, s);

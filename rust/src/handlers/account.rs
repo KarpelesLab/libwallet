@@ -133,7 +133,15 @@ fn sign_tx_evm(env: &Env, account: &crate::models::account::Account, params: &Va
 /// The `Transaction` object of an EVM request ({nonce, gas, gasPrice |
 /// maxFeePerGas + maxPriorityFeePerGas, to, value, data, chainId, type}) as
 /// an `EvmTxRequest`. Shared by the TSS signer and the air-gap request builder.
+///
+/// `chainId` is required — a JSON number, or a decimal / `0x`-hex string. It
+/// picks the replay domain of the signature, so nothing is assumed for it: a
+/// missing or unreadable value is an error, never mainnet.
 pub(crate) fn evm_request_from_tx(tx: &Value) -> Result<crate::evm::EvmTxRequest, ApiError> {
+    let chain_id = match tx.get("chainId") {
+        Some(v) => evm_chain_id(v)?,
+        None => return Err(ApiError::new(400, "Transaction.chainId required")),
+    };
     let eip1559 =
         tx.get("type").and_then(Value::as_u64) == Some(2) || tx.get("maxFeePerGas").is_some();
     let max_fee = if eip1559 { tx.get("maxFeePerGas") } else { tx.get("gasPrice") }
@@ -151,10 +159,63 @@ pub(crate) fn evm_request_from_tx(tx: &Value) -> Result<crate::evm::EvmTxRequest
             Some(h) => decode_hex(h)?,
             None => Vec::new(),
         },
-        chain_id: tx.get("chainId").and_then(Value::as_u64).unwrap_or(1),
+        chain_id,
         eip1559,
     };
     Ok(req)
+}
+
+/// An EVM chain id from a `chainId` field: a JSON number, or a decimal or
+/// `0x`-hex string (dApps send `"0x89"`, hosts `137` or `"137"`). Zero and
+/// anything unreadable are refused.
+pub(crate) fn evm_chain_id(v: &Value) -> Result<u64, ApiError> {
+    let id = match v {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            Some(h) if !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()) => u64::from_str_radix(h, 16).ok(),
+            Some(_) => None,
+            None if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) => s.parse().ok(),
+            None => None,
+        },
+        _ => None,
+    };
+    match id {
+        Some(id) if id != 0 => Ok(id),
+        _ => Err(ApiError::new(400, format!("Transaction.chainId {v} is not a valid chain id"))),
+    }
+}
+
+/// `params` with its `Transaction.chainId` pinned to the EVM network the
+/// request runs on (the `Network` param, else the current network when it is an
+/// EVM one, else the default — see `network_for_kind`). A `chainId` the caller
+/// supplied must name that same network. The chain id is the signature's replay
+/// domain, so it comes from the Network model and never from the node: a
+/// malicious RPC answering `eth_chainId` could otherwise have a transaction
+/// meant for its chain signed for another.
+pub(crate) fn evm_pin_chain_id(env: &Env, params: &Value) -> Result<Value, ApiError> {
+    let net = super::network_for_kind(env, params, "evm")?;
+    let want: u64 = net
+        .chain_id
+        .parse()
+        .ok()
+        .filter(|id| *id != 0)
+        .ok_or_else(|| ApiError::new(400, "non-numeric EVM chain id"))?;
+    let mut p = params.clone();
+    let tx = p
+        .get_mut("Transaction")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    if let Some(given) = tx.get("chainId") {
+        let given = evm_chain_id(given)?;
+        if given != want {
+            return Err(ApiError::new(
+                400,
+                format!("Transaction.chainId {given} does not match the network's chain id {want}"),
+            ));
+        }
+    }
+    tx.insert("chainId".into(), serde_json::json!(want));
+    Ok(p)
 }
 
 /// The fields that name a complete serialized Solana transaction.
@@ -399,18 +460,34 @@ pub async fn sign_and_send_impl(env: &Env, params: &Value) -> ApiResult {
 }
 
 /// Decode an `0x`-hex quantity into a u64 (JSON-RPC returns hex strings).
-fn u64_from_hex(s: &str) -> u64 {
-    u64::from_str_radix(s.trim_start_matches("0x"), 16).unwrap_or(0)
+/// A reply that isn't one is an error (502) — never a silent zero, which would
+/// become a nonce, gas limit or fee the node didn't actually report.
+fn u64_from_hex(s: &str) -> Result<u64, ApiError> {
+    s.strip_prefix("0x")
+        .filter(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()))
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+        .ok_or_else(|| ApiError::new(502, format!("node returned a bad hex quantity {s:?}")))
 }
 
-/// EVM signAndSend: fill in any tx fields the caller didn't supply (chainId,
-/// nonce, gas, EIP-1559 fees) from the node, sign offline via `sign_tx_evm`,
-/// then broadcast. A field already present in `Transaction` is kept as-is, so a
+/// The `0x`-hex quantity a node call returned, as a u64.
+fn u64_from_reply(method: &str, v: &Value) -> Result<u64, ApiError> {
+    let s = v.as_str().ok_or_else(|| ApiError::new(502, format!("{method}: reply is not a hex quantity")))?;
+    u64_from_hex(s).map_err(|e| ApiError::new(502, format!("{method}: {}", e.message)))
+}
+
+/// EVM signAndSend: fill in any tx fields the caller didn't supply (nonce, gas,
+/// EIP-1559 fees) from the node, sign offline via `sign_tx_evm`, then
+/// broadcast. A field already present in `Transaction` is kept as-is, so a
 /// fully-specified tx makes no read calls (native/Dart behaviour) while the
 /// browser can pass just {to, value} and let Rust fetch the rest.
-/// Autofill an EVM `Transaction` from the node (chainId, nonce, gas, EIP-1559
-/// fees) for any field the caller omitted, returning the params with a fully
-/// populated `Transaction`. Shared by estimate (preview) and send (sign).
+/// Autofill an EVM `Transaction` from the node (nonce, gas, EIP-1559 fees) for
+/// any field the caller omitted, returning the params with those populated.
+/// Shared by estimate (preview) and send (sign).
+///
+/// `chainId` is deliberately NOT filled here: the node is untrusted and the
+/// chain id is the signature's replay domain. A caller with a Network pins it
+/// with [`evm_pin_chain_id`] first; otherwise it stays whatever the caller
+/// supplied and `evm_request_from_tx` refuses a transaction without one.
 pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result<Value, ApiError> {
     let mut p = params.clone();
     {
@@ -419,46 +496,48 @@ pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result
             .and_then(Value::as_object_mut)
             .ok_or_else(|| ApiError::new(400, "Transaction required"))?;
 
-        if !tx.contains_key("chainId") {
-            let cid = crate::rpc::call_async(url, "eth_chainId", serde_json::json!([]))
-                .await
-                .map_err(ApiError::internal)?;
-            tx.insert("chainId".into(), serde_json::json!(u64_from_hex(cid.as_str().unwrap_or("0x1"))));
-        }
         if !tx.contains_key("nonce") {
             let n = crate::rpc::call_async(url, "eth_getTransactionCount", serde_json::json!([address, "pending"]))
                 .await
                 .map_err(ApiError::internal)?;
-            tx.insert("nonce".into(), serde_json::json!(u64_from_hex(n.as_str().unwrap_or("0x0"))));
+            tx.insert("nonce".into(), serde_json::json!(u64_from_reply("eth_getTransactionCount", &n)?));
         }
         if !tx.contains_key("gas") {
             let to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_owned();
             let value_dec = tx.get("value").and_then(Value::as_str).unwrap_or("0");
             let value_hex = format!("0x{:x}", value_dec.parse::<u128>().unwrap_or(0));
-            let est = crate::rpc::call_async(
+            // A node that can't estimate leaves the plain-transfer 21000; one
+            // that answers must answer with a quantity.
+            let est = match crate::rpc::call_async(
                 url,
                 "eth_estimateGas",
                 serde_json::json!([{ "from": address, "to": to, "value": value_hex }]),
             )
             .await
-            .ok()
-            .and_then(|g| g.as_str().map(u64_from_hex))
-            .unwrap_or(21000);
+            {
+                Ok(g) => u64_from_reply("eth_estimateGas", &g)?,
+                Err(_) => 21000,
+            };
             tx.insert("gas".into(), serde_json::json!(est));
         }
         // Fees: prefer EIP-1559 (baseFee×2 + tip); fall back to legacy gasPrice.
         if !tx.contains_key("maxFeePerGas") && !tx.contains_key("gasPrice") {
-            let base = crate::rpc::call_async(url, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
+            let base = match crate::rpc::call_async(url, "eth_getBlockByNumber", serde_json::json!(["latest", false]))
                 .await
                 .ok()
-                .and_then(|b| b.get("baseFeePerGas").and_then(Value::as_str).map(|s| u128::from(u64_from_hex(s))));
+                .as_ref()
+                .and_then(|b| b.get("baseFeePerGas"))
+                .and_then(Value::as_str)
+            {
+                Some(s) => Some(u128::from(u64_from_hex(s)?)),
+                None => None,
+            };
             match base {
                 Some(base_fee) => {
-                    let tip = crate::rpc::call_async(url, "eth_maxPriorityFeePerGas", serde_json::json!([]))
-                        .await
-                        .ok()
-                        .and_then(|t| t.as_str().map(u64_from_hex))
-                        .unwrap_or(1_000_000_000) as u128; // 1 gwei
+                    let tip = match crate::rpc::call_async(url, "eth_maxPriorityFeePerGas", serde_json::json!([])).await {
+                        Ok(t) if !t.is_null() => u64_from_reply("eth_maxPriorityFeePerGas", &t)?,
+                        _ => 1_000_000_000, // 1 gwei
+                    } as u128;
                     let max_fee = base_fee * 2 + tip;
                     tx.insert("maxFeePerGas".into(), serde_json::json!(max_fee.to_string()));
                     tx.insert("maxPriorityFeePerGas".into(), serde_json::json!(tip.to_string()));
@@ -467,9 +546,8 @@ pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result
                 None => {
                     let gp = crate::rpc::call_async(url, "eth_gasPrice", serde_json::json!([]))
                         .await
-                        .ok()
-                        .and_then(|g| g.as_str().map(u64_from_hex))
-                        .unwrap_or(0);
+                        .map_err(ApiError::internal)?;
+                    let gp = u64_from_reply("eth_gasPrice", &gp)?;
                     tx.insert("gasPrice".into(), serde_json::json!(gp.to_string()));
                 }
             }
@@ -479,7 +557,10 @@ pub(crate) async fn evm_fill(address: &str, url: &str, params: &Value) -> Result
 }
 
 async fn evm_send_async(env: &Env, account: &crate::models::account::Account, url: &str, params: &Value) -> ApiResult {
-    let p = evm_fill(&account.address, url, params).await?;
+    // The chain id comes from the Network model, before anything is asked of
+    // the node (which supplies the nonce and fees but must not pick the chain).
+    let p = evm_pin_chain_id(env, params)?;
+    let p = evm_fill(&account.address, url, &p).await?;
     let signed = sign_tx_evm(env, account, &p)?;
     let raw = signed["raw"].as_str().ok_or_else(|| ApiError::new(500, "no raw tx"))?;
     let hash = crate::rpc::call_async(url, "eth_sendRawTransaction", serde_json::json!([raw]))
@@ -1406,20 +1487,144 @@ mod balance_tests {
         format!("http://{addr}")
     }
 
-    // EVM signAndSend end to end through native block_on: autofill chainId /
-    // nonce / gas / EIP-1559 fees from the node, sign offline, broadcast. Proves
-    // the browser can pass just {to, value} and Rust does the rest.
+    fn evm_env() -> (Env, crate::models::wallet::Wallet, crate::models::account::Account, Vec<Value>) {
+        let env = Env::init_memory().unwrap();
+        crate::models::wallet::init(&env).unwrap();
+        crate::models::account::init(&env).unwrap();
+        crate::models::network::init(&env).unwrap();
+        let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+        let w = crate::models::wallet::create(&env, "ETH", "secp256k1", &kds).unwrap();
+        let a = crate::models::account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+        let keys: Vec<_> = w
+            .keys
+            .iter()
+            .zip(["passwordone", "passwordtwo", "passwordthree"])
+            .map(|(k, p)| serde_json::json!({ "Type": "Password", "Id": k.id, "Key": p }))
+            .collect();
+        (env, w, a, keys)
+    }
+
+    fn raw_tx(out: &Value) -> outscript::evmtx::EvmTx {
+        let bytes = decode_hex(out["raw"].as_str().unwrap()).unwrap();
+        outscript::evmtx::EvmTx::from_bytes(&bytes).unwrap()
+    }
+
+    // Audit H1: the chain id of a signAndSend comes from the Network model. A
+    // node claiming another chain (here Polygon, with the default network being
+    // mainnet) must not move the signature's replay domain.
+    #[test]
+    fn ethereum_sign_and_send_takes_chain_id_from_network_not_node() {
+        let (env, _w, a, keys) = evm_env();
+        let url = mock_rpc_dispatch(&[
+            ("eth_chainId", r#""0x89""#),
+            ("eth_getTransactionCount", r#""0x0""#),
+            ("eth_estimateGas", r#""0x5208""#),
+            ("eth_getBlockByNumber", r#"{"baseFeePerGas":"0x7"}"#),
+            ("eth_maxPriorityFeePerGas", r#""0x3b9aca00""#),
+            ("eth_sendRawTransaction", r#""0xabc123""#),
+        ]);
+        let tx = serde_json::json!({ "to": "0x000000000000000000000000000000000000dead", "value": "1000" });
+        let out = sign_and_send_transaction(
+            &env,
+            &serde_json::json!({ "Id": a.id, "RPC": url, "Keys": keys, "Transaction": tx }),
+        )
+        .unwrap();
+        assert_eq!(raw_tx(&out).chain_id, 1, "{out}");
+
+        // A chainId naming the network is fine, in any of the accepted spellings…
+        for cid in [serde_json::json!(1), serde_json::json!("1"), serde_json::json!("0x1")] {
+            let mut tx = tx.clone();
+            tx["chainId"] = cid;
+            let out = sign_and_send_transaction(
+                &env,
+                &serde_json::json!({ "Id": a.id, "RPC": url, "Keys": keys, "Transaction": tx }),
+            )
+            .unwrap();
+            assert_eq!(raw_tx(&out).chain_id, 1, "{out}");
+        }
+        // …one naming another chain is refused, as is an unreadable one.
+        for cid in [serde_json::json!(137), serde_json::json!("0x89"), serde_json::json!("polygon"), serde_json::json!(0)] {
+            let mut tx = tx.clone();
+            tx["chainId"] = cid.clone();
+            let err = sign_and_send_transaction(
+                &env,
+                &serde_json::json!({ "Id": a.id, "RPC": url, "Keys": keys, "Transaction": tx }),
+            )
+            .unwrap_err();
+            assert_eq!(err.code, 400, "chainId {cid}: {}", err.message);
+        }
+    }
+
+    // Audit H1: offline signing has no Network to fall back on, so chainId is
+    // required and read as a number or a decimal / 0x-hex string — never
+    // defaulted to mainnet.
+    #[test]
+    fn evm_request_requires_a_readable_chain_id() {
+        let base = serde_json::json!({ "nonce": 0, "gas": 21000, "gasPrice": "1", "to": "0x000000000000000000000000000000000000dead", "value": "1" });
+        assert_eq!(evm_request_from_tx(&base).err().map(|e| e.code), Some(400));
+        for (cid, want) in [
+            (serde_json::json!(137), 137u64),
+            (serde_json::json!("137"), 137),
+            (serde_json::json!("0x89"), 137),
+            (serde_json::json!("0X89"), 137),
+        ] {
+            let mut tx = base.clone();
+            tx["chainId"] = cid;
+            assert_eq!(evm_request_from_tx(&tx).unwrap().chain_id, want);
+        }
+        for cid in [
+            serde_json::json!(0),
+            serde_json::json!("0x0"),
+            serde_json::json!(""),
+            serde_json::json!("0x"),
+            serde_json::json!("+1"),
+            serde_json::json!("1e3"),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(null),
+            serde_json::json!("0x1ffffffffffffffff"),
+        ] {
+            let mut tx = base.clone();
+            tx["chainId"] = cid.clone();
+            assert!(evm_request_from_tx(&tx).is_err(), "chainId {cid} accepted");
+        }
+    }
+
+    // Audit H1: a node quantity that isn't one is an error, not a zero.
+    #[test]
+    fn node_hex_quantities_are_strict() {
+        assert_eq!(u64_from_hex("0x5208").unwrap(), 21000);
+        for bad in ["", "0x", "garbage", "0xzz", "5208", "0x-1", "0x1ffffffffffffffff", "0x\u{e9}\u{e9}"] {
+            assert_eq!(u64_from_hex(bad).err().map(|e| e.code), Some(502), "{bad:?}");
+        }
+        let (env, _w, a, keys) = evm_env();
+        let url = mock_rpc_dispatch(&[("eth_getTransactionCount", r#""garbage""#)]);
+        let err = sign_and_send_transaction(
+            &env,
+            &serde_json::json!({
+                "Id": a.id, "RPC": url, "Keys": keys,
+                "Transaction": { "to": "0x000000000000000000000000000000000000dead", "value": "1000" }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, 502, "{}", err.message);
+    }
+
+    // EVM signAndSend end to end through native block_on: autofill nonce / gas /
+    // EIP-1559 fees from the node (the chain id comes from the network), sign
+    // offline, broadcast. Proves the browser can pass just {to, value} and Rust
+    // does the rest.
     #[test]
     fn ethereum_sign_and_send_autofills_and_broadcasts() {
         let env = Env::init_memory().unwrap();
         crate::models::wallet::init(&env).unwrap();
         crate::models::account::init(&env).unwrap();
+        crate::models::network::init(&env).unwrap();
         let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
         let w = crate::models::wallet::create(&env, "ETH", "secp256k1", &kds).unwrap();
         let a = crate::models::account::create(&env, &w.id, "", "ethereum", 0).unwrap();
 
         let url = mock_rpc_dispatch(&[
-            ("eth_chainId", r#""0x1""#),
             ("eth_getTransactionCount", r#""0x0""#),
             ("eth_estimateGas", r#""0x5208""#),
             ("eth_getBlockByNumber", r#"{"baseFeePerGas":"0x7"}"#),

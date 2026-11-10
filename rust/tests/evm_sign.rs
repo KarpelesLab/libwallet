@@ -106,6 +106,44 @@ fn personal_sign_recovers_to_account() {
     assert_eq!(digest, purecrypto::hash::keccak256(&expect));
 }
 
+/// Audit H1: chain id 0 would make a legacy signature pre-EIP-155 — valid on
+/// every chain — so no transaction is built (let alone signed) with it.
+#[test]
+fn chain_id_zero_is_refused() {
+    use libwallet::evm::{attach_signature, build_unsigned};
+    let env = Env::init_memory().unwrap();
+    wallet::init(&env).unwrap();
+    account::init(&env).unwrap();
+    let kds = vec![pw("passwordone"), pw("passwordtwo"), pw("passwordthree")];
+    let w = wallet::create(&env, "EVM", "secp256k1", &kds).unwrap();
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let unlock: Vec<(String, String)> =
+        vec![(w.keys[0].id.clone(), "passwordone".to_string()), (w.keys[1].id.clone(), "passwordtwo".to_string())];
+    let req = |chain_id: u64, eip1559: bool| EvmTxRequest {
+        nonce: 0,
+        gas: 21000,
+        max_fee: "20000000000".to_string(),
+        max_priority: "0".to_string(),
+        to: "0x000000000000000000000000000000000000dead".to_string(),
+        value: "1".to_string(),
+        data: vec![],
+        chain_id,
+        eip1559,
+    };
+    for eip1559 in [false, true] {
+        assert!(build_unsigned(&req(0, eip1559)).is_err());
+        let err = sign_tx(&env, &a.id, &unlock, &req(0, eip1559)).unwrap_err().to_string();
+        assert!(err.contains("chain id"), "{err}");
+        // Too large for the legacy v = chain_id*2 + 35 + parity to fit.
+        assert!(build_unsigned(&req(u64::MAX, eip1559)).is_err());
+    }
+    // A tx whose chain id was zeroed after building can't be given a signature.
+    let mut tx = build_unsigned(&req(1, false)).unwrap();
+    tx.chain_id = 0;
+    assert!(attach_signature(tx, &[1u8; 32], &[1u8; 32], 0).is_err());
+    assert!(build_unsigned(&req(1, false)).is_ok());
+}
+
 /// A 2-of-3 wallet signs with ANY two shares — whichever pair the caller holds,
 /// in any order — and recovers to the account; a single share is refused.
 #[test]
