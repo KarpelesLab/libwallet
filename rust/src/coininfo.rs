@@ -50,7 +50,14 @@ pub fn by_address(env: &Env, address: &str) -> Result<Option<CoinInfo>> {
 
 /// Backend-overridable variant (tests point `base` at a mock server).
 pub fn by_key(env: &Env, base: &str, key_type: &str, key: &str) -> Result<Option<CoinInfo>> {
-    let cache_key = format!("rest:ccInfo:{key_type}:{key}");
+    // Only the default backend owns the shared cache entry. An overridden
+    // backend gets its own namespace, so an answer from a foreign host can
+    // never be served later as the production backend's coin metadata.
+    let cache_key = if base == crate::rest::DEFAULT_HOST {
+        format!("rest:ccInfo:{key_type}:{key}")
+    } else {
+        format!("rest:ccInfo@{base}:{key_type}:{key}")
+    };
     if let Some(bytes) = env.cache_load(&cache_key)? {
         // An empty cache entry records a known-absent record (negative cache).
         if bytes.is_empty() {

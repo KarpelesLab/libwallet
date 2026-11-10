@@ -67,3 +67,38 @@ fn absent_record_is_negative_cached() {
     assert!(coininfo::by_key(&env, &base, "symbol", "NOPE").unwrap().is_none());
     assert_eq!(hits.load(Ordering::SeqCst), 1);
 }
+
+/// Audit F8: a lookup against an overridden backend is cached under that
+/// backend only — it never lands in (or is served from) the entry the default
+/// backend uses, nor another override's.
+#[test]
+fn overridden_backend_does_not_share_the_default_cache_entry() {
+    let hits_a = Arc::new(AtomicUsize::new(0));
+    let hits_b = Arc::new(AtomicUsize::new(0));
+    let a = mock(r#"{"id":1,"name":"Evil Tether","symbol":"USDT"}"#, hits_a.clone());
+    let b = mock(r#"{"id":2,"name":"Other Tether","symbol":"USDT"}"#, hits_b.clone());
+    let env = Env::init_memory().unwrap();
+
+    let got = coininfo::by_key(&env, &a, "symbol", "USDT").unwrap().expect("found");
+    assert_eq!(got.name, "Evil Tether");
+    // The production cache entry is untouched.
+    assert!(env.cache_load("rest:ccInfo:symbol:USDT").unwrap().is_none());
+
+    // A different backend is fetched, not answered from the first one's entry.
+    let got = coininfo::by_key(&env, &b, "symbol", "USDT").unwrap().expect("found");
+    assert_eq!(got.name, "Other Tether");
+    assert_eq!((hits_a.load(Ordering::SeqCst), hits_b.load(Ordering::SeqCst)), (1, 1));
+
+    // Each override still caches for itself.
+    assert_eq!(coininfo::by_key(&env, &a, "symbol", "USDT").unwrap().unwrap().name, "Evil Tether");
+    assert_eq!((hits_a.load(Ordering::SeqCst), hits_b.load(Ordering::SeqCst)), (1, 1));
+
+    // And an entry cached by the default backend is what the default path reads.
+    env.cache_store(
+        "rest:ccInfo:symbol:USDT",
+        br#"{"id":825,"name":"Tether","symbol":"USDT"}"#,
+        std::time::Duration::from_secs(60),
+    )
+    .unwrap();
+    assert_eq!(coininfo::by_symbol(&env, "USDT").unwrap().unwrap().name, "Tether");
+}
