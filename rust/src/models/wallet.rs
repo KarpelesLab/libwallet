@@ -1164,26 +1164,41 @@ pub fn restore_entry(env: &Env, data_b64url: &str) -> Result<String> {
         restore_accounts(env, &existing, &wj)?;
         return Ok(id);
     }
-    let keys: Vec<WalletKey> = wj
-        .get("Keys")
-        .and_then(|k| k.as_array())
-        .map(|arr| {
-            arr.iter()
-                .map(|k| {
-                    let ks = |f: &str| k.get(f).and_then(|v| v.as_str()).unwrap_or("").to_owned();
-                    WalletKey {
-                        id: ks("Id"),
-                        wallet: ks("Wallet"),
-                        kind: ks("Type"),
-                        schema: ks("Schema"),
-                        key: ks("Key"),
-                        data: STANDARD.decode(ks("Data")).unwrap_or_default(),
-                        generation: k.get("Gen").and_then(|v| v.as_u64()).unwrap_or(1),
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // The backup / transfer blob is untrusted input. Every key row is bound to
+    // the wallet being restored — whatever `Wallet` id the blob carries — so a
+    // crafted entry cannot attach rows to another wallet already on this
+    // device; a key id that is missing, repeated or already in use is refused
+    // before anything is written, as are an entry without keys and a share
+    // whose `Data` does not decode (rather than storing an empty share).
+    let mut keys: Vec<WalletKey> = Vec::new();
+    for k in wj.get("Keys").and_then(|k| k.as_array()).map(Vec::as_slice).unwrap_or_default() {
+        let ks = |f: &str| k.get(f).and_then(|v| v.as_str()).unwrap_or("").to_owned();
+        let key_id = ks("Id");
+        if key_id.is_empty() {
+            return Err(Error::Env("backup has a wallet key without an Id".into()));
+        }
+        if keys.iter().any(|o| o.id == key_id) {
+            return Err(Error::Env(format!("backup lists wallet key {key_id} twice")));
+        }
+        if fetch_key(env, &key_id)?.is_some() {
+            return Err(Error::Env(format!("backup wallet key {key_id} already exists on this device")));
+        }
+        let data = STANDARD
+            .decode(ks("Data"))
+            .map_err(|e| Error::Env(format!("backup wallet key {key_id} has undecodable Data: {e}")))?;
+        keys.push(WalletKey {
+            id: key_id,
+            wallet: id.clone(),
+            kind: ks("Type"),
+            schema: ks("Schema"),
+            key: ks("Key"),
+            data,
+            generation: k.get("Gen").and_then(|v| v.as_u64()).unwrap_or(1),
+        });
+    }
+    if keys.is_empty() {
+        return Err(Error::Env("backup has no wallet keys".into()));
+    }
     let w = Wallet {
         id: id.clone(),
         name: s("Name"),
