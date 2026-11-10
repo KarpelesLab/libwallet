@@ -12,6 +12,7 @@
 //!   Offline?} → {requestId, parts, payload}; `Airgap:submitSignature`
 //!   {Payload|Parts|DecoderId, RequestId?, Broadcast?, RPC|Network?} → signed tx
 //! Display: `Airgap:qr` {Text|Parts} → QR modules, for hosts without a renderer.
+//! Camera: `Airgap:scanFrame` {Width, Height, Luma, Id?} → the QR codes in a frame.
 //!   (RequestId is mandatory for bitcoin answers — signed PSBT / raw tx — which
 //!   carry none and are only accepted as the pending request's transaction).
 //!   `Airgap:pending` {RequestId} shows an outstanding request.
@@ -344,7 +345,7 @@ const MAX_QR_FRAMES: usize = 512;
 /// `{codes: [{size, rows: ["0110…", …]}]}` (`1` = dark). UR and BBQr frames
 /// are uppercase alphanumeric, which QR encodes compactly.
 pub fn qr(_env: &Env, params: &Value) -> ApiResult {
-    use qrcodegen::{QrCode, QrCodeEcc};
+    use anyd::codes::qr::EcLevel;
     let frames: Vec<&str> = match (str_param(params, "Text"), params.get("Parts").and_then(Value::as_array)) {
         (Some(t), _) => vec![t],
         (None, Some(a)) => a.iter().filter_map(Value::as_str).collect(),
@@ -354,20 +355,63 @@ pub fn qr(_env: &Env, params: &Value) -> ApiResult {
         return Err(ApiError::new(400, format!("1-{MAX_QR_FRAMES} frames required")));
     }
     let ecc = match str_param(params, "Ecc").unwrap_or("L") {
-        "L" => QrCodeEcc::Low,
-        "M" => QrCodeEcc::Medium,
-        "Q" => QrCodeEcc::Quartile,
-        "H" => QrCodeEcc::High,
+        "L" => EcLevel::L,
+        "M" => EcLevel::M,
+        "Q" => EcLevel::Q,
+        "H" => EcLevel::H,
         other => return Err(ApiError::new(400, format!("unknown Ecc {other:?}"))),
     };
     let mut codes = Vec::with_capacity(frames.len());
     for f in frames {
-        let code = QrCode::encode_text(f, ecc).map_err(|_| ApiError::new(400, "frame too long for one QR code: use shorter parts (MaxFragmentLen / MaxPartLen)"))?;
-        let size = code.size();
-        let rows: Vec<String> = (0..size).map(|y| (0..size).map(|x| if code.get_module(x, y) { '1' } else { '0' }).collect()).collect();
-        codes.push(json!({ "size": size, "rows": rows }));
+        let rows = qr_rows(f, ecc).ok_or_else(|| ApiError::new(400, "frame too long for one QR code: use shorter parts (MaxFragmentLen / MaxPartLen)"))?;
+        codes.push(json!({ "size": rows.len(), "rows": rows }));
     }
     Ok(json!({ "codes": codes }))
+}
+
+/// The modules of the QR code for `text`, one `'0'`/`'1'` string per row.
+fn qr_rows(text: &str, ecc: anyd::codes::qr::EcLevel) -> Option<Vec<String>> {
+    use anyd::traits::Encode;
+    let encoder = anyd::codes::qr::QrEncoder::new();
+    let symbol = encoder.build_text(text, ecc).ok()?;
+    let anyd::output::Encoding::Matrix(m) = encoder.encode(&symbol).ok()? else { return None };
+    Some((0..m.height()).map(|y| (0..m.width()).map(|x| if m.get(x, y) { '1' } else { '0' }).collect()).collect())
+}
+
+/// The largest camera frame `Airgap:scanFrame` looks at (pixels).
+const MAX_SCAN_PIXELS: usize = 1920 * 1080;
+
+/// `Airgap:scanFrame` {Width, Height, Luma (base64, one byte per pixel, rows
+/// top to bottom), Id?} — read the QR codes in a camera frame, for hosts
+/// without a detector of their own: `{texts: […]}`. With `Id` (a decoder
+/// context) each code is also fed to it and its progress is returned, so a
+/// scan loop is one call per frame.
+pub fn scan_frame(env: &Env, params: &Value) -> ApiResult {
+    use base64::Engine;
+    let dim = |k: &str| params.get(k).and_then(Value::as_u64).map(|n| n as usize).filter(|n| *n > 0).ok_or_else(|| ApiError::new(400, format!("{k} required")));
+    let (width, height) = (dim("Width")?, dim("Height")?);
+    let pixels = width.checked_mul(height).filter(|n| *n <= MAX_SCAN_PIXELS).ok_or_else(|| ApiError::new(400, "frame too large: scale it down"))?;
+    let luma = str_param(params, "Luma").ok_or_else(|| ApiError::new(400, "Luma (base64) required"))?;
+    let luma = base64::engine::general_purpose::STANDARD.decode(luma).map_err(|e| ApiError::new(400, format!("Luma: {e}")))?;
+    if luma.len() != pixels {
+        return Err(ApiError::new(400, format!("Luma is {} bytes, expected Width × Height = {pixels}", luma.len())));
+    }
+    let frame = anyd::GrayFrame::new(&luma, width, height).map_err(|e| ApiError::new(400, format!("frame: {e:?}")))?;
+    let texts: Vec<String> = anyd::pipeline::scan_2d(&frame).iter().filter_map(|s| s.text()).filter(|t| !t.is_empty()).collect();
+    let mut out = json!({ "texts": texts });
+    if let Some(id) = str_param(params, "Id") {
+        let mut ctx = decoder::store_load(env, id).map_err(|e| ApiError::new(404, e.to_string()))?;
+        // A frame that is not part of this payload is not an error of the scan.
+        let mut fed = false;
+        for t in &texts {
+            fed |= ctx.feed(t).is_ok();
+        }
+        if fed {
+            decoder::store_save(env, id, &ctx).map_err(ApiError::internal)?;
+        }
+        out["progress"] = progress_json(&ctx.progress().map_err(bad)?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -393,6 +437,47 @@ mod tests {
         assert!(qr(&env, &json!({})).is_err());
         assert!(qr(&env, &json!({ "Text": "x", "Ecc": "Z" })).is_err());
         assert!(qr(&env, &json!({ "Text": "A".repeat(8000) })).is_err());
+    }
+
+    /// A rendered QR code, painted into a camera-like frame, is read back —
+    /// and fed to a decoder context when one is named.
+    #[test]
+    fn scan_frame_reads_a_rendered_code() {
+        use base64::Engine;
+        let env = Env::init_memory().unwrap();
+        // A real single-part UR, so the decoder context accepts it.
+        let text = airgap::ur_single("bytes", &outscript::bcur::bytes_to_cbor(b"hello anyd")).unwrap().to_uppercase();
+        let text = text.as_str();
+        let rows = qr_rows(text, anyd::codes::qr::EcLevel::M).unwrap();
+        // 6 px per module, a 4-module quiet zone, on a grey-ish background.
+        let (scale, quiet) = (6usize, 4usize);
+        let side = (rows.len() + 2 * quiet) * scale;
+        let (width, height) = (side + 40, side + 24);
+        let mut luma = vec![235u8; width * height];
+        for (y, row) in rows.iter().enumerate() {
+            for (x, m) in row.bytes().enumerate() {
+                if m == b'1' {
+                    for dy in 0..scale {
+                        for dx in 0..scale {
+                            luma[(12 + (y + quiet) * scale + dy) * width + 20 + (x + quiet) * scale + dx] = 20;
+                        }
+                    }
+                }
+            }
+        }
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&luma);
+        let out = scan_frame(&env, &json!({ "Width": width, "Height": height, "Luma": b64 })).unwrap();
+        assert_eq!(out["texts"], json!([text]));
+
+        let id = decoder_new(&env, &json!({})).unwrap()["Id"].as_str().unwrap().to_owned();
+        let out = scan_frame(&env, &json!({ "Width": width, "Height": height, "Luma": b64, "Id": id })).unwrap();
+        assert_eq!(out["progress"]["complete"], true, "{out}");
+
+        // An empty frame finds nothing; a wrong size is refused.
+        let blank = base64::engine::general_purpose::STANDARD.encode(vec![200u8; 64 * 48]);
+        assert_eq!(scan_frame(&env, &json!({ "Width": 64, "Height": 48, "Luma": blank })).unwrap()["texts"], json!([]));
+        assert!(scan_frame(&env, &json!({ "Width": 65, "Height": 48, "Luma": blank })).is_err());
+        assert!(scan_frame(&env, &json!({ "Width": 100_000, "Height": 100_000, "Luma": "" })).is_err());
     }
 
     /// The bitcoin prefill leaves a Transaction that already carries its UTXOs

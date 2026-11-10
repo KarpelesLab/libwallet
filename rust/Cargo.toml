@@ -84,9 +84,11 @@ ciborium = "0.2"
 # not used: device management (src/ledger/manage.rs) runs on rsurl instead.
 lsdk = { version = "0.1.0", default-features = false, features = ["apps"] }
 compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
-# QR code modules for the air-gap frames (Airgap:qr), for hosts — the web
-# wallet — without a renderer of their own. Pure Rust, no dependencies.
-qrcodegen = "1.8"
+# QR codes for the air-gap frames, with our own anyd (AnyDCode): rendering them
+# (Airgap:qr) for hosts without a renderer, and reading them out of camera
+# frames (Airgap:scanFrame) for hosts without a detector — the web wallet, in
+# browsers that lack the native one. QR only; pure Rust, no dependencies.
+anyd = { version = "0.2", default-features = false, features = ["std", "encode", "decode", "scan", "qr"] }
 
 # Native-only dependencies — TSS and the app layers that still depend on them.
 # Being migrated to the browser incrementally.

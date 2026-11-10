@@ -388,6 +388,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Airgap:submitSignature" => airgap::submit_signature(&handle.env, params),
         "Airgap:pending" => airgap::pending(&handle.env, params),
         "Airgap:qr" => airgap::qr(&handle.env, params),
+        "Airgap:scanFrame" => airgap::scan_frame(&handle.env, params),
         "Account:setCurrent" => account::set_current(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Network:testRPC" => network::test_rpc(&handle.env, params),
