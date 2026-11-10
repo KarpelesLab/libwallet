@@ -65,6 +65,14 @@ const el = (tag, cls, html) => {
 };
 const short = (s, head = 10, tail = 8) =>
   s && s.length > head + tail + 1 ? `${s.slice(0, head)}…${s.slice(-tail)}` : s;
+// HTML-escape for both text and (quoted) attribute contexts. Everything that
+// isn't a literal in this file — backend/RPC responses, chain data, addresses,
+// error messages, localStorage contents — goes through this before innerHTML.
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ESC_MAP[c]);
+// What a broadcast may return as a transaction id: a 32-byte hex hash (EVM /
+// Bitcoin) or a base58 signature (Solana). Anything else is shown as plain text.
+const TX_ID_RE = /^(?:(?:0x)?[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{43,88})$/;
 
 // ============================================================================
 // Boot
@@ -179,7 +187,7 @@ function renderSeed() {
   grid.innerHTML = '';
   words.forEach((w, i) => {
     const cell = el('div', 'seed-word');
-    cell.innerHTML = `<span class="n">${i + 1}</span><span class="w">${w}</span>`;
+    cell.innerHTML = `<span class="n">${i + 1}</span><span class="w">${esc(w)}</span>`;
     grid.appendChild(cell);
   });
   // Re-seal the cover and reset the confirmation on every (re)render.
@@ -497,7 +505,7 @@ function peekRender(root, addresses) {
     const addr = addresses[chain];
     return `<div class="peek-row" data-chain="${chain}">
         <span class="chain-badge">${CHAIN_META[chain].badge}</span>
-        <span class="peek-addr" title="${addr}">${short(addr, 10, 8)}</span>
+        <span class="peek-addr" title="${esc(addr)}">${esc(short(addr, 10, 8))}</span>
         <span class="peek-bal dim" data-peek="${chain}">…</span>
       </div>`;
   }).join('');
@@ -566,7 +574,7 @@ function peekUpdate(root, passphrase, mnemonicFor, pending) {
   peek.timer = setTimeout(() => {
     if (seq !== peek.seq) return;
     const mnemonic = mnemonicFor();
-    if (!mnemonic) return peekShow(root, `<div class="peek-note">${pending}</div>`);
+    if (!mnemonic) return peekShow(root, `<div class="peek-note">${esc(pending)}</div>`);
     let addresses;
     try {
       addresses = wasm.derive_addresses(mnemonic, passphrase);
@@ -713,7 +721,8 @@ async function prepareSend(chain, to, amount) {
 // --- Confirm modal + broadcast --------------------------------------------
 
 function confirmSend(p) {
-  const rows = p.rows.map(([k, v]) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+  // Row values include chain data (e.g. a contract's revert reason) — escape.
+  const rows = p.rows.map(([k, v]) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
   openModal(`
     <div class="card-pad stack" style="--gap:18px">
       <div class="eyebrow">Confirm · signed on this device</div>
@@ -735,8 +744,15 @@ function confirmSend(p) {
       const { id, url } = await p.broadcast();
       closeModal();
       $('#sendTo').value = ''; $('#sendAmount').value = '';
-      toast('ok', 'Transaction sent',
-        `<a href="${url}" target="_blank" rel="noopener">${short(id, 14, 12)} ↗</a>`);
+      // `id` is whatever the RPC node returned and `url` is built from it:
+      // link only a well-formed tx id on an https explorer, else plain text.
+      const txId = String(id ?? '');
+      if (TX_ID_RE.test(txId) && /^https:\/\//.test(url || '')) {
+        toast('ok', 'Transaction sent',
+          `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(short(txId, 14, 12))} ↗</a>`, true);
+      } else {
+        toast('ok', 'Transaction sent', short(txId, 14, 12));
+      }
       setTimeout(refreshAllBalances, 2500);
     } catch (e) {
       cerr.textContent = e.message || String(e);
@@ -777,7 +793,7 @@ function openReveal() {
 function showRevealed(phrase) {
   const words = phrase.trim().split(/\s+/);
   const grid = words.map((w, i) =>
-    `<div class="seed-word"><span class="n">${i + 1}</span><span class="w">${w}</span></div>`).join('');
+    `<div class="seed-word"><span class="n">${i + 1}</span><span class="w">${esc(w)}</span></div>`).join('');
   // With a passphrase in play these words restore a different wallet on their
   // own, so back up the pair or the backup is worthless.
   const ppNote = session.passphrase
@@ -810,12 +826,20 @@ function closeModal() {
   $('#modalBox').innerHTML = '';
 }
 
-function toast(kind, title, detailHtml) {
+// `title` and `detail` are rendered as TEXT. Pass detailIsHtml = true only for
+// markup built in this file from already-escaped values.
+function toast(kind, title, detail, detailIsHtml = false) {
   const t = el('div', `toast ${kind}`);
   const icon = kind === 'ok'
     ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 8v5m0 3h.01M12 3l9 16H3l9-16z" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-  t.innerHTML = `<span class="ic">${icon}</span><div class="body"><div class="t">${title}</div>${detailHtml ? `<div class="d">${detailHtml}</div>` : ''}</div>`;
+  t.innerHTML = `<span class="ic">${icon}</span><div class="body"><div class="t"></div></div>`;
+  $('.t', t).textContent = title;
+  if (detail) {
+    const d = el('div', 'd');
+    if (detailIsHtml) d.innerHTML = detail; else d.textContent = detail;
+    $('.body', t).appendChild(d);
+  }
   $('#toasts').appendChild(t);
   setTimeout(() => { t.style.transition = 'opacity .4s, transform .4s'; t.style.opacity = '0'; t.style.transform = 'translateY(8px)'; setTimeout(() => t.remove(), 400); }, kind === 'error' ? 8000 : 6000);
 }
@@ -1340,8 +1364,10 @@ function b64utf8(str) {
   return btoa(String.fromCharCode(...new TextEncoder().encode(str)));
 }
 
+// Backend-pane alias of esc(): also escapes quotes, since it is used inside
+// attribute values (title="…", data-copy="…", value="…").
 function bkEsc(s) {
-  return String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  return esc(s);
 }
 
 function bkStatus(kind, text) {
@@ -1721,7 +1747,7 @@ async function backendSpotStatus() {
     out.innerHTML = `
       <div class="kv"><span class="k">Online</span><span class="v">${online ? 'yes' : 'not yet'}</span></div>
       <div class="kv"><span class="k">Target id</span><span class="v mono">${bkEsc(s.target_id || '')}</span></div>
-      <div class="kv"><span class="k">Connections</span><span class="v">${(s.connections && s.connections.online) || 0} / ${(s.connections && s.connections.total) || 0}</span></div>`;
+      <div class="kv"><span class="k">Connections</span><span class="v">${bkEsc((s.connections && s.connections.online) || 0)} / ${bkEsc((s.connections && s.connections.total) || 0)}</span></div>`;
   } catch (e) {
     pill.textContent = 'error';
     err.textContent = e.message || String(e);
@@ -1858,13 +1884,13 @@ function backendWalletCardHtml(w) {
       <div class="asset-head">
         <div class="asset-name">
           <span class="chain-badge">W</span>
-          <span class="meta"><span class="n">${bkEsc(w.Name || 'Wallet')}</span><br><span class="t">${bkEsc(w.Curve || '')} · ${bkEsc(w.Protocol || '')} · ${w.Threshold + 1}-of-${(w.Keys || []).length}</span></span>
+          <span class="meta"><span class="n">${bkEsc(w.Name || 'Wallet')}</span><br><span class="t">${bkEsc(w.Curve || '')} · ${bkEsc(w.Protocol || '')} · ${bkEsc(w.Threshold + 1)}-of-${(w.Keys || []).length}</span></span>
         </div>
       </div>
       <div class="panel" style="padding:4px 16px">
         <div class="kv"><span class="k">Id</span><span class="v">${bkEsc(w.Id)}</span></div>
         <div class="kv"><span class="k">Pubkey</span><span class="v">${bkEsc(short(w.Pubkey || '', 14, 12))}</span></div>
-        <div class="kv"><span class="k">Key shares</span><span class="v">${(w.Keys || []).map(k => k.Type).join(' · ')}</span></div>
+        <div class="kv"><span class="k">Key shares</span><span class="v">${bkEsc((w.Keys || []).map(k => k.Type).join(' · '))}</span></div>
       </div>
     </div>`;
 }
