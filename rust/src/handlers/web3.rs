@@ -174,9 +174,39 @@ pub fn request(env: &Env, params: &Value) -> ApiResult {
         "mpurse_signMessage" => mpurse_sign_message(env, &key, &net, &q_params),
         "mpurse_signRawTransaction" => mpurse_sign_raw_tx(env, &key, &q_params),
         // Open relay: forward any other JSON-RPC method to the active network
-        // (Go's default — many dApps depend on eth_call / eth_getLogs / etc.).
-        other => rpc_passthrough(&net, params, other, &q_params),
+        // (Go's default — many dApps depend on eth_call / eth_getLogs / etc.) —
+        // except the node-management / key-holding methods no web page has any
+        // business invoking on the user's node.
+        other => {
+            if passthrough_denied(other) {
+                return Err(ApiError::new(4200, format!("The requested method {other} is not supported by this provider.")));
+            }
+            rpc_passthrough(&net, params, other, &q_params)
+        }
     }
+}
+
+/// Namespaces never relayed to the user's RPC node: they manage the node, hold
+/// or use its keys, or expose its internals. `wallet_*` is the wallet's own
+/// namespace — the methods libwallet implements are routed before the relay, so
+/// anything left is unimplemented rather than something a node should answer.
+const PASSTHROUGH_DENIED_NAMESPACES: &[&str] = &[
+    "personal_", "admin_", "debug_", "miner_", "txpool_", "engine_", "clique_", "les_", "parity_", "signer_", "wallet_",
+];
+
+/// Individual methods never relayed: node-side signing with the node's own
+/// keys, and account disclosure (the wallet answers those itself, per origin).
+const PASSTHROUGH_DENIED_METHODS: &[&str] =
+    &["eth_sign", "eth_signtransaction", "eth_sendtransaction", "eth_accounts", "eth_coinbase"];
+
+/// Whether `method` must not be forwarded by the open relay (compared
+/// case-insensitively, so a node that is lax about case cannot be reached with
+/// a re-cased name). Only consulted for methods the wallet does not handle
+/// itself, so `personal_sign`, `eth_accounts`, `wallet_switchEthereumChain`, …
+/// keep working through their own arms.
+fn passthrough_denied(method: &str) -> bool {
+    let m = method.to_ascii_lowercase();
+    PASSTHROUGH_DENIED_NAMESPACES.iter().any(|ns| m.starts_with(ns)) || PASSTHROUGH_DENIED_METHODS.contains(&m.as_str())
 }
 
 /// `mpurse_signRawTransaction` params [txHex] — raise a `transaction_sign`
@@ -922,6 +952,56 @@ mod tests {
         })).unwrap_err();
         assert_eq!(err.code, 400);
         assert!(err.message.contains("origin is required"), "message: {}", err.message);
+    }
+
+    /// Audit F6: node-management / key-holding methods are refused (EIP-1193
+    /// 4200) instead of being relayed to the user's RPC node.
+    #[test]
+    fn passthrough_refuses_node_management_and_key_methods() {
+        let (env, host, _addr) = connected_env();
+        for method in [
+            "personal_unlockAccount", "personal_sendTransaction", "personal_listAccounts", "personal_importRawKey",
+            "admin_addPeer", "admin_nodeInfo", "debug_setHead", "debug_traceTransaction", "miner_start",
+            "txpool_content", "engine_newPayloadV3", "clique_propose", "les_addBalance", "parity_allAccountsInfo",
+            "signer_confirmRequest", "eth_sign", "eth_signTransaction", "eth_coinbase", "wallet_unknownThing",
+            "wallet_sendCalls", "PERSONAL_unlockAccount", "Eth_Sign",
+        ] {
+            // The RPC override points at a closed port: a relayed call would fail
+            // with a transport error, not 4200.
+            let err = request(&env, &json!({
+                "origin": host, "RPC": "http://127.0.0.1:1",
+                "query": { "method": method, "params": [] },
+            })).unwrap_err();
+            assert_eq!(err.code, 4200, "{method}: {}", err.message);
+        }
+        assert!(passthrough_denied("eth_sendTransaction") && passthrough_denied("eth_accounts"));
+    }
+
+    /// The methods the wallet implements itself are routed before the relay and
+    /// ordinary read methods are still forwarded.
+    #[test]
+    fn passthrough_deny_list_spares_wallet_arms_and_reads() {
+        let (env, host, addr) = connected_env();
+        // Wallet-handled methods in denied namespaces still work.
+        assert_eq!(eth_accounts(&env, &host), vec![addr]);
+        let perms = request(&env, &json!({
+            "origin": host, "query": { "method": "wallet_getPermissions", "params": [] },
+        })).unwrap();
+        assert_eq!(perms[0]["parentCapability"], "eth_accounts");
+        let err = request(&env, &json!({
+            "origin": host, "query": { "method": "personal_ecRecover", "params": ["0x00", "0x00"] },
+        })).unwrap_err();
+        assert_eq!(err.code, 400, "personal_ecRecover is handled by the wallet: {}", err.message);
+
+        // Ordinary node reads are relayed (and here fail on the closed port).
+        for method in ["eth_call", "eth_getLogs", "eth_blockNumber", "eth_getBalance", "eth_estimateGas", "eth_sendRawTransaction"] {
+            assert!(!passthrough_denied(method), "{method} must stay relayable");
+        }
+        let err = request(&env, &json!({
+            "origin": host, "RPC": "http://127.0.0.1:1",
+            "query": { "method": "eth_blockNumber", "params": [] },
+        })).unwrap_err();
+        assert_ne!(err.code, 4200, "eth_blockNumber was not relayed: {}", err.message);
     }
 
     #[test]
