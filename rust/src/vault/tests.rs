@@ -258,3 +258,22 @@ fn cached_secret_only_answers_for_the_envelope_it_came_from() {
     edited.policy.exportable = true;
     assert!(session::secret(&edited, scope, None, "").is_err());
 }
+
+#[test]
+fn expired_secrets_are_purged_on_any_cache_access() {
+    let _serial = platform::testing::serial();
+    let env = env();
+    let scope = env.vault_scope();
+    let e = create(&env, new(Kind::Data, "password", Policy { cache_seconds: 60, ..Default::default() }, Some("correct horse"))).unwrap();
+    session::unlock(&e, scope, Some("correct horse"), "").unwrap();
+    assert!(session::is_unlocked(scope, &e.id));
+
+    // Once expired it is gone as soon as anything touches the cache, without
+    // the entry itself being asked for again.
+    session::expire_for_test(scope, &e.id);
+    assert!(session::holds_for_test(scope, &e.id));
+    assert!(!session::is_unlocked(scope, "vlt-some-other-entry"));
+    assert!(!session::holds_for_test(scope, &e.id));
+    assert!(!session::is_unlocked(scope, &e.id));
+    assert!(session::secret(&e, scope, None, "").is_err(), "expired: a real unseal, which needs the password");
+}

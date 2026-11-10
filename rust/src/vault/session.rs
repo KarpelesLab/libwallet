@@ -17,7 +17,7 @@
 //! background. Values are `Zeroizing`, wiped on removal.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 use purecrypto::hash::sha256;
 use purecrypto::rng::{OsRng, RngCore};
@@ -58,6 +58,16 @@ static CACHE: LazyLock<Mutex<HashMap<(u64, String), Cached>>> = LazyLock::new(De
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// The unlock cache, minus everything that has expired: each access drops
+/// (and so wipes) every expired secret, not just the one being asked for, so
+/// none outlives its `CacheSeconds` waiting to be requested again.
+fn cache() -> MutexGuard<'static, HashMap<(u64, String), Cached>> {
+    let mut cache = CACHE.lock().unwrap();
+    let now = now_ms();
+    cache.retain(|_, c| c.expires_ms.is_none_or(|t| t > now));
+    cache
 }
 
 /// The tokens one request bound; dropping it revokes them.
@@ -156,12 +166,12 @@ pub fn public_for_token(material: &str) -> Option<Result<String>> {
 pub fn secret(e: &Entry, scope: u64, password: Option<&str>, reason: &str) -> Result<Zeroizing<Vec<u8>>> {
     let key = (scope, e.id.clone());
     {
-        let mut cache = CACHE.lock().unwrap();
+        let mut cache = cache();
         match cache.get(&key) {
             // The row must still be the envelope the secret came out of, and
             // agree with the policy sealed in it: the cache never answers for
             // an entry that was replaced or edited after the unlock.
-            Some(c) if c.expires_ms.is_none_or(|t| t > now_ms()) && c.sealed == sha256(&e.data) && e.matches_envelope() => {
+            Some(c) if c.sealed == sha256(&e.data) && e.matches_envelope() => {
                 return Ok(c.secret.clone());
             }
             Some(_) => {
@@ -181,7 +191,7 @@ fn keep(e: &Entry, key: (u64, String), s: &Zeroizing<Vec<u8>>) {
         n if n < 0 => None,
         n => Some(now_ms().saturating_add(n.saturating_mul(1000))),
     };
-    CACHE.lock().unwrap().insert(key, Cached { secret: s.clone(), sealed: sha256(&e.data), expires_ms });
+    cache().insert(key, Cached { secret: s.clone(), sealed: sha256(&e.data), expires_ms });
 }
 
 /// `Vault:unlock`: unseal now and keep the secret for the entry's
@@ -196,34 +206,48 @@ pub fn unlock(e: &Entry, scope: u64, password: Option<&str>, reason: &str) -> Re
     }
     forget(scope, &e.id);
     secret(e, scope, password, reason)?;
-    Ok(CACHE.lock().unwrap().get(&(scope, e.id.clone())).and_then(|c| c.expires_ms))
+    Ok(cache().get(&(scope, e.id.clone())).and_then(|c| c.expires_ms))
 }
 
 /// Whether the entry has a live cached secret.
 pub fn is_unlocked(scope: u64, id: &str) -> bool {
-    CACHE.lock().unwrap().get(&(scope, id.to_owned())).is_some_and(|c| c.expires_ms.is_none_or(|t| t > now_ms()))
+    cache().contains_key(&(scope, id.to_owned()))
+}
+
+/// Tests: make a cached secret already expired, and look at the cache without
+/// the purge every other access does.
+#[cfg(test)]
+pub(crate) fn expire_for_test(scope: u64, id: &str) {
+    if let Some(c) = CACHE.lock().unwrap().get_mut(&(scope, id.to_owned())) {
+        c.expires_ms = Some(now_ms() - 1);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn holds_for_test(scope: u64, id: &str) -> bool {
+    CACHE.lock().unwrap().contains_key(&(scope, id.to_owned()))
 }
 
 /// Drop one entry's cached secret in session `scope` (wiped by `Zeroizing`).
 pub fn forget(scope: u64, id: &str) {
-    CACHE.lock().unwrap().remove(&(scope, id.to_owned()));
+    cache().remove(&(scope, id.to_owned()));
 }
 
 /// Drop one entry's cached secret in every session (the entry was deleted).
 pub fn forget_everywhere(id: &str) {
-    CACHE.lock().unwrap().retain(|(_, e), _| e != id);
+    cache().retain(|(_, e), _| e != id);
 }
 
 /// `Vault:lock` without an id, or the session closing: drop every cached
 /// secret of session `scope`.
 pub fn lock_scope(scope: u64) {
-    CACHE.lock().unwrap().retain(|(s, _), _| *s != scope);
+    cache().retain(|(s, _), _| *s != scope);
 }
 
 /// App backgrounded: drop every cached secret of every session, and dismiss
 /// any prompt on screen.
 pub fn lock_all() {
-    CACHE.lock().unwrap().clear();
+    cache().clear();
     if let Some(b) = super::platform::backend() {
         b.cancel_prompts();
     }
