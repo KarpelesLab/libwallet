@@ -944,7 +944,11 @@ fn message_text(bytes: &[u8]) -> Option<String> {
 
 fn decode_hex_0x(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
-    if s.len() % 2 != 0 {
+    // Hex digits only: besides rejecting junk (`from_str_radix` alone would
+    // accept a sign, e.g. "+f"), this guarantees the input is ASCII, so the
+    // two-byte slices below can never split a multi-byte UTF-8 character (which
+    // panics) — the string comes straight from a web page.
+    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
@@ -1276,6 +1280,36 @@ mod tests {
         let out = add_chain(&env, &host, chain_param("0x89", "https://rpc.example", json!(18))).unwrap();
         assert!(out.is_null());
         assert!(crate::models::request::list(&env).unwrap().is_empty());
+    }
+
+    /// Audit F14: non-ASCII input must be rejected, not panic on a char boundary.
+    #[test]
+    fn decode_hex_0x_rejects_non_ascii_without_panicking() {
+        assert_eq!(decode_hex_0x("0x00ff"), Some(vec![0x00, 0xff]));
+        assert_eq!(decode_hex_0x("00FF"), Some(vec![0x00, 0xff]));
+        assert_eq!(decode_hex_0x("0x"), Some(vec![]));
+        assert_eq!(decode_hex_0x("0x0"), None);
+        assert_eq!(decode_hex_0x("zz"), None);
+        assert_eq!(decode_hex_0x("+f"), None);
+        // Even byte lengths that used to slice through a multi-byte character.
+        for evil in ["0x\u{e9}", "a\u{e9}1", "\u{20ac}1", "0x\u{1f600}", "0xab\u{e9}"] {
+            assert_eq!(decode_hex_0x(evil), None, "{evil:?}");
+        }
+    }
+
+    /// The same input through the provider entry points that feed it.
+    #[test]
+    fn hex_params_with_multibyte_utf8_are_errors_not_panics() {
+        let (env, host, _addr) = connected_env();
+        for (method, params) in [
+            ("web3_sha3", json!(["0x\u{e9}"])),
+            ("personal_sign", json!(["0x\u{20ac}1"])),
+            ("personal_ecRecover", json!(["0x\u{e9}", "0x00"])),
+            ("personal_ecRecover", json!(["0x00", "\u{1f600}"])),
+        ] {
+            let err = request(&env, &json!({ "origin": host, "query": { "method": method, "params": params } })).unwrap_err();
+            assert_eq!(err.code, 400, "{method}: {}", err.message);
+        }
     }
 
     #[test]

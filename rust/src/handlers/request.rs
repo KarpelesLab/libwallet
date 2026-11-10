@@ -346,7 +346,11 @@ fn approve_mpurse_sign_raw_tx(env: &Env, req: &Request, params: &Value) -> Resul
 /// Decode a plain (non-0x) or 0x-prefixed hex string.
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
-    if s.len() % 2 != 0 {
+    // Hex digits only: besides rejecting junk (`from_str_radix` alone would
+    // accept a sign, e.g. "+f"), this guarantees the input is ASCII, so the
+    // two-byte slices below can never split a multi-byte UTF-8 character (which
+    // panics) — the string comes straight from a web page.
+    if s.len() % 2 != 0 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
@@ -597,6 +601,21 @@ mod tests {
         approve_add_network(&env, &proposal(json!({ "RPC": "auto" }))).unwrap();
         approve_add_network(&env, &proposal(json!({}))).unwrap();
         assert!(crate::models::network::by_id_opt(&env, "evm.8453"));
+    }
+
+    /// Audit F14: non-ASCII input must be rejected, not panic on a char boundary.
+    #[test]
+    fn decode_hex_rejects_non_ascii_without_panicking() {
+        assert_eq!(decode_hex("0x00ff"), Some(vec![0x00, 0xff]));
+        assert_eq!(decode_hex("00FF"), Some(vec![0x00, 0xff]));
+        assert_eq!(decode_hex("0x"), Some(vec![]));
+        assert_eq!(decode_hex("0x0"), None);
+        assert_eq!(decode_hex("zz"), None);
+        assert_eq!(decode_hex("+f"), None);
+        // Even byte lengths that used to slice through a multi-byte character.
+        for evil in ["0x\u{e9}", "a\u{e9}1", "\u{20ac}1", "0x\u{1f600}", "0xab\u{e9}"] {
+            assert_eq!(decode_hex(evil), None, "{evil:?}");
+        }
     }
 
     /// Wait for `run_with_timeout` (on another thread) to persist its row.
