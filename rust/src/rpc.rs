@@ -5,10 +5,24 @@
 //! calls (eth_getBalance, eth_sendRawTransaction, net_version, modchain_*, ...).
 
 use serde_json::{json, Value};
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use crate::{Error, Result};
+
+/// Wall-clock cap on one whole JSON-RPC exchange (connect + request + the full
+/// response). The per-read timeout alone only catches a stalled peer; a node
+/// that keeps trickling bytes could otherwise hold the caller indefinitely.
+/// Generous: far above any honest node call.
+///
+/// Enforcement depends on the transport (rsurl 0.1.19): the async client races
+/// the whole transfer against it, so [`call_async`] is truly bounded; the
+/// blocking client only checks `max_time` between redirect hops, so for
+/// [`call`] it bounds redirect chains but NOT a slow-trickling body — that
+/// needs in-flight enforcement in rsurl's blocking HTTP path.
+///
+/// Response size is bounded by rsurl itself (a fixed 256 MiB in-memory cap);
+/// there is no per-request knob to lower it.
+const MAX_TIME: Duration = Duration::from_secs(120);
 
 /// Encode a JSON-RPC 2.0 request body for `method`/`params`.
 fn encode_body(method: &str, params: &Value) -> Result<Vec<u8>> {
@@ -38,6 +52,7 @@ pub fn call(url: &str, method: &str, params: Value) -> Result<Value> {
         .map_err(|e| Error::Env(format!("rpc {method} request build failed: {e}")))?
         .header("Content-Type", "application/json")
         .read_timeout(Some(Duration::from_secs(20)))
+        .max_time(MAX_TIME)
         .body(encode_body(method, &params)?)
         .send()
         .map_err(|e| Error::Env(format!("rpc {method} request failed: {e}")))?
@@ -52,8 +67,13 @@ pub fn call(url: &str, method: &str, params: Value) -> Result<Value> {
 /// handlers use for chain RPC, so endpoint resolution stays in Rust and the JS
 /// never names a node URL. Native code can use it too (see the test below).
 pub async fn call_async(url: &str, method: &str, params: Value) -> Result<Value> {
+    call_async_within(url, method, params, MAX_TIME).await
+}
+
+async fn call_async_within(url: &str, method: &str, params: Value, max_time: Duration) -> Result<Value> {
     let req = rsurl::aio::Request::new("POST", url)
         .header("Content-Type", "application/json")
+        .timeout(max_time)
         .body(encode_body(method, &params)?);
     let resp = aio_send(&req)
         .await
@@ -129,6 +149,39 @@ mod tests {
         let url = mock_rpc(r#""0x2a""#);
         let got = call_async(&url, "eth_getBalance", json!(["0xabc", "latest"])).await.unwrap();
         assert_eq!(got, json!("0x2a"));
+    }
+
+    /// A node that never stalls long enough to trip the per-read timeout: it
+    /// sends the headers, then one body byte every 50 ms, forever (until the
+    /// client goes away). Returns the `http://addr` to POST to.
+    fn trickling_rpc() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 2048];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\nConnection: close\r\n\r\n");
+                for _ in 0..1200 {
+                    if s.write_all(b" ").and_then(|_| s.flush()).is_err() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    // Audit F15: the whole async exchange is capped, not just each read — a
+    // node that keeps trickling bytes cannot hold the caller indefinitely.
+    #[tokio::test]
+    async fn call_async_gives_up_on_a_trickling_node() {
+        let url = trickling_rpc();
+        let started = std::time::Instant::now();
+        let res = call_async_within(&url, "eth_blockNumber", json!([]), Duration::from_millis(400)).await;
+        assert!(res.is_err(), "trickling response was accepted: {res:?}");
+        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
     }
 
     // A JSON-RPC error envelope surfaces as an Err, not a missing-result.

@@ -42,6 +42,15 @@ fn go_query_escape(s: &str) -> String {
     out
 }
 
+/// Wall-clock cap on one whole REST exchange. Generous: far above any honest
+/// backend call. NOTE: rsurl 0.1.19's blocking client only checks `max_time`
+/// between redirect hops, so today this bounds redirect chains but not a
+/// slow-trickling body (the per-read timeout is the only in-flight guard) —
+/// see `rpc::MAX_TIME`. Response size is bounded by rsurl's fixed 256 MiB
+/// in-memory cap; there is no per-request knob to lower it.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TIME: Duration = Duration::from_secs(120);
+
 /// Default backend host, matching Go `rest.Host` (`www.atonline.com`, https).
 pub const DEFAULT_HOST: &str = "https://www.atonline.com";
 
@@ -60,7 +69,8 @@ pub fn do_get_with_client_id(base: &str, path: &str, client_id: Option<&str>) ->
     let mut req = rsurl::Request::new("GET", &url)
         .map_err(|e| Error::Env(format!("rest {path} request build failed: {e}")))?
         .header("Sec-Rest-Http", "false")
-        .read_timeout(Some(Duration::from_secs(20)));
+        .read_timeout(Some(Duration::from_secs(20)))
+        .max_time(MAX_TIME);
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
         req = req.header("Sec-ClientId", id);
     }
@@ -87,6 +97,7 @@ pub fn do_post(base: &str, path: &str, params: &Value, client_id: Option<&str>) 
         .header("Sec-Rest-Http", "false")
         .header("Content-Type", "application/json")
         .read_timeout(Some(Duration::from_secs(20)))
+        .max_time(MAX_TIME)
         .body(body);
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
         req = req.header("Sec-ClientId", id);
@@ -111,7 +122,8 @@ pub fn do_get_params(base: &str, path: &str, params: &Value, client_id: Option<&
     let mut req = rsurl::Request::new("GET", &url)
         .map_err(|e| Error::Env(format!("rest {path} request build failed: {e}")))?
         .header("Sec-Rest-Http", "false")
-        .read_timeout(Some(Duration::from_secs(30)));
+        .read_timeout(Some(Duration::from_secs(30)))
+        .max_time(MAX_TIME);
     if let Some(id) = client_id.filter(|s| !s.is_empty()) {
         req = req.header("Sec-ClientId", id);
     }
