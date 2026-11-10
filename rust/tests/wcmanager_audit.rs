@@ -153,3 +153,194 @@ fn approve_rejects_small_order_proposer_key() {
     assert!(format!("{err}").contains("small-order"), "got: {err}");
     assert!(wc_session::list_by_state(&p.env, "active").unwrap().is_empty(), "no session may be stored");
 }
+
+// ── F3: session state / expiry ───────────────────────────────────────────────
+
+struct Session {
+    p: Paired,
+    /// Session topic + symKey (as the dApp derives them).
+    topic: String,
+    sym: [u8; 32],
+}
+
+/// Pair, propose, and approve a session for `eip155:1` with `personal_sign` +
+/// `eth_sendTransaction`.
+fn established(seed: u8) -> Session {
+    let mut p = paired(seed);
+    let (dapp_priv, dapp_pub) = wc::new_x25519_keypair();
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(100, &dapp_pub));
+    let (_, inbound) = p.mgr.pump(&p.env).unwrap().unwrap();
+    let wc::WcInbound::Propose { id, params } = inbound else { panic!("expected Propose") };
+    let wallet_pub = b64url_decode32(&wc_session::fetch_by_topic(&p.env, &p.topic).unwrap().unwrap().self_pub);
+    let topic = p.mgr.approve(&p.env, &p.topic, id, &params, &["eip155:1:0xabc".to_string()], &[], &[]).unwrap();
+    let sym = wc::derive_sym_key(&dapp_priv, &wallet_pub).unwrap();
+    Session { p, topic, sym }
+}
+
+fn session_request(id: i64, chain: &str, method: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": id, "jsonrpc": "2.0", "method": "wc_sessionRequest",
+        "params": { "request": { "method": method, "params": ["0xdeadbeef", "0xabc"] }, "chainId": chain },
+    })
+}
+
+fn set_expiry(env: &Env, topic: &str, expiry: &str) {
+    env.exec(
+        r#"UPDATE "WalletConnect" SET "Expiry" = ?1 WHERE "Topic" = ?2"#,
+        vec![libwallet::SqlValue::Text(expiry.into()), libwallet::SqlValue::Text(topic.into())],
+    )
+    .unwrap();
+}
+
+fn state_of(env: &Env, topic: &str) -> String {
+    wc_session::fetch_by_topic(env, topic).unwrap().unwrap().state
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+/// The settle carries an ABSOLUTE Unix expiry (not the relative 604800), and the
+/// same instant is stored on the session row.
+#[test]
+fn settle_expiry_is_absolute_and_stored() {
+    let s = established(10);
+    let settle = s
+        .p
+        .relay
+        .published(&s.topic, &s.sym)
+        .into_iter()
+        .find(|m| m["method"] == "wc_sessionSettle")
+        .expect("settle published");
+    let expiry = settle["params"]["expiry"].as_i64().unwrap();
+    let want = unix_now() + 7 * 24 * 60 * 60;
+    assert!((expiry - want).abs() < 60, "expiry {expiry} is not ~now+7d ({want})");
+
+    let row = wc_session::fetch_by_topic(&s.p.env, &s.topic).unwrap().unwrap();
+    assert_eq!(row.expiry_unix(), Some(expiry));
+}
+
+/// A session the wallet disconnected no longer accepts frames, and can no longer
+/// be answered on.
+#[test]
+fn frames_on_a_disconnected_session_are_dropped() {
+    let mut s = established(11);
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:1", "personal_sign"));
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { .. }))));
+
+    s.p.mgr.disconnect(&s.p.env, &s.topic).unwrap();
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(2, "eip155:1", "personal_sign"));
+    assert!(s.p.mgr.pump(&s.p.env).is_err(), "request accepted on a disconnected session");
+    assert!(s.p.mgr.respond(&s.p.env, &s.topic, 2, serde_json::json!("0x")).is_err());
+    assert!(s.p.mgr.respond_error(&s.p.env, &s.topic, 2, 0, "x").is_err());
+}
+
+/// An inbound `wc_sessionDelete` is applied: the row flips to disconnected and
+/// the session stops taking requests.
+#[test]
+fn inbound_session_delete_disconnects() {
+    let mut s = established(12);
+    s.p.relay.deliver_rpc(
+        &s.topic,
+        &s.sym,
+        serde_json::json!({ "id": 5, "jsonrpc": "2.0", "method": "wc_sessionDelete", "params": { "code": 6000, "message": "bye" } }),
+    );
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Delete { id: 5 }))));
+    assert_eq!(state_of(&s.p.env, &s.topic), "disconnected");
+
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(6, "eip155:1", "personal_sign"));
+    assert!(s.p.mgr.pump(&s.p.env).is_err(), "request accepted after wc_sessionDelete");
+}
+
+/// A session past its stored expiry is torn down on the next frame.
+#[test]
+fn frames_past_session_expiry_are_rejected() {
+    let mut s = established(13);
+    set_expiry(&s.p.env, &s.topic, "2020-01-01T00:00:00Z");
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:1", "personal_sign"));
+    assert!(s.p.mgr.pump(&s.p.env).is_err(), "request accepted on an expired session");
+    assert_eq!(state_of(&s.p.env, &s.topic), "disconnected");
+}
+
+/// A legacy active row with no recorded expiry keeps working.
+#[test]
+fn legacy_session_without_expiry_still_works() {
+    let mut s = established(14);
+    set_expiry(&s.p.env, &s.topic, "");
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, session_request(1, "eip155:1", "personal_sign"));
+    assert!(matches!(s.p.mgr.pump(&s.p.env).unwrap(), Some((_, wc::WcInbound::Request { .. }))));
+}
+
+/// A pairing only lives for the 5-minute proposal TTL: after that the proposal
+/// is dropped and cannot be approved.
+#[test]
+fn pairing_expires_after_ttl() {
+    // Fresh pairing rows carry an expiry ~5 minutes out.
+    let mut p = paired(15);
+    let row = wc_session::fetch_by_topic(&p.env, &p.topic).unwrap().unwrap();
+    let exp = row.expiry_unix().expect("pairing expiry recorded");
+    assert!((exp - (unix_now() + 300)).abs() < 60, "pairing expiry {exp} is not ~now+5m");
+
+    // Expired before the proposal arrives: the proposal is dropped.
+    let (_, dapp_pub) = wc::new_x25519_keypair();
+    set_expiry(&p.env, &p.topic, "2020-01-01T00:00:00Z");
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(100, &dapp_pub));
+    assert!(p.mgr.pump(&p.env).is_err(), "proposal accepted on an expired pairing");
+    assert_eq!(state_of(&p.env, &p.topic), "disconnected");
+
+    // Expired between proposal and approval: the approval is refused.
+    let mut p = paired(16);
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(100, &dapp_pub));
+    let (_, inbound) = p.mgr.pump(&p.env).unwrap().unwrap();
+    let wc::WcInbound::Propose { id, params } = inbound else { panic!("expected Propose") };
+    set_expiry(&p.env, &p.topic, "2020-01-01T00:00:00Z");
+    assert!(p.mgr.approve(&p.env, &p.topic, id, &params, &["eip155:1:0xabc".to_string()], &[], &[]).is_err());
+    assert!(wc_session::list_by_state(&p.env, "active").unwrap().is_empty());
+
+    // A legacy pairing row (no Expiry) ages out from its Created time.
+    let mut p = paired(17);
+    p.env
+        .exec(
+            r#"UPDATE "WalletConnect" SET "Expiry" = '', "Created" = '2020-01-01T00:00:00Z' WHERE "Topic" = ?1"#,
+            vec![libwallet::SqlValue::Text(p.topic.clone())],
+        )
+        .unwrap();
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(100, &dapp_pub));
+    assert!(p.mgr.pump(&p.env).is_err(), "proposal accepted on a stale legacy pairing");
+}
+
+/// Once approved (or rejected) the pairing is retired: its symKey no longer
+/// authenticates further proposals, and it cannot be approved twice.
+#[test]
+fn pairing_is_retired_once_used() {
+    let mut s = established(18);
+    assert_eq!(state_of(&s.p.env, &s.p.topic), "disconnected");
+    let (_, other_pub) = wc::new_x25519_keypair();
+    s.p.relay.deliver_rpc(&s.p.topic, &s.p.sym, proposal(101, &other_pub));
+    assert!(s.p.mgr.pump(&s.p.env).is_err(), "second proposal accepted on a used pairing");
+    let params = proposal(101, &other_pub)["params"].clone();
+    assert!(s.p.mgr.approve(&s.p.env, &s.p.topic, 101, &params, &["eip155:1:0xabc".to_string()], &[], &[]).is_err());
+
+    // Rejected pairing.
+    let mut p = paired(19);
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(100, &other_pub));
+    p.mgr.pump(&p.env).unwrap().unwrap();
+    p.mgr.reject(&p.env, &p.topic, 0, "").unwrap();
+    assert_eq!(state_of(&p.env, &p.topic), "disconnected");
+    p.relay.deliver_rpc(&p.topic, &p.sym, proposal(102, &other_pub));
+    assert!(p.mgr.pump(&p.env).is_err(), "proposal accepted on a rejected pairing");
+}
+
+/// Frame kinds are tied to the row they belong on: no requests on a pairing
+/// topic, no proposals on a settled session.
+#[test]
+fn frame_kind_must_match_row_state() {
+    let mut p = paired(20);
+    p.relay.deliver_rpc(&p.topic, &p.sym, session_request(1, "eip155:1", "personal_sign"));
+    assert!(p.mgr.pump(&p.env).is_err(), "wc_sessionRequest accepted on a pairing topic");
+
+    let mut s = established(21);
+    let (_, other_pub) = wc::new_x25519_keypair();
+    s.p.relay.deliver_rpc(&s.topic, &s.sym, proposal(7, &other_pub));
+    assert!(s.p.mgr.pump(&s.p.env).is_err(), "wc_sessionPropose accepted on a settled session");
+}

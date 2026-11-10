@@ -53,6 +53,17 @@ impl<T: wc::RelayTransport> WcManager<T> {
         };
         let s = wc_session::fetch_by_topic(env, &topic)?
             .ok_or_else(|| Error::Env(format!("inbound for unknown topic {topic}")))?;
+        // Only a live row takes traffic: a disconnected (or consumed-pairing)
+        // row's keys must not keep authenticating frames, and neither may a row
+        // past its expiry — that one is torn down on the spot.
+        if s.state != "pairing" && s.state != "active" {
+            return Err(Error::Env(format!("inbound on {} session dropped", s.state)));
+        }
+        if s.is_expired(now_unix()) {
+            wc_session::set_state(env, &s.id, "disconnected")?;
+            self.pending_proposals.remove(&topic);
+            return Err(Error::Env("inbound on expired session dropped".into()));
+        }
         let sym: [u8; 32] = b64url_decode(&s.sym_key)?
             .try_into()
             .map_err(|_| Error::Env("session symKey not 32 bytes".into()))?;
@@ -65,9 +76,26 @@ impl<T: wc::RelayTransport> WcManager<T> {
         // thing authenticating the dApp), so it is never offered.
         let active = s.state == "active";
         let inbound = wc::process_inbound(&sym, None, active, &message)?;
-        // Track the pending proposal so a later reject can address it.
-        if let wc::WcInbound::Propose { id, .. } = &inbound {
-            self.pending_proposals.insert(topic.clone(), *id);
+        match &inbound {
+            // A proposal only makes sense on a pairing topic; track it so a
+            // later reject can address it.
+            wc::WcInbound::Propose { id, .. } => {
+                if active {
+                    return Err(Error::Env("wc_sessionPropose on a settled session dropped".into()));
+                }
+                self.pending_proposals.insert(topic.clone(), *id);
+            }
+            // Requests only exist inside a settled session.
+            wc::WcInbound::Request { .. } if !active => {
+                return Err(Error::Env("wc_sessionRequest on a pairing topic dropped".into()));
+            }
+            // The peer ended the session (Go `handleSessionDelete`): tear it
+            // down locally so its keys stop being accepted.
+            wc::WcInbound::Delete { .. } => {
+                wc_session::set_state(env, &s.id, "disconnected")?;
+                self.pending_proposals.remove(&topic);
+            }
+            _ => {}
         }
         Ok(Some((topic, inbound)))
     }
@@ -88,6 +116,8 @@ impl<T: wc::RelayTransport> WcManager<T> {
     ) -> Result<String> {
         let pairing = wc_session::fetch_by_topic(env, pairing_topic)?
             .ok_or_else(|| Error::Env("pairing session not found".into()))?;
+        let now = now_unix();
+        self.check_pairing_live(env, &pairing, now)?;
         let pairing_sym: [u8; 32] = b64url_decode(&pairing.sym_key)?
             .try_into()
             .map_err(|_| Error::Env("pairing symKey not 32 bytes".into()))?;
@@ -110,6 +140,9 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let session_topic = wc::derive_topic(&session_sym);
 
         let namespaces = wc::build_namespaces(proposal, accounts, methods, events);
+        // WC v2 `expiry` is an ABSOLUTE Unix timestamp (seconds); the same value
+        // is stored on the row and enforced on every inbound frame.
+        let expiry = now + SESSION_TTL_SECS;
         self.client.subscribe(&session_topic)?;
 
         // Persist the active session.
@@ -122,7 +155,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
             &b64url(&self_pub),
             &b64url(&peer_pub),
             &namespaces.to_string(),
-            "", // expiry timestamp (informational); the Unix expiry rides the settle payload
+            &crate::db::unix_to_rfc3339(expiry),
         )?;
 
         // wc_sessionSettle on the session topic (Type-0 under the session key).
@@ -139,7 +172,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
                 "namespaces": namespaces,
                 "requiredNamespaces": proposal.get("requiredNamespaces"),
                 "optionalNamespaces": proposal.get("optionalNamespaces"),
-                "expiry": SESSION_TTL_SECS,
+                "expiry": expiry,
             },
         });
         let settle_env = wc::seal_type0(&session_sym, settle.to_string().as_bytes());
@@ -157,7 +190,10 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let resp_env = wc::seal_type0(&pairing_sym, response.to_string().as_bytes());
         self.client.publish(pairing_topic, &resp_env, wc::TAG_SESSION_SETTLE, 0)?;
 
+        // The pairing has served its purpose: retire it so its symKey stops
+        // authenticating further proposals.
         self.pending_proposals.remove(pairing_topic);
+        wc_session::set_state(env, &pairing.id, "disconnected")?;
         Ok(session_topic)
     }
 
@@ -171,6 +207,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
             .ok_or_else(|| Error::Env("no pending proposal on that pairing topic".into()))?;
         let pairing = wc_session::fetch_by_topic(env, pairing_topic)?
             .ok_or_else(|| Error::Env("pairing session not found".into()))?;
+        self.check_pairing_live(env, &pairing, now_unix())?;
         let sym: [u8; 32] = b64url_decode(&pairing.sym_key)?
             .try_into()
             .map_err(|_| Error::Env("pairing symKey not 32 bytes".into()))?;
@@ -178,7 +215,24 @@ impl<T: wc::RelayTransport> WcManager<T> {
         let message = if message.is_empty() { "User rejected" } else { message };
         let rpc = wc::build_jsonrpc_error(proposal_id, code, message);
         let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
+        // Retire the pairing whether or not the publish goes through — the
+        // proposal is consumed either way.
+        wc_session::set_state(env, &pairing.id, "disconnected")?;
         self.client.publish(pairing_topic, &env0, wc::TAG_SESSION_SETTLE, 0)?;
+        Ok(())
+    }
+
+    /// A pairing row can only be approved/rejected while it is still in the
+    /// `pairing` state and inside its TTL; an expired one is retired here.
+    fn check_pairing_live(&mut self, env: &Env, pairing: &wc_session::WcSession, now: i64) -> Result<()> {
+        if pairing.state != "pairing" {
+            return Err(Error::Env(format!("pairing is no longer pending (state {})", pairing.state)));
+        }
+        if pairing.is_expired(now) {
+            wc_session::set_state(env, &pairing.id, "disconnected")?;
+            self.pending_proposals.remove(&pairing.topic);
+            return Err(Error::Env("pairing expired".into()));
+        }
         Ok(())
     }
 
@@ -230,9 +284,16 @@ impl<T: wc::RelayTransport> WcManager<T> {
     }
 
     /// Fetch an active session by topic and decode its 32-byte symmetric key.
+    /// A row that is not `active` (pairing / disconnected) is "unknown topic",
+    /// as in Go's `sessionByTopic`; one past its expiry is torn down.
     fn session_sym(&self, env: &Env, topic: &str) -> Result<[u8; 32]> {
         let s = wc_session::fetch_by_topic(env, topic)?
+            .filter(|s| s.state == "active")
             .ok_or_else(|| Error::Env("unknown topic".into()))?;
+        if s.is_expired(now_unix()) {
+            wc_session::set_state(env, &s.id, "disconnected")?;
+            return Err(Error::Env("session expired".into()));
+        }
         b64url_decode(&s.sym_key)?
             .try_into()
             .map_err(|_| Error::Env("session symKey not 32 bytes".into()))
@@ -241,11 +302,7 @@ impl<T: wc::RelayTransport> WcManager<T> {
     /// `WalletConnect:respond`: publish a JSON-RPC result for a `wc_sessionRequest`
     /// on an active session (Type-0 under the session key).
     pub fn respond(&mut self, env: &Env, topic: &str, id: i64, result: serde_json::Value) -> Result<()> {
-        let s = wc_session::fetch_by_topic(env, topic)?
-            .ok_or_else(|| Error::Env("session not found".into()))?;
-        let sym: [u8; 32] = b64url_decode(&s.sym_key)?
-            .try_into()
-            .map_err(|_| Error::Env("session symKey not 32 bytes".into()))?;
+        let sym = self.session_sym(env, topic)?;
         let rpc = wc::build_jsonrpc_result(id, result);
         let env0 = wc::seal_type0(&sym, rpc.to_string().as_bytes());
         self.client.publish(topic, &env0, wc::TAG_SESSION_RESPONSE, 0)?;
@@ -272,6 +329,14 @@ pub fn inbound_event(topic: &str, msg: &wc::WcInbound) -> String {
         wc::WcInbound::Other { id, method } => ("wc_other", serde_json::json!({ "id": id, "method": method })),
     };
     crate::response::event(kind, serde_json::json!({ "topic": topic, "payload": body }))
+}
+
+/// The current Unix time in seconds (session / pairing expiry checks).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 /// A JSON-RPC id for outbound notifications (Go uses `time.Now().UnixNano()`).

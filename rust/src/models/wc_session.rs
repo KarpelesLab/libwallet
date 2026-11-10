@@ -15,6 +15,10 @@ const INDEX_DDL: &str = r#"CREATE UNIQUE INDEX IF NOT EXISTS "WalletConnect_Topi
 const COLS: &str = r#""Id", "Topic", "PairingTopic", "State", "SymKey", "SelfPriv", "SelfPub", "PeerPub", "PeerMetadata", "Namespaces", "Expiry", "Created", "Updated""#;
 const ID_PREFIX: &str = "wc";
 
+/// How long a pairing row accepts a `wc_sessionPropose` and can be approved:
+/// five minutes, the WalletConnect v2 default proposal lifetime.
+pub const PAIRING_TTL_SECS: i64 = 5 * 60;
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WcSession {
     #[serde(rename = "Id", default)]
@@ -47,6 +51,28 @@ pub struct WcSession {
     pub updated: String,
 }
 
+impl WcSession {
+    /// The absolute expiry as a Unix timestamp (seconds). `Expiry` is stored as
+    /// RFC3339 text; a pairing row written before expiry was recorded falls back
+    /// to `Created` + [`PAIRING_TTL_SECS`]. `None` means "no known expiry" (a
+    /// legacy active row with an empty/unparseable `Expiry`), which never expires.
+    pub fn expiry_unix(&self) -> Option<i64> {
+        let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s.trim()).ok().map(|d| d.timestamp());
+        if let Some(t) = parse(&self.expiry) {
+            return Some(t);
+        }
+        if self.state == "pairing" {
+            return parse(&self.created).map(|t| t + PAIRING_TTL_SECS);
+        }
+        None
+    }
+
+    /// Whether the row is past its expiry at `now_unix` (Unix seconds).
+    pub fn is_expired(&self, now_unix: i64) -> bool {
+        self.expiry_unix().is_some_and(|t| now_unix >= t)
+    }
+}
+
 pub fn init(env: &Env) -> Result<()> {
     env.ensure_table(TABLE_DDL)?;
     // Databases written by the Go backend never had this index, and can carry
@@ -61,7 +87,8 @@ pub fn init(env: &Env) -> Result<()> {
     env.ensure_table(INDEX_DDL)
 }
 
-/// Persist a new pairing row (state = "pairing") for a parsed pairing URI.
+/// Persist a new pairing row (state = "pairing") for a parsed pairing URI. It
+/// expires [`PAIRING_TTL_SECS`] from now.
 pub fn create_pairing(
     env: &Env,
     pairing_topic: &str,
@@ -81,7 +108,7 @@ pub fn create_pairing(
         peer_pub: String::new(),
         peer_metadata: String::new(),
         namespaces: String::new(),
-        expiry: String::new(),
+        expiry: crate::db::unix_to_rfc3339(chrono::Utc::now().timestamp() + PAIRING_TTL_SECS),
         created: now.clone(),
         updated: now,
     };
