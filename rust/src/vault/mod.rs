@@ -164,6 +164,17 @@ impl Entry {
         let policy: Option<Policy> = m.get("Policy").and_then(|p| serde_json::from_value(p.clone()).ok());
         s("Id") == self.id && s("Kind") == self.kind.as_str() && s("Public") == self.public && policy.as_ref() == Some(&self.policy)
     }
+
+    /// Whether this row agrees with the metadata its own envelope
+    /// authenticates (see [`Entry::matches_meta`]).
+    pub(crate) fn matches_envelope(&self) -> bool {
+        let meta = match self.backend.as_str() {
+            "password" => blob::password_meta(&self.data).ok(),
+            "secure" => blob::secure_parts(&self.data).ok().map(|(aad, _, _)| aad),
+            _ => None,
+        };
+        meta.is_some_and(|m| self.matches_meta(m))
+    }
 }
 
 pub fn init(env: &Env) -> Result<()> {
@@ -197,6 +208,11 @@ pub fn list(env: &Env) -> Result<Vec<Entry>> {
 
 fn store(env: &Env, e: &Entry) -> Result<()> {
     env.exec(r#"DELETE FROM "Vault" WHERE "Id" = ?1"#, vec![SqlValue::Text(e.id.clone())])?;
+    insert(env, e)
+}
+
+/// Add a row; fails (primary key) rather than replace an entry with that id.
+fn insert(env: &Env, e: &Entry) -> Result<()> {
     env.exec(
         &format!(r#"INSERT INTO "Vault" ({COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)"#),
         vec![
@@ -327,6 +343,12 @@ pub fn create(env: &Env, n: NewEntry<'_>) -> Result<Entry> {
 /// Register a password blob produced by this library (`Vault:blob`), e.g. the
 /// one a browser extension kept on disk. The password is not needed until the
 /// entry is used.
+///
+/// Loading never replaces an entry: the id comes from the blob's cleartext
+/// header, so a crafted blob could otherwise swap a different envelope (and
+/// policy) in under an id the host already trusts. Loading the very blob an
+/// entry already holds is a no-op, which is what a host re-loading its saved
+/// blob at startup does.
 pub fn load_blob(env: &Env, blob_bytes: &[u8]) -> Result<Entry> {
     let meta: Value = serde_json::from_slice(blob::password_meta(blob_bytes).map_err(Error::Env)?)
         .map_err(|_| Error::Env("vault blob: bad header".into()))?;
@@ -346,7 +368,16 @@ pub fn load_blob(env: &Env, blob_bytes: &[u8]) -> Result<Entry> {
         data: blob_bytes.to_vec(),
         created: s("Created"),
     };
-    store(env, &e)?;
+    if let Some(existing) = fetch(env, &e.id)? {
+        if existing.backend == "password" && existing.data == e.data {
+            return Ok(existing);
+        }
+        return Err(Error::Env(format!(
+            "vault entry {} already exists with different contents; delete it before loading this blob",
+            e.id
+        )));
+    }
+    insert(env, &e)?;
     Ok(e)
 }
 

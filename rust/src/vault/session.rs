@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 
+use purecrypto::hash::sha256;
 use purecrypto::rng::{OsRng, RngCore};
 use purecrypto::zeroize::{Zeroize, Zeroizing};
 use serde_json::Value;
@@ -43,6 +44,10 @@ struct Ref {
 
 struct Cached {
     secret: Zeroizing<Vec<u8>>,
+    /// SHA-256 of the envelope (`Entry::data`) this secret was unsealed from:
+    /// a cached secret only ever answers for that exact envelope, so a row
+    /// whose envelope or policy changed since has to be unsealed again.
+    sealed: [u8; 32],
     /// Unix ms; None = until locked.
     expires_ms: Option<i64>,
 }
@@ -153,7 +158,12 @@ pub fn secret(e: &Entry, scope: u64, password: Option<&str>, reason: &str) -> Re
     {
         let mut cache = CACHE.lock().unwrap();
         match cache.get(&key) {
-            Some(c) if c.expires_ms.is_none_or(|t| t > now_ms()) => return Ok(c.secret.clone()),
+            // The row must still be the envelope the secret came out of, and
+            // agree with the policy sealed in it: the cache never answers for
+            // an entry that was replaced or edited after the unlock.
+            Some(c) if c.expires_ms.is_none_or(|t| t > now_ms()) && c.sealed == sha256(&e.data) && e.matches_envelope() => {
+                return Ok(c.secret.clone());
+            }
             Some(_) => {
                 cache.remove(&key);
             }
@@ -171,7 +181,7 @@ fn keep(e: &Entry, key: (u64, String), s: &Zeroizing<Vec<u8>>) {
         n if n < 0 => None,
         n => Some(now_ms().saturating_add(n.saturating_mul(1000))),
     };
-    CACHE.lock().unwrap().insert(key, Cached { secret: s.clone(), expires_ms });
+    CACHE.lock().unwrap().insert(key, Cached { secret: s.clone(), sealed: sha256(&e.data), expires_ms });
 }
 
 /// `Vault:unlock`: unseal now and keep the secret for the entry's

@@ -153,3 +153,51 @@ fn create(env: &Env, params: &Value, import: bool) -> ApiResult {
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use base64::Engine;
+
+    use super::*;
+    use crate::vault::{blob, platform::testing::serial};
+
+    /// With a non-exportable entry unlocked, loading a crafted blob that
+    /// claims its id with `Exportable: true` must not make `export` hand out
+    /// the cached secret.
+    #[test]
+    fn a_loaded_blob_cannot_make_an_unlocked_entry_exportable() {
+        let _serial = serial();
+        let env = Env::init_memory().unwrap();
+        crate::handlers::init_models(&env).unwrap();
+        let fast = Kdf { m_kib: 64, t: 1, p: 1 };
+        let e = vault::create(
+            &env,
+            NewEntry {
+                label: "test",
+                kind: Kind::Data,
+                backend: "password",
+                policy: Policy { cache_seconds: -1, ..Default::default() },
+                password: Some("correct horse"),
+                secret: None,
+                kdf: fast,
+            },
+        )
+        .unwrap();
+        let id = json!({ "Id": e.id });
+        route(&env, "POST", "unlock", &json!({ "Id": e.id, "Password": "correct horse" })).unwrap();
+        assert_eq!(route(&env, "POST", "export", &id).unwrap_err().code, 403);
+
+        let meta = json!({
+            "Id": e.id, "Label": "", "Kind": "data", "Public": "", "Created": e.created,
+            "Policy": { "UserPresence": false, "CacheSeconds": -1, "Exportable": true },
+        });
+        let forged = blob::seal_password(&serde_json::to_vec(&meta).unwrap(), b"attacker password", b"attacker secret", fast).unwrap();
+        let blob = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&forged);
+        let err = route(&env, "POST", "load", &json!({ "Blob": blob })).unwrap_err();
+        assert!(err.message.contains("already exists"), "{}", err.message);
+        assert_eq!(route(&env, "POST", "export", &id).unwrap_err().code, 403);
+        assert_eq!(route(&env, "GET", "", &id).unwrap()["Policy"]["Exportable"], false);
+        // The entry still works for its owner.
+        assert_eq!(route(&env, "POST", "status", &id).unwrap()["Unlocked"], true);
+    }
+}

@@ -51,6 +51,7 @@ fn edited_policy_in_the_database_is_refused() {
 
 #[test]
 fn secure_entry_prompts_per_policy_and_caches() {
+    let _serial = platform::testing::serial();
     let be = MemoryBackend::leak();
     platform::set_test_backend(Some(be));
     let env = env();
@@ -84,6 +85,7 @@ fn secure_entry_prompts_per_policy_and_caches() {
 
 #[test]
 fn vault_key_descriptions_create_and_sign_without_the_secret_in_params() {
+    let _serial = platform::testing::serial();
     let be = MemoryBackend::leak();
     platform::set_test_backend(Some(be));
     let env = env();
@@ -152,6 +154,7 @@ fn import_decodes_storekey_format_and_rejects_bad_secrets() {
 
 #[test]
 fn no_platform_backend_reports_why() {
+    let _serial = platform::testing::serial();
     platform::set_test_backend(None);
     let caps = platform::capabilities();
     if !caps.secure {
@@ -171,6 +174,7 @@ fn wipe_value_clears_every_string() {
 
 #[test]
 fn unlocks_are_scoped_to_their_session() {
+    let _serial = platform::testing::serial();
     let a = env();
     let e = create(&a, new(Kind::Data, "password", Policy { cache_seconds: -1, ..Default::default() }, Some("correct horse"))).unwrap();
     session::unlock(&e, a.vault_scope(), Some("correct horse"), "").unwrap();
@@ -186,4 +190,71 @@ fn unlocks_are_scoped_to_their_session() {
     let scope = a.vault_scope();
     drop(a);
     assert!(!session::is_unlocked(scope, &e.id));
+}
+
+/// A password blob claiming to be entry `like`, sealed under an attacker's own
+/// password with whatever policy they like.
+fn forged_blob(like: &Entry, policy: Policy) -> Vec<u8> {
+    let forged = Entry { policy, ..like.clone() };
+    blob::seal_password(&forged.meta(), b"attacker password", b"attacker secret", FAST).unwrap()
+}
+
+#[test]
+fn load_never_replaces_an_entry() {
+    let _serial = platform::testing::serial();
+    let be = MemoryBackend::leak();
+    platform::set_test_backend(Some(be));
+    let env = env();
+    let scope = env.vault_scope();
+    let loose = Policy { exportable: true, cache_seconds: -1, user_presence: false };
+
+    for backend in ["password", "secure"] {
+        let pw = (backend == "password").then_some("correct horse");
+        let e = create(&env, new(Kind::Data, backend, Policy { cache_seconds: -1, ..Default::default() }, pw)).unwrap();
+        session::unlock(&e, scope, pw, "x").unwrap();
+
+        // A crafted blob claiming the same id with Exportable set is refused
+        // and the entry, with its unlock, is left as it was.
+        let err = load_blob(&env, &forged_blob(&e, loose.clone())).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        let row = fetch(&env, &e.id).unwrap().unwrap();
+        assert_eq!((&row.data, &row.policy, row.backend.as_str()), (&e.data, &e.policy, backend));
+        assert!(session::is_unlocked(scope, &e.id));
+    }
+
+    // Re-loading the blob an entry already holds stays a no-op.
+    let p = create(&env, new(Kind::Data, "password", Policy::default(), Some("correct horse"))).unwrap();
+    assert_eq!(load_blob(&env, &p.data).unwrap().data, p.data);
+    assert_eq!(list(&env).unwrap().iter().filter(|x| x.id == p.id).count(), 1);
+    platform::set_test_backend(None);
+}
+
+#[test]
+fn cached_secret_only_answers_for_the_envelope_it_came_from() {
+    let _serial = platform::testing::serial();
+    let env = env();
+    let scope = env.vault_scope();
+    let e = create(&env, new(Kind::Data, "password", Policy { cache_seconds: -1, ..Default::default() }, Some("correct horse"))).unwrap();
+    session::unlock(&e, scope, Some("correct horse"), "").unwrap();
+    assert!(session::secret(&e, scope, None, "").is_ok(), "cached");
+
+    // The row is swapped behind the cache (written straight to the table, as
+    // if `Vault:load` did not refuse): a self-consistent envelope with the
+    // same id and a looser policy is not answered with the cached secret.
+    let mut swapped = e.clone();
+    swapped.policy.exportable = true;
+    swapped.data = forged_blob(&e, swapped.policy.clone());
+    store(&env, &swapped).unwrap();
+    let row = fetch(&env, &e.id).unwrap().unwrap();
+    assert!(row.policy.exportable && row.matches_envelope());
+    assert!(session::secret(&row, scope, None, "").is_err(), "falls through to a real unseal, which needs a password");
+    assert!(!session::is_unlocked(scope, &e.id), "the stale cached secret is dropped");
+    assert_eq!(*session::secret(&row, scope, Some("attacker password"), "").unwrap(), b"attacker secret".to_vec());
+
+    // Same envelope, policy edited in the row only: not served from the cache.
+    store(&env, &e).unwrap();
+    session::unlock(&e, scope, Some("correct horse"), "").unwrap();
+    let mut edited = e.clone();
+    edited.policy.exportable = true;
+    assert!(session::secret(&edited, scope, None, "").is_err());
 }

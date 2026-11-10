@@ -122,7 +122,14 @@ pub(crate) mod testing {
     use super::*;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// Held by tests that touch process-wide vault state (the test backend,
+    /// the unlock cache through `lock_all`), so they don't trip each other.
+    pub fn serial() -> MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[derive(Default)]
     pub struct MemoryBackend {
