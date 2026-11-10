@@ -31,8 +31,10 @@ pub fn backfill_evm_modchain(env: &Env, address: &str, net: &crate::models::netw
         // Newest→oldest: stop once we hit a tx we already have.
         let mut saw_known = false;
         for r in &results {
+            // The hash ends up in the explorer URL and as the row's identity:
+            // skip anything that isn't shaped like an EVM tx hash.
             let hash = r.get("tx").and_then(Value::as_str).unwrap_or("").to_lowercase();
-            if hash.is_empty() {
+            if !is_evm_tx_hash(&hash) {
                 continue;
             }
             if existing_tx_by_hash(env, &hash, &net.id)? {
@@ -96,7 +98,7 @@ pub fn backfill_bitcoin_modchain(
             let mut saw_known = false;
             for r in results {
                 let txid = r.get("tx").and_then(Value::as_str).unwrap_or("").to_lowercase();
-                if txid.is_empty() || fetched.contains_key(&txid) {
+                if !is_hex_txid(&txid) || fetched.contains_key(&txid) {
                     continue;
                 }
                 if existing_tx_by_hash(env, &txid, &net.id)? {
@@ -301,7 +303,7 @@ pub fn backfill_solana_signatures(env: &Env, address: &str, net: &crate::models:
         let mut last_sig = String::new();
         for s in &sigs {
             let signature = s.get("signature").and_then(Value::as_str).unwrap_or("");
-            if signature.is_empty() {
+            if !is_solana_signature(signature) {
                 continue;
             }
             last_sig = signature.to_owned();
@@ -433,6 +435,27 @@ fn solana_balance_delta(parsed: &Value, owner: &str) -> Option<BigInt> {
         num_bigint::Sign::Minus => Some(-delta),
         num_bigint::Sign::Plus => Some(delta),
     }
+}
+
+// Indexer-supplied transaction ids are stored as the row's hash and
+// interpolated into the explorer URL (`Network::transaction_url`), so a row is
+// only taken when its id has the chain's shape: no path, query or script text
+// can ride in through it.
+
+/// 64 hex digits: a Bitcoin-family (or Tron) txid.
+fn is_hex_txid(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// `0x` + 64 hex digits: an EVM transaction hash.
+fn is_evm_tx_hash(s: &str) -> bool {
+    s.strip_prefix("0x").is_some_and(is_hex_txid)
+}
+
+/// A base58 string that decodes to the 64 bytes of an Ed25519 signature: a
+/// Solana transaction id.
+fn is_solana_signature(s: &str) -> bool {
+    (64..=88).contains(&s.len()) && bs58::decode(s).into_vec().is_ok_and(|b| b.len() == 64)
 }
 
 /// Whether a Transaction row already exists for `(hash, network)`.
@@ -577,6 +600,39 @@ mod tests {
         v["vout"][0]["value"] = json!("0xffffffffffffffff");
         v["vout"][1]["value"] = json!("0xffffffffffffffff");
         assert!(row(&v.to_string(), &[]).is_none());
+    }
+
+    #[test]
+    fn transaction_ids_must_have_the_chains_shape() {
+        let h = "c27a54ea62408d29f62ebb98f3f0aade879ae4e5d4320e9b65770ab7c38674fe";
+        assert!(is_hex_txid(h));
+        assert!(is_evm_tx_hash(&format!("0x{h}")));
+        assert!(!is_hex_txid(&format!("0x{h}")));
+        assert!(!is_evm_tx_hash(h));
+        assert!(is_solana_signature(&bs58::encode([0xabu8; 64]).into_string()));
+        assert!(is_solana_signature(&bs58::encode([0u8; 64]).into_string()));
+        assert!(!is_solana_signature(&bs58::encode([0xabu8; 32]).into_string())); // an address
+        assert!(!is_solana_signature(&bs58::encode([0xabu8; 65]).into_string()));
+        // Anything that could steer the explorer URL is refused for every chain.
+        let sig = bs58::encode([0xabu8; 64]).into_string();
+        for bad in [
+            String::new(),
+            "abc".to_owned(),
+            "../../login?next=//evil.example".to_owned(),
+            h[..63].to_owned(),
+            format!("{h}0"),
+            format!("{}/", &h[..63]),
+            format!("{}?", &h[..63]),
+            format!("{}é", &h[..62]), // 64 bytes, not ASCII
+            format!("javascript:alert(1)//{}", "a".repeat(60)),
+            format!("{}/#", &sig[..sig.len() - 2]),
+            format!("{sig}/../x"),
+        ] {
+            assert!(!is_hex_txid(&bad), "{bad:?}");
+            assert!(!is_evm_tx_hash(&bad), "{bad:?}");
+            assert!(!is_evm_tx_hash(&format!("0x{bad}")), "0x{bad:?}");
+            assert!(!is_solana_signature(&bad), "{bad:?}");
+        }
     }
 
     #[test]

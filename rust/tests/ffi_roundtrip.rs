@@ -2827,7 +2827,9 @@ fn transaction_backfill_solana_signatures() {
     request(h, r#"{"path":"Network:setCurrent","params":{"Id":"solana.mainnet"}}"#);
 
     // Sequence: getSignaturesForAddress → getTransaction(sig) → empty page.
-    let sigs = r#"{"jsonrpc":"2.0","id":1,"result":[{"signature":"sigAAA","blockTime":1610612736}]}"#.to_string();
+    // A real-shaped signature (base58 of 64 bytes): rows whose id isn't one are skipped.
+    let sig = bs58::encode([0xabu8; 64]).into_string();
+    let sigs = format!(r#"{{"jsonrpc":"2.0","id":1,"result":[{{"signature":"{sig}","blockTime":1610612736}}]}}"#);
     let get_tx = format!(
         r#"{{"jsonrpc":"2.0","id":1,"result":{{"transaction":{{"message":{{"instructions":[{{"program":"system","parsed":{{"type":"transfer","info":{{"source":"{address}","destination":"DestSol1111111111111111111111111111111111","lamports":1000000000}}}}}}],"accountKeys":["{address}"]}}}},"meta":{{"preBalances":[2000000000],"postBalances":[1000000000]}},"blockTime":1610612736}}}}"#
     );
@@ -2842,7 +2844,7 @@ fn transaction_backfill_solana_signatures() {
     let list = request(h, r#"{"path":"Transaction","verb":"GET"}"#);
     let txs = list["data"].as_array().unwrap();
     assert_eq!(txs.len(), 1);
-    assert_eq!(txs[0]["hash"], "sigAAA");
+    assert_eq!(txs[0]["hash"], sig);
     assert_eq!(txs[0]["type"], "transfer");
     assert_eq!(txs[0]["from"], address);
     LibwalletDestroy(h);
@@ -2866,7 +2868,7 @@ fn transaction_backfill_evm_modchain() {
 
     // Mock modchain_historyByAddress: one page, one tx, no continuation.
     let node = mock_node(
-        r#"{"jsonrpc":"2.0","id":1,"result":{"results":[{"blk":100,"tx":"0xABC123","data":{"from":"0xFrom0000000000000000000000000000000000aa","to":"0xTo00000000000000000000000000000000000bb","value":"0xde0b6b3a7640000","gas":"0x5208","gasPrice":"0x4a817c800","timestamp":"0x60000000"}}],"continueKey":""}}"#,
+        r#"{"jsonrpc":"2.0","id":1,"result":{"results":[{"blk":100,"tx":"0xABC1230000000000000000000000000000000000000000000000000000000000","data":{"from":"0xFrom0000000000000000000000000000000000aa","to":"0xTo00000000000000000000000000000000000bb","value":"0xde0b6b3a7640000","gas":"0x5208","gasPrice":"0x4a817c800","timestamp":"0x60000000"}}],"continueKey":""}}"#,
     );
     let bf = request(h, &format!(r#"{{"path":"Transaction:backfill","params":{{"RPC":"{node}"}}}}"#));
     assert_eq!(bf["result"], "success", "{bf}");
@@ -2877,7 +2879,7 @@ fn transaction_backfill_evm_modchain() {
     let list = request(h, r#"{"path":"Transaction","verb":"GET"}"#);
     let txs = list["data"].as_array().unwrap();
     assert_eq!(txs.len(), 1);
-    assert_eq!(txs[0]["hash"], "0xabc123");
+    assert_eq!(txs[0]["hash"], "0xabc1230000000000000000000000000000000000000000000000000000000000");
     assert_eq!(txs[0]["from"], "0xfrom0000000000000000000000000000000000aa");
     assert_eq!(txs[0]["type"], "transfer");
     LibwalletDestroy(h);
