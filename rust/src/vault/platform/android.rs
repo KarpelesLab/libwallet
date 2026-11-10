@@ -125,17 +125,29 @@ impl SecureBackend for Android {
     fn seal_key(&self, entry_id: &str, policy: &Policy) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>), String> {
         let mut dek = Zeroizing::new([0u8; 32]);
         OsRng.fill_bytes(&mut *dek);
+        // What `wrap` threw, if it did: taken (and cleared) inside the closure,
+        // because no JNI call but the exception ones may be made while an
+        // exception is pending, and the dek copy is zeroed with one.
+        let mut thrown: Option<String> = None;
         let wrapped = with_bridge(|env, cls| {
             let id = alias_arg(env, entry_id)?;
             env.call_static_method(cls, "generateKey", "(Ljava/lang/String;Z)V", &[JValue::Object(&id), JValue::Bool(policy.user_presence as u8)])?;
             let arg = env.byte_array_from_slice(&*dek)?;
             let out = env.call_static_method(cls, "wrap", "(Ljava/lang/String;[B)[B", &[JValue::Object(&id), JValue::Object(&arg)]);
+            if matches!(out, Err(jni::errors::Error::JavaException)) {
+                thrown = Some(take_exception(env));
+            }
             // Zero our copy of the dek in the JVM whatever happened.
             let zeros = [0i8; 32];
             let _ = env.set_byte_array_region(&arg, 0, &zeros);
             let out = JByteArray::from(out?.l()?);
             env.convert_byte_array(&out)
-        })?;
+        });
+        let wrapped = match (wrapped, thrown) {
+            (Ok(w), _) => w,
+            (Err(_), Some(msg)) => return Err(msg),
+            (Err(e), None) => return Err(e),
+        };
         Ok((dek, wrapped))
     }
 
