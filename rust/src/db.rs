@@ -117,7 +117,12 @@ impl Db {
     pub fn open(path: &str) -> Result<Db> {
         let path = path.to_owned();
         Db::spawn(move || {
-            if Path::new(&path).exists() {
+            // An empty file is what a create interrupted right after
+            // `restrict_db_files` leaves behind — still a database to create.
+            let exists = std::fs::metadata(Path::new(&path)).map(|m| m.len() > 0).unwrap_or(false);
+            #[cfg(unix)]
+            restrict_db_files(&path);
+            if exists {
                 Ok(Connection::open(&path)?)
             } else {
                 Ok(Connection::create(&path)?)
@@ -174,6 +179,24 @@ impl Db {
             }))
             .map_err(|_| Error::Env("db thread gone".into()))?;
         rx.recv().map_err(|_| Error::Env("db reply lost".into()))?
+    }
+}
+
+/// Make the database file and its `-journal` / `-wal` companions owner-only
+/// (0600): they hold wrapped key shares. graphitesql opens all three with
+/// "create if missing" and the process umask, so they are created here first
+/// with the restrictive mode, and files left over from an earlier build are
+/// tightened. Best-effort — a failure here surfaces (if at all) as the open
+/// error that follows.
+#[cfg(all(unix, not(target_arch = "wasm32")))]
+fn restrict_db_files(path: &str) {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    for suffix in ["", "-journal", "-wal"] {
+        let p = format!("{path}{suffix}");
+        // No truncate: an existing file keeps its content (and its mode, which
+        // the chmod below then tightens).
+        let _ = std::fs::OpenOptions::new().write(true).create(true).mode(0o600).open(&p);
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
     }
 }
 

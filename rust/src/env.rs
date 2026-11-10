@@ -482,6 +482,15 @@ fn ensure_dir(dir: &Path) -> Result<()> {
             return Err(Error::Env(format!("data path {dir:?} exists and is not a directory")));
         }
     } else {
+        // The data dir holds sql.db (wrapped key shares): a directory we create
+        // is owner-only. A pre-existing directory is the host's and is left
+        // untouched.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)?;
+        }
+        #[cfg(not(unix))]
         std::fs::create_dir_all(dir)?;
     }
     Ok(())

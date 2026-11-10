@@ -90,6 +90,53 @@ fn fetch_current_survives_a_stored_self_reference() {
     }
 }
 
+// --- F5: the data dir and database files are owner-only -------------------
+
+#[cfg(unix)]
+#[test]
+fn data_dir_and_db_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+
+    // A directory we create (parents included) is 0700; the db files 0600.
+    let root = temp_dir("perm");
+    let dir = root.join("nested").join("wallet");
+    let env = Env::init(dir.to_str().unwrap()).unwrap();
+    env.config_set("probe", b"1").unwrap();
+    assert_eq!(mode(&dir), 0o700);
+    assert_eq!(mode(&root), 0o700);
+    let mut seen = 0;
+    for name in ["sql.db", "sql.db-journal", "sql.db-wal"] {
+        let p = dir.join(name);
+        if p.exists() {
+            assert_eq!(mode(&p), 0o600, "{name}");
+            seen += 1;
+        }
+    }
+    assert!(seen >= 1, "sql.db exists");
+    drop(env);
+
+    // Reopening keeps the data; a database left world-readable by an older
+    // build is tightened.
+    std::fs::set_permissions(dir.join("sql.db"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let env = Env::init(dir.to_str().unwrap()).unwrap();
+    assert_eq!(env.config_get("probe").unwrap().as_deref(), Some(&b"1"[..]));
+    assert_eq!(mode(&dir.join("sql.db")), 0o600);
+    drop(env);
+
+    // A pre-existing directory is the host's: its mode is not changed.
+    let existing = temp_dir("perm-existing");
+    std::fs::create_dir_all(&existing).unwrap();
+    std::fs::set_permissions(&existing, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = Env::init(existing.to_str().unwrap()).unwrap();
+    assert_eq!(mode(&existing), 0o755);
+    assert_eq!(mode(&existing.join("sql.db")), 0o600);
+    drop(env);
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&existing);
+}
+
 // --- F2: SSRF guard — IPv4 wrapped in IPv6, and numeric host spellings -----
 
 #[test]
