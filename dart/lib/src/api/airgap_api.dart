@@ -114,6 +114,31 @@ class AirgapApi {
         .toList();
   }
 
+  /// Read the QR codes in a camera frame, for apps without a QR detector:
+  /// [luma] is one byte per pixel, rows top to bottom ([width] × [height]).
+  /// With [decoderId] each code found is also fed to that decoder context and
+  /// its progress is returned, so a scan loop is one call per frame.
+  Future<({List<String> texts, AirgapProgress? progress})> scanFrame({
+    required int width,
+    required int height,
+    required Uint8List luma,
+    String? decoderId,
+  }) async {
+    final data = await _conn.request('Airgap:scanFrame', 'POST', {
+      'Width': width,
+      'Height': height,
+      'Luma': base64.encode(luma),
+      if (decoderId != null) 'Id': decoderId,
+    });
+    final m = Map<String, dynamic>.from(data as Map);
+    return (
+      texts: List<String>.from((m['texts'] as List?) ?? const []),
+      progress: m['progress'] is Map
+          ? AirgapProgress.fromJson(Map<String, dynamic>.from(m['progress'] as Map))
+          : null,
+    );
+  }
+
   // ── Keys ──────────────────────────────────────────────────────────────────
 
   /// Preview the keys in a scanned export without persisting anything. Pass

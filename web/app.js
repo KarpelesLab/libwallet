@@ -2681,7 +2681,7 @@ function hardwareSelect(device) {
   const p = HW_PROFILES[device];
   $('#qrDeviceName').textContent = p.name;
   $('#qrImportHelp').textContent = p.importHelp;
-  $('#qrScanKeys').classList.toggle('hidden', !('BarcodeDetector' in window));
+  $('#qrScanKeys').classList.toggle('hidden', !navigator.mediaDevices?.getUserMedia);
   qrRenderAccounts();
 }
 
@@ -2695,11 +2695,29 @@ async function qrRun(errSel, fn) {
 }
 
 // --- Camera -----------------------------------------------------------------
+// One video frame as base64 luminance, scaled down so a frame stays small.
+function qrFrameLuma(video, canvas) {
+  const scale = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight));
+  const w = Math.max(1, Math.round(video.videoWidth * scale)), h = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, w, h);
+  const rgba = ctx.getImageData(0, 0, w, h).data;
+  let bin = '';
+  for (let i = 0; i < rgba.length; i += 4) {
+    bin += String.fromCharCode((rgba[i] * 77 + rgba[i + 1] * 150 + rgba[i + 2] * 29) >> 8);
+  }
+  return { Width: w, Height: h, Luma: btoa(bin) };
+}
+
 // Scan (possibly animated) QR codes into a libwallet decoder context until the
 // payload is complete. Resolves with the decoder id, or null when cancelled.
+// Codes are read by the browser's detector where it has one, else by libwallet
+// (anyd, in the wasm) from the frame's pixels — so this works in every browser
+// that has a camera.
 async function qrScan(title) {
-  if (!('BarcodeDetector' in window)) throw new Error('This browser cannot scan QR codes. Paste the text or upload the file instead.');
-  const detector = new BarcodeDetector({ formats: ['qr_code'] });
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser has no camera access. Paste the text or upload the file instead.');
+  const detector = 'BarcodeDetector' in window ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
   const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
   const { Id: decoderId } = await backendRequest('Airgap:decoderNew', 'POST', {});
   openModal(`
@@ -2714,28 +2732,43 @@ async function qrScan(title) {
   const video = $('#qrVideo');
   video.srcObject = stream;
   await video.play();
+  const grab = el('canvas');
   const seen = new Set();
+  const progress = p => {
+    if (p && $('#qrScanBar')) $('#qrScanBar').value = p.percent ?? 0;
+    return !!(p && p.complete);
+  };
   try {
     // The modal closing (Cancel, backdrop) ends the scan.
     while ($('#qrVideo') === video) {
-      let codes = [];
-      try { codes = await detector.detect(video); } catch { /* frame not ready */ }
-      for (const c of codes) {
-        const text = c.rawValue;
-        if (!text || seen.has(text)) continue;
-        seen.add(text);
-        try {
-          const p = await backendRequest('Airgap:decoderFeed', 'POST', { Id: decoderId, Part: text });
-          if ($('#qrScanBar')) $('#qrScanBar').value = p.percent ?? 0;
-          if (p.complete) { closeModal(); return decoderId; }
-        } catch (e) { if ($('#qrScanErr')) $('#qrScanErr').textContent = e.message || String(e); }
-      }
-      await sleep(120);
+      try {
+        if (detector) {
+          let codes = [];
+          try { codes = await detector.detect(video); } catch { /* frame not ready */ }
+          for (const c of codes) {
+            const text = c.rawValue;
+            if (!text || seen.has(text)) continue;
+            seen.add(text);
+            if (progress(await backendRequestQuiet('Airgap:decoderFeed', { Id: decoderId, Part: text }))) { closeModal(); return decoderId; }
+          }
+        } else if (video.videoWidth) {
+          const r = await backendRequestQuiet('Airgap:scanFrame', { ...qrFrameLuma(video, grab), Id: decoderId });
+          if (progress(r.progress)) { closeModal(); return decoderId; }
+        }
+      } catch (e) { if ($('#qrScanErr')) $('#qrScanErr').textContent = e.message || String(e); }
+      await sleep(detector ? 120 : 60);
     }
     return null;
   } finally {
     stream.getTracks().forEach(t => t.stop());
   }
+}
+
+// A backend call that stays off the event tape (one per camera frame).
+async function backendRequestQuiet(path, params) {
+  const env = JSON.parse(await wasm.libwallet_request(backend.handle, JSON.stringify({ path, verb: 'POST', params })));
+  if (env.result === 'error') { const e = new Error(env.error || 'Backend error'); e.code = env.code; throw e; }
+  return env.data;
 }
 
 // A file from the device: a binary PSBT becomes base64 (what libwallet takes
@@ -2818,7 +2851,7 @@ function qrSend() {
 }
 
 function qrShowRequest(profile, account, req, codes) {
-  const canScan = 'BarcodeDetector' in window;
+  const canScan = !!navigator.mediaDevices?.getUserMedia;
   const psbt = req.payload && req.payload.psbt;
   openModal(`
     <div class="card-pad stack" style="--gap:16px">

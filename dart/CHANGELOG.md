@@ -12,8 +12,9 @@
   `installedApps()`, `catalog()`, `installApp()`, `uninstallApp()`,
   `firmwareUpdate()` and `firmwareFlash()`.
 - **Air-gapped signers in the browser build.** `Airgap:signRequest` and
-  `Airgap:submitSignature` now work there too, and `client.airgap.qr()` returns
-  QR code modules for apps without a renderer.
+  `Airgap:submitSignature` now work there too. `client.airgap.qr()` returns QR
+  code modules for apps without a renderer, and `client.airgap.scanFrame()`
+  reads the QR codes in a camera frame for apps without a detector.
 - **WalletConnect events.** `walletConnectProposals` and
   `walletConnectRequests` now receive the proposals and requests the backend
   emits (the event names and payload shape did not match before).
