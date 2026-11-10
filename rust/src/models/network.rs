@@ -676,10 +676,22 @@ pub fn validate_rpc_url(raw: &str) -> Result<()> {
     if is_localhost_name(&lhost) {
         return Ok(());
     }
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    let ip = host.parse::<IpAddr>().ok();
+    if let Some(ip) = ip {
         if ip.is_loopback() {
             return Ok(());
         }
+    }
+    // A host we could not parse as an IP literal must be a real DNS name. The
+    // system resolver (getaddrinfo / inet_aton) also accepts numeric IPv4
+    // spellings the strict parser above refuses — a single number
+    // ("167772161"), short dotted forms ("10.1"), octal / 0x-hex components —
+    // and a bracketed IPv6 literal may carry a zone id; all of those would
+    // reach an address the internal-range check below never saw.
+    if ip.is_none() && (host.contains(':') || ends_in_number(&lhost)) {
+        return Err(crate::Error::Env(format!(
+            "RPC URL host {host:?} is not a valid IP address or DNS name"
+        )));
     }
     if scheme != "https" {
         return Err(crate::Error::Env(
@@ -691,7 +703,7 @@ pub fn validate_rpc_url(raw: &str) -> Result<()> {
             "RPC URL host {host:?} (.local mDNS) not allowed"
         )));
     }
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Some(ip) = ip {
         if is_internal_ip(&ip) {
             return Err(crate::Error::Env(format!(
                 "RPC URL points at internal address {ip}"
@@ -699,6 +711,24 @@ pub fn validate_rpc_url(raw: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Whether the last label of `host` (lowercased, no trailing dot) is a number:
+/// all digits, or `0x` followed by hex digits. No DNS name ends that way (TLDs
+/// are never numeric), while every numeric IPv4 spelling the system resolver
+/// understands does — the WHATWG URL "ends in a number" test.
+fn ends_in_number(host: &str) -> bool {
+    let last = host.rsplit('.').next().unwrap_or(host);
+    if last.is_empty() {
+        return false;
+    }
+    if last.bytes().all(|b| b.is_ascii_digit()) {
+        return true;
+    }
+    match last.strip_prefix("0x") {
+        Some(hex) => hex.bytes().all(|b| b.is_ascii_hexdigit()),
+        None => false,
+    }
 }
 
 /// Extract the (lowercased scheme, host-without-port) from a URL. A minimal
@@ -754,6 +784,20 @@ fn is_internal_ip(ip: &IpAddr) -> bool {
                 return true;
             }
             let seg = v6.segments();
+            // An IPv6 form that merely wraps an IPv4 address reaches that IPv4
+            // host, so judge it by the IPv4 rules: IPv4-mapped ::ffff:a.b.c.d,
+            // the deprecated IPv4-compatible ::a.b.c.d, and NAT64 64:ff9b::/96.
+            let v4_prefix = seg[..5] == [0, 0, 0, 0, 0] && (seg[5] == 0xffff || seg[5] == 0);
+            let nat64 = seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0];
+            if v4_prefix || nat64 {
+                let v4 = std::net::Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    seg[6] as u8,
+                    (seg[7] >> 8) as u8,
+                    seg[7] as u8,
+                );
+                return is_internal_ip(&IpAddr::V4(v4));
+            }
             // link-local unicast fe80::/10
             if (seg[0] & 0xffc0) == 0xfe80 {
                 return true;

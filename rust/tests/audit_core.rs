@@ -89,3 +89,58 @@ fn fetch_current_survives_a_stored_self_reference() {
         assert_eq!((n.kind.as_str(), n.chain_id.as_str()), ("evm", "1"));
     }
 }
+
+// --- F2: SSRF guard — IPv4 wrapped in IPv6, and numeric host spellings -----
+
+#[test]
+fn rpc_guard_unwraps_ipv4_embedded_in_ipv6() {
+    for url in [
+        "https://[::ffff:10.0.0.1]/rpc",     // IPv4-mapped private
+        "https://[::ffff:a00:1]/rpc",        // same, hex spelling
+        "https://[::ffff:127.0.0.1]/rpc",    // IPv4-mapped loopback
+        "http://[::ffff:127.0.0.1]:8545",    // ... is not the http escape hatch
+        "https://[::ffff:169.254.169.254]/", // cloud metadata
+        "https://[64:ff9b::a00:1]/rpc",      // NAT64 -> 10.0.0.1
+        "https://[64:ff9b::c0a8:101]/rpc",   // NAT64 -> 192.168.1.1
+        "https://[::10.0.0.1]/rpc",          // IPv4-compatible
+        "https://[fe80::1%25eth0]/rpc",      // zone id: not a parseable literal
+    ] {
+        assert!(network::validate_rpc_url(url).is_err(), "{url} must be rejected");
+    }
+    // Public addresses in the same forms stay allowed.
+    assert!(network::validate_rpc_url("https://[::ffff:8.8.8.8]/rpc").is_ok());
+    assert!(network::validate_rpc_url("https://[64:ff9b::808:808]/rpc").is_ok());
+    assert!(network::validate_rpc_url("https://[2606:4700::1111]/rpc").is_ok());
+}
+
+#[test]
+fn rpc_guard_rejects_numeric_host_spellings() {
+    for url in [
+        "https://167772161/rpc",  // 10.0.0.1 as one number
+        "https://2130706433/rpc", // 127.0.0.1
+        "https://10.1/rpc",       // short dotted form
+        "https://192.168.257/rpc",
+        "https://0x0a000001/rpc", // hex
+        "https://0xa.0.0.1/rpc",
+        "https://0XA.0.0.0X1/rpc",
+        "https://012.0.0.1/rpc",  // octal component
+        "https://10.0.0.1./rpc",  // trailing dot
+        "http://127.1:8545",      // not the loopback escape hatch either
+        "https://0x/rpc",
+    ] {
+        assert!(network::validate_rpc_url(url).is_err(), "{url} must be rejected");
+    }
+    // Ordinary names (including digit-heavy ones) and literals are unaffected.
+    for url in [
+        "https://mainnet.example/rpc",
+        "https://1rpc.io/eth",
+        "https://123.example.com/rpc",
+        "https://rpc.0x.example/rpc",
+        "https://8.8.8.8/rpc",
+        "http://localhost:8545",
+        "http://127.0.0.1:8545",
+        "http://[::1]:8545",
+    ] {
+        assert!(network::validate_rpc_url(url).is_ok(), "{url} must be accepted");
+    }
+}
