@@ -8,6 +8,12 @@
   on iOS and Android the app relays the APDUs with `client.ledger.bridge()`.
   A signature is only returned when it verifies under the account's key over
   what was requested. See `docs/ledger.md`.
+- **Ledger device management.** `client.ledger.status()`, `genuineCheck()`,
+  `installedApps()`, `catalog()`, `installApp()`, `uninstallApp()`,
+  `firmwareUpdate()` and `firmwareFlash()`.
+- **Air-gapped signers in the browser build.** `Airgap:signRequest` and
+  `Airgap:submitSignature` now work there too, and `client.airgap.qr()` returns
+  QR code modules for apps without a renderer.
 - **WalletConnect events.** `walletConnectProposals` and
   `walletConnectRequests` now receive the proposals and requests the backend
   emits (the event names and payload shape did not match before).

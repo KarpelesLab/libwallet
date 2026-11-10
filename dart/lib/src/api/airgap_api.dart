@@ -101,6 +101,19 @@ class AirgapApi {
     return List<String>.from((data as Map)['parts'] as List);
   }
 
+  /// The QR code modules for [frames], for apps without a QR renderer: one
+  /// square matrix per frame, `true` = dark. [ecc] is `L`, `M`, `Q` or `H`.
+  Future<List<List<List<bool>>>> qr(List<String> frames,
+      {String ecc = 'L'}) async {
+    final data = await _conn
+        .request('Airgap:qr', 'POST', {'Parts': frames, 'Ecc': ecc});
+    return ((data as Map)['codes'] as List)
+        .map((c) => ((c as Map)['rows'] as List)
+            .map((r) => (r as String).codeUnits.map((u) => u == 0x31).toList())
+            .toList())
+        .toList();
+  }
+
   // ── Keys ──────────────────────────────────────────────────────────────────
 
   /// Preview the keys in a scanned export without persisting anything. Pass
