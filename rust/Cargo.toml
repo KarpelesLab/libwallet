@@ -82,7 +82,7 @@ ciborium = "0.2"
 # Android, which have neither — the host can relay APDUs itself ("bridge").
 # lsdk's own `manager` feature (reqwest + tokio-tungstenite) is deliberately
 # not used: device management (src/ledger/manage.rs) runs on rsurl instead.
-lsdk = { version = "0.0.1", default-features = false, features = ["apps"] }
+lsdk = { version = "0.1.0", default-features = false, features = ["apps"] }
 compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
 # QR code modules for the air-gap frames (Airgap:qr), for hosts — the web
 # wallet — without a renderer of their own. Pure Rust, no dependencies.
@@ -116,7 +116,7 @@ spotlib = "0.1.3"
 # Desktop: lsdk's native USB HID transport (hidapi — the one C dependency;
 # on Linux it links libudev).
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
-lsdk = { version = "0.0.1", default-features = false, features = ["apps", "hid"] }
+lsdk = { version = "0.1.0", default-features = false, features = ["apps", "hid"] }
 
 # Android vault backend: JNI calls into the plugin's Kotlin VaultBridge.
 [target.'cfg(target_os = "android")'.dependencies]
@@ -132,7 +132,7 @@ chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 graphitesql = { version = "0.1.7", default-features = false }
 uuid = { version = "1", features = ["js"] }
 rsurl = { version = "0.1.19", default-features = false, features = ["purecrypto-tls"] }
-lsdk = { version = "0.0.1", default-features = false, features = ["apps", "webhid"] }
+lsdk = { version = "0.1.0", default-features = false, features = ["apps", "webhid"] }
 # spotlib's `native` feature (thread/blocking transport) is forbidden on wasm;
 # the browser build uses its async fetch/WebSocket transport instead. Needed for
 # the distributed keygen/sign ceremonies (Phase 2).

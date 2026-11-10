@@ -2,7 +2,7 @@
 
 libwallet can use a Ledger device (Nano S / S Plus / X, Stax, Flex) as the
 signer for Ethereum, Bitcoin and Solana accounts, through the
-[`lsdk`](https://crates.io/crates/lsdk) crate.
+[`lsdk`](https://crates.io/crates/lsdk) crate (0.1).
 
 A Ledger wallet has `Protocol: "ledger"`. Like an air-gapped signer wallet it
 holds watch-only accounts: the public keys were read from the device, and each
