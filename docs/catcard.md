@@ -134,8 +134,8 @@ call   CatCard:pairResponse  {"Id": "pair-…", "Accept": true}     the user com
                           or {"Id": "pair-…", "Accept": false}    they differ, or the user cancelled
 ```
 
-The first route that needs the channel (`getKeys`, `signTransaction`) starts
-the handshake and emits `catcard:pair`; show the code, large, next to "does
+The first route that needs the channel (`getKeys`, `signTransaction`,
+`showAddress`, `signMessage`) starts the handshake and emits `catcard:pair`; show the code, large, next to "does
 your CatCard show the same code?", and answer only on the user's tap. The
 device shows the same code and asks its owner. The call waits up to two
 minutes for each of them. `bench: true` means the device runs a development
@@ -152,11 +152,44 @@ handshakes abandoned before their reveal it blocks pairing until its owner
 dismisses a warning. libwallet starts one handshake per call and never
 retries on its own.
 
+## Firmware versions
+
+Every CatCard firmware with the host-wallet protocol shares an account's
+addresses and signs transactions. Newer firmware adds three requests: the
+address at one path (which can also be shown on the device), a signature over
+a message, and `HostInfo`, which says what the firmware answers. libwallet
+sends `HostInfo` once per paired session; a firmware that does not know it has
+the original requests only, and on such a device:
+
+- `CatCard:showAddress`, `CatCard:signMessage` and `CatCard:getKeys {Paths}`
+  answer **501**, saying the device's firmware is too old;
+- everything else works as before.
+
+`CatCard:info` reports what the device said as `hostInfo`:
+
+```
+"hostInfo": {
+  "legacy": false,            true: older firmware, the original requests only
+  "addressAt": true,          showAddress and getKeys {Paths} work
+  "signMessage": true,        signMessage works
+  "pathsAllowed": false,      the owner ticked "Allow during session" (below)
+  "shared": true,             something was shared this session
+  "messageMax": 960,          longest message, in bytes
+  "chains": [{"chain": 1, "name": "Bitcoin", "addresses": true, "sign": true,
+              "messages": true, "formats": ["p2wpkh", "p2sh:p2wpkh", "p2pkh", "p2tr"]}, …]
+}
+```
+
+`HostInfo` only travels inside the paired channel, and `CatCard:info` never
+starts a pairing: `hostInfo` is `null` until some other call has paired, and
+is asked afresh on each `info` after that.
+
 ## Reading accounts
 
 ```
-CatCard:info     → {board, firmware, protocol, unlocked, blank, pairing, hostWallet, bench, paired}
+CatCard:info     → {board, firmware, protocol, unlocked, blank, pairing, hostWallet, bench, paired, hostInfo}
 CatCard:getKeys  {Account?, Scripts?}       → {format: "catcard", master_fingerprint, version, keys: […]}
+CatCard:getKeys  {Paths, Chain?, Format?}   → the same shape, one key per path
 CatCard:import   {Keys, Name?, Wallet?}     → {wallet, accounts, skipped}
 ```
 
@@ -176,14 +209,59 @@ multichain build) ticks the chains. For that account the device shares:
 - **Solana** — the key at `m/44'/501'/n'/0'`.
 
 `Account`, when given, is only a check: if the owner picked another account
-the call fails (409). `Count` other than 1 and `Paths` are refused — the
-protocol shares one account, at its standard paths. Chains the device shares
+the call fails (409). `Count` other than 1 is refused — the device shares one
+account per request. Chains the device shares
 but does not sign for (Litecoin, Dogecoin, Bitcoin Cash, Monacoin, Namecoin,
 Electra Protocol, Tron) come back with `chain: "unsupported"` and a `reason`,
 and are skipped on import; so are Bitcoin test-network keys.
 
+### Keys by their path
+
+With `Paths` (newer firmware) the host names the keys instead, and no account
+is shared:
+
+```
+CatCard:getKeys {Paths: ["m/44'/60'/0'/0/1", "m/44'/501'/1'/0'"], Chain?, Format?}
+```
+
+Each path is asked for on its own, in order, on one session. The chain is read
+from the path's coin type (`0'` Bitcoin, `60'` Ethereum, `501'` Solana);
+`Chain` (`bitcoin`, `ethereum`, `solana`) names it for a path that does not
+say, and applies to every path of the request. `Format` is the Bitcoin script
+kind (`p2wpkh`, `p2sh:p2wpkh`, `p2pkh`, `p2tr`) when the path's purpose
+(`84'`, `49'`, `44'`, `86'`) does not give it. A Solana path is hardened
+throughout. At most 32 paths per request; `Account` cannot be combined with
+`Paths`.
+
+- **Ethereum, Solana** — the key comes back as a leaf key, and `CatCard:import`
+  takes it like any other.
+- **Bitcoin** — a path names one address key, not an account: there is no
+  extended key to derive the account's other addresses from. It comes back
+  with `chain: "unsupported"`, its `address`, `pubkey` and `script`, and a
+  `reason`; `CatCard:import` skips it. Use it to read or check a single
+  address. To import a Bitcoin account, share it without `Paths`.
+
+#### "Allow during session"
+
+For each address asked by its path the device's owner sees "Computer asks for
+the <chain> address at" with the path in full, then:
+
+```
+[ ] Allow during session
+    Share it
+```
+
+"Share it" shares that one address. Ticking **Allow during session** first
+also lets this session have any later address by its path *without a
+question* — until the session ends (unplug, logout, a new pairing, a change of
+passphrase). It is worth telling the user what that means: the computer can
+then learn the public key and address at any path it names, which is enough
+to learn which addresses are this wallet's. It covers nothing else — sharing
+an account and every signature are still asked for — and it is never stored.
+`hostInfo.pathsAllowed` reports it.
+
 While the device's owner is being waited for, `catcard:waiting` events report
-`{for: "addresses" | "signature", stage: "queued" | "deciding"}` (`queued`:
+`{for: "addresses" | "address" | "signature" | "message", stage: "queued" | "deciding"}` (`queued`:
 they are in another menu, and the device asks when they are back on one). The
 call waits up to fifteen minutes.
 
@@ -216,11 +294,24 @@ The device shows its ordinary review for the chain — what *it* parsed: amounts
 destinations, the fee, the signing address — and its owner approves or cancels
 there.
 
-**The device only signs with keys of an account it shared in the same
-session.** After a reconnect the first `signTransaction` therefore asks the
-device to share its addresses again, and its owner must pick the account the
-transaction's account belongs to (and its chain); otherwise the call fails
-with 409 and says which account to pick.
+**The device only signs with keys it shared in the same session** — keys
+below an account it shared, or a key it shared by its own path. After a
+reconnect the first request that signs therefore asks first:
+
+- **Ethereum, Solana** (one key per account) — for that one key by its path:
+  the owner answers one question about one key, or none if they ticked
+  "Allow during session". On older firmware the device is asked to share its
+  addresses again instead, and its owner must pick the account the
+  transaction's account belongs to (and its chain); otherwise the call fails
+  with 409 and says which account to pick.
+- **Bitcoin** — always to share its addresses again: a spend's inputs sit on
+  many keys below the account, so the account itself must be shared. Its
+  owner must pick that account.
+
+The device remembers the sixteen latest keys it shared by path. If it reports
+that a key libwallet believed shared no longer is (its owner changed the
+passphrase, which drops everything shared), the call fails with 409 and the
+next one asks again.
 
 Nothing the device returns is trusted on its own:
 
@@ -240,29 +331,91 @@ Nothing the device returns is trusted on its own:
 
 A signature from other keys is refused with code 409.
 
-## What the protocol does not have
+## Showing an address
 
-The firmware's host protocol has two questions — share addresses, sign a
-transaction — and nothing else. These routes exist for symmetry with
-`Ledger:*` and answer 501:
+```
+CatCard:showAddress {Account}   → {address, account, path}
+```
 
-- `CatCard:showAddress` — there is no command to display one address. The
-  device's own Address Explorer shows them; `CatCard:getKeys` checks that the
-  device still derives the addresses libwallet holds.
-- `CatCard:signMessage` — a sign request carries a Bitcoin PSBT, an EVM
-  transaction or a Solana transaction, never a message. (EIP-712 typed data
-  likewise.)
+Newer firmware only (501 otherwise). The device puts the account's address on
+its screen — "Same as the computer shows?" — and the call returns once its
+owner has said it matches (4001 if they say it does not, or decline to share
+it). Show the same address in your UI while they compare.
 
-Also not available over this protocol: choosing the account from the host,
-arbitrary derivation paths, multisig, and signing for the address-only chains.
-Firmware upgrades and the bench/debug commands are deliberately not
-implemented here.
+The address is the account's own for Ethereum and Solana, and the **first
+receive address** (`…/0/0` below the account key, in the account's script
+type) for Bitcoin; `path` says which key was shown. The comparison screen
+appears even when "Allow during session" was ticked.
+
+libwallet checks the device's answer as well: the public key and the address
+it reports must be the ones held for the account, or the call fails with 409
+("the device shows …, but this account is …") — another device, or another
+passphrase.
+
+## Signing a message
+
+```
+CatCard:signMessage {Account, Message, Scheme?}
+                                → {signature, account, address, scheme, verified, path?}
+```
+
+Newer firmware only (501 otherwise). `Message` is base64. The device's owner
+reads the message on the device, with the address that signs, and approves.
+
+| Account | `Scheme` | `signature` | Verified by libwallet |
+|---|---|---|---|
+| Ethereum | `eip191` (default; the only one) | `0x` + 65 bytes `r‖s‖v` hex, `v` 27/28 | yes: recovers to the account |
+| Bitcoin `p2wpkh`, `p2sh:p2wpkh`, `p2pkh` | `bip137` (default) | base64 of the 65 bytes | yes: recovers to the key at `path` |
+| Bitcoin `p2wpkh`, `p2tr` | `bip322` (default for `p2tr`) | base64 of the witness stack | **no** |
+| Bitcoin `p2wpkh`, `p2sh:p2wpkh`, `p2tr` | `bip322-full` | base64 of the `to_sign` transaction | **no** |
+
+A Bitcoin message is signed with the account's first receive address (`…/0/0`);
+`path` reports the key and `address` the address. A scheme that does not sign
+for the account's address type (BIP-137 for taproot, BIP-322 simple for
+`p2sh:p2wpkh` or `p2pkh`, any BIP-322 for `p2pkh`) is refused with 400 before
+the device is involved.
+
+**libwallet does not verify BIP-322 signatures** — it has no BIP-322 verifier.
+For those it checks only that the device answered for the request that was
+made and that the address it signed for is the account's; the signature
+itself is the device's word, and the result says `verified: false`. Verify it
+with your own tooling if it matters. (The firmware runs its own BIP-322
+verifier before handing the signature back.)
+
+**What can be signed.** The device signs only text its screen shows
+faithfully, and refuses the rest:
+
+- Bitcoin: one line of printable ASCII, at most 240 characters.
+- Ethereum: printable ASCII in at most 24 lines and 960 bytes; no line
+  beginning or ending with a space; no blank first or last line.
+
+libwallet applies these rules before asking the device and answers **400**
+with the device's wording ("message too long", "plain ASCII only", "a line
+starts or ends blank", …). A message that passes them but is too long for
+that board's screen is refused by the device itself, also reported as 400
+with its reason ("too long to show here").
+
+**Not signed:** EIP-712 typed data, raw digests, Solana messages, and messages
+for the address-only chains. A Solana account gets 400; `hostInfo.chains[].messages`
+says which chains a firmware signs messages for.
+
+The key must have been shared in the session. If it has not, libwallet first
+asks the device for it by its path (the owner sees the share question, unless
+they allowed addresses for the session), then for the signature.
+
+## What is not available
+
+Not available over this protocol: choosing the account from the host for an
+account share, importing a Bitcoin account from a path, multisig, EIP-712,
+and signing for the address-only chains. Firmware upgrades and the
+bench/debug commands are deliberately not implemented here.
 
 Error codes: 404 no device, 502 the link failed or the card refused the APDU, 423 device locked, 409 wrong device / wrong
 account shared / device busy, 4001 refused on the device or the pairing code
-not confirmed, 403 the device refused the request (with its reason), 408
-nobody answered, 410 the session ended, 501 not something this protocol or
-this firmware can do.
+not confirmed, 403 the device refused the request (with its reason), 400 a
+request the device would not take (a message it does not sign, with its
+reason), 408 nobody answered, 410 the session ended, 501 not something this
+protocol or this device's firmware can do.
 
 ## What has been verified
 
@@ -280,9 +433,19 @@ No physical device was available when this was written.
   signs for real from a test mnemonic. Every operation is also run through a
   simulated card (command chaining, and with short APDUs replies paged by
   `GET RESPONSE`).
+- The address-by-path, message and `HostInfo` layouts match the firmware's
+  pinned vectors (`catcard-usb`'s `hostwallet` tests, `tools/hostwallet.py
+  --selftest`). Showing an address, signing messages, keys by path, the
+  session allowance and the old-firmware fallback run against the same
+  simulated device, which produces real EIP-191 and BIP-137 signatures. Its
+  BIP-322 answers are placeholders: libwallet does not verify those, and
+  nothing here tests that a real one is well formed. These requests were
+  written against firmware changes that were not yet committed, and may still
+  move.
 - Not exercised: a real device over USB HID (including which hidapi backend
   reports the vendor usage page on each OS), WebHID in a browser, the
   smart-card reader on a phone (CryptoTokenKit, or Android's CCID path) or
   through a desktop PC/SC stack, and the firmware's actual review and signing
-  behaviour. The firmware's own documentation says its reader has not yet been
+  behaviour — including its screens for sharing an address, comparing one
+  and reading a message, and what each board's panel refuses as too long. The firmware's own documentation says its reader has not yet been
   exercised against an iPhone or on hardware.
