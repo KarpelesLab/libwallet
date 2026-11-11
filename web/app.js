@@ -2347,7 +2347,7 @@ function confirmRemove() {
 // opening the one needed, and offering to install it when it is missing.
 // ============================================================================
 
-const LEDGER_APPS = { ethereum: 'Ethereum', bitcoin: 'Bitcoin', solana: 'Solana' };
+const LEDGER_APPS = { ethereum: 'Ethereum', bitcoin: 'Bitcoin', solana: 'Solana', tron: 'Tron' };
 const LEDGER_DECIMALS = { ethereum: 18, bitcoin: 8, solana: 9 };
 const LEDGER_SYMBOL = { ethereum: 'ETH', bitcoin: 'BTC', solana: 'SOL' };
 const ledger = { wired: false, connected: false, busy: false, wallet: null, accounts: [], update: null, installed: null };
@@ -2847,17 +2847,20 @@ function qrDraw(canvas, code) {
 
 // Show an unsigned request as an (animated) QR for the device and take its
 // signed answer back — by camera, file or paste — then broadcast. Resolves with
-// the transaction id; rejects with "Cancelled." when the user backs out.
+// the transaction id (or, for a message request, the signature); rejects with
+// "Cancelled." when the user backs out.
 function qrSignFlow(profile, req, codes) {
   return new Promise((resolve, reject) => {
     const canScan = !!navigator.mediaDevices?.getUserMedia;
     const psbt = req.payload && req.payload.psbt;
+    // A message or typed-data request carries its scheme; a transaction does not.
+    const what = req.payload && req.payload.scheme ? 'message' : 'transaction';
     let timer = null, scanning = false, settled = false;
     const finish = (fn, v) => { if (settled) return; settled = true; clearInterval(timer); fn(v); };
     const submit = async source => {
       // The route waiting on this request (see airgapSignEvent) takes it from here.
       const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id });
-      finish(resolve, String(out.id ?? ''));
+      finish(resolve, String((out.type === 'message' ? out.signature : out.id) ?? ''));
     };
     const show = error => {
       openModal(`
@@ -2865,7 +2868,7 @@ function qrSignFlow(profile, req, codes) {
           <div class="eyebrow">${esc(profile.name)} · step 1 of 2</div>
           <h2 class="title">Scan with your device</h2>
           <canvas id="qrCanvas" style="width:100%;max-width:360px;margin:0 auto;border-radius:10px"></canvas>
-          <p class="subtitle">${codes.length > 1 ? `Animated QR · ${codes.length} frames. ` : ''}Review and approve the transaction on the device, then bring its answer back.</p>
+          <p class="subtitle">${codes.length > 1 ? `Animated QR · ${codes.length} frames. ` : ''}Review and approve the ${what} on the device, then bring its answer back.</p>
           <div class="err-inline" id="qrReqErr">${esc(error || '')}</div>
           <div class="btn-row wrap">
             ${canScan ? '<button class="btn primary grow" type="button" id="qrAnswerScan">Scan the signed answer</button>' : ''}

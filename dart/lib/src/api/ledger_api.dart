@@ -186,8 +186,10 @@ class LedgerApi {
   }
 
   /// Sign [message] with [account] on the device: Ethereum `personal_sign`
-  /// (returns `0x` + 65-byte r‖s‖v hex) or a Bitcoin message signature
-  /// (base64). Solana accounts are not supported.
+  /// or a Tron `signMessageV2` (returns `0x` + 65-byte r‖s‖v hex), a Bitcoin
+  /// message signature (base64), or — for a Solana account — the signature
+  /// (base58) over the off-chain message wrapping the text; use
+  /// [signSolanaMessage] to also get those signed bytes.
   Future<String> signMessage({
     required String account,
     required Uint8List message,
@@ -197,6 +199,43 @@ class LedgerApi {
       ..._link(link),
       'Account': account,
       'Message': base64.encode(message),
+    });
+    return (data as Map)['signature'] as String;
+  }
+
+  /// Sign the text [message] with a Solana [account]. The Solana app does not
+  /// sign bare bytes: it signs the off-chain message that wraps the text
+  /// (signing domain, version, the signer, the length). A verifier must check
+  /// the signature over `signedMessage`, not over [message].
+  Future<({String signature, Uint8List signedMessage})> signSolanaMessage({
+    required String account,
+    required Uint8List message,
+    LedgerLink? link,
+  }) async {
+    final data = await _conn.request('Ledger:signMessage', 'POST', {
+      ..._link(link),
+      'Account': account,
+      'Message': base64.encode(message),
+    }) as Map;
+    return (
+      signature: data['signature'] as String,
+      signedMessage: base64.decode(data['signedMessage'] as String),
+    );
+  }
+
+  /// Sign EIP-712 [typedData] (the JSON) with an Ethereum [account]: `0x` +
+  /// 65-byte r‖s‖v hex. The device is given the domain separator and the
+  /// message hash and shows those — it cannot display the typed data itself
+  /// (the Ethereum app's blind-signing setting must allow it).
+  Future<String> signTypedData({
+    required String account,
+    required String typedData,
+    LedgerLink? link,
+  }) async {
+    final data = await _conn.request('Ledger:signTypedData', 'POST', {
+      ..._link(link),
+      'Account': account,
+      'TypedData': typedData,
     });
     return (data as Map)['signature'] as String;
   }

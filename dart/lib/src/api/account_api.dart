@@ -180,6 +180,21 @@ class AccountApi {
     return SignedMessage.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
+  /// Sign EIP-712 [typedData] (the JSON) with an Ethereum account: 0x-hex
+  /// 65-byte r‖s‖v. [keys] unlock a software wallet; a hardware wallet's
+  /// account signs on its device (pass an empty list).
+  Future<SignedMessage> signTypedData(
+    String id, {
+    required String typedData,
+    required List<Map<String, dynamic>> keys,
+  }) async {
+    final data = await _conn.request('Account/$id:signTypedData', 'POST', {
+      'TypedData': typedData,
+      'Keys': keys,
+    });
+    return SignedMessage.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
   /// Sign a serialized Solana transaction (legacy or v0, e.g. a swap or dApp
   /// transaction). The account's signature goes into its own signer slot;
   /// the message and other signers' slots are left untouched, so a partially

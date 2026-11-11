@@ -9,10 +9,16 @@ class SignedMessage {
   /// Base58-encoded public key of the signer (Solana mode only; null for EVM).
   final String? publicKey;
 
-  const SignedMessage({required this.signature, this.publicKey});
+  /// The bytes the signature is over (base64), when they are not the message
+  /// itself: a Ledger signs a Solana message wrapped as an off-chain message.
+  final String? signedMessage;
+
+  const SignedMessage(
+      {required this.signature, this.publicKey, this.signedMessage});
 
   factory SignedMessage.fromJson(Map<String, dynamic> json) => SignedMessage(
         signature: json['signature'] as String,
         publicKey: json['publicKey'] as String?,
+        signedMessage: json['signedMessage'] as String?,
       );
 }

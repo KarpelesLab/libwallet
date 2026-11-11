@@ -454,9 +454,26 @@ No physical device was available when this was written.
 
 > The generic routes work too. `Account:signTransaction`,
 > `Account:signAndSendTransaction`, `Account:signMessage`,
-> `Transaction:signAndSend` and the dApp request approvals see that the
-> account is on a hardware wallet and have the device sign — no `Keys`; the
-> link params (`Transport`, …) pass through. An air-gapped account makes the
-> call emit `airgap:sign` and wait for `Airgap:submitSignature`
-> (or `Airgap:cancelSign`). Hardware wallets are not included in
+> `Account:signTypedData`, `Transaction:signAndSend`, `Swap:execute` and the
+> dApp request approvals see that the account is on a hardware wallet and
+> have the device sign — no `Keys`; the link params (`Transport`, …) pass
+> through. An air-gapped account makes the call emit `airgap:sign` and wait
+> for `Airgap:submitSignature` (or `Airgap:cancelSign`) — for a message or
+> typed data as for a transaction. Hardware wallets are not included in
 > `Wallet:backup`.
+>
+> | | Ledger | Air-gapped (Keystone UR) | CatCard |
+> |---|---|---|---|
+> | Bitcoin, EVM, Solana transactions | yes | yes | yes |
+> | Tron transactions (TRX, TRC-20) | yes (Tron app) | yes (`tron-sign-request`) | 501 — no firmware request |
+> | `personal_sign`, Bitcoin messages | yes | yes | yes |
+> | EIP-712 typed data | yes, as two hashes | yes (the JSON is shown) | 501 — no firmware request |
+> | Solana messages | yes, as an off-chain message | yes | 501 — no firmware request |
+> | Tron messages | yes | yes | 501 — no firmware request |
+>
+> A serialized Solana transaction that other parties sign too gets this
+> account's signature in its own slot; it is only sent once none is missing
+> (`missingSignatures` in the result). A Bitcoin `Transaction` may be the
+> explicit `{UTXOs: [{txid, vout, amount, path}], Outputs: [{address, amount,
+> path?}]}` — every input is spent, what is left over is the fee, and an
+> output with a `path` (`m/1/5`) is marked as the account's own.

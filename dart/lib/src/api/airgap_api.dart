@@ -215,6 +215,42 @@ class AirgapApi {
     return AirgapSignRequest.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
+  /// Build the request for [account] to sign a message on the signer: give
+  /// [message] (bytes, signed the chain's way — Ethereum `personal_sign`, a
+  /// Solana message, a Bitcoin signed message, a Tron `signMessageV2`) or
+  /// [typedData] (EIP-712 JSON, Ethereum accounts only).
+  ///
+  /// The frames are the signer's own request type (`eth-sign-request`,
+  /// `sol-sign-request`, `btc-sign-request`, `tron-sign-request`). Hand the
+  /// answer to [submitSignature]: it comes back with
+  /// [AirgapSignedTransaction.isMessage] set and the signature in
+  /// [AirgapSignedTransaction.signature], in the encoding
+  /// `Account.signMessage` returns for that chain — and only if it is that
+  /// account's signature over exactly this message.
+  Future<AirgapSignRequest> signMessageRequest({
+    required String account,
+    Uint8List? message,
+    String? typedData,
+    String transport = 'ur',
+    int? maxFragmentLen,
+    int? maxPartLen,
+    int? extraParts,
+  }) async {
+    if ((message == null) == (typedData == null)) {
+      throw ArgumentError('give exactly one of message and typedData');
+    }
+    final data = await _conn.request('Airgap:signRequest', 'POST', {
+      'Account': account,
+      if (message != null) 'Message': base64.encode(message),
+      if (typedData != null) 'TypedData': typedData,
+      'Transport': transport,
+      if (maxFragmentLen != null) 'MaxFragmentLen': maxFragmentLen,
+      if (maxPartLen != null) 'MaxPartLen': maxPartLen,
+      if (extraParts != null) 'ExtraParts': extraParts,
+    });
+    return AirgapSignRequest.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
   /// Turn the signer's answer (`eth-signature`, `sol-signature`, a signed
   /// `crypto-psbt`/BBQr PSBT, or a bare hex/base64 signature) into a signed
   /// transaction. [requestId] is required when the answer carries none
@@ -438,13 +474,19 @@ class AirgapSignRequest {
 /// A signed, assembled transaction.
 class AirgapSignedTransaction {
   final String? requestId;
+  /// `transaction`, or `message` for the answer to a message request.
+  final String type;
   final String chain;
   final String account;
-  /// bitcoin/ethereum: `0x`-hex raw tx; solana: base58 raw tx.
+  /// bitcoin/ethereum: `0x`-hex raw tx; solana: base58 raw tx; tron: the hex
+  /// `broadcasthex` takes. Empty for a message.
   final String raw;
-  /// bitcoin txid / ethereum tx hash / solana signature.
+  /// bitcoin / tron txid, ethereum tx hash, solana signature. Empty for a
+  /// message.
   final String id;
-  /// The signature as received (hex), when the signer returned one.
+  /// A transaction: the signature as received (hex), when the signer
+  /// returned one. A message: the signature, encoded as `Account.signMessage`
+  /// returns it for the chain.
   final String signature;
   /// bitcoin: the finalized PSBT (base64).
   final String? psbt;
@@ -453,6 +495,7 @@ class AirgapSignedTransaction {
 
   AirgapSignedTransaction.fromJson(Map<String, dynamic> j)
       : requestId = j['request_id'] as String?,
+        type = j['type'] as String? ?? 'transaction',
         chain = j['chain'] as String,
         account = j['account'] as String? ?? '',
         raw = j['raw'] as String,
@@ -460,4 +503,7 @@ class AirgapSignedTransaction {
         signature = j['signature'] as String? ?? '',
         psbt = j['psbt'] as String?,
         broadcast = j['broadcast'];
+
+  /// Whether this is a message signature rather than a signed transaction.
+  bool get isMessage => type == 'message';
 }

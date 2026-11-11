@@ -1,5 +1,37 @@
 ## Unreleased
 
+- **Hardware wallets sign more.** All of this goes through the generic routes
+  (`Account.signTransaction`, `signAndSendTransaction`, `signMessage`, the new
+  `Account.signTypedData`, `Transaction.signAndSend`, dApp approvals) as well
+  as the device-specific ones.
+  - **Swaps.** `Swap.execute` signs on the device when the account is on a
+    hardware wallet; no `keys` are needed.
+  - **Tron.** Ledger (Tron app) and air-gapped signers (Keystone
+    `tron-sign-request`) hold and sign for Tron accounts: TRX and TRC-20
+    transfers, and messages. Tron keys in a signer's export are now imported.
+  - **Messages on air-gapped signers.** `client.airgap.signMessageRequest()`
+    builds the request for an Ethereum `personal_sign`, EIP-712 typed data, a
+    Solana message, a Bitcoin message or a Tron message; `submitSignature()`
+    returns the signature (`isMessage`), accepted only if it is the account's
+    over that message. Through the generic routes it arrives as an
+    `airgap:sign` event like a transaction.
+  - **Typed data on Ledger.** `client.ledger.signTypedData()`. The device
+    shows the two EIP-712 hashes, not the data.
+  - **Solana messages on Ledger.** The Solana app signs the text wrapped as an
+    off-chain message; `SignedMessage.signedMessage` /
+    `client.ledger.signSolanaMessage()` return the bytes the signature is
+    over. A verifier expecting a signature over the bare message rejects it.
+  - **Solana transactions with several signers** get the hardware account's
+    signature in its slot (`missingSignatures` in the result) instead of
+    being refused.
+  - **Bitcoin `{UTXOs, Outputs}`** is accepted for hardware accounts.
+  - **CatCard** still answers 501 for Tron, typed data and Solana messages:
+    its firmware has no request for them.
+- **Fixed: a crash on macOS when HID devices were listed more than once**
+  (`Ledger.list` / `CatCard.list` from different requests), which also made
+  the FFI integration test abort now and then.
+- `AirgapSignedTransaction.type` / `isMessage`.
+
 - **CatCard hardware wallets (`client.catcard`).** Use a CatCard (our open
   firmware for Coldcard hardware) as the signer for Bitcoin, Ethereum and
   Solana accounts over its own USB protocol: `getKeys()` / `importKeys()` read
