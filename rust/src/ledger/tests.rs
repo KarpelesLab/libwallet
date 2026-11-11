@@ -391,3 +391,42 @@ fn bridge_relays_apdus_through_the_host() {
     assert_eq!(err.code, 404);
     env.set_event_sink(None);
 }
+
+/// The generic routes sign for a Ledger account on the device, and persist a
+/// Transaction row for `Transaction:signAndSend`.
+#[test]
+fn generic_routes_sign_on_the_device() {
+    use std::sync::Arc;
+    let env = Arc::new(env());
+    crate::models::transaction::init(&env).unwrap();
+    env.set_event_sink(Some(Box::new(|ev: &str| {
+        let ev: Value = serde_json::from_str(ev).unwrap();
+        if ev["event"] != "ledger:apdu" {
+            return;
+        }
+        let id = ev["data"]["id"].as_str().unwrap().to_owned();
+        let apdu = unhex(ev["data"]["apdu"].as_str().unwrap()).unwrap();
+        std::thread::spawn(move || {
+            transport::bridge_resolve(&id, Ok(FakeLedger::new("Ethereum", MNEMONIC).handle(&apdu)));
+        });
+    })));
+    let account = import_app(&env, "Ethereum", None).accounts.remove(0);
+
+    // Account:signTransaction — no Keys, the device signs.
+    let out = crate::handlers::account::sign_transaction(&env, &json!({ "Id": account.id, "Transaction": evm_tx(), "Transport": "bridge" })).unwrap();
+    let raw = unhex(out["raw"].as_str().unwrap()).unwrap();
+    assert!(crate::evm::recover_sender(&raw).unwrap().eq_ignore_ascii_case(&account.address), "{out}");
+    assert_eq!(out["hash"], out["id"]);
+
+    // Account:signMessage.
+    use base64::Engine;
+    let msg = base64::engine::general_purpose::STANDARD.encode("hello ledger");
+    let out = crate::handlers::account::sign_message(&env, &json!({ "Id": account.id, "Message": msg, "Transport": "bridge" })).unwrap();
+    assert_eq!(out["signature"].as_str().unwrap(), crate::walletcore::sign_evm_personal(MNEMONIC, "", "hello ledger").unwrap());
+
+    // Tron has no hardware path.
+    let tron: Account = serde_json::from_value(json!({ "Id": "acct-t", "Wallet": account.wallet, "Type": "tron" })).unwrap();
+    let err = run(crate::handlers::signer::sign_transaction(&env, &tron, "ledger", &json!({ "Transaction": {} }), false)).unwrap_err();
+    assert_eq!(err.code, 501, "{}", err.message);
+    env.set_event_sink(None);
+}

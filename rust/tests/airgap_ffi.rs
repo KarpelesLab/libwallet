@@ -15,7 +15,7 @@ use std::time::Duration;
 use base64::Engine;
 use libwallet::airgap::registry::{self, HdKey, KeyPath, MultiAccounts, HARDENED};
 use libwallet::airgap::{cbor, ur_parts};
-use libwallet::{LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest, ResponseCallback};
+use libwallet::{EventCallback, LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest, LibwalletSetEventCallback, ResponseCallback};
 
 extern "C" fn capture(resp: *const c_char, user_data: usize) {
     let json = unsafe { CStr::from_ptr(resp) }.to_str().unwrap().to_owned();
@@ -221,6 +221,100 @@ fn import_then_sign_ethereum_via_eth_signature() {
     let gone = request(h, &format!(r#"{{"path":"Airgap:pending","params":{{"RequestId":"{rid}"}}}}"#));
     assert_eq!(gone["code"], 404, "{gone}");
     LibwalletDestroy(h);
+}
+
+extern "C" fn capture_event(json: *const c_char, user_data: usize) {
+    let s = unsafe { CStr::from_ptr(json) }.to_str().unwrap().to_owned();
+    LibwalletFree(json as *mut c_char);
+    let tx = unsafe { &*(user_data as *const Sender<String>) };
+    let _ = tx.send(s);
+}
+
+/// The generic routes work for an air-gapped account: the call emits
+/// `airgap:sign` with the request to show, waits, and returns once the host has
+/// handed the device's answer to `Airgap:submitSignature`.
+#[test]
+fn generic_routes_sign_through_the_air_gapped_signer() {
+    let h = new_env();
+    let (etx, erx) = channel::<String>();
+    let eud = Box::into_raw(Box::new(etx)) as usize;
+    LibwalletSetEventCallback(h, Some(capture_event as EventCallback), eud);
+    let imported = import_device(h);
+    let acct_id = account_of(&imported, "ethereum")["Id"].as_str().unwrap().to_owned();
+    let wallet_id = imported["wallet"]["Id"].as_str().unwrap().to_owned();
+    let node = mock_rpc_dispatch(vec![("eth_sendRawTransaction", r#""0xfeed""#.into())]);
+
+    let wait_request = || loop {
+        let ev: serde_json::Value = serde_json::from_str(&erx.recv_timeout(Duration::from_secs(20)).expect("airgap:sign event")).unwrap();
+        if ev["event"] == "airgap:sign" {
+            break ev["data"].clone();
+        }
+    };
+    let call = |path: &str, extra: &str| {
+        let (tx, rx) = channel::<String>();
+        let ud = Box::into_raw(Box::new(tx)) as usize;
+        let body = format!(
+            r#"{{"path":"{path}","params":{{"Id":"{acct_id}"{extra},"Transaction":{{"nonce":7,"gas":21000,"gasPrice":"20000000000","to":"0x000000000000000000000000000000000000dEaD","value":"1000000000000000","chainId":1}}}}}}"#
+        );
+        let req = CString::new(body).unwrap();
+        LibwalletRequest(h, req.as_ptr(), Some(capture as ResponseCallback), ud);
+        (rx, ud)
+    };
+    // The "device": sign the request's preimage with the seed's key.
+    let answer = |data: &serde_json::Value| {
+        let rid = data["request"]["request_id"].as_str().unwrap().to_owned();
+        let sign_data = libwallet::airgap::unhex(data["request"]["payload"]["signData"].as_str().unwrap()).unwrap();
+        let priv_key = libwallet::hdderive::derive_privkey_from_seed(&seed(), "secp256k1", "m/44'/60'/0'/0/0").unwrap();
+        let sk = outscript::crypto::secp256k1::SecpPrivateKey::from_bytes(&priv_key).unwrap();
+        let (r, s, recid) = sk.sign_recoverable(&purecrypto::hash::keccak256(&sign_data));
+        let mut sig = [r.as_slice(), s.as_slice()].concat();
+        sig.push(27 + recid);
+        let a = registry::EthSignature { request_id: Some(registry::uuid_parse(&rid).unwrap()), signature: sig, origin: None };
+        (rid, ur_parts(registry::UR_ETH_SIGNATURE, &cbor::to_bytes(&a.to_cbor()).unwrap(), None, None).unwrap())
+    };
+    let finish = |rx: std::sync::mpsc::Receiver<String>, ud: usize| {
+        let v: serde_json::Value = serde_json::from_str(&rx.recv_timeout(Duration::from_secs(20)).expect("generic route returned")).unwrap();
+        drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+        v
+    };
+
+    // signTransaction: signs, does not broadcast.
+    let (rx, ud) = call("Account:signTransaction", "");
+    let data = wait_request();
+    assert_eq!(data["account"], acct_id.as_str());
+    assert!(!data["request"]["parts"].as_array().unwrap().is_empty());
+    let (_, frames) = answer(&data);
+    let submitted = request(h, &format!(r#"{{"path":"Airgap:submitSignature","params":{{"Parts":{}}}}}"#, serde_json::to_string(&frames).unwrap()));
+    assert_eq!(submitted["data"]["delivered"], true, "{submitted}");
+    let out = finish(rx, ud);
+    assert_eq!(out["result"], "success", "{out}");
+    let raw = libwallet::airgap::unhex(out["data"]["raw"].as_str().unwrap()).unwrap();
+    assert_eq!(libwallet::evm::recover_sender(&raw).unwrap().to_lowercase(), "0x9858effd232b4033e47d90003d41ec34ecaeda94");
+    assert!(out["data"].get("broadcast").is_none(), "{out}");
+
+    // signAndSendTransaction: the waiting route broadcasts, the submit does not.
+    let (rx, ud) = call("Account:signAndSendTransaction", &format!(r#","RPC":"{node}""#));
+    let (_, frames) = answer(&wait_request());
+    let submitted = request(h, &format!(r#"{{"path":"Airgap:submitSignature","params":{{"Parts":{},"Broadcast":true,"RPC":"{node}"}}}}"#, serde_json::to_string(&frames).unwrap()));
+    assert!(submitted["data"].get("broadcast").is_none(), "{submitted}");
+    let out = finish(rx, ud);
+    assert_eq!(out["data"]["hash"], "0xfeed", "{out}");
+
+    // Cancelling fails the waiting route with 4001.
+    let (rx, ud) = call("Account:signTransaction", "");
+    let rid = wait_request()["request"]["request_id"].as_str().unwrap().to_owned();
+    let cancelled = request(h, &format!(r#"{{"path":"Airgap:cancelSign","params":{{"RequestId":"{rid}"}}}}"#));
+    assert_eq!(cancelled["data"]["cancelled"], true, "{cancelled}");
+    assert_eq!(finish(rx, ud)["code"], 4001);
+
+    // A hardware wallet is left out of backups.
+    let all = request(h, r#"{"path":"Wallet:backup","params":{}}"#);
+    assert_eq!(all["data"], serde_json::json!([]), "{all}");
+    let one = request(h, &format!(r#"{{"path":"Wallet:backup","params":{{"Id":"{wallet_id}"}}}}"#));
+    assert_eq!(one["code"], 400, "{one}");
+
+    LibwalletDestroy(h);
+    drop(unsafe { Box::from_raw(eud as *mut Sender<String>) });
 }
 
 #[test]

@@ -246,6 +246,11 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
         _ => net.resolved_rpc().map_err(|e| ApiError::new(400, e.to_string()))?,
     };
 
+    // A hardware wallet's account: the device signs (see handlers/signer.rs).
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        return sign_and_send_hardware(env, tx, params, &account, &protocol, &net, &rpc);
+    }
+
     // Chain dispatch (Go `SignAndSend` branches on n.Type). EVM falls through to
     // the inline path below; Solana/Bitcoin build+sign+broadcast in their own
     // helpers by reusing the same crate modules Account:signAndSendTransaction uses.
@@ -362,6 +367,112 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
     };
     crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     record.raw = format!("0x{raw_hex}"); // return 0x-hex raw to the host
+    Ok(serde_json::to_value(&record).unwrap())
+}
+
+/// `Transaction:signAndSend` for a hardware wallet's account: the same
+/// high-level tx, turned into what the device signs — the EVM call
+/// [`evm_call`] derives, the Solana message the shared builder produces, a
+/// Bitcoin `{To, Amount}` spend — then signed on the device, broadcast, and
+/// persisted as a Transaction row like any other send.
+fn sign_and_send_hardware(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    protocol: &str,
+    net: &crate::models::network::Network,
+    rpc: &str,
+) -> ApiResult {
+    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
+    let mut to = tx.get("to").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut value = None;
+    let mut data_hex = String::new();
+    let device_tx = match net.kind.as_str() {
+        "evm" => {
+            let call = evm_call(tx)?;
+            data_hex = format!("0x{}", call.data.iter().map(|b| format!("{b:02x}")).collect::<String>());
+            let mut t = json!({ "to": call.to, "value": call.value.to_string() });
+            if !call.data.is_empty() {
+                t["data"] = json!(data_hex);
+            }
+            // Fee and nonce fields the caller pinned pass through; the rest is
+            // filled from the node, the chain id from the network.
+            for k in ["nonce", "gas", "gasPrice", "maxFeePerGas", "maxPriorityFeePerGas"] {
+                if let Some(v) = tx.get(k).filter(|v| !v.is_null() && v.as_u64() != Some(0)) {
+                    t[k] = v.clone();
+                }
+            }
+            to = call.to;
+            value = Some(crate::Amount::new_raw(call.value, 0));
+            t
+        }
+        "solana" => {
+            let built = crate::rt::block_on(super::solana_build::build_unsigned(env, account, net, rpc, tx))?;
+            json!({ "message": bs58::encode(&built.message).into_string() })
+        }
+        "bitcoin" => {
+            if to.is_empty() {
+                return Err(ApiError::new(400, "recipient (to) is required for bitcoin_transfer"));
+            }
+            let sats = amount_significand(tx.get("amount")).and_then(|b| bigint_to_u64(&b)).ok_or_else(|| ApiError::new(400, "amount (satoshi) is required"))?;
+            json!({ "To": to, "Amount": sats, "FeeRate": bitcoin_fee_rate(rpc, tx), "ChainId": net.chain_id })
+        }
+        other => return Err(ApiError::new(501, format!("{other} accounts cannot be signed for on a hardware wallet"))),
+    };
+
+    // The device routes resolve the node from the network (or the RPC override).
+    let mut p = params.clone();
+    if !p.is_object() {
+        p = json!({});
+    }
+    p["Id"] = json!(account.id);
+    p["Transaction"] = device_tx;
+    if p.get("RPC").and_then(Value::as_str).is_some_and(|u| !u.is_empty()) {
+        if net.kind == "evm" {
+            p["Transaction"]["chainId"] = json!(net.chain_id.parse::<u64>().map_err(|_| ApiError::new(400, "non-numeric EVM chain id"))?);
+        }
+    } else {
+        p["Network"] = json!(net.id);
+    }
+    let out = crate::rt::block_on(super::signer::sign_transaction(env, account, protocol, &p, true))?;
+
+    let hash = ["hash", "txid", "signature"].iter().find_map(|k| out.get(*k).and_then(Value::as_str)).unwrap_or_default().to_string();
+    // The signed transaction as bytes: 0x-hex (EVM, Bitcoin) or base58 (Solana).
+    let raw_str = out.get("raw").and_then(Value::as_str).unwrap_or_default();
+    let raw = match raw_str.strip_prefix("0x") {
+        Some(h) => super::simulate::hex_bytes_strict(h).unwrap_or_default(),
+        None => bs58::decode(raw_str).into_vec().unwrap_or_default(),
+    };
+    let filled = out.get("transaction");
+    let u = |k: &str| filled.and_then(|t| t.get(k)).and_then(Value::as_u64).unwrap_or(0);
+    let st = |k: &str| filled.and_then(|t| t.get(k)).and_then(Value::as_str).unwrap_or("").to_string();
+    let record = crate::models::transaction::Transaction {
+        id: xuid::Xuid::new("tx").to_string(),
+        kind: typ.to_string(),
+        asset: tx.get("asset").and_then(Value::as_str).unwrap_or("").to_string(),
+        from: account.address.clone(),
+        to,
+        gas: u("gas"),
+        gas_price: st("gasPrice"),
+        max_fee_per_gas: st("maxFeePerGas"),
+        max_priority_fee_per_gas: st("maxPriorityFeePerGas"),
+        fee: None,
+        nonce: u("nonce"),
+        format: if net.kind != "evm" { String::new() } else if st("maxFeePerGas").is_empty() { "legacy".into() } else { "eip1559".into() },
+        raw: base64::engine::general_purpose::STANDARD.encode(&raw),
+        hash: hash.clone(),
+        url: net.transaction_url(&hash),
+        network: net.id.clone(),
+        amount: tx_amount_field(tx.get("amount")),
+        value,
+        data: data_hex,
+        created: crate::now_rfc3339(),
+        fiat_amount: None,
+        fiat_currency: String::new(),
+        fiat_quote: None,
+    };
+    crate::models::transaction::persist(env, &record).map_err(ApiError::internal)?;
     Ok(serde_json::to_value(&record).unwrap())
 }
 

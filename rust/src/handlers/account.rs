@@ -38,6 +38,13 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
 
+    // A hardware wallet's account is signed for on the device. (The browser
+    // build awaits this from dispatch::handle_parsed_async instead.)
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        return crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, &msg));
+    }
+
     match account.kind.as_str() {
         // EIP-191 personal_sign — 65-byte R‖S‖V, hex-encoded.
         "ethereum" => {
@@ -109,6 +116,12 @@ pub fn sign_transaction(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    // A hardware wallet's account is signed for on the device. (The browser
+    // build awaits this from dispatch::handle_parsed_async instead.)
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        return crate::rt::block_on(super::signer::sign_transaction(env, &account, &protocol, params, false));
+    }
     match account.kind.as_str() {
         "ethereum" => sign_tx_evm(env, &account, params),
         "solana" => sign_tx_solana(env, &account, params),
@@ -455,6 +468,10 @@ pub async fn sign_and_send_impl(env: &Env, params: &Value) -> ApiResult {
     let account = crate::models::account::fetch(env, account_id)
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
+    // A hardware wallet's account: the device signs, then the node gets it.
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        return super::signer::sign_transaction(env, &account, &protocol, params, true).await;
+    }
     let url = resolve_rpc(env, params, &account.kind)?;
 
     match account.kind.as_str() {

@@ -435,6 +435,23 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
     let method = value.get("method").and_then(Value::as_str).unwrap_or("");
     let account_id = req.account.as_deref().ok_or_else(|| ApiError::new(400, "message_sign: missing account"))?;
 
+    // A hardware wallet's account signs on the device — no Keys, and only what
+    // the device can show: a personal_sign or a Bitcoin message.
+    let hw_account = crate::models::account::find(env, account_id).ok().flatten();
+    if let Some((account, protocol)) = hw_account.and_then(|a| super::signer::hardware_protocol(env, &a).map(|p| (a, p))) {
+        if !matches!(method, "personal_sign" | "mpurse_signMessage") {
+            return Err(ApiError::new(501, format!("{method} cannot be signed on a hardware wallet")));
+        }
+        let message = base64::engine::general_purpose::STANDARD
+            .decode(value.get("messageBytes").and_then(Value::as_str).unwrap_or(""))
+            .map_err(|e| ApiError::new(400, format!("decode message bytes: {e}")))?;
+        let out = crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, &message))?;
+        let mut r = request::fetch(env, &req.id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "request not found"))?;
+        r.result = Some(out.get("signature").cloned().unwrap_or(Value::Null));
+        r.updated = crate::now_rfc3339();
+        return request::save(env, &r).map_err(ApiError::internal);
+    }
+
     let keys: Vec<crate::sign::KeyDescription> = params
         .get("Keys")
         .and_then(|k| serde_json::from_value(k.clone()).ok())

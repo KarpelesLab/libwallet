@@ -449,3 +449,14 @@ No physical device was available when this was written.
   behaviour — including its screens for sharing an address, comparing one
   and reading a message, and what each board's panel refuses as too long. The firmware's own documentation says its reader has not yet been
   exercised against an iPhone or on hardware.
+
+## Generic routes
+
+> The generic routes work too. `Account:signTransaction`,
+> `Account:signAndSendTransaction`, `Account:signMessage`,
+> `Transaction:signAndSend` and the dApp request approvals see that the
+> account is on a hardware wallet and have the device sign — no `Keys`; the
+> link params (`Transport`, …) pass through. An air-gapped account makes the
+> call emit `airgap:sign` and wait for `Airgap:submitSignature`
+> (or `Airgap:cancelSign`). Hardware wallets are not included in
+> `Wallet:backup`.

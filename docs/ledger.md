@@ -67,6 +67,15 @@ address on the device and fails if it is not the one libwallet holds.
 
 ## Signing
 
+> The generic routes work too. `Account:signTransaction`,
+> `Account:signAndSendTransaction`, `Account:signMessage`,
+> `Transaction:signAndSend` and the dApp request approvals see that the
+> account is on a hardware wallet and have the device sign — no `Keys`; the
+> link params (`Transport`, …) pass through. An air-gapped account makes the
+> call emit `airgap:sign` and wait for `Airgap:submitSignature`
+> (or `Airgap:cancelSign`). Hardware wallets are not included in
+> `Wallet:backup`.
+
 ```
 Ledger:signTransaction {Account, Transaction, Network?|RPC?, Offline?, Broadcast?}
 Ledger:signMessage     {Account, Message: <base64>}

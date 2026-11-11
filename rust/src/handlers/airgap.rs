@@ -301,20 +301,33 @@ pub async fn submit_signature_impl(env: &Env, params: &Value) -> ApiResult {
     let request_id = str_param(params, "RequestId");
     let accepted = airgap::sign::accept(env, &payload, request_id).map_err(bad)?;
     let mut j = serde_json::to_value(&accepted).unwrap();
-    if params.get("Broadcast").and_then(Value::as_bool) == Some(true) {
-        let url = rpc_from_params(env, params, &accepted.chain)?.ok_or_else(|| ApiError::new(400, "Broadcast needs an RPC/Network (not Offline)"))?;
-        let (method, args) = match accepted.chain.as_str() {
-            "ethereum" => ("eth_sendRawTransaction", json!([accepted.raw])),
-            "bitcoin" => ("sendrawtransaction", json!([accepted.raw.trim_start_matches("0x")])),
-            "solana" => ("sendTransaction", json!([accepted.raw, { "encoding": "base58" }])),
-            other => return Err(ApiError::new(400, format!("cannot broadcast {other}"))),
-        };
-        j["broadcast"] = crate::rpc::call_async(&url, method, args).await.map_err(|e| ApiError::new(502, e.to_string()))?;
-    }
     if let Some(id) = str_param(params, "DecoderId") {
         let _ = decoder::store_delete(env, id);
     }
+    // A generic route (Account:signAndSendTransaction, …) waiting for this
+    // answer takes it from here — broadcasting included, if its caller asked.
+    if let Some(rid) = accepted.request_id.as_deref().filter(|r| super::signer::airgap_waiting(r)) {
+        j["delivered"] = json!(super::signer::airgap_deliver(rid, Ok(j.clone())));
+        return Ok(j);
+    }
+    if params.get("Broadcast").and_then(Value::as_bool) == Some(true) {
+        j["broadcast"] = broadcast_accepted(env, params, &j).await?;
+    }
     Ok(j)
+}
+
+/// Send an accepted transaction (`{chain, raw}`) through its chain's node.
+pub(crate) async fn broadcast_accepted(env: &Env, params: &Value, accepted: &Value) -> ApiResult {
+    let chain = accepted.get("chain").and_then(Value::as_str).unwrap_or_default();
+    let raw = accepted.get("raw").and_then(Value::as_str).unwrap_or_default();
+    let url = rpc_from_params(env, params, chain)?.ok_or_else(|| ApiError::new(400, "Broadcast needs an RPC/Network (not Offline)"))?;
+    let (method, args) = match chain {
+        "ethereum" => ("eth_sendRawTransaction", json!([raw])),
+        "bitcoin" => ("sendrawtransaction", json!([raw.trim_start_matches("0x")])),
+        "solana" => ("sendTransaction", json!([raw, { "encoding": "base58" }])),
+        other => return Err(ApiError::new(400, format!("cannot broadcast {other}"))),
+    };
+    crate::rpc::call_async(&url, method, args).await.map_err(|e| ApiError::new(502, e.to_string()))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
