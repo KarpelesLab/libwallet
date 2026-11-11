@@ -139,6 +139,11 @@ class AirgapApi {
     );
   }
 
+  /// Give up on a request a generic signing call is waiting for (see the
+  /// `airgap:sign` event): that call then fails with code 4001.
+  Future<void> cancelSign(String requestId) =>
+      _conn.request('Airgap:cancelSign', 'POST', {'RequestId': requestId});
+
   // ── Keys ──────────────────────────────────────────────────────────────────
 
   /// Preview the keys in a scanned export without persisting anything. Pass

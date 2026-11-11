@@ -42,6 +42,14 @@
   `Airgap:submitSignature` now work there too. `client.airgap.qr()` returns QR
   code modules for apps without a renderer, and `client.airgap.scanFrame()`
   reads the QR codes in a camera frame for apps without a detector.
+- **Hardware wallets behind the generic routes.** `accounts.signTransaction`,
+  `signAndSendTransaction`, `signMessage`, `transactions.signAndSend` and the
+  dApp request approvals now work for Ledger, CatCard and air-gapped accounts
+  with no `Keys`: the device signs. An air-gapped account makes the call emit
+  an `airgap:sign` event (the request to show as QR) and wait for
+  `airgap.submitSignature(requestId: …)`, or `airgap.cancelSign()`.
+- **Hardware wallets are left out of `wallets.backup()`**; add the device
+  again to get its accounts back.
 - **WalletConnect events.** `walletConnectProposals` and
   `walletConnectRequests` now receive the proposals and requests the backend
   emits (the event names and payload shape did not match before).

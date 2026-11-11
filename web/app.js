@@ -1478,6 +1478,7 @@ function backendOpen() {
       try { const e = JSON.parse(json); name = e.event || 'event'; } catch {}
       bkLog('evt', name + ' · ' + json);
       if (name === 'ledger:progress') { try { ledgerProgress(JSON.parse(json).data); } catch {} }
+      if (name === 'airgap:sign') { try { airgapSignEvent(JSON.parse(json).data); } catch {} }
       if (name === 'catcard:pair' || name === 'catcard:waiting') { try { catcardEvent(name, JSON.parse(json).data); } catch {} }
     });
   } catch { /* callback wiring is best-effort */ }
@@ -2854,7 +2855,8 @@ function qrSignFlow(profile, req, codes) {
     let timer = null, scanning = false, settled = false;
     const finish = (fn, v) => { if (settled) return; settled = true; clearInterval(timer); fn(v); };
     const submit = async source => {
-      const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id, Broadcast: true });
+      // The route waiting on this request (see airgapSignEvent) takes it from here.
+      const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id });
       finish(resolve, String(out.id ?? ''));
     };
     const show = error => {
@@ -3036,37 +3038,41 @@ function hwDisconnect() {
   goStep('choose');
 }
 
-// Sign `base` units to `to` from a hardware account on its device, broadcast,
-// and return the transaction id.
+// Sign `base` units to `to` from a hardware account, broadcast, and return the
+// transaction id. This is the same generic route a software wallet uses
+// (minus the Keys): libwallet sees the account is on a hardware wallet and
+// has the device sign. USB devices are driven from inside that call; an
+// air-gapped one makes it emit `airgap:sign` (see airgapSignEvent) and wait.
 async function hwSignAndSend(acct, to, base) {
   const device = session.hw.device;
+  const tx = acct.type === 'bitcoin' ? { To: to, Amount: Number(base) } : { to, value: base.toString() };
   if (device === 'ledger') {
-    const tx = acct.type === 'ethereum' ? { to, value: base.toString() }
-      : acct.type === 'bitcoin' ? { To: to, Amount: Number(base) }
-      : { to, amount: base.toString() };
     await ledgerEnsureApp(LEDGER_APPS[acct.type]);
     toast('ok', 'Review the transaction on your Ledger');
-    const out = await backendRequest('Ledger:signTransaction', 'POST', { Account: acct.id, Transaction: tx, Broadcast: true });
-    return String(out.id ?? '');
-  }
-  if (acct.usb) {
-    const tx = acct.type === 'bitcoin' ? { To: to, Amount: Number(base) }
-      : acct.type === 'solana' ? { to, amount: base.toString() }
-      : { to, value: base.toString() };
+  } else if (acct.usb) {
     toast('ok', 'Review the transaction on your CatCard');
-    const out = await backendRequest('CatCard:signTransaction', 'POST', { Account: acct.id, Transaction: tx, Broadcast: true });
-    return String(out.id ?? '');
   }
-  // Air-gapped: QR out, signed answer back.
   const p = HW_PROFILES[device];
-  const tx = acct.type === 'bitcoin' ? { To: to, Amount: Number(base) } : { to, value: base.toString() };
+  const params = { Id: acct.id, Transaction: tx };
   // Small frames scan reliably from a laptop screen.
-  const req = await backendRequest('Airgap:signRequest', 'POST',
-    { Account: acct.id, Transaction: tx, Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
-  const { codes } = await backendRequest('Airgap:qr', 'POST', { Parts: req.parts });
-  const id = await qrSignFlow(p, req, codes);
-  closeModal();
-  return id;
+  if (!p.usb && !acct.usb) Object.assign(params, { Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
+  const r = await backendRequest('Account:signAndSendTransaction', 'POST', params);
+  if ($('#qrCanvas')) closeModal();
+  return String(r.hash ?? r.txid ?? r.signature ?? r.id ?? '');
+}
+
+// `airgap:sign`: a generic signing route is waiting on an air-gapped signer.
+// Show its request as a QR code and take the answer back; submitting hands it
+// to the waiting route, cancelling fails that route.
+async function airgapSignEvent(d) {
+  const req = d.request;
+  const p = HW_PROFILES[session.hw?.device] || HW_PROFILES.keystone;
+  try {
+    const { codes } = await backendRequest('Airgap:qr', 'POST', { Parts: req.parts });
+    await qrSignFlow(p, req, codes);
+  } catch {
+    backendRequest('Airgap:cancelSign', 'POST', { RequestId: req.request_id }).catch(() => {});
+  }
 }
 
 // Receive: the account's address as text and as a QR code. A hardware wallet
