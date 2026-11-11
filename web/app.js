@@ -1439,6 +1439,7 @@ function backendOpen() {
       try { const e = JSON.parse(json); name = e.event || 'event'; } catch {}
       bkLog('evt', name + ' · ' + json);
       if (name === 'ledger:progress') { try { ledgerProgress(JSON.parse(json).data); } catch {} }
+      if (name === 'catcard:pair' || name === 'catcard:waiting') { try { catcardEvent(name, JSON.parse(json).data); } catch {} }
     });
   } catch { /* callback wiring is best-effort */ }
 
@@ -2662,7 +2663,7 @@ const HW_PROFILES = {
   },
   catcard: {
     name: 'CatCard · Coldcard', transport: 'bbqr', files: true,
-    importHelp: 'On a Q1, export the wallet as a QR code (Advanced → Export Wallet) and show it to your camera. On boards without a screen for QR, export to the microSD card and upload the file here.',
+    importHelp: 'Air-gapped: On a Q1, export the wallet as a QR code (Advanced → Export Wallet) and show it to your camera. On boards without a screen for QR, export to the microSD card and upload the file here.',
   },
 };
 // Airgap Transaction shapes differ per chain (see docs): amounts in base units.
@@ -2682,6 +2683,7 @@ function hardwareSelect(device) {
   $('#qrDeviceName').textContent = p.name;
   $('#qrImportHelp').textContent = p.importHelp;
   $('#qrScanKeys').classList.toggle('hidden', !navigator.mediaDevices?.getUserMedia);
+  $('#ccUsb').classList.toggle('hidden', device !== 'catcard' || !('hid' in navigator));
   qrRenderAccounts();
 }
 
@@ -2842,6 +2844,16 @@ function qrSend() {
     const units = toBaseUnits($('#qrSendAmount').value, QR_DECIMALS[a.Type]);
     if (units <= 0n) throw new Error('Enter an amount.');
     const tx = a.Type === 'bitcoin' ? { To: to, Amount: Number(units) } : { to, value: units.toString() };
+    // An account read over CatCard USB is signed over USB, not QR.
+    if (a.usb) {
+      const usbTx = a.Type === 'solana' ? { to, amount: units.toString() } : tx;
+      toast('ok', 'Review the transaction on your CatCard');
+      const out = await backendRequest('CatCard:signTransaction', 'POST', { Account: a.Id, Transaction: usbTx, Broadcast: true });
+      $('#qrSendTo').value = ''; $('#qrSendAmount').value = '';
+      toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
+      setTimeout(qrRenderAccounts, 2500);
+      return;
+    }
     // Small frames scan reliably from a laptop screen.
     const req = await backendRequest('Airgap:signRequest', 'POST',
       { Account: a.Id, Transaction: tx, Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
@@ -2932,4 +2944,47 @@ function qrInit() {
     $('#qrKeysText').value = '';
   });
   $('#qrSendBtn').onclick = qrSend;
+  // The WebHID picker needs the click's user activation.
+  $('#ccConnect').onclick = () => qrRun('#ccErr', async () => {
+    const info = await backendRequest('CatCard:info', 'POST', { Request: true });
+    $('#ccState').className = 'bk-status live';
+    $('#ccStateText').textContent = info.unlocked ? 'connected' : 'locked';
+    $('#ccInfo').innerHTML = ledgerKv([['Board', String(info.board ?? '')], ['Firmware', String(info.firmware ?? '')], ['Unlocked', info.unlocked ? 'yes' : 'no — enter the PIN on the device']]);
+    $('#ccInfo').classList.remove('hidden');
+    $('#ccAdd').disabled = false;
+  });
+  $('#ccAdd').onclick = () => qrRun('#ccErr', async () => {
+    const keys = await backendRequest('CatCard:getKeys', 'POST', {});
+    const params = { Keys: keys.keys, Name: 'CatCard' };
+    if (keys.master_fingerprint) params.MasterFingerprint = keys.master_fingerprint;
+    if (hardware.wallets.catcardUsb) params.Wallet = hardware.wallets.catcardUsb;
+    const res = await backendRequest('CatCard:import', 'POST', params);
+    hardware.wallets.catcardUsb = res.wallet.Id;
+    const list = qrAccountsOf('catcard');
+    for (const a of res.accounts) if (!list.some(x => x.Id === a.Id)) list.push({ ...a, usb: true });
+    qrRenderAccounts();
+    toast('ok', `${res.accounts.length} account${res.accounts.length === 1 ? '' : 's'} added`);
+  });
+}
+
+// CatCard USB events: the pairing code to compare, and "waiting for the person
+// at the device".
+function catcardEvent(name, d) {
+  if (name === 'catcard:waiting') {
+    toast('ok', d.for === 'signature' ? 'Approve the transaction on your CatCard' : 'Choose the account to share on your CatCard');
+    return;
+  }
+  const answer = accept => { closeModal(); backendRequest('CatCard:pairResponse', 'POST', { Id: d.id, Accept: accept }).catch(() => {}); };
+  openModal(`
+    <div class="card-pad stack" style="--gap:18px">
+      <div class="eyebrow">CatCard · pairing</div>
+      <h2 class="title mono" style="letter-spacing:0.12em">${esc(d.code)}</h2>
+      <p class="subtitle">Check that your CatCard shows the same code, then confirm on both. If the codes differ, cancel: something is between this page and your device.</p>
+      <div class="btn-row">
+        <button class="btn subtle" type="button" id="ccPairNo">Cancel</button>
+        <button class="btn primary grow" type="button" id="ccPairYes">The codes match</button>
+      </div>
+    </div>`);
+  $('#ccPairNo').onclick = () => answer(false);
+  $('#ccPairYes').onclick = () => answer(true);
 }

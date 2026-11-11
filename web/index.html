@@ -136,7 +136,7 @@
               </span>
               <span>
                 <h4>CatCard · Coldcard</h4>
-                <p>Air-gapped, over QR codes (Q1) or files on a microSD card.</p>
+                <p>CatCard over USB, or air-gapped with QR codes (Q1) or microSD files.</p>
               </span>
             </button>
           </div>
@@ -509,6 +509,25 @@
 
           <!-- Air-gapped signers: Keystone (UR), CatCard / Coldcard (BBQr, files) -->
           <div id="hwQr" class="hidden">
+            <!-- CatCard over USB (its own firmware's paired session) -->
+            <div class="bk-block hidden" id="ccUsb">
+              <div class="section-head">
+                <div class="eyebrow muted">CatCard · USB</div>
+                <span class="bk-status" id="ccState"><span class="bk-dot"></span><span id="ccStateText">not connected</span></span>
+              </div>
+              <div class="asset">
+                <div class="form-grid">
+                  <p class="subtitle">A device running CatCard firmware can connect directly over USB. You confirm a six-digit pairing code on both screens, then choose on the device which account to share. A stock Coldcard uses QR codes or files, below.</p>
+                  <div class="btn-row wrap">
+                    <button class="btn primary" type="button" id="ccConnect">Connect over USB</button>
+                    <button class="btn subtle" type="button" id="ccAdd" disabled>Add accounts from device</button>
+                  </div>
+                  <div class="err-inline" id="ccErr"></div>
+                  <div id="ccInfo" class="panel hidden" style="padding:4px 16px"></div>
+                </div>
+              </div>
+            </div>
+
             <div class="bk-block">
               <div class="section-head">
                 <div class="eyebrow muted">Add accounts · <span id="qrDeviceName">Keystone</span></div>
