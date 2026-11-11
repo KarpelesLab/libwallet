@@ -1881,7 +1881,7 @@ pub fn sign_ed25519_for_account(
         return Err(Error::Env("this account's keys live on a Ledger device: use Ledger:signTransaction / Ledger:signMessage".into()));
     }
     if wallet.protocol == "catcard" {
-        return Err(Error::Env("this account's keys live on a CatCard device: use CatCard:signTransaction".into()));
+        return Err(Error::Env("this account's keys live on a CatCard device: use CatCard:signTransaction / CatCard:signMessage".into()));
     }
     if wallet.protocol == "airgap" {
         return Err(Error::Env("this account's keys live on an air-gapped signer: use Airgap:signRequest / Airgap:submitSignature".into()));
@@ -2122,7 +2122,7 @@ pub fn dkls_sign_digest_at(
         return Err(Error::Env("this account's keys live on a Ledger device: use Ledger:signTransaction / Ledger:signMessage".into()));
     }
     if wallet.protocol == "catcard" {
-        return Err(Error::Env("this account's keys live on a CatCard device: use CatCard:signTransaction".into()));
+        return Err(Error::Env("this account's keys live on a CatCard device: use CatCard:signTransaction / CatCard:signMessage".into()));
     }
     if wallet.protocol == "airgap" {
         return Err(Error::Env("this account's keys live on an air-gapped signer: use Airgap:signRequest / Airgap:submitSignature".into()));

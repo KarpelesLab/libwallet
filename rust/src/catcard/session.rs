@@ -190,11 +190,46 @@ pub struct Session {
     /// The accounts shared in this session (the device only signs with keys
     /// below them): the entries of every address reply, newest last.
     pub shared: Vec<proto::Entry>,
+    /// The keys shared in this session by their own path (`HostAddressAt`),
+    /// oldest first: a sign request may name exactly those too. The device
+    /// remembers the latest [`proto::SHARED_KEYS_MAX`], and so does this.
+    pub by_path: Vec<proto::AddressAt>,
+    /// What the device's `HostInfo` said, once asked: `Some(None)` is a
+    /// firmware that predates it, and has the first six host-wallet commands
+    /// only.
+    pub host: Option<Option<proto::HostInfo>>,
 }
 
 impl Session {
     pub(crate) fn new(cipher: Cipher, link: String, identity: Identity) -> Self {
-        Session { cipher, link, alive: true, identity, fingerprint: None, shared: Vec::new() }
+        Session { cipher, link, alive: true, identity, fingerprint: None, shared: Vec::new(), by_path: Vec::new(), host: None }
+    }
+
+    /// Whether nothing has ended the session (as far as this side knows).
+    pub fn alive(&self) -> bool {
+        self.alive
+    }
+
+    /// Record a key the device shared by its path, as the device does: one
+    /// already there stays where it is, and the oldest makes room.
+    pub(crate) fn remember(&mut self, key: proto::AddressAt) {
+        if let Some(have) = self.by_path.iter_mut().find(|k| k.chain == key.chain && k.path == key.path) {
+            *have = key;
+            return;
+        }
+        if self.by_path.len() >= proto::SHARED_KEYS_MAX {
+            self.by_path.remove(0);
+        }
+        self.by_path.push(key);
+    }
+
+    /// The device said a key it was asked to sign with was not shared: what
+    /// this side believed it shared no longer holds (its owner changed the
+    /// wallet in force — a passphrase — which drops it all).
+    pub(crate) fn forget_shared(&mut self) {
+        self.shared.clear();
+        self.by_path.clear();
+        self.fingerprint = None;
     }
 
     /// Run one command inside the channel: `(inner status, inner payload)`.
@@ -272,6 +307,12 @@ pub fn keep(session: Session) {
 /// ended on the device's side).
 pub fn held<T: Transport>(link: &T) -> bool {
     held_sessions(|h| h.contains_key(&link.id()))
+}
+
+/// Take the session held for `link`, if any, without checking it or pairing:
+/// the caller hands it back with [`keep`].
+pub(crate) fn take<T: Transport>(link: &T) -> Option<Session> {
+    held_sessions(|h| h.remove(&link.id()))
 }
 
 /// Forget the session held for `link` and tell the device (`PairAbort`), which

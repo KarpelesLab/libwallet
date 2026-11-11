@@ -129,6 +129,68 @@ fn wire_layouts_match_the_reference_tools() {
     sol.extend([1, 0, 0, 0, 0xEE]);
     assert_eq!(proto::read_solana(&sol).unwrap(), (vec![(1u8, [0x55u8; 64])], &[0xEE][..]));
 
+    // A reader refuses every truncation of a reply, and one byte too many.
+    fn strict<R>(decode: impl Fn(&[u8]) -> Result<R, String>, reply: &[u8]) {
+        assert!(decode(reply).is_ok());
+        for cut in 0..reply.len() {
+            assert!(decode(&reply[..cut]).is_err(), "a reply truncated at {cut} was accepted");
+        }
+        assert!(decode(&[reply, &[0]].concat()).is_err(), "a trailing byte was accepted");
+    }
+
+    // One address by its path (`hostwallet::tests`, tools/hostwallet.py): the
+    // request, with the show flag and without, and the reply.
+    let want = [1, 4, 1, 5, 86, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0, 5, 0, 0, 0];
+    assert_eq!(proto::address_at_request(1, format::P2TR, true, &[86 | H, H, H, 0, 5]).unwrap(), want);
+    assert_eq!(proto::address_at_request(2, format::EVM, false, &[44 | H]).unwrap(), [2, 5, 0, 1, 44, 0, 0, 0x80]);
+    assert!(proto::address_at_request(1, 3, false, &[]).is_err());
+    assert!(proto::address_at_request(1, 3, false, &[0; 9]).is_err());
+    let mut one = vec![5, 1, 0xde, 0xad, 0xbe, 0xef, 2, 5];
+    one.extend([5, 44, 0, 0, 0x80, 60, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0, 9, 0, 0, 0, 4]);
+    one.extend(b"0xAb");
+    one.extend([2, 2, 7]);
+    let a = proto::AddressAt::decode(&one).unwrap();
+    assert_eq!((a.fingerprint, a.chain, a.format), ([0xde, 0xad, 0xbe, 0xef], chain::ETHEREUM, format::EVM));
+    assert_eq!((&a.path[..], a.address.as_str(), &a.pubkey[..]), (&[44 | H, 60 | H, H, 0, 9][..], "0xAb", &[2u8, 7][..]));
+    strict(proto::AddressAt::decode, &one);
+    // The many-address reply is another kind, and is not read as this one.
+    one[0] = kind::ADDRESSES;
+    assert!(proto::AddressAt::decode(&one).is_err());
+
+    // A message: the request, and the result.
+    let mut want = vec![1, 1, 3, 2, 5, 84, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0, 3, 0, 0, 0, 2, 0];
+    want.extend(b"hi");
+    assert_eq!(proto::message_request(1, format::P2WPKH, scheme::BIP322, &[84 | H, H, H, 0, 3], b"hi").unwrap(), want);
+    assert!(proto::message_request(1, 3, 1, &[84 | H], b"").is_err());
+    assert!(proto::message_request(1, 3, 1, &[84 | H], &[b'x'; proto::MESSAGE_MAX + 1]).is_err());
+    // The longest one, at the deepest path, fits one sealed record with its opcode.
+    assert!(2 + proto::message_request(2, 5, 4, &[H; 8], &[b'x'; proto::MESSAGE_MAX]).unwrap().len() <= proto::PLAIN_MAX);
+    let mut msg = vec![6, 1, 2, 4, 5, 44, 0, 0, 0x80, 60, 0, 0, 0x80, 0, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 4];
+    msg.extend(b"0xAb");
+    msg.extend([3, 0, 0xAA, 0xBB, 27]);
+    let m = proto::SignedMessage::decode(&msg).unwrap();
+    assert_eq!((m.chain, m.scheme, &m.path[..]), (chain::ETHEREUM, scheme::EIP191, &[44 | H, 60 | H, H, 0, 0][..]));
+    assert_eq!((m.address.as_str(), &m.signature[..]), ("0xAb", &[0xAA, 0xBB, 27][..]));
+    strict(proto::SignedMessage::decode, &msg);
+
+    // What a build answers.
+    let inf = [1, 0b11, 0b10, 0xC0, 0x03, 2, 1, 0b111, 2, 3, 4, 9, 0b001, 1, 6];
+    let i = proto::HostInfo::decode(&inf).unwrap();
+    assert_eq!((i.features, i.session, i.message_max as usize), (feature::ADDRESS_AT | feature::SIGN_MESSAGE, proto::granted::SHARED, proto::MESSAGE_MAX));
+    assert_eq!(i.chains, [proto::ChainInfo { chain: 1, can: 7, formats: vec![format::P2WPKH, format::P2TR] }, proto::ChainInfo { chain: 9, can: can::ADDRESSES, formats: vec![format::TRON] }]);
+    assert_eq!((i.can(chain::BITCOIN), i.can(chain::SOLANA)), (can::ADDRESSES | can::SIGN | can::MESSAGES, 0));
+    strict(proto::HostInfo::decode, &inf);
+
+    // Which scheme signs for which address type (docs/USB.md's table).
+    let fits = |how: u8| [format::P2PKH, format::P2SH_P2WPKH, format::P2WPKH, format::P2TR, format::EVM].into_iter().filter(|f| scheme::fits(how, *f)).collect::<Vec<_>>();
+    assert_eq!(fits(scheme::BIP137), [format::P2PKH, format::P2SH_P2WPKH, format::P2WPKH]);
+    assert_eq!(fits(scheme::BIP322), [format::P2WPKH, format::P2TR]);
+    assert_eq!(fits(scheme::BIP322_FULL), [format::P2SH_P2WPKH, format::P2WPKH, format::P2TR]);
+    assert_eq!(fits(scheme::EIP191), [format::EVM]);
+    assert_eq!((scheme::parse("BIP322-Full"), scheme::parse("eip712")), (Some(scheme::BIP322_FULL), None));
+    // The EIP-191 digest the device signs (`catcard_evm::personal`'s vector).
+    assert_eq!(hex(&crate::evm::personal_sign_digest(b"hello world")), "d9eba16ed0ecae432b71fe008c98cc872bb4cc214d3220a36f365326cf807d68");
+
     // docs/PHONE-APP.md §2: Identify from an unlocked Q1 running 7.0.0.
     let id = Identity::decode(&h("020001c00271310537 2e302e30".replace(' ', "").as_str())).unwrap();
     assert_eq!((id.protocol, id.board.as_str(), id.version.as_str()), (2, "q1", "7.0.0"));
@@ -191,6 +253,11 @@ struct Dev {
     confirm_polls: u32,
     /// The accounts shared in this session: (chain, `m/purpose'/coin'/account'`).
     exposed: Vec<(u8, Vec<u32>)>,
+    /// The keys shared by their own path in this session, the latest sixteen:
+    /// (chain, path). A sign request may name exactly those too.
+    by_path: Vec<(u8, Vec<u32>)>,
+    /// The person ticked "Allow during session".
+    paths_allowed: bool,
     upload: Option<(u8, usize, Vec<u8>)>,
     outcome: Option<Result<Vec<u8>, (u16, Vec<u8>)>>,
     wait_polls: u32,
@@ -218,6 +285,19 @@ struct FakeCatCard {
     /// Polls answered "not yet" before the person accepts the code / answers.
     accept_after: u32,
     answer_after: u32,
+    /// A firmware from before `HostInfo`: the first six host-wallet requests
+    /// only, `UnknownOpcode` for the rest.
+    old: bool,
+    /// The person ticks "Allow during session" when first asked for an
+    /// address by its path.
+    allow_session: bool,
+    /// The person says the address on the screen is not the computer's.
+    decline_show: bool,
+    /// The longest message this board's panel shows whole.
+    panel: usize,
+    /// What the person was asked, in order: `share <path>`, `compare
+    /// <address>`, `message <text>`.
+    screens: RefCell<Vec<String>>,
     dev: RefCell<Dev>,
     clear_ops: RefCell<Vec<u16>>,
     sealed_ops: RefCell<Vec<u16>>,
@@ -241,6 +321,11 @@ impl FakeCatCard {
             forge: false,
             accept_after: 0,
             answer_after: 0,
+            old: false,
+            allow_session: false,
+            decline_show: false,
+            panel: usize::MAX,
+            screens: RefCell::new(Vec::new()),
             dev: RefCell::new(Dev::default()),
             clear_ops: RefCell::new(Vec::new()),
             sealed_ops: RefCell::new(Vec::new()),
@@ -323,6 +408,147 @@ impl FakeCatCard {
         entry(shape::ACCOUNT, 3, format::SOLANA, &sol[..3], &sol, "", &bs58::encode(&pk).into_string(), &pk);
         out[10] = count;
         (out, exposed)
+    }
+
+    /// The key at `path` as the device writes it for `chain` in `fmt`: its
+    /// public key and its address.
+    fn key_at(&self, chain: u8, fmt: u8, path: &[u32]) -> Option<(Vec<u8>, String)> {
+        if chain == chain::SOLANA {
+            let pk = Self::ed(&self.seed, path).public_key().to_bytes();
+            return Some((pk.to_vec(), bs58::encode(&pk).into_string()));
+        }
+        let pk = hdderive::derive_pubkey_for_path(&self.seed, "secp256k1", &proto::path_text(path)).ok()?;
+        let address = match (chain, fmt) {
+            (chain::ETHEREUM, format::EVM) if self.lie => "0x000000000000000000000000000000000000dEaD".to_owned(),
+            (chain::ETHEREUM, format::EVM) => hdderive::evm_address(&pk).ok()?,
+            (chain::BITCOIN, _) => crate::bitcoin::address_for(pk[..].try_into().ok()?, format_script(fmt)?, "bitcoin").ok()?,
+            (9, format::TRON) => hdderive::tron_address(&pk).ok()?,
+            _ => return None,
+        };
+        Some((pk, address))
+    }
+
+    /// `HostAddressAt`, once the request was taken: the questions the person
+    /// is asked, and the address reply.
+    fn share_at(&self, dev: &mut Dev, chain: u8, fmt: u8, path: &[u32], show: bool) -> Result<Vec<u8>, (u16, Vec<u8>)> {
+        let declined = Err((status::DECLINED, vec![]));
+        if !dev.paths_allowed {
+            // "Computer asks for the <chain> address at <path>", then
+            // "[ ] Allow during session / Share it".
+            self.screens.borrow_mut().push(format!("share {}", proto::path_text(path)));
+            if self.decline {
+                return declined;
+            }
+            dev.paths_allowed = self.allow_session;
+        }
+        let Some((pubkey, address)) = self.key_at(chain, fmt, path) else { return Err((status::REFUSED, b"derivation failed".to_vec())) };
+        if show {
+            // On the screen whatever the session was allowed.
+            self.screens.borrow_mut().push(format!("compare {address}"));
+            if self.decline || self.decline_show {
+                return declined;
+            }
+        }
+        // What was shared is what may sign later: the latest sixteen.
+        let key = (chain, path.to_vec());
+        if !dev.by_path.contains(&key) {
+            if dev.by_path.len() >= 16 {
+                dev.by_path.remove(0);
+            }
+            dev.by_path.push(key);
+        }
+        let mut out = vec![kind::ADDRESS, 1];
+        out.extend(self.fingerprint());
+        out.extend([chain, fmt, path.len() as u8]);
+        path.iter().for_each(|c| out.extend(c.to_le_bytes()));
+        out.push(address.len() as u8);
+        out.extend(address.as_bytes());
+        out.push(pubkey.len() as u8);
+        out.extend(pubkey);
+        Ok(out)
+    }
+
+    /// Why the device does not sign `m`: not text its screen shows faithfully.
+    fn unshowable(how: u8, m: &[u8]) -> Option<&'static str> {
+        let text = |b: &u8| (0x20..0x7f).contains(b);
+        if how != scheme::EIP191 {
+            return if m.len() > 240 {
+                Some("message too long")
+            } else if !m.iter().all(text) {
+                Some("plain ASCII only")
+            } else {
+                None
+            };
+        }
+        let lines: Vec<&[u8]> = m.split(|b| *b == b'\n').collect();
+        if m.len() > 960 {
+            Some("message too long")
+        } else if !m.iter().all(|b| text(b) || *b == b'\n') {
+            Some("plain ASCII text only")
+        } else if lines.len() > 24 {
+            Some("message has too many lines")
+        } else if lines.iter().any(|l| l.starts_with(b" ") || l.ends_with(b" ")) || lines[0].is_empty() || lines[lines.len() - 1].is_empty() {
+            Some("a line starts or ends blank")
+        } else {
+            None
+        }
+    }
+
+    /// `HostSignMessage`, once the request was taken: the review, and the
+    /// message result. The digests are spelled out here, apart from the
+    /// library's own.
+    fn sign_text(&self, chain: u8, fmt: u8, how: u8, path: &[u32], m: &[u8]) -> Result<Vec<u8>, (u16, Vec<u8>)> {
+        use base64::Engine;
+        self.screens.borrow_mut().push(format!("message {}", String::from_utf8_lossy(m)));
+        if self.decline {
+            return Err((status::DECLINED, vec![]));
+        }
+        if m.len() > self.panel {
+            return Err((status::REFUSED, b"too long to show here".to_vec()));
+        }
+        let (_, address) = self.key_at(chain, fmt, path).ok_or((status::REFUSED, b"bad path".to_vec()))?;
+        let key = Self::secp(&self.sign_seed, path);
+        let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b).into_bytes();
+        let signature = match how {
+            scheme::EIP191 => {
+                let mut full = format!("\x19Ethereum Signed Message:\n{}", m.len()).into_bytes();
+                full.extend_from_slice(m);
+                let (r, s, recid) = key.sign_recoverable(&purecrypto::hash::keccak256(&full));
+                [&r[..], &s[..], &[27 + recid]].concat()
+            }
+            scheme::BIP137 => {
+                // The messages here are short: a one-byte length.
+                let mut full = b"\x18Bitcoin Signed Message:\n".to_vec();
+                full.push(m.len() as u8);
+                full.extend_from_slice(m);
+                let (r, s, recid) = key.sign_recoverable(&outscript::hash::dsha256(&full));
+                let base = [31u8, 35, 39][fmt as usize - 1];
+                b64(&[&[base + recid][..], &r[..], &s[..]].concat())
+            }
+            // Not a BIP-322 signature: bytes shaped like a witness stack. The
+            // host hands these back unverified, and that is all it is for.
+            _ => {
+                let mut stack = vec![2u8, 65];
+                stack.extend([0x5a; 64]);
+                stack.extend([1, 33]);
+                stack.extend(key.public_key().serialize_compressed());
+                b64(&stack)
+            }
+        };
+        let mut out = vec![kind::MESSAGE, 1, chain, how, path.len() as u8];
+        path.iter().for_each(|c| out.extend(c.to_le_bytes()));
+        out.push(address.len() as u8);
+        out.extend(address.as_bytes());
+        out.extend((signature.len() as u16).to_le_bytes());
+        out.extend(signature);
+        Ok(out)
+    }
+
+    /// Whether this session may sign with `key` on `chain`: below an account
+    /// it was shown, or a key it was given by its own path — not a sibling,
+    /// a parent or a child of one.
+    fn may_sign(dev: &Dev, chain: u8, key: &[u32]) -> bool {
+        dev.exposed.iter().any(|(c, root)| *c == chain && key.len() > root.len() && key.starts_with(root)) || dev.by_path.iter().any(|(c, path)| *c == chain && path == key)
     }
 
     /// Sign what was uploaded, as the chain's signer on the device would.
@@ -428,8 +654,8 @@ impl FakeCatCard {
                 if !(1..=3).contains(&p[0]) {
                     return (status::REFUSED, format!("{} cannot be signed here", chain::name(p[0])).into_bytes());
                 }
-                if !dev.exposed.iter().any(|(c, _)| *c == p[0]) {
-                    return (status::REFUSED, b"nothing shared on this chain".to_vec());
+                if !dev.exposed.iter().chain(&dev.by_path).any(|(c, _)| *c == p[0]) {
+                    return (status::REFUSED, format!("{} was not shared this session", chain::name(p[0])).into_bytes());
                 }
                 dev.upload = Some((p[0], u32at(&p[1..]) as usize, Vec::new()));
                 (status::OK, 1018u32.to_le_bytes().to_vec())
@@ -458,9 +684,11 @@ impl FakeCatCard {
                     Ok((keys, tx))
                 })();
                 let Ok((keys, tx)) = parsed else { return (status::REFUSED, b"malformed sign request".to_vec()) };
-                let below = |key: &Vec<u32>| dev.exposed.iter().any(|(c, root)| *c == chain && key.len() > root.len() && key.starts_with(root));
-                if keys.is_empty() || !keys.iter().all(below) || (chain == chain::ETHEREUM && keys.len() != 1) {
-                    return (status::REFUSED, b"key not shared in this session".to_vec());
+                if keys.is_empty() || !keys.iter().all(|key| Self::may_sign(dev, chain, key)) {
+                    return (status::REFUSED, b"a key was not shared this session".to_vec());
+                }
+                if chain == chain::ETHEREUM && keys.len() != 1 {
+                    return (status::REFUSED, b"an EVM transaction takes one key".to_vec());
                 }
                 dev.outcome = Some(if self.decline { Err((status::DECLINED, vec![])) } else { self.sign(chain, &keys, &tx) });
                 dev.wait_polls = self.answer_after;
@@ -495,6 +723,100 @@ impl FakeCatCard {
             }
             op::HOST_ABORT => {
                 dev.upload = None;
+                (status::OK, vec![])
+            }
+            op::HOST_ADDRESS_AT | op::HOST_SIGN_MESSAGE | op::HOST_INFO if self.old => (status::UNKNOWN_OPCODE, vec![]),
+            op::HOST_INFO => {
+                if !p.is_empty() {
+                    return (status::BAD_REQUEST, vec![]);
+                }
+                // Answered whatever else is in hand: nothing of the wallet's.
+                let session = u8::from(dev.paths_allowed) | u8::from(!dev.exposed.is_empty() || !dev.by_path.is_empty()) << 1;
+                let mut b = vec![1, 0b11, session, 0xC0, 0x03, 5];
+                b.extend([1, 0b111, 4, 3, 2, 1, 4]);
+                b.extend([2, 0b111, 1, 5]);
+                b.extend([3, 0b011, 1, 7]);
+                b.extend([4, 0b001, 3, 3, 2, 1]);
+                b.extend([9, 0b001, 1, 6]);
+                (status::OK, b)
+            }
+            op::HOST_ADDRESS_AT => {
+                // [chain][format][flags][path], nothing after.
+                let parsed = (|| {
+                    let mut c = proto::Cursor::new(p);
+                    let head = (c.u8()?, c.u8()?, c.u8()?);
+                    let path = c.path()?;
+                    c.done()?;
+                    Ok::<_, String>((head, path))
+                })();
+                let Ok(((chain, fmt, flags), path)) = parsed else { return (status::BAD_REQUEST, vec![]) };
+                if flags & !1 != 0 {
+                    return (status::BAD_REQUEST, vec![]);
+                }
+                if dev.outcome.is_some() || dev.upload.is_some() {
+                    return (status::NOT_NOW, vec![2]);
+                }
+                let has: &[u8] = match chain {
+                    1 => &[1, 2, 3, 4],
+                    2 => &[5],
+                    3 => &[7],
+                    9 => &[6],
+                    _ => return (status::REFUSED, b"unknown chain".to_vec()),
+                };
+                if !has.contains(&fmt) {
+                    return (status::REFUSED, format!("{} has no such address format", chain::name(chain)).into_bytes());
+                }
+                if chain == chain::SOLANA && path.iter().any(|c| c & H == 0) {
+                    return (status::REFUSED, b"a Solana key path must be hardened throughout".to_vec());
+                }
+                dev.outcome = Some(self.share_at(dev, chain, fmt, &path, flags & 1 != 0));
+                dev.wait_polls = self.answer_after;
+                (status::OK, vec![])
+            }
+            op::HOST_SIGN_MESSAGE => {
+                // [version][chain][format][scheme][path][u16 len][message].
+                let parsed = (|| {
+                    let mut c = proto::Cursor::new(p);
+                    if c.u8()? != 1 {
+                        return Err("version".to_owned());
+                    }
+                    let head = (c.u8()?, c.u8()?, c.u8()?);
+                    let path = c.path()?;
+                    let n = c.u16()? as usize;
+                    if n == 0 || n > 960 {
+                        return Err("length".into());
+                    }
+                    let message = c.take(n)?.to_vec();
+                    c.done()?;
+                    Ok((head, path, message))
+                })();
+                let Ok(((chain, fmt, how), path, message)) = parsed else { return (status::BAD_REQUEST, vec![]) };
+                if dev.outcome.is_some() || dev.upload.is_some() {
+                    return (status::NOT_NOW, vec![2]);
+                }
+                // Everything that can be judged without a key is judged
+                // before anything reaches the screen.
+                let refuse = |why: &str| (status::REFUSED, why.as_bytes().to_vec());
+                let fits = match chain {
+                    chain::BITCOIN if !(1..=4).contains(&fmt) => Err("not a Bitcoin address format"),
+                    chain::BITCOIN if !(1..=3).contains(&how) => Err("not a Bitcoin message scheme"),
+                    chain::BITCOIN if !matches!((how, fmt), (1, 1..=3) | (2, 3 | 4) | (3, 2..=4)) => Err("that scheme does not fit that address type"),
+                    chain::ETHEREUM if fmt != 5 => Err("not an EVM address format"),
+                    chain::ETHEREUM if how != 4 => Err("not an EVM message scheme"),
+                    chain::BITCOIN | chain::ETHEREUM => Ok(()),
+                    _ => return refuse(&format!("{} messages cannot be signed here", chain::name(chain))),
+                };
+                if let Err(why) = fits {
+                    return refuse(why);
+                }
+                if !Self::may_sign(dev, chain, &path) {
+                    return refuse("the key was not shared this session");
+                }
+                if let Some(why) = Self::unshowable(how, &message) {
+                    return refuse(why);
+                }
+                dev.outcome = Some(self.sign_text(chain, fmt, how, &path, &message));
+                dev.wait_polls = self.answer_after;
                 (status::OK, vec![])
             }
             _ => (status::UNKNOWN_OPCODE, vec![]),
@@ -753,7 +1075,6 @@ fn keys_match_the_mnemonic_and_import_as_a_catcard_wallet() {
     assert_eq!(export.keys[0].path, "m/84'/0'/1'");
     assert_eq!(run(keys(&env, &second, &KeyQuery::from_params(&json!({ "Account": 0 })).unwrap())).unwrap_err().code, 409);
     assert!(KeyQuery::from_params(&json!({ "Count": 2 })).is_err());
-    assert!(KeyQuery::from_params(&json!({ "Paths": ["m/44'/60'/0'/0/1"] })).is_err());
     assert!(KeyQuery::from_params(&json!({ "Scripts": ["p2wsh"] })).is_err());
     assert!(KeyQuery::from_params(&json!({ "Account": 0x8000_0000u32 })).is_err());
 
@@ -778,12 +1099,434 @@ fn only_catcard_accounts_are_signed_for_and_never_in_software() {
     let err = crate::evm::personal_sign(&env, &eth.id, &[], b"hi").unwrap_err().to_string();
     assert!(err.contains("CatCard:signTransaction"), "{err}");
 
-    // What the protocol has no command for is said, not improvised.
-    for route in ["showAddress", "signMessage"] {
-        let err = run(crate::handlers::catcard::route(&env, route, &json!({ "Account": eth.id, "Message": "aGk=" }))).unwrap_err();
-        assert_eq!(err.code, 501, "{}", err.message);
-    }
     assert_eq!(run(crate::handlers::catcard::route(&env, "nope", &json!({}))).unwrap_err().code, 404);
+    // The routes that take an account want one of a CatCard wallet, and a
+    // message as base64 — before any device is looked for.
+    for route in ["showAddress", "signMessage", "signTransaction"] {
+        assert_eq!(run(crate::handlers::catcard::route(&env, route, &json!({ "Account": "acct-nope", "Message": "aGk=" }))).unwrap_err().code, 404);
+        assert_eq!(run(crate::handlers::catcard::route(&env, route, &json!({}))).unwrap_err().code, 400);
+    }
+    for message in [json!(null), json!("not base64!")] {
+        let err = run(crate::handlers::catcard::route(&env, "signMessage", &json!({ "Account": eth.id, "Message": message, "Transport": "bridge" }))).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
+    }
+}
+
+// ── What the firmware answers ────────────────────────────────────────────────
+
+/// A device whose firmware predates `HostInfo`.
+fn old_firmware(mnemonic: &str) -> FakeCatCard {
+    let mut d = FakeCatCard::new(mnemonic);
+    d.old = true;
+    d
+}
+
+#[test]
+fn host_info_says_what_the_firmware_answers() {
+    let env = env();
+    let device = FakeCatCard::new(MNEMONIC);
+    // Not paired: nothing is known, and nothing is paired to find out.
+    let id = run(info(&device)).unwrap();
+    assert_eq!((id["paired"].as_bool(), id["hostInfo"].is_null()), (Some(false), true));
+    assert!(device.clear_ops.borrow().iter().all(|o| *o == op::IDENTIFY));
+
+    run(keys(&env, &device, &all_scripts())).unwrap();
+    let id = run(info(&device)).unwrap();
+    let host = &id["hostInfo"];
+    assert_eq!(id["paired"], true);
+    assert_eq!((host["legacy"].as_bool(), host["addressAt"].as_bool(), host["signMessage"].as_bool()), (Some(false), Some(true), Some(true)));
+    // An account was shared; nobody ticked "Allow during session".
+    assert_eq!((host["shared"].as_bool(), host["pathsAllowed"].as_bool(), host["messageMax"].as_u64()), (Some(true), Some(false), Some(960)));
+    let chains = host["chains"].as_array().unwrap();
+    assert_eq!(chains.iter().map(|c| c["name"].as_str().unwrap()).collect::<Vec<_>>(), ["Bitcoin", "Ethereum", "Solana", "Litecoin", "Tron"]);
+    assert_eq!(chains[0], json!({ "chain": 1, "name": "Bitcoin", "addresses": true, "sign": true, "messages": true, "formats": ["p2wpkh", "p2sh:p2wpkh", "p2pkh", "p2tr"] }));
+    assert_eq!((chains[2]["sign"].as_bool(), chains[2]["messages"].as_bool()), (Some(true), Some(false)));
+    assert_eq!((chains[4]["sign"].as_bool(), chains[4]["formats"][0].as_str()), (Some(false), Some("tron")));
+    assert_eq!(device.count(&device.clear_ops, op::PAIR_COMMIT), 1);
+
+    // The session's own bits move: the owner allows addresses by path.
+    let mut allowing = FakeCatCard::new(MNEMONIC);
+    allowing.allow_session = true;
+    run(keys(&env, &allowing, &KeyQuery::from_params(&json!({ "Paths": ["m/44'/60'/0'/0/0"] })).unwrap())).unwrap();
+    let host = run(info(&allowing)).unwrap()["hostInfo"].clone();
+    assert_eq!((host["shared"].as_bool(), host["pathsAllowed"].as_bool()), (Some(true), Some(true)));
+
+    // A firmware from before HostInfo says so by not knowing it.
+    let old = old_firmware(MNEMONIC);
+    run(keys(&env, &old, &all_scripts())).unwrap();
+    let id = run(info(&old)).unwrap();
+    assert_eq!((id["paired"].as_bool(), id["hostInfo"]["legacy"].as_bool(), id["hostInfo"]["addressAt"].as_bool()), (Some(true), Some(true), Some(false)));
+    // …and is asked once per session, however often it matters.
+    run(info(&old)).unwrap();
+    assert_eq!(old.count(&old.sealed_ops, op::HOST_INFO), 1);
+
+    // A session the device no longer has is found out, not reported.
+    device.replug();
+    let id = run(info(&device)).unwrap();
+    assert_eq!((id["paired"].as_bool(), id["hostInfo"].is_null()), (Some(false), true));
+    assert!(!session::held(&device));
+}
+
+#[test]
+fn an_old_firmware_shows_no_address_and_signs_no_message() {
+    let env = env();
+    let device = old_firmware(MNEMONIC);
+    let imported = import_from(&env, &device);
+    for (kind, script) in [("ethereum", ""), ("bitcoin", "p2wpkh"), ("solana", "")] {
+        let (account, info) = account_of(&env, &imported, kind, script);
+        let err = run(show_address(&env, &device, &account, &info)).unwrap_err();
+        assert_eq!(err.code, 501, "{}", err.message);
+        assert!(err.message.contains("too old to display an address"), "{}", err.message);
+        if kind != "solana" {
+            let err = run(sign_message(&env, &device, &account, &info, b"hi", None)).unwrap_err();
+            assert_eq!(err.code, 501, "{}", err.message);
+            assert!(err.message.contains("too old to sign a message"), "{}", err.message);
+        }
+    }
+    let err = run(keys(&env, &device, &KeyQuery::from_params(&json!({ "Paths": ["m/44'/60'/0'/0/1"] })).unwrap())).unwrap_err();
+    assert_eq!(err.code, 501, "{}", err.message);
+    // It was asked what it answers once, and never for what it does not have.
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_INFO), 1);
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT) + device.count(&device.sealed_ops, op::HOST_SIGN_MESSAGE), 0);
+    assert!(device.screens.borrow().is_empty());
+
+    // Transactions are signed as before; after a reconnect the account is
+    // shared again the only way this firmware has.
+    let (account, info) = account_of(&env, &imported, "ethereum", "");
+    device.replug();
+    run(sign_transaction(&env, &device, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESSES), 2);
+    // …and its owner must pick the account the transaction's belongs to.
+    let mut elsewhere = old_firmware(MNEMONIC);
+    elsewhere.account = 3;
+    let err = run(sign_transaction(&env, &elsewhere, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert!(err.message.contains("account 0"), "{}", err.message);
+}
+
+// ── One address ──────────────────────────────────────────────────────────────
+
+#[test]
+fn an_address_is_shown_on_the_device_and_checked() {
+    let env = env();
+    let device = FakeCatCard::new(MNEMONIC);
+    let imported = import_from(&env, &device);
+    let want = crate::walletcore::derive_addresses(MNEMONIC, "").unwrap();
+
+    // Each account's address: asked for by its path, then put on the screen
+    // to be compared. Bitcoin: the first receive address.
+    for (kind, script, path) in [("ethereum", "", "m/44'/60'/0'/0/0"), ("solana", "", "m/44'/501'/0'/0'"), ("bitcoin", "p2wpkh", "m/84'/0'/0'/0/0"), ("bitcoin", "p2sh:p2wpkh", "m/49'/0'/0'/0/0"), ("bitcoin", "p2pkh", "m/44'/0'/0'/0/0"), ("bitcoin", "p2tr", "m/86'/0'/0'/0/0")] {
+        let (account, info) = account_of(&env, &imported, kind, script);
+        device.screens.borrow_mut().clear();
+        let out = run(show_address(&env, &device, &account, &info)).unwrap();
+        assert_eq!(out, json!({ "address": account.address, "account": account.id, "path": path }), "{kind} {script}");
+        assert_eq!(*device.screens.borrow(), [format!("share {path}"), format!("compare {}", account.address)]);
+    }
+    assert_eq!(run(show_address(&env, &device, &account_of(&env, &imported, "bitcoin", "p2wpkh").0, &account_of(&env, &imported, "bitcoin", "p2wpkh").1)).unwrap()["address"], want.bitcoin.as_str());
+    // The show flag travelled with every request, in one session.
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 7);
+    assert_eq!(device.count(&device.clear_ops, op::PAIR_COMMIT), 1);
+
+    // Once its owner allowed addresses for the session the question goes,
+    // and the comparison stays: that is what showing is for.
+    let mut allowing = FakeCatCard::new(MNEMONIC);
+    allowing.allow_session = true;
+    let (eth, eth_info) = account_of(&env, &imported, "ethereum", "");
+    let (sol, sol_info) = account_of(&env, &imported, "solana", "");
+    run(show_address(&env, &allowing, &eth, &eth_info)).unwrap();
+    run(show_address(&env, &allowing, &sol, &sol_info)).unwrap();
+    assert_eq!(*allowing.screens.borrow(), ["share m/44'/60'/0'/0/0".to_owned(), format!("compare {}", eth.address), format!("compare {}", sol.address)]);
+
+    // A device holding other keys shows another address: refused, whatever
+    // its owner answered. One already known to hold another key there is not
+    // asked to show anything.
+    let other = FakeCatCard::new(OTHER);
+    let err = run(show_address(&env, &other, &eth, &eth_info)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert!(err.message.contains("the device shows 0x") && err.message.contains(&eth.address), "{}", err.message);
+    let err = run(show_address(&env, &other, &eth, &eth_info)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert_eq!(other.count(&other.sealed_ops, op::HOST_ADDRESS_AT), 1);
+    // The owner says the screens differ, or says no to sharing at all; a
+    // device whose address is not its key's is not believed.
+    let mut differing = FakeCatCard::new(MNEMONIC);
+    differing.decline_show = true;
+    assert_eq!(run(show_address(&env, &differing, &eth, &eth_info)).unwrap_err().code, 4001);
+    assert_eq!(differing.screens.borrow().len(), 2);
+    let mut refusing = FakeCatCard::new(MNEMONIC);
+    refusing.decline = true;
+    assert_eq!(run(show_address(&env, &refusing, &eth, &eth_info)).unwrap_err().code, 4001);
+    assert_eq!(*refusing.screens.borrow(), ["share m/44'/60'/0'/0/0"]);
+    let mut liar = FakeCatCard::new(MNEMONIC);
+    liar.lie = true;
+    assert_eq!(run(show_address(&env, &liar, &eth, &eth_info)).unwrap_err().code, 502);
+    let mut locked = FakeCatCard::new(MNEMONIC);
+    locked.locked = true;
+    assert_eq!(run(show_address(&env, &locked, &eth, &eth_info)).unwrap_err().code, 423);
+}
+
+// ── Messages ─────────────────────────────────────────────────────────────────
+
+const SIGN_IN: &[u8] = b"Sign in to example.com\nNonce: 1";
+
+#[test]
+fn ethereum_message_is_signed_and_bound_to_the_account() {
+    let env = env();
+    let device = FakeCatCard::new(MNEMONIC);
+    let imported = import_from(&env, &device);
+    let (account, info) = account_of(&env, &imported, "ethereum", "");
+
+    let out = run(sign_message(&env, &device, &account, &info, SIGN_IN, None)).unwrap();
+    assert_eq!((out["scheme"].as_str(), out["verified"].as_bool(), out["account"].as_str()), (Some("eip191"), Some(true), Some(account.id.as_str())));
+    let sig = unhex(out["signature"].as_str().unwrap().strip_prefix("0x").unwrap()).unwrap();
+    assert_eq!(sig.len(), 65);
+    assert!(matches!(sig[64], 27 | 28));
+    assert!(crate::evm::personal_ec_recover(SIGN_IN, &sig).unwrap().eq_ignore_ascii_case(&account.address));
+    assert!(out["address"].as_str().unwrap().eq_ignore_ascii_case(&account.address));
+    // Its owner read the message itself. The account was shared in this
+    // session (the import), so its key was not asked for again.
+    assert_eq!(*device.screens.borrow(), [format!("message {}", String::from_utf8_lossy(SIGN_IN))]);
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 0);
+
+    // A new session has been shown nothing: the key is asked for by its
+    // path first — the account is not shared again — and then signs.
+    device.replug();
+    run(sign_message(&env, &device, &account, &info, b"hello", Some("eip191"))).unwrap();
+    assert_eq!((device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), device.count(&device.sealed_ops, op::HOST_ADDRESSES)), (1, 1));
+    assert_eq!(device.screens.borrow()[1..], ["share m/44'/60'/0'/0/0", "message hello"]);
+    run(sign_message(&env, &device, &account, &info, b"again", None)).unwrap();
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 1);
+    // What the firmware answers was asked once in each of the two sessions.
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_INFO), 2);
+
+    // The device's owner changed the wallet in force: it forgot what it had
+    // shared, says so, and the next request asks again.
+    device.dev.borrow_mut().by_path.clear();
+    let err = run(sign_message(&env, &device, &account, &info, b"again", None)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    run(sign_message(&env, &device, &account, &info, b"again", None)).unwrap();
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 2);
+
+    // A device that shows this account's address and signs with another key:
+    // its signature is refused. One holding other keys altogether is turned
+    // down before it is asked to sign.
+    let wrong = impostor();
+    let err = run(sign_message(&env, &wrong, &account, &info, SIGN_IN, None)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert_eq!(wrong.count(&wrong.sealed_ops, op::HOST_SIGN_MESSAGE), 1);
+    let other = FakeCatCard::new(OTHER);
+    let err = run(sign_message(&env, &other, &account, &info, SIGN_IN, None)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert_eq!(other.count(&other.sealed_ops, op::HOST_SIGN_MESSAGE), 0);
+    let mut refusing = FakeCatCard::new(MNEMONIC);
+    run(keys(&env, &refusing, &all_scripts())).unwrap();
+    refusing.decline = true;
+    assert_eq!(run(sign_message(&env, &refusing, &account, &info, SIGN_IN, None)).unwrap_err().code, 4001);
+
+    // Only text a screen shows faithfully is signed. What the device would
+    // refuse is refused with its reason before it — or its owner — is
+    // involved at all.
+    let untouched = FakeCatCard::new(MNEMONIC);
+    let long = vec![b'x'; 961];
+    let lines = b"x\n".repeat(23);
+    for (message, why) in [(&b""[..], "nothing to sign"), (&long[..], "message too long"), ("caf\u{e9}".as_bytes(), "plain ASCII text only"), (b"a\tb", "plain ASCII text only"), (b"a\r\nb", "plain ASCII text only"), (&lines[..], "a line starts or ends blank"), (&[&lines[..], b"x\nx"].concat()[..], "too many lines"), (b" a", "starts or ends blank"), (b"a\nb ", "starts or ends blank")] {
+        let err = run(sign_message(&env, &untouched, &account, &info, message, None)).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
+        assert!(err.message.contains(why), "{:?}: {}", String::from_utf8_lossy(message), err.message);
+        // The simulated device has the same rule, written apart.
+        assert!(message.is_empty() || FakeCatCard::unshowable(scheme::EIP191, message).is_some());
+    }
+    assert!(untouched.clear_ops.borrow().is_empty(), "the device was involved in a message it does not sign");
+    // The longest one goes through, with its 24 lines.
+    let longest = [&lines[..], &[b'y'; 960 - 46][..]].concat();
+    assert_eq!(longest.len(), 960);
+    run(sign_message(&env, &untouched, &account, &info, &longest, None)).unwrap();
+    // What only the device knows — this board's panel is too small for it —
+    // comes back as its refusal, with its reason.
+    let mut small = FakeCatCard::new(MNEMONIC);
+    small.panel = 100;
+    let err = run(sign_message(&env, &small, &account, &info, &[b'x'; 101], None)).unwrap_err();
+    assert_eq!(err.code, 400, "{}", err.message);
+    assert!(err.message.contains("too long to show here"), "{}", err.message);
+
+    // Schemes that are not Ethereum's; Solana messages are not signed.
+    assert_eq!(run(sign_message(&env, &untouched, &account, &info, b"hi", Some("bip137"))).unwrap_err().code, 400);
+    assert_eq!(run(sign_message(&env, &untouched, &account, &info, b"hi", Some("eip712"))).unwrap_err().code, 400);
+    let (sol, sol_info) = account_of(&env, &imported, "solana", "");
+    let err = run(sign_message(&env, &untouched, &sol, &sol_info, b"hi", None)).unwrap_err();
+    assert_eq!(err.code, 400, "{}", err.message);
+}
+
+#[test]
+fn bitcoin_message_is_signed_by_the_first_receive_address() {
+    use base64::Engine;
+    let env = env();
+    let device = FakeCatCard::new(MNEMONIC);
+    let imported = import_from(&env, &device);
+    let message = b"I own this address, 2026-11-11";
+
+    // BIP-137 for every address type that has it: the header says which.
+    for (script, path, header) in [("p2wpkh", "m/84'/0'/0'/0/0", 39u8), ("p2sh:p2wpkh", "m/49'/0'/0'/0/0", 35), ("p2pkh", "m/44'/0'/0'/0/0", 31)] {
+        let (account, info) = account_of(&env, &imported, "bitcoin", script);
+        let out = run(sign_message(&env, &device, &account, &info, message, None)).unwrap();
+        assert_eq!((out["scheme"].as_str(), out["verified"].as_bool(), out["path"].as_str()), (Some("bip137"), Some(true), Some(path)), "{script}");
+        assert_eq!(out["address"], account.address.as_str());
+        let sig = base64::engine::general_purpose::STANDARD.decode(out["signature"].as_str().unwrap()).unwrap();
+        assert_eq!(sig.len(), 65);
+        assert!((header..header + 4).contains(&sig[0]), "{script}: header {}", sig[0]);
+        // The signature is by the key at …/0/0 below the account key.
+        let key = FakeCatCard::secp(&device.seed, &proto::parse_path(path).unwrap()).public_key();
+        let digest = outscript::hash::dsha256(&[&b"\x18Bitcoin Signed Message:\n\x1e"[..], message].concat());
+        let (r, s): ([u8; 32], [u8; 32]) = (sig[1..33].try_into().unwrap(), sig[33..].try_into().unwrap());
+        assert!(key.verify(&digest, &r, &s), "{script}");
+    }
+    // The accounts were shared in this session: no key was asked for by path.
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 0);
+    assert_eq!(device.screens.borrow().len(), 3);
+
+    // BIP-322, when asked for — and for a taproot address, which has nothing
+    // else. Returned as the device gave it, and said to be unverified.
+    let (segwit, segwit_info) = account_of(&env, &imported, "bitcoin", "p2wpkh");
+    let (taproot, taproot_info) = account_of(&env, &imported, "bitcoin", "p2tr");
+    let (nested, nested_info) = account_of(&env, &imported, "bitcoin", "p2sh:p2wpkh");
+    let (legacy, legacy_info) = account_of(&env, &imported, "bitcoin", "p2pkh");
+    for (account, info, wanted, how) in [(&segwit, &segwit_info, Some("bip322"), "bip322"), (&segwit, &segwit_info, Some("bip322-full"), "bip322-full"), (&taproot, &taproot_info, None, "bip322"), (&taproot, &taproot_info, Some("bip322-full"), "bip322-full"), (&nested, &nested_info, Some("bip322-full"), "bip322-full")] {
+        let out = run(sign_message(&env, &device, account, info, message, wanted)).unwrap();
+        assert_eq!((out["scheme"].as_str(), out["verified"].as_bool()), (Some(how), Some(false)));
+        assert_eq!(out["address"], account.address.as_str());
+        assert!(base64::engine::general_purpose::STANDARD.decode(out["signature"].as_str().unwrap()).is_ok());
+    }
+    // The combinations the table excludes never reach the device.
+    let asked = device.count(&device.sealed_ops, op::HOST_SIGN_MESSAGE);
+    for (account, info, wanted) in [(&taproot, &taproot_info, "bip137"), (&nested, &nested_info, "bip322"), (&legacy, &legacy_info, "bip322"), (&legacy, &legacy_info, "bip322-full"), (&segwit, &segwit_info, "eip191"), (&segwit, &segwit_info, "schnorr")] {
+        let err = run(sign_message(&env, &device, account, info, message, Some(wanted))).unwrap_err();
+        assert_eq!(err.code, 400, "{wanted}: {}", err.message);
+    }
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_SIGN_MESSAGE), asked);
+
+    // A new session: the first receive key is asked for by its path, with
+    // the account's address type, and signs.
+    device.replug();
+    device.screens.borrow_mut().clear();
+    run(sign_message(&env, &device, &nested, &nested_info, message, None)).unwrap();
+    assert_eq!(*device.screens.borrow(), ["share m/49'/0'/0'/0/0".to_owned(), format!("message {}", String::from_utf8_lossy(message))]);
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESSES), 1);
+
+    // Another key's signature under this account's address is refused; a
+    // device with other keys is not asked to sign.
+    let err = run(sign_message(&env, &impostor(), &segwit, &segwit_info, message, None)).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    let other = FakeCatCard::new(OTHER);
+    assert_eq!(run(sign_message(&env, &other, &segwit, &segwit_info, message, None)).unwrap_err().code, 409);
+    assert_eq!(other.count(&other.sealed_ops, op::HOST_SIGN_MESSAGE), 0);
+
+    // One line of printable ASCII, at most 240 characters — refused with the
+    // device's reason before it is involved.
+    let untouched = FakeCatCard::new(MNEMONIC);
+    for (text, why) in [(&[b'x'; 241][..], "message too long"), ("\u{20bf}".as_bytes(), "plain ASCII only"), (b"two\nlines", "plain ASCII only"), (b"", "nothing to sign")] {
+        let err = run(sign_message(&env, &untouched, &segwit, &segwit_info, text, None)).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
+        assert!(err.message.contains(why), "{}", err.message);
+        assert!(text.is_empty() || FakeCatCard::unshowable(scheme::BIP137, text).is_some());
+    }
+    assert!(untouched.clear_ops.borrow().is_empty());
+    run(sign_message(&env, &untouched, &segwit, &segwit_info, &[b'x'; 240], Some("bip322"))).unwrap();
+}
+
+// ── Keys by their path ───────────────────────────────────────────────────────
+
+#[test]
+fn keys_are_read_by_their_path_and_may_sign() {
+    let env = env();
+    let mut device = FakeCatCard::new(MNEMONIC);
+    device.allow_session = true;
+    let seed = bip39::mnemonic_to_seed(MNEMONIC, "");
+    let query = KeyQuery::from_params(&json!({ "Paths": ["m/44'/60'/0'/0/1", "m/44'/501'/1'/0'", "m/84'/0'/0'/0/5", "m/86'/0'/2'/1/0"] })).unwrap();
+    assert_eq!(query.paths.iter().map(|(c, f, _)| (*c, *f)).collect::<Vec<_>>(), [(chain::ETHEREUM, format::EVM), (chain::SOLANA, format::SOLANA), (chain::BITCOIN, format::P2WPKH), (chain::BITCOIN, format::P2TR)]);
+
+    let export = run(keys(&env, &device, &query)).unwrap();
+    assert_eq!((export.format.as_str(), export.master_fingerprint.as_deref()), ("catcard", Some("73c5da0a")));
+    // Asked once: "Allow during session" was ticked at the first.
+    assert_eq!(*device.screens.borrow(), ["share m/44'/60'/0'/0/1"]);
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 4);
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESSES), 0);
+    let eth_pk = hdderive::derive_pubkey_for_path(&seed, "secp256k1", "m/44'/60'/0'/0/1").unwrap();
+    let k = &export.keys[0];
+    assert_eq!((k.chain.as_str(), k.path.as_str(), k.pubkey.as_str(), k.chain_code.as_deref()), ("ethereum", "m/44'/60'/0'/0/1", hex(&eth_pk).as_str(), None));
+    assert_eq!(k.address, hdderive::evm_address(&eth_pk).unwrap());
+    let k = &export.keys[1];
+    assert_eq!((k.chain.as_str(), k.curve.as_str(), k.path.as_str()), ("solana", "ed25519", "m/44'/501'/1'/0'"));
+    assert_eq!(k.address, bs58::encode(unhex(&k.pubkey).unwrap()).into_string());
+    // A Bitcoin path is one address key, not an account: reported, with its
+    // address and script kind, as something an import does not take.
+    for (k, script, prefix) in [(&export.keys[2], "p2wpkh", "bc1q"), (&export.keys[3], "p2tr", "bc1p")] {
+        assert_eq!((k.chain.as_str(), k.name.as_deref(), k.script.as_str(), k.chain_code.as_deref()), ("unsupported", Some("Bitcoin"), script, None));
+        assert!(k.address.starts_with(prefix) && k.reason.as_deref().unwrap().contains("not an account"), "{k:?}");
+    }
+
+    let imported = import(&env, &export, &ImportOptions { protocol: Some("catcard".into()), ..Default::default() }).unwrap();
+    assert_eq!(imported.accounts.iter().map(|a| (a.kind.as_str(), a.path.as_str())).collect::<Vec<_>>(), [("ethereum", "m/44'/60'/0'/0/1"), ("solana", "m/44'/501'/1'/0'")]);
+    assert_eq!(imported.skipped.len(), 2);
+
+    // A key shared this way may sign: a transaction and a message, with no
+    // account ever shared in this session.
+    let (eth, eth_info) = account_of(&env, &imported, "ethereum", "");
+    let out = run(sign_transaction(&env, &device, &eth, &eth_info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
+    assert!(crate::evm::recover_sender(&unhex(out["raw"].as_str().unwrap()).unwrap()).unwrap().eq_ignore_ascii_case(&eth.address));
+    run(sign_message(&env, &device, &eth, &eth_info, SIGN_IN, None)).unwrap();
+    let (sol, sol_info) = account_of(&env, &imported, "solana", "");
+    let from = crate::solana::pubkey_from_b64url(&sol.pubkey).unwrap();
+    let message = crate::solana::build_transfer_message(&from, &[9u8; 32], 1_000, &[3u8; 32]);
+    let out = run(sign_transaction(&env, &device, &sol, &sol_info, &json!({ "Transaction": { "message": bs58::encode(&message).into_string() }, "Offline": true }))).unwrap();
+    assert!(crate::tss::ed25519_verify(&from, &message, &<[u8; 64]>::try_from(bs58::decode(out["id"].as_str().unwrap()).into_vec().unwrap()).unwrap()));
+    assert_eq!((device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), device.count(&device.sealed_ops, op::HOST_ADDRESSES)), (4, 0));
+
+    // After a reconnect the key is asked for by its path again — one
+    // question about one key, not the whole account — and signs.
+    device.replug();
+    device.screens.borrow_mut().clear();
+    run(sign_transaction(&env, &device, &eth, &eth_info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
+    assert_eq!(*device.screens.borrow(), ["share m/44'/60'/0'/0/1"]);
+    assert_eq!((device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), device.count(&device.sealed_ops, op::HOST_ADDRESSES)), (5, 0));
+    // Exactly that key: the device signs with nothing beside it.
+    {
+        let dev = device.dev.borrow();
+        assert!(FakeCatCard::may_sign(&dev, chain::ETHEREUM, &[44 | H, 60 | H, H, 0, 1]));
+        for near in [&[44 | H, 60 | H, H, 0, 2][..], &[44 | H, 60 | H, H, 0], &[44 | H, 60 | H, H, 0, 1, 0]] {
+            assert!(!FakeCatCard::may_sign(&dev, chain::ETHEREUM, near));
+        }
+        assert!(!FakeCatCard::may_sign(&dev, 9, &[44 | H, 60 | H, H, 0, 1]), "the same path on another chain");
+    }
+    // The device keeps the latest sixteen, and so does the session's memory.
+    let many: Vec<String> = (10..27).map(|i| format!("m/44'/60'/0'/0/{i}")).collect();
+    run(keys(&env, &device, &KeyQuery::from_params(&json!({ "Paths": many })).unwrap())).unwrap();
+    assert_eq!(device.dev.borrow().by_path.len(), 16);
+    run(sign_transaction(&env, &device, &eth, &eth_info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
+    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESS_AT), 5 + 17 + 1);
+
+    // A device holding other keys is turned down before it signs; one whose
+    // owner says no shares nothing.
+    let other = FakeCatCard::new(OTHER);
+    let err = run(sign_transaction(&env, &other, &eth, &eth_info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap_err();
+    assert_eq!(err.code, 409, "{}", err.message);
+    assert_eq!(other.count(&other.sealed_ops, op::HOST_SIGN_BEGIN), 0);
+    let mut refusing = FakeCatCard::new(MNEMONIC);
+    refusing.decline = true;
+    assert_eq!(run(keys(&env, &refusing, &query)).unwrap_err().code, 4001);
+    let mut liar = FakeCatCard::new(MNEMONIC);
+    liar.lie = true;
+    assert_eq!(run(keys(&env, &liar, &query)).unwrap_err().code, 502);
+
+    // What a path does not say has to be said; what it cannot be is refused.
+    let q = |p: Value| KeyQuery::from_params(&p);
+    assert_eq!(q(json!({ "Paths": ["m/44'/2'/0'/0/0"] })).unwrap_err().code, 400);
+    assert_eq!(q(json!({ "Paths": ["m/0/1"], "Chain": "ethereum" })).unwrap().paths[0].0, chain::ETHEREUM);
+    assert_eq!(q(json!({ "Paths": ["m/84'/0'/0'/0/1"], "Format": "p2sh:p2wpkh" })).unwrap().paths[0].1, format::P2SH_P2WPKH);
+    assert_eq!(q(json!({ "Paths": ["m/49'/0'/0'/0/1", "m/44'/0'/0'/0/1"] })).unwrap().paths.iter().map(|p| p.1).collect::<Vec<_>>(), [format::P2SH_P2WPKH, format::P2PKH]);
+    for refused in [json!({ "Paths": ["m/44'/60'/0'/0/1"], "Account": 1 }), json!({ "Paths": ["m/44'/60'/0'/0/1"], "Chain": "tron" }), json!({ "Paths": ["m/84'/0'/0'/0/1"], "Format": "p2wsh" }), json!({ "Paths": ["m/44'/501'/0'/0"] }), json!({ "Paths": ["nope"] }), json!({ "Paths": "m/44'/60'/0'/0/1" }), json!({ "Paths": vec!["m/44'/60'/0'/0/1"; 33] })] {
+        assert_eq!(q(refused.clone()).unwrap_err().code, 400, "{refused}");
+    }
+    assert!(q(json!({ "Paths": [] })).unwrap().paths.is_empty());
 }
 
 // ── Signing ──────────────────────────────────────────────────────────────────
@@ -817,11 +1560,13 @@ fn evm_transaction_is_signed_and_bound_to_the_account() {
     assert_eq!(device.count(&device.sealed_ops, op::HOST_SIGN_COMMIT), 2);
     assert_eq!(device.count(&device.clear_ops, op::PAIR_COMMIT), 1);
 
-    // A new session knows no shared account: the device is asked to share
-    // again before it is asked to sign.
+    // A new session has been shown nothing: the device is asked for the
+    // account's one key by its path — not to share the whole account again —
+    // before it is asked to sign.
     device.replug();
     run(sign_transaction(&env, &device, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
-    assert_eq!(device.count(&device.sealed_ops, op::HOST_ADDRESSES), 2);
+    assert_eq!((device.count(&device.sealed_ops, op::HOST_ADDRESSES), device.count(&device.sealed_ops, op::HOST_ADDRESS_AT)), (1, 1));
+    assert_eq!(*device.screens.borrow(), ["share m/44'/60'/0'/0/0"]);
 
     // A device that shows this account's address but signs with another key:
     // its signature is refused.
@@ -835,12 +1580,13 @@ fn evm_transaction_is_signed_and_bound_to_the_account() {
     let err = run(sign_transaction(&env, &other, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap_err();
     assert_eq!(err.code, 409, "{}", err.message);
     assert_eq!(other.count(&other.sealed_ops, op::HOST_SIGN_BEGIN), 0);
-    // …and so is one on which the person shared another account.
+    // The key is named by the host, so which account the person would have
+    // picked no longer matters (it does on an older firmware: see
+    // `an_old_firmware_shows_no_address_and_signs_no_message`).
     let mut elsewhere = FakeCatCard::new(MNEMONIC);
     elsewhere.account = 3;
-    let err = run(sign_transaction(&env, &elsewhere, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap_err();
-    assert_eq!(err.code, 409, "{}", err.message);
-    assert!(err.message.contains("account 0"), "{}", err.message);
+    run(sign_transaction(&env, &elsewhere, &account, &info, &json!({ "Transaction": evm_tx(), "Offline": true }))).unwrap();
+    assert_eq!(elsewhere.count(&elsewhere.sealed_ops, op::HOST_ADDRESSES), 0);
 
     // A refusal on the device, and an incomplete offline transaction (which
     // never reaches the device at all).
@@ -1215,8 +1961,38 @@ fn every_operation_runs_through_the_smart_card_reader() {
         let sig: [u8; 64] = bs58::decode(out["id"].as_str().unwrap()).into_vec().unwrap().try_into().unwrap();
         assert!(crate::tss::ed25519_verify(&from, &message, &sig));
 
+        // What later firmware adds: an address shown on the device and
+        // checked, messages signed, a key read by its path, and what the
+        // firmware says of itself.
+        use base64::Engine;
+        let b64 = |m: &[u8]| base64::engine::general_purpose::STANDARD.encode(m);
+        let out = run(crate::handlers::catcard::route(&env, "showAddress", &with(json!({ "Account": eth.id })))).unwrap();
+        assert_eq!(out, json!({ "address": eth.address, "account": eth.id, "path": "m/44'/60'/0'/0/0" }));
+        let out = run(crate::handlers::catcard::route(&env, "showAddress", &with(json!({ "Account": btc.id })))).unwrap();
+        assert_eq!((out["address"].as_str(), out["path"].as_str()), (Some(want.bitcoin.as_str()), Some("m/84'/0'/0'/0/0")));
+        let out = run(crate::handlers::catcard::route(&env, "signMessage", &with(json!({ "Account": eth.id, "Message": b64(SIGN_IN) })))).unwrap();
+        let sig = unhex(out["signature"].as_str().unwrap().strip_prefix("0x").unwrap()).unwrap();
+        assert!(crate::evm::personal_ec_recover(SIGN_IN, &sig).unwrap().eq_ignore_ascii_case(&want.evm));
+        let out = run(crate::handlers::catcard::route(&env, "signMessage", &with(json!({ "Account": btc.id, "Message": b64(b"mine") })))).unwrap();
+        assert_eq!((out["scheme"].as_str(), out["verified"].as_bool(), out["path"].as_str()), (Some("bip137"), Some(true), Some("m/84'/0'/0'/0/0")));
+        assert_eq!(base64::engine::general_purpose::STANDARD.decode(out["signature"].as_str().unwrap()).unwrap().len(), 65);
+        let out = run(crate::handlers::catcard::route(&env, "signMessage", &with(json!({ "Account": btc.id, "Message": b64(b"mine"), "Scheme": "bip322" })))).unwrap();
+        assert_eq!((out["scheme"].as_str(), out["verified"].as_bool()), (Some("bip322"), Some(false)));
+        let err = run(crate::handlers::catcard::route(&env, "signMessage", &with(json!({ "Account": btc.id, "Message": b64(&[b'x'; 241]) })))).unwrap_err();
+        assert_eq!(err.code, 400, "{}", err.message);
+        let by_path = run(crate::handlers::catcard::route(&env, "getKeys", &with(json!({ "Paths": ["m/44'/60'/0'/0/1", "m/84'/0'/0'/0/1"] })))).unwrap();
+        assert_eq!((by_path["keys"][0]["chain"].as_str(), by_path["keys"][0]["path"].as_str()), (Some("ethereum"), Some("m/44'/60'/0'/0/1")));
+        assert_eq!((by_path["keys"][1]["chain"].as_str(), by_path["keys"][1]["script"].as_str()), (Some("unsupported"), Some("p2wpkh")));
+        let info = run(crate::handlers::catcard::route(&env, "info", &link)).unwrap();
+        assert_eq!((info["paired"].as_bool(), info["hostInfo"]["signMessage"].as_bool(), info["hostInfo"]["shared"].as_bool()), (Some(true), Some(true), Some(true)));
+        assert_eq!(info["hostInfo"]["chains"][1]["formats"], json!(["evm"]));
+
         {
             let card = card.lock().unwrap();
+            // The person compared two addresses and read three messages.
+            let screens = card.dev.screens.borrow();
+            assert_eq!(screens.iter().filter(|s| s.starts_with("compare ")).count(), 2, "{screens:?}");
+            assert_eq!(screens.iter().filter(|s| s.starts_with("message ")).count(), 3, "{screens:?}");
             // One pairing served everything.
             assert_eq!(card.dev.count(&card.dev.clear_ops, op::PAIR_COMMIT), 1, "short={short} clear={:x?} sealed={:x?}", card.dev.clear_ops.borrow(), card.dev.sealed_ops.borrow());
             let chained = card.seen.iter().filter(|a| a[0] == 0x90).count();

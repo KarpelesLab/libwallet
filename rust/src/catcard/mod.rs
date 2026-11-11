@@ -11,12 +11,16 @@
 //!
 //! The protocol is the firmware's "host-wallet" one: the host asks, the device
 //! puts the question on its own screen, the person holding it answers there,
-//! and the host polls for the outcome. Two questions exist — "share this
-//! wallet's addresses" and "sign this transaction" (a Bitcoin PSBT, an EVM
-//! transaction, a Solana message). The account is chosen on the device, not by
-//! the host, and the device only signs with keys below an account it shared in
-//! the same session. There is no command to display one address or to sign a
-//! message: [`show_address`] and [`sign_message`] say so.
+//! and the host polls for the outcome. Every firmware has two questions —
+//! "share this wallet's addresses" (the account is chosen on the device, not
+//! by the host) and "sign this transaction" (a Bitcoin PSBT, an EVM
+//! transaction, a Solana message). Later firmware has two more — "the address
+//! at this path" (optionally shown on the device to be compared) and "sign
+//! this message" — and says so in `HostInfo`, asked once per session: a
+//! firmware without it answers `UnknownOpcode`, and [`show_address`] and
+//! [`sign_message`] then answer 501. The device only signs with keys it shared
+//! in the same session: below an account it shared, or a key it shared by its
+//! own path.
 //!
 //! Nothing the device returns is trusted on its own. A shared key is only
 //! reported once its address derives from it here; a signature is only handed
@@ -25,7 +29,10 @@
 //! and must recover to the account address, the Solana signature must verify
 //! over the built message, and every input of a Bitcoin PSBT must carry a
 //! signature that verifies under the account's own derived key before the PSBT
-//! goes through the same pending-request binding as an air-gapped signer's.
+//! goes through the same pending-request binding as an air-gapped signer's. A
+//! message signature must recover to the account's key (EIP-191, BIP-137); a
+//! BIP-322 one is not checked here — nothing in this library verifies those —
+//! and is returned marked as such.
 
 pub mod proto;
 pub mod session;
@@ -38,7 +45,7 @@ use crate::handlers::{ApiError, ApiResult};
 use crate::models::account::Account;
 use crate::Env;
 
-use proto::{chain, format, op, shape, status, Addresses, Entry, HARDENED};
+use proto::{can, chain, feature, format, op, scheme, shape, status, AddressAt, Addresses, Entry, HostInfo, HARDENED};
 use session::{reason, Session, POLL_MS};
 use transport::{hex, sleep_ms, unhex, Transport};
 
@@ -60,8 +67,23 @@ fn str_param<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
 
 /// `CatCard:info` — what the device says about itself (`Identify`, in the
 /// clear: no pairing, nobody is asked anything).
+///
+/// What its firmware answers beyond that (`HostInfo`) only travels inside the
+/// encrypted channel, so `hostInfo` is there when a session is already held
+/// for the link — it is asked afresh, the session's own bits move — and null
+/// otherwise: no pairing is started for this.
 pub async fn info<T: Transport>(link: &T) -> ApiResult {
     let id = session::identify(link).await?;
+    let mut host = Value::Null;
+    let mut paired = false;
+    if let Some(mut s) = session::take(link) {
+        if let Ok(known) = host_info(link, &mut s, true).await {
+            host = host_json(known.as_ref());
+        }
+        // A session the device no longer honours ended with that call.
+        paired = s.alive();
+        session::keep(s);
+    }
     Ok(json!({
         "board": id.board,
         "firmware": id.version,
@@ -73,8 +95,71 @@ pub async fn info<T: Transport>(link: &T) -> ApiResult {
         // A development image whose host can press keys or read memory.
         "bench": id.bench(),
         // A session from an earlier request is held for this link.
-        "paired": session::held(link),
+        "paired": paired,
+        "hostInfo": host,
     }))
+}
+
+// ── What the firmware answers ────────────────────────────────────────────────
+
+/// The device's `HostInfo`: which requests beyond the first six its firmware
+/// answers, what each chain can be asked for, and what this session has been
+/// given. Asked once per session and remembered (`refresh` asks again). `None`
+/// is a firmware that predates the request — it answers `UnknownOpcode`.
+async fn host_info<T: Transport>(link: &T, s: &mut Session, refresh: bool) -> Result<Option<HostInfo>, ApiError> {
+    match &s.host {
+        // A firmware that did not know the request has not learned it since.
+        Some(None) => return Ok(None),
+        Some(known) if !refresh => return Ok(known.clone()),
+        _ => {}
+    }
+    let (st, body) = s.call(link, op::HOST_INFO, &[]).await?;
+    let info = match st {
+        status::OK => Some(HostInfo::decode(&body).map_err(|e| cerr(502, format!("HostInfo: {e}")))?),
+        status::UNKNOWN_OPCODE => None,
+        other => return Err(cerr(502, format!("HostInfo answered {}", status::name(other)))),
+    };
+    s.host = Some(info.clone());
+    Ok(info)
+}
+
+/// `HostInfo` as `CatCard:info` reports it.
+fn host_json(info: Option<&HostInfo>) -> Value {
+    let Some(i) = info else {
+        // The firmware has the first six requests only.
+        return json!({ "legacy": true, "addressAt": false, "signMessage": false, "pathsAllowed": false, "shared": false, "messageMax": 0, "chains": [] });
+    };
+    json!({
+        "legacy": false,
+        "addressAt": i.features & feature::ADDRESS_AT != 0,
+        "signMessage": i.features & feature::SIGN_MESSAGE != 0,
+        // The owner ticked "Allow during session": addresses by path are
+        // answered without a question until the session ends.
+        "pathsAllowed": i.session & proto::granted::PATHS_ALLOWED != 0,
+        "shared": i.session & proto::granted::SHARED != 0,
+        "messageMax": i.message_max,
+        "chains": i.chains.iter().map(|c| json!({
+            "chain": c.chain,
+            "name": chain::name(c.chain),
+            "addresses": c.can & can::ADDRESSES != 0,
+            "sign": c.can & can::SIGN != 0,
+            "messages": c.can & can::MESSAGES != 0,
+            "formats": c.formats.iter().map(|f| format::name(*f)).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The firmware's `HostInfo`, provided it has the request `bit` names and can
+/// do it for `chain` — else a 501 saying what the firmware cannot do.
+async fn require_feature<T: Transport>(link: &T, s: &mut Session, bit: u8, chain: u8, needs: u8, what: &str) -> Result<HostInfo, ApiError> {
+    let info = host_info(link, s, false).await?.filter(|i| i.features & bit != 0);
+    let Some(info) = info else {
+        return Err(cerr(501, format!("the device's firmware is too old to {what} (CatCard {} has no such request): update its firmware", s.identity.version)));
+    };
+    if info.can(chain) & needs == 0 {
+        return Err(cerr(501, format!("this CatCard firmware cannot {what} for {}", chain::name(chain))));
+    }
+    Ok(info)
 }
 
 // ── Asking the person at the device ──────────────────────────────────────────
@@ -162,6 +247,71 @@ async fn share<T: Transport>(env: &Env, link: &T, s: &mut Session) -> Result<Add
     Ok(addresses)
 }
 
+/// A refusal's error. One that says a key "was not shared this session"
+/// contradicts what this side remembers of the session — the device's owner
+/// changed the wallet in force (a passphrase), which drops everything it had
+/// shared — so that memory is dropped too, and the next request asks again.
+fn refused(s: &mut Session, body: &[u8]) -> ApiError {
+    let why = reason(body);
+    if why.contains("not shared") {
+        s.forget_shared();
+        return cerr(409, format!("the device refused: {why} (it no longer shares this key: try again)"));
+    }
+    cerr(403, format!("the device refused: {why}"))
+}
+
+/// A question that fits one request (`HostAddressAt`, `HostSignMessage`):
+/// send it, and wait for the answer of the person at the device.
+async fn ask<T: Transport>(env: &Env, link: &T, s: &mut Session, opcode: u16, payload: &[u8], name: &str, what: &str) -> Result<Vec<u8>, ApiError> {
+    let (st, body) = s.call(link, opcode, payload).await?;
+    match st {
+        status::OK => await_result(env, link, s, what).await,
+        status::UNKNOWN_OPCODE => Err(cerr(501, format!("the device's firmware is too old: it has no {name} request"))),
+        status::NOT_NOW => Err(not_now(&body)),
+        status::REFUSED => Err(refused(s, &body)),
+        other => Err(cerr(502, format!("{name} answered {}", status::name(other)))),
+    }
+}
+
+/// The address `pubkey` has on `chain` written as `format`, for the chains
+/// this library holds accounts on (Bitcoin: its main network).
+fn address_of(chain: u8, fmt: u8, pubkey: &[u8]) -> Option<String> {
+    match (chain, fmt) {
+        (chain::BITCOIN, _) => crate::bitcoin::address_for(pubkey.try_into().ok()?, format_script(fmt)?, "bitcoin").ok(),
+        (chain::ETHEREUM, format::EVM) => crate::hdderive::evm_address(pubkey).ok(),
+        (chain::SOLANA, format::SOLANA) => (pubkey.len() == 32).then(|| bs58::encode(pubkey).into_string()),
+        _ => None,
+    }
+}
+
+/// Ask the device for the one key at `path` (`HostAddressAt`). Its owner is
+/// asked "Computer asks for the <chain> address at <path>" — unless they
+/// ticked "Allow during session" at an earlier one — and, with `show`, then
+/// sees the address itself with "Same as the computer shows?", whatever the
+/// session was allowed.
+///
+/// The reply must be for the key that was asked, and its address must be the
+/// one its public key has here. The device then lets this session sign with
+/// exactly that key, which is remembered.
+async fn address_at<T: Transport>(env: &Env, link: &T, s: &mut Session, chain: u8, fmt: u8, path: &[u32], show: bool) -> Result<AddressAt, ApiError> {
+    let request = proto::address_at_request(chain, fmt, show, path).map_err(bad)?;
+    let reply = ask(env, link, s, op::HOST_ADDRESS_AT, &request, "HostAddressAt", "address").await?;
+    let a = AddressAt::decode(&reply).map_err(|e| cerr(502, format!("address reply: {e}")))?;
+    let (name, at) = (chain::name(chain), proto::path_text(path));
+    if a.chain != chain || a.format != fmt || a.path != path {
+        return Err(cerr(502, format!("the device answered for another key than the {name} one asked for at {at}")));
+    }
+    let derived = address_of(chain, fmt, &a.pubkey).ok_or_else(|| cerr(502, format!("the device's {name} public key at {at} cannot be used")))?;
+    let same = if chain == chain::ETHEREUM { derived.eq_ignore_ascii_case(&a.address) } else { derived == a.address };
+    if !same {
+        let hint = if chain == chain::BITCOIN { " (is the device set to a test network?)" } else { "" };
+        return Err(cerr(502, format!("the device's {name} address does not match its key at {at}{hint}")));
+    }
+    s.fingerprint = Some(a.fingerprint);
+    s.remember(a.clone());
+    Ok(a)
+}
+
 // ── Keys ─────────────────────────────────────────────────────────────────────
 
 /// Which of the shared keys [`keys`] reports.
@@ -173,7 +323,14 @@ pub struct KeyQuery {
     /// Bitcoin script kinds to report an account key for (`p2wpkh`,
     /// `p2sh:p2wpkh`, `p2pkh`, `p2tr`); the device shares all four.
     pub scripts: Vec<String>,
+    /// Individual keys to read by their path instead (`HostAddressAt`):
+    /// `(chain, format, path)`. Empty: the account-sharing flow.
+    pub paths: Vec<(u8, u8, Vec<u32>)>,
 }
+
+/// Most keys one `CatCard:getKeys {Paths}` reads: each is a question on the
+/// device unless its owner allows them for the session.
+const MAX_PATHS: usize = 32;
 
 impl KeyQuery {
     pub fn from_params(params: &Value) -> Result<Self, ApiError> {
@@ -184,8 +341,48 @@ impl KeyQuery {
         if params.get("Count").and_then(Value::as_u64).is_some_and(|c| c != 1) {
             return Err(bad("a CatCard shares one account per request (the person picks it on the device): Count must be 1"));
         }
-        if params.get("Paths").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
-            return Err(bad("a CatCard shares its standard account paths only: Paths is not supported"));
+        let mut paths = Vec::new();
+        if let Some(list) = params.get("Paths").filter(|v| !v.is_null()) {
+            let list = list.as_array().ok_or_else(|| bad("Paths must be a list of derivation paths"))?;
+            if list.len() > MAX_PATHS {
+                return Err(bad(format!("at most {MAX_PATHS} Paths per request")));
+            }
+            if !list.is_empty() && account.is_some() {
+                return Err(bad("Account selects nothing with Paths: each path names its own key"));
+            }
+            let chain = str_param(params, "Chain").map(|c| chain_of(c).map_err(|_| bad(format!("Chain must be bitcoin, ethereum or solana, not {c:?}")))).transpose()?;
+            let wanted = str_param(params, "Format");
+            for p in list {
+                let text = p.as_str().ok_or_else(|| bad("Paths must be a list of derivation paths"))?;
+                let path = proto::parse_path(text).map_err(|e| bad(format!("path {text:?}: {e}")))?;
+                // The chain a path's coin type means, when none was named.
+                let chain = match (chain, path.get(1).filter(|c| path.len() >= 2 && **c & HARDENED != 0).map(|c| c & !HARDENED)) {
+                    (Some(c), _) => c,
+                    (None, Some(0)) => chain::BITCOIN,
+                    (None, Some(60)) => chain::ETHEREUM,
+                    (None, Some(501)) => chain::SOLANA,
+                    _ => return Err(bad(format!("Chain (bitcoin, ethereum or solana) required: {text} does not say which chain it is for"))),
+                };
+                let fmt = match chain {
+                    chain::ETHEREUM => format::EVM,
+                    chain::SOLANA => format::SOLANA,
+                    // The script kind asked for, else the one the path's
+                    // purpose means (native segwit when it means none).
+                    _ => match wanted {
+                        Some(f) => script_format(f).ok_or_else(|| bad(format!("unsupported bitcoin Format {f:?} (p2wpkh, p2sh:p2wpkh, p2pkh, p2tr)")))?,
+                        None => match path[0] ^ HARDENED {
+                            44 => format::P2PKH,
+                            49 => format::P2SH_P2WPKH,
+                            86 => format::P2TR,
+                            _ => format::P2WPKH,
+                        },
+                    },
+                };
+                if chain == chain::SOLANA && path.iter().any(|c| c & HARDENED == 0) {
+                    return Err(bad(format!("a Solana key path is hardened throughout, not {text}")));
+                }
+                paths.push((chain, fmt, path));
+            }
         }
         let mut scripts: Vec<String> = params.get("Scripts").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
         if scripts.is_empty() {
@@ -196,7 +393,7 @@ impl KeyQuery {
                 return Err(bad(format!("unsupported bitcoin script kind {s:?} (p2wpkh, p2sh:p2wpkh, p2pkh, p2tr)")));
             }
         }
-        Ok(KeyQuery { account, scripts })
+        Ok(KeyQuery { account, scripts, paths })
     }
 }
 
@@ -307,11 +504,53 @@ fn discovered(env: &Env, fp: &str, e: &Entry) -> Result<DiscoveredKey, ApiError>
 /// - **Solana**: the key at `m/44'/501'/n'/0'`.
 ///
 /// Chains the device shares but does not sign for come back `unsupported`.
+///
+/// With `Paths` the host names the keys instead (later firmware only): each
+/// is asked for by its path with `HostAddressAt` — a question on the device
+/// per key, unless its owner ticks "Allow during session" at the first.
+/// Ethereum and Solana keys come back as the leaf keys an import takes. A
+/// Bitcoin path names a single address key, not an account: it has no
+/// extended key to derive addresses from, so it is reported `unsupported`
+/// (with its address, key and script kind) and an import skips it.
 pub async fn keys<T: Transport>(env: &Env, link: &T, q: &KeyQuery) -> Result<Export, ApiError> {
     let mut s = session::connect(env, link).await?;
-    let out = keys_in(env, link, &mut s, q).await;
+    let out = if q.paths.is_empty() { keys_in(env, link, &mut s, q).await } else { keys_by_path(env, link, &mut s, q).await };
     session::keep(s);
     out
+}
+
+async fn keys_by_path<T: Transport>(env: &Env, link: &T, s: &mut Session, q: &KeyQuery) -> Result<Export, ApiError> {
+    let mut export = Export { format: "catcard".into(), device: Some("CatCard".into()), version: Some(format!("{} {}", s.identity.board, s.identity.version)), ..Default::default() };
+    for (chain, fmt, path) in &q.paths {
+        require_feature(link, s, feature::ADDRESS_AT, *chain, can::ADDRESSES, "share a key by its path").await?;
+        let a = address_at(env, link, s, *chain, *fmt, path, false).await?;
+        let fp = hex(&a.fingerprint);
+        if export.master_fingerprint.get_or_insert_with(|| fp.clone()) != &fp {
+            s.forget_shared();
+            return Err(cerr(409, "the device's wallet changed between two keys (a passphrase?): read them again"));
+        }
+        let (name, curve, coin) = match *chain {
+            chain::ETHEREUM => ("ethereum", "secp256k1", 60),
+            chain::SOLANA => ("solana", "ed25519", 501),
+            _ => ("unsupported", "secp256k1", 0),
+        };
+        let single = *chain == chain::BITCOIN;
+        export.keys.push(DiscoveredKey {
+            chain: name.into(),
+            curve: curve.into(),
+            coin_type: Some(coin),
+            path: proto::path_text(path),
+            master_fingerprint: Some(fp),
+            pubkey: hex(&a.pubkey),
+            chain_code: None,
+            script: if single { format_script(*fmt).unwrap_or_default().into() } else { String::new() },
+            address: a.address,
+            name: single.then(|| chain::name(*chain)),
+            note: None,
+            reason: single.then(|| "a single Bitcoin address key, not an account: it has no extended key to derive addresses from (share the account with CatCard:getKeys without Paths)".into()),
+        });
+    }
+    Ok(export)
 }
 
 async fn keys_in<T: Transport>(env: &Env, link: &T, s: &mut Session, q: &KeyQuery) -> Result<Export, ApiError> {
@@ -374,62 +613,322 @@ fn shared_entry<'s>(s: &'s Session, chain: u8, root: &[u32], want_format: Option
     s.shared.iter().find(|e| e.chain == chain && e.account_path == root && want_format.map_or(true, |f| e.format == f))
 }
 
-/// Make sure the device will sign for `account` in this session — it only
-/// signs with keys below an account it shared in the same session, so ask it
-/// to share when it has not — and that the key it shared there is the
-/// account's: a device holding other keys (another seed, another passphrase)
-/// is turned down before it is asked to sign anything.
+fn wrong_device(account: &Account) -> ApiError {
+    cerr(409, format!("the device does not hold this account's key ({}): wrong device, or wrong passphrase?", account.address))
+}
+
+fn not_shared(chain: u8, root: &[u32]) -> ApiError {
+    let number = root[2] & !HARDENED;
+    cerr(409, format!("the device did not share {} account {number} ({}): pick account {number} and that chain when it asks", chain::name(chain), proto::path_text(root)))
+}
+
+/// The one key of an account that a single-key request names — an address to
+/// show, a message to sign, an Ethereum or Solana transaction: where it is,
+/// how its address is written, and the public key libwallet holds for it.
+struct KeyRef {
+    chain: u8,
+    format: u8,
+    /// Ethereum, Solana: the account's path. Bitcoin: the first receive
+    /// address, `…/0/0` below the account key.
+    path: Vec<u32>,
+    pubkey: Vec<u8>,
+}
+
+fn key_of(account: &Account, info: &AccountKeyInfo) -> Result<KeyRef, ApiError> {
+    use base64::Engine;
+    let chain = chain_of(&account.kind)?;
+    let mut path = proto::parse_path(&info.path).map_err(|e| bad(format!("account path {}: {e}", info.path)))?;
+    let pubkey = account_pubkey(account)?;
+    match chain {
+        chain::BITCOIN => {
+            let format = script_format(&info.script).ok_or_else(|| bad(format!("unsupported bitcoin script kind {:?}", info.script)))?;
+            let cc = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&account.chaincode).ok().filter(|c| c.len() == 32).ok_or_else(|| bad("this bitcoin account has no account key to derive its first address from"))?;
+            let first = crate::hdderive::derive_pub(&pubkey, &cc, &[0, 0]).map_err(|e| ApiError::new(500, format!("account key: {e}")))?;
+            if path.len() + 2 > proto::MAX_DEPTH {
+                return Err(bad(format!("account path {} is too deep", info.path)));
+            }
+            path.extend([0, 0]);
+            Ok(KeyRef { chain, format, path, pubkey: first.to_vec() })
+        }
+        chain::ETHEREUM => Ok(KeyRef { chain, format: format::EVM, path, pubkey }),
+        _ => Ok(KeyRef { chain, format: format::SOLANA, path, pubkey }),
+    }
+}
+
+/// The standard account path `m/purpose'/coin'/account'` a key sits below,
+/// if it sits below one.
+fn account_root(path: &[u32]) -> Option<&[u32]> {
+    (path.len() > 3 && path[..3].iter().all(|c| c & HARDENED != 0)).then(|| &path[..3])
+}
+
+/// What the accounts shared in this session (`HostAddresses`) say of `key`:
+/// `None` when none covers it; else the public key the device reported at
+/// exactly that path, when that is the path it reported (after checking the
+/// entry's own claims against each other).
+fn covered(env: &Env, s: &Session, key: &KeyRef) -> Result<Option<Option<Vec<u8>>>, ApiError> {
+    let want_format = (key.chain == chain::BITCOIN).then_some(key.format);
+    let Some(entry) = account_root(&key.path).and_then(|root| shared_entry(s, key.chain, root, want_format)) else { return Ok(None) };
+    if entry.address_path != key.path {
+        return Ok(Some(None));
+    }
+    discovered(env, &hex(&s.fingerprint.unwrap_or_default()), entry)?;
+    Ok(Some(Some(entry.pubkey.clone())))
+}
+
+/// Make sure the device will sign with `key` in this session, and that the
+/// key it holds there is the account's: a device holding other keys (another
+/// seed, another passphrase) is turned down before it is asked to sign
+/// anything.
+///
+/// The device only signs with keys it shared in the same session. One it has
+/// not shared yet is asked for by its path (`HostAddressAt`: one question
+/// about one key, none once its owner allowed them for the session); a
+/// firmware without that request is asked to share its addresses instead, and
+/// its owner must then pick the account the key belongs to.
+async fn require_key<T: Transport>(env: &Env, link: &T, s: &mut Session, account: &Account, key: &KeyRef) -> Result<(), ApiError> {
+    let check = |have: &[u8]| if have == &key.pubkey[..] { Ok(()) } else { Err(wrong_device(account)) };
+    if let Some(k) = s.by_path.iter().find(|k| k.chain == key.chain && k.path == key.path) {
+        return check(&k.pubkey);
+    }
+    if let Some(known) = covered(env, s, key)? {
+        return known.map_or(Ok(()), |pubkey| check(&pubkey));
+    }
+    if host_info(link, s, false).await?.is_some_and(|i| i.features & feature::ADDRESS_AT != 0 && i.can(key.chain) & can::ADDRESSES != 0) {
+        let a = address_at(env, link, s, key.chain, key.format, &key.path, false).await?;
+        return check(&a.pubkey);
+    }
+    let Some(root) = account_root(&key.path) else {
+        return Err(bad(format!("{} is not below a standard account path (m/purpose'/coin'/account'), and this device's firmware is too old to share a key by its path", proto::path_text(&key.path))));
+    };
+    share(env, link, s).await?;
+    match covered(env, s, key)? {
+        Some(known) => known.map_or(Ok(()), |pubkey| check(&pubkey)),
+        None => Err(not_shared(key.chain, root)),
+    }
+}
+
+/// Make sure the device will sign a transaction for `account` in this
+/// session, and that the key it shared for it is the account's.
+///
+/// An Ethereum or a Solana account signs with one key: see [`require_key`].
+/// A Bitcoin spend's inputs span many keys below the account, so the account
+/// itself must have been shared (`HostAddresses`): the device is asked to
+/// share when it has not, and its owner picks the account.
 async fn require_shared<T: Transport>(env: &Env, link: &T, s: &mut Session, account: &Account, info: &AccountKeyInfo) -> Result<Vec<u32>, ApiError> {
     let chain = chain_of(&account.kind)?;
-    let path = proto::parse_path(&info.path).map_err(|e| bad(format!("account path {}: {e}", info.path)))?;
-    let min = if chain == chain::BITCOIN { 3 } else { 4 };
-    if path.len() < min || path[..3].iter().any(|c| c & HARDENED == 0) {
-        return Err(bad(format!("{} is not below a standard account path (m/purpose'/coin'/account')", info.path)));
+    if chain != chain::BITCOIN {
+        let key = key_of(account, info)?;
+        require_key(env, link, s, account, &key).await?;
+        return Ok(key.path);
     }
-    let root = &path[..3];
-    let want_format = if chain == chain::BITCOIN { Some(script_format(&info.script).ok_or_else(|| bad(format!("unsupported bitcoin script kind {:?}", info.script)))?) } else { None };
-    if shared_entry(s, chain, root, want_format).is_none() {
+    let path = proto::parse_path(&info.path).map_err(|e| bad(format!("account path {}: {e}", info.path)))?;
+    if path.len() != 3 || path.iter().any(|c| c & HARDENED == 0) {
+        return Err(bad(format!("a bitcoin account's path is its account key's (m/purpose'/coin'/account'), not {}", info.path)));
+    }
+    let want_format = Some(script_format(&info.script).ok_or_else(|| bad(format!("unsupported bitcoin script kind {:?}", info.script)))?);
+    if shared_entry(s, chain, &path, want_format).is_none() {
         share(env, link, s).await?;
     }
-    let number = root[2] & !HARDENED;
-    let entry = shared_entry(s, chain, root, want_format).ok_or_else(|| {
-        cerr(409, format!("the device did not share {} account {number} ({}): pick account {number} and that chain when it asks", chain::name(chain), proto::path_text(root)))
-    })?;
-    let wrong = || cerr(409, format!("the device does not hold this account's key ({}): wrong device, or wrong passphrase?", account.address));
-    let pubkey = account_pubkey(account)?;
-    if chain == chain::BITCOIN {
-        if path.len() != 3 {
-            return Err(bad(format!("a bitcoin account's path is its account key's (m/purpose'/coin'/account'), not {}", info.path)));
-        }
-        let fp = hex(&s.fingerprint.unwrap_or_default());
-        let k = discovered(env, &fp, entry)?;
-        if k.pubkey != hex(&pubkey) || info.master_fingerprint.as_deref().is_some_and(|have| !have.eq_ignore_ascii_case(&fp)) {
-            return Err(wrong());
-        }
-    } else if entry.address_path == path {
-        discovered(env, "", entry)?;
-        if entry.pubkey != pubkey {
-            return Err(wrong());
-        }
+    let entry = shared_entry(s, chain, &path, want_format).ok_or_else(|| not_shared(chain, &path))?;
+    let fp = hex(&s.fingerprint.unwrap_or_default());
+    let k = discovered(env, &fp, entry)?;
+    if k.pubkey != hex(&account_pubkey(account)?) || info.master_fingerprint.as_deref().is_some_and(|have| !have.eq_ignore_ascii_case(&fp)) {
+        return Err(wrong_device(account));
     }
     Ok(path)
 }
 
-/// `CatCard:showAddress` — not something the device's host protocol can do:
-/// it has no command to display one address. (Its own Address Explorer shows
-/// them, on the device.)
-pub fn show_address(account: &Account) -> ApiResult {
-    Err(ApiError::new(
-        501,
-        format!("the CatCard host protocol has no command to display an address: compare {} with the device's own Address Explorer (CatCard:getKeys checks that the device still derives it)", account.address),
-    ))
+// ── One address, one message ─────────────────────────────────────────────────
+
+/// `CatCard:showAddress` — have the device put the account's address on its
+/// screen ("Same as the computer shows?") for its owner to compare, and check
+/// that the key and the address it shows are the ones held for the account.
+/// Bitcoin: the account's first receive address, `…/0/0`.
+///
+/// Later firmware only (`HostAddressAt` with the show flag): 501 otherwise.
+pub async fn show_address<T: Transport>(env: &Env, link: &T, account: &Account, info: &AccountKeyInfo) -> ApiResult {
+    let key = key_of(account, info)?;
+    let mut s = session::connect(env, link).await?;
+    let shown = async {
+        require_feature(link, &mut s, feature::ADDRESS_AT, key.chain, can::ADDRESSES, "display an address").await?;
+        // A device already known to hold another key there has nothing to show.
+        if s.by_path.iter().any(|k| k.chain == key.chain && k.path == key.path && k.pubkey != key.pubkey) {
+            return Err(wrong_device(account));
+        }
+        address_at(env, link, &mut s, key.chain, key.format, &key.path, true).await
+    }
+    .await;
+    session::keep(s);
+    let shown = shown?;
+    let same = if key.chain == chain::ETHEREUM { shown.address.eq_ignore_ascii_case(&account.address) } else { shown.address == account.address };
+    if !same || shown.pubkey != key.pubkey {
+        return Err(ApiError::new(409, format!("the device shows {}, but this account is {}: it is not this device's key", shown.address, account.address)));
+    }
+    Ok(json!({ "address": shown.address, "account": account.id, "path": proto::path_text(&key.path) }))
 }
 
-/// `CatCard:signMessage` — not something the device's host protocol can do:
-/// its sign request takes a Bitcoin PSBT, an EVM transaction or a Solana
-/// transaction, never a message.
-pub fn sign_message(account: &Account) -> ApiResult {
-    Err(ApiError::new(501, format!("the CatCard host protocol has no message-signing command ({} account {}): sign messages on the device itself", account.kind, account.id)))
+/// Longest Bitcoin message the device signs (what its Sign → Message takes).
+const BITCOIN_MESSAGE_MAX: usize = 240;
+/// Most lines of an EIP-191 message the device signs.
+const EIP191_LINES_MAX: usize = 24;
+
+/// Why the device would refuse to sign `message` under `scheme`, in its own
+/// words: it only signs text its screen shows faithfully (the firmware's
+/// `docs/USB.md`, "Signing a message"). Checked here first, so that its owner
+/// is not asked to share a key for a message it will not sign; the device
+/// checks again, and its panel may hold less.
+fn unshowable(scheme: u8, message: &[u8]) -> Option<&'static str> {
+    if message.is_empty() {
+        return Some("nothing to sign in that");
+    }
+    let printable = |b: &u8| (0x20..0x7f).contains(b);
+    if scheme != scheme::EIP191 {
+        // One line of printable ASCII.
+        return if message.len() > BITCOIN_MESSAGE_MAX {
+            Some("message too long")
+        } else if !message.iter().all(printable) {
+            Some("plain ASCII only")
+        } else {
+            None
+        };
+    }
+    if message.len() > proto::MESSAGE_MAX {
+        return Some("message too long");
+    }
+    if !message.iter().all(|b| printable(b) || *b == b'\n') {
+        return Some("plain ASCII text only");
+    }
+    if message.split(|b| *b == b'\n').count() > EIP191_LINES_MAX {
+        return Some("message has too many lines");
+    }
+    // What a screen would swallow: a line beginning or ending in a space, a
+    // blank first or last line.
+    let blank_edge = message.first() == Some(&b'\n') || message.last() == Some(&b'\n');
+    if blank_edge || message.split(|b| *b == b'\n').any(|line| line.first() == Some(&b' ') || line.last() == Some(&b' ')) {
+        return Some("a line starts or ends blank");
+    }
+    None
+}
+
+/// The scheme a message is signed with for `key`: the one asked for, else
+/// EIP-191 (Ethereum), BIP-137 (Bitcoin), or BIP-322 for a taproot address,
+/// which BIP-137 has no form for.
+fn message_scheme(key: &KeyRef, wanted: Option<&str>) -> Result<u8, ApiError> {
+    let fitting = || [scheme::BIP137, scheme::BIP322, scheme::BIP322_FULL, scheme::EIP191].into_iter().filter(|s| scheme::fits(*s, key.format)).map(scheme::name).collect::<Vec<_>>().join(", ");
+    let chosen = match wanted {
+        Some(name) => scheme::parse(name).ok_or_else(|| bad(format!("unknown Scheme {name:?}: this account signs with {}", fitting())))?,
+        None if key.chain == chain::ETHEREUM => scheme::EIP191,
+        None if key.format == format::P2TR => scheme::BIP322,
+        None => scheme::BIP137,
+    };
+    if !scheme::fits(chosen, key.format) {
+        return Err(bad(format!("{} does not sign for a {} address: this account signs with {}", scheme::name(chosen), format::name(key.format), fitting())));
+    }
+    Ok(chosen)
+}
+
+/// The code a refused message is reported with: what the device says of the
+/// message itself is the caller's to fix (400).
+fn message_refusal(mut e: ApiError) -> ApiError {
+    if e.code == 403 {
+        e.code = if ["cannot be signed here", "does not sign", "not in this build"].iter().any(|w| e.message.contains(w)) {
+            501
+        } else if e.message.contains("memory") {
+            403
+        } else {
+            400
+        };
+    }
+    e
+}
+
+/// `CatCard:signMessage` — have the device's owner read `message` on its
+/// screen and sign it: Ethereum `personal_sign` (EIP-191), or a Bitcoin
+/// message signature by the account's first receive address (BIP-137 by
+/// default; `Scheme` asks for `bip322` or `bip322-full`, and a taproot account
+/// has those only). The device signs printable ASCII text only, of a bounded
+/// length; typed data (EIP-712) and Solana messages are not signed.
+///
+/// The key must have been shared in this session, so it is asked for first
+/// when it has not ([`require_key`]). An EIP-191 or BIP-137 signature is only
+/// returned once it recovers to the account's key over `message`; a BIP-322
+/// one is returned as the device gave it, `verified: false`.
+///
+/// Later firmware only (`HostSignMessage`): 501 otherwise.
+pub async fn sign_message<T: Transport>(env: &Env, link: &T, account: &Account, info: &AccountKeyInfo, message: &[u8], wanted: Option<&str>) -> ApiResult {
+    use base64::Engine;
+    if !matches!(account.kind.as_str(), "bitcoin" | "ethereum") {
+        return Err(bad(format!("a CatCard signs Bitcoin and Ethereum messages only, not {} ones", account.kind)));
+    }
+    let key = key_of(account, info)?;
+    let how = message_scheme(&key, wanted)?;
+    if let Some(why) = unshowable(how, message) {
+        return Err(bad(format!("catcard: the device does not sign this message: {why}")));
+    }
+    let request = proto::message_request(key.chain, key.format, how, &key.path, message).map_err(bad)?;
+
+    let mut s = session::connect(env, link).await?;
+    let reply = async {
+        let can_do = require_feature(link, &mut s, feature::SIGN_MESSAGE, key.chain, can::MESSAGES, "sign a message").await?;
+        if message.len() > can_do.message_max as usize {
+            return Err(bad("catcard: the device does not sign this message: message too long"));
+        }
+        require_key(env, link, &mut s, account, &key).await?;
+        ask(env, link, &mut s, op::HOST_SIGN_MESSAGE, &request, "HostSignMessage", "message").await.map_err(message_refusal)
+    }
+    .await;
+    session::keep(s);
+    let signed = proto::SignedMessage::decode(&reply?).map_err(|e| cerr(502, format!("message result: {e}")))?;
+    if signed.chain != key.chain || signed.scheme != how || signed.path != key.path {
+        return Err(cerr(502, "the device answered for another message request than the one made"));
+    }
+    let same = if key.chain == chain::ETHEREUM { signed.address.eq_ignore_ascii_case(&account.address) } else { signed.address == account.address };
+    if !same {
+        return Err(ApiError::new(409, format!("the device signed for {}, not this account ({}): wrong device, or wrong passphrase?", signed.address, account.address)));
+    }
+    let mut out = json!({ "account": account.id, "address": signed.address, "scheme": scheme::name(how), "verified": true });
+    match how {
+        scheme::EIP191 => {
+            // r ‖ s ‖ v, v 27 or 28: it must recover to the account.
+            if signed.signature.len() != 65 || !matches!(signed.signature[64], 27 | 28) {
+                return Err(cerr(502, "the device returned no usable signature"));
+            }
+            let from = crate::evm::personal_ec_recover(message, &signed.signature).map_err(|e| cerr(502, e))?;
+            if !from.eq_ignore_ascii_case(&account.address) {
+                return Err(not_this_account(account));
+            }
+            out["signature"] = json!(format!("0x{}", hex(&signed.signature)));
+        }
+        _ => {
+            let text = String::from_utf8(signed.signature).ok().filter(|t| !t.is_empty()).ok_or_else(|| cerr(502, "the device returned no usable signature"))?;
+            let raw = base64::engine::general_purpose::STANDARD.decode(&text).map_err(|_| cerr(502, "the device's signature is not base64"))?;
+            if how == scheme::BIP137 {
+                // A header saying which address type signed and the recovery
+                // id, then r and s: it must recover to the key at the path.
+                let base = match key.format {
+                    format::P2PKH => 31,
+                    format::P2SH_P2WPKH => 35,
+                    _ => 39,
+                };
+                let digest = crate::bitcoin::message_digest("bitcoin", message).ok_or_else(|| ApiError::new(500, "no bitcoin message prefix"))?;
+                let recovered = <&[u8; 65]>::try_from(&raw[..]).ok().filter(|sig| (base..base + 4).contains(&sig[0])).and_then(|sig| {
+                    let (r, sv): ([u8; 32], [u8; 32]) = (sig[1..33].try_into().unwrap(), sig[33..].try_into().unwrap());
+                    outscript::crypto::secp256k1::recover_public_key(&r, &sv, sig[0] - base, &digest).ok()
+                });
+                let recovered = recovered.ok_or_else(|| cerr(502, format!("the device returned no usable {} signature", format::name(key.format))))?;
+                if recovered.serialize_compressed()[..] != key.pubkey[..] {
+                    return Err(not_this_account(account));
+                }
+            } else {
+                // Nothing in this library verifies BIP-322: handed back as
+                // the device gave it, and said so.
+                out["verified"] = json!(false);
+            }
+            out["signature"] = json!(text);
+            out["path"] = json!(proto::path_text(&key.path));
+        }
+    }
+    Ok(out)
 }
 
 // ── Signing ──────────────────────────────────────────────────────────────────
@@ -444,7 +943,7 @@ async fn sign_on_device<T: Transport>(env: &Env, link: &T, s: &mut Session, chai
     let chunk = match st {
         status::OK => body.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize).unwrap_or(proto::DATA_MAX).clamp(1, proto::DATA_MAX),
         status::NOT_NOW => return Err(not_now(&body)),
-        status::REFUSED => return Err(cerr(403, format!("the device refused: {}", reason(&body)))),
+        status::REFUSED => return Err(refused(s, &body)),
         other => return Err(cerr(502, format!("HostSignBegin answered {}", status::name(other)))),
     };
     let uploaded = async {
@@ -462,7 +961,7 @@ async fn sign_on_device<T: Transport>(env: &Env, link: &T, s: &mut Session, chai
         let (st, body) = s.call(link, op::HOST_SIGN_COMMIT, &[]).await?;
         match st {
             status::OK => Ok(()),
-            status::REFUSED => Err(cerr(403, format!("the device refused: {}", reason(&body)))),
+            status::REFUSED => Err(refused(s, &body)),
             other => Err(cerr(502, format!("HostSignCommit answered {}", status::name(other)))),
         }
     }

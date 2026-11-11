@@ -12,17 +12,23 @@
 //! then reused by later requests until the device ends it.
 //!
 //!   CatCard:list                     → the devices the built-in transport sees
-//!   CatCard:info                     → {board, firmware, unlocked, paired, …}
+//!   CatCard:info                     → {board, firmware, unlocked, paired,
+//!                                      hostInfo, …}
 //!   CatCard:getKeys {Account?, Scripts?}
 //!                                    → the keys the person shares on the
 //!                                      device ({format, keys:[…]})
+//!   CatCard:getKeys {Paths, Chain?, Format?}
+//!                                    → the keys at those paths, each asked
+//!                                      for on the device (later firmware)
 //!   CatCard:import {Keys, Name?, Wallet?}
 //!                                    → a `catcard` wallet + accounts (no device)
 //!   CatCard:signTransaction {Account, Transaction, Network|RPC?, Offline?,
 //!                            Broadcast?}
-//!   CatCard:showAddress {Account}    → 501: the protocol has no such command
-//!   CatCard:signMessage {Account, Message}
-//!                                    → 501: the protocol has no such command
+//!   CatCard:showAddress {Account}    → display + verify the address on the
+//!                                      device (later firmware; 501 before)
+//!   CatCard:signMessage {Account, Message (base64), Scheme?}
+//!                                    → EIP-191 / BIP-137 / BIP-322 signature
+//!                                      (later firmware; 501 before)
 //!   CatCard:pairResponse {Id, Accept}
 //!                                    → the user's answer to a `catcard:pair`
 //!                                      event
@@ -72,8 +78,19 @@ pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
             let export = catcard::keys(env, &link, &query).await?;
             Ok(serde_json::to_value(export).map_err(ApiError::internal)?)
         }
-        "showAddress" => catcard::show_address(&catcard::load_account(env, account_param(params)?)?.0),
-        "signMessage" => catcard::sign_message(&catcard::load_account(env, account_param(params)?)?.0),
+        "showAddress" => {
+            let (account, info) = catcard::load_account(env, account_param(params)?)?;
+            let link = transport::open(env, params).await?;
+            catcard::show_address(env, &link, &account, &info).await
+        }
+        "signMessage" => {
+            use base64::Engine;
+            let (account, info) = catcard::load_account(env, account_param(params)?)?;
+            let message = str_param(params, "Message").ok_or_else(|| ApiError::new(400, "Message (base64) required"))?;
+            let message = base64::engine::general_purpose::STANDARD.decode(message).map_err(|e| ApiError::new(400, format!("Message: {e}")))?;
+            let link = transport::open(env, params).await?;
+            catcard::sign_message(env, &link, &account, &info, &message, str_param(params, "Scheme")).await
+        }
         "signTransaction" => {
             let (account, info) = catcard::load_account(env, account_param(params)?)?;
             let link = transport::open(env, params).await?;

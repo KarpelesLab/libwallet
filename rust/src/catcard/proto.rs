@@ -1,6 +1,6 @@
 //! CatCard's wire layouts: the 64-byte report framing, the opcodes and
 //! statuses, `Identify`, and the host-wallet structures (paths, the sign blob,
-//! the address reply, the sign results).
+//! the address replies, the message request, `HostInfo`, the sign results).
 //!
 //! Written from the firmware's `docs/USB.md` / `docs/PHONE-APP.md` and checked
 //! against the byte vectors its own tests and reference tools pin
@@ -42,6 +42,11 @@ pub mod op {
     pub const HOST_SIGN_COMMIT: u16 = 0x0053;
     pub const HOST_RESULT: u16 = 0x0054;
     pub const HOST_ABORT: u16 = 0x0055;
+    // Later firmware only: a build without them answers `UnknownOpcode`, and
+    // `HostInfo` is how a host finds out.
+    pub const HOST_ADDRESS_AT: u16 = 0x0056;
+    pub const HOST_SIGN_MESSAGE: u16 = 0x0057;
+    pub const HOST_INFO: u16 = 0x0058;
 }
 
 /// Reply statuses.
@@ -120,7 +125,23 @@ pub mod format {
     pub const P2WPKH: u8 = 3;
     pub const P2TR: u8 = 4;
     pub const EVM: u8 = 5;
+    pub const TRON: u8 = 6;
     pub const SOLANA: u8 = 7;
+
+    /// The name a format goes by in this library: the Bitcoin script kinds as
+    /// accounts carry them, the chain's own name otherwise.
+    pub fn name(f: u8) -> String {
+        match f {
+            P2PKH => "p2pkh".into(),
+            P2SH_P2WPKH => "p2sh:p2wpkh".into(),
+            P2WPKH => "p2wpkh".into(),
+            P2TR => "p2tr".into(),
+            EVM => "evm".into(),
+            TRON => "tron".into(),
+            SOLANA => "solana".into(),
+            other => format!("format {other}"),
+        }
+    }
 }
 
 /// The first byte of every host-wallet result.
@@ -129,6 +150,89 @@ pub mod kind {
     pub const BITCOIN: u8 = 2;
     pub const EVM: u8 = 3;
     pub const SOLANA: u8 = 4;
+    /// One address, asked for by its path.
+    pub const ADDRESS: u8 = 5;
+    /// A signed message.
+    pub const MESSAGE: u8 = 6;
+}
+
+/// Flag bits of a `HostAddressAt` request. The device refuses any other bit.
+pub mod ask {
+    /// Put the address on the device's screen for its owner to compare with
+    /// what the host shows; the result only comes back once they said it
+    /// matches.
+    pub const SHOW: u8 = 1 << 0;
+}
+
+/// How a message is signed (`HostSignMessage`).
+pub mod scheme {
+    /// "Bitcoin Signed Message", a 65-byte recoverable signature in base64.
+    pub const BIP137: u8 = 1;
+    /// BIP-322 simple: the witness stack, base64.
+    pub const BIP322: u8 = 2;
+    /// BIP-322 full: the `to_sign` transaction, base64.
+    pub const BIP322_FULL: u8 = 3;
+    /// EIP-191 `personal_sign`: 65 raw bytes `r ‖ s ‖ v`, `v` 27 or 28.
+    pub const EIP191: u8 = 4;
+
+    pub fn name(s: u8) -> String {
+        match s {
+            BIP137 => "bip137".into(),
+            BIP322 => "bip322".into(),
+            BIP322_FULL => "bip322-full".into(),
+            EIP191 => "eip191".into(),
+            other => format!("scheme {other}"),
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<u8> {
+        match name.to_ascii_lowercase().as_str() {
+            "bip137" => Some(BIP137),
+            "bip322" => Some(BIP322),
+            "bip322-full" => Some(BIP322_FULL),
+            "eip191" => Some(EIP191),
+            _ => None,
+        }
+    }
+
+    /// Whether `scheme` signs for an address of `format` (the table in the
+    /// firmware's `docs/USB.md`, "Signing a message").
+    pub fn fits(scheme: u8, format: u8) -> bool {
+        use super::format::{EVM, P2PKH, P2SH_P2WPKH, P2TR, P2WPKH};
+        match scheme {
+            BIP137 => matches!(format, P2PKH | P2SH_P2WPKH | P2WPKH),
+            BIP322 => matches!(format, P2WPKH | P2TR),
+            BIP322_FULL => matches!(format, P2SH_P2WPKH | P2WPKH | P2TR),
+            EIP191 => format == EVM,
+            _ => false,
+        }
+    }
+}
+
+/// What a chain can be asked for (`HostInfo`).
+pub mod can {
+    /// `HostAddresses` and `HostAddressAt`.
+    pub const ADDRESSES: u8 = 1 << 0;
+    /// `HostSignBegin`.
+    pub const SIGN: u8 = 1 << 1;
+    /// `HostSignMessage`.
+    pub const MESSAGES: u8 = 1 << 2;
+}
+
+/// Which commands beyond the first six a build answers (`HostInfo`).
+pub mod feature {
+    pub const ADDRESS_AT: u8 = 1 << 0;
+    pub const SIGN_MESSAGE: u8 = 1 << 1;
+}
+
+/// What the session asking has been given (`HostInfo`).
+pub mod granted {
+    /// The owner ticked "Allow during session": `HostAddressAt` is answered
+    /// without a question until the session ends.
+    pub const PATHS_ALLOWED: u8 = 1 << 0;
+    /// Something was shared (an account, or an address by its path), so a
+    /// sign request has keys it may name.
+    pub const SHARED: u8 = 1 << 1;
 }
 
 /// Entry shapes of the address reply.
@@ -150,6 +254,11 @@ pub const PLAIN_MAX: usize = 1024;
 pub const DATA_MAX: usize = PLAIN_MAX - 2 - 4;
 /// Most result bytes one `HostResult` page carries.
 pub const PAGE_MAX: usize = 448;
+/// Longest message a `HostSignMessage` carries (a scheme may allow less).
+pub const MESSAGE_MAX: usize = 960;
+/// How many keys shared by their path the device remembers per session (the
+/// latest ones): what a sign request may name beyond the shared accounts.
+pub const SHARED_KEYS_MAX: usize = 16;
 
 // ── Framing ──────────────────────────────────────────────────────────────────
 
@@ -406,6 +515,10 @@ impl<'a> Cursor<'a> {
         Ok(self.take(1)?[0])
     }
 
+    pub(crate) fn u16(&mut self) -> Result<u16, String> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+
     pub(crate) fn u32(&mut self) -> Result<u32, String> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
@@ -496,6 +609,32 @@ pub fn sign_blob(chain: u8, keys: &[Vec<u32>], tx: &[u8]) -> Result<Vec<u8>, Str
     Ok(out)
 }
 
+/// `HostAddressAt`: `[u8 chain][u8 format][u8 flags][path]`.
+pub fn address_at_request(chain: u8, format: u8, show: bool, path: &[u32]) -> Result<Vec<u8>, String> {
+    if path.is_empty() || path.len() > MAX_DEPTH {
+        return Err(format!("path depth must be 1-{MAX_DEPTH}"));
+    }
+    let mut out = vec![chain, format, if show { ask::SHOW } else { 0 }];
+    put_path(&mut out, path);
+    Ok(out)
+}
+
+/// `HostSignMessage`, whole in one sealed record:
+/// `[u8 version = 1][u8 chain][u8 format][u8 scheme][path][u16 length][message]`.
+pub fn message_request(chain: u8, format: u8, scheme: u8, path: &[u32], message: &[u8]) -> Result<Vec<u8>, String> {
+    if path.is_empty() || path.len() > MAX_DEPTH {
+        return Err(format!("path depth must be 1-{MAX_DEPTH}"));
+    }
+    if message.is_empty() || message.len() > MESSAGE_MAX {
+        return Err(format!("a message is 1-{MESSAGE_MAX} bytes, not {}", message.len()));
+    }
+    let mut out = vec![1, chain, format, scheme];
+    put_path(&mut out, path);
+    out.extend_from_slice(&(message.len() as u16).to_le_bytes());
+    out.extend_from_slice(message);
+    Ok(out)
+}
+
 // ── The address reply ────────────────────────────────────────────────────────
 
 /// One entry of the address reply.
@@ -559,6 +698,98 @@ impl Addresses {
     }
 }
 
+// ── One address, by its path ─────────────────────────────────────────────────
+
+/// The answer to `HostAddressAt`:
+/// `[u8 kind = 5][u8 version = 1][4 master fingerprint][u8 chain][u8 format][path]`
+/// `[u8 len][address][u8 len][public key]`. One key: nothing below it can be
+/// derived from the reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddressAt {
+    pub fingerprint: [u8; 4],
+    pub chain: u8,
+    pub format: u8,
+    pub path: Vec<u32>,
+    pub address: String,
+    /// Compressed secp256k1 (33 bytes) or ed25519 (32).
+    pub pubkey: Vec<u8>,
+}
+
+impl AddressAt {
+    pub fn decode(r: &[u8]) -> Result<Self, String> {
+        let mut c = Cursor::new(r);
+        if c.u8()? != kind::ADDRESS {
+            return Err("not an address-by-path reply".into());
+        }
+        if c.u8()? != 1 {
+            return Err("address-by-path reply of an unknown version".into());
+        }
+        let fingerprint: [u8; 4] = c.take(4)?.try_into().unwrap();
+        let chain = c.u8()?;
+        let format = c.u8()?;
+        let path = c.path()?;
+        let address = String::from_utf8(c.short()?.to_vec()).map_err(|_| "address is not UTF-8".to_owned())?;
+        let pubkey = c.short()?.to_vec();
+        c.done()?;
+        Ok(AddressAt { fingerprint, chain, format, path, address, pubkey })
+    }
+}
+
+// ── What a build answers ─────────────────────────────────────────────────────
+
+/// One chain of a `HostInfo` reply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainInfo {
+    pub chain: u8,
+    /// [`can`] bits.
+    pub can: u8,
+    /// The address [`format`]s the chain has, most usual first.
+    pub formats: Vec<u8>,
+}
+
+/// The answer to `HostInfo`:
+/// `[u8 version = 1][u8 features][u8 session][u16 longest message][u8 count]`
+/// then `count × [u8 chain][u8 can][u8 n][n × u8 format]`. Nothing in it is the
+/// wallet's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostInfo {
+    /// [`feature`] bits.
+    pub features: u8,
+    /// [`granted`] bits.
+    pub session: u8,
+    /// Longest message `HostSignMessage` takes on the wire.
+    pub message_max: u16,
+    pub chains: Vec<ChainInfo>,
+}
+
+impl HostInfo {
+    pub fn decode(r: &[u8]) -> Result<Self, String> {
+        let mut c = Cursor::new(r);
+        if c.u8()? != 1 {
+            return Err("info reply of an unknown version".into());
+        }
+        let features = c.u8()?;
+        let session = c.u8()?;
+        let message_max = c.u16()?;
+        let count = c.u8()?;
+        let mut chains = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let chain = c.u8()?;
+            let can = c.u8()?;
+            let formats = c.short()?.to_vec();
+            chains.push(ChainInfo { chain, can, formats });
+        }
+        c.done()?;
+        Ok(HostInfo { features, session, message_max, chains })
+    }
+
+    /// What `chain` can be asked for ([`can`] bits); zero for a chain the
+    /// build does not carry.
+    pub fn can(&self, chain: u8) -> u8 {
+        self.chains.iter().find(|c| c.chain == chain).map_or(0, |c| c.can)
+    }
+}
+
 // ── Sign results ─────────────────────────────────────────────────────────────
 
 /// `[u8 kind = 2][u8 psbt version, 0 or 2][u32 len][signed PSBT][u32 len][network tx]`
@@ -611,4 +842,38 @@ pub fn read_solana(r: &[u8]) -> Result<(Vec<(u8, [u8; 64])>, &[u8]), String> {
     let tx = c.take(n)?;
     c.done()?;
     Ok((sigs, tx))
+}
+
+/// A signed message:
+/// `[u8 kind = 6][u8 version = 1][u8 chain][u8 scheme][path][u8 len][address][u16 len][signature]`.
+/// The signature is in the form the scheme's verifiers take: base64 text for
+/// the Bitcoin ones, 65 raw bytes for EIP-191.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedMessage {
+    pub chain: u8,
+    pub scheme: u8,
+    pub path: Vec<u32>,
+    /// The address the signature speaks for.
+    pub address: String,
+    pub signature: Vec<u8>,
+}
+
+impl SignedMessage {
+    pub fn decode(r: &[u8]) -> Result<Self, String> {
+        let mut c = Cursor::new(r);
+        if c.u8()? != kind::MESSAGE {
+            return Err("not a message result".into());
+        }
+        if c.u8()? != 1 {
+            return Err("message result of an unknown version".into());
+        }
+        let chain = c.u8()?;
+        let scheme = c.u8()?;
+        let path = c.path()?;
+        let address = String::from_utf8(c.short()?.to_vec()).map_err(|_| "address is not UTF-8".to_owned())?;
+        let n = c.u16()? as usize;
+        let signature = c.take(n)?.to_vec();
+        c.done()?;
+        Ok(SignedMessage { chain, scheme, path, address, signature })
+    }
 }

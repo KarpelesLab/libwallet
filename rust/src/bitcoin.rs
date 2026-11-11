@@ -547,6 +547,16 @@ pub fn message_prefix(chain_id: &str) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// The digest a Bitcoin-family signed message is made over:
+/// `double_sha256(prefix || varint(len(message)) || message)`. None for a chain
+/// with no known prefix.
+pub(crate) fn message_digest(chain_id: &str, message: &[u8]) -> Option<[u8; 32]> {
+    let mut full = message_prefix(chain_id)?;
+    append_varint(&mut full, message.len() as u64);
+    full.extend_from_slice(message);
+    Some(outscript::hash::dsha256(&full))
+}
+
 /// Sign a Bitcoin-family message (Go `Account.SignBitcoinMessage`): the digest
 /// is `double_sha256(prefix || varint(len(message)) || message)`, DKLs-signed;
 /// the recovery id is brute-forced against the account's pubkey and the result
@@ -559,12 +569,8 @@ pub fn sign_message(
     chain_id: &str,
     message: &[u8],
 ) -> Result<Vec<u8>> {
-    let prefix = message_prefix(chain_id)
+    let digest = message_digest(chain_id, message)
         .ok_or_else(|| Error::Env("unknown Bitcoin-family message prefix (chain not in allow-list)".into()))?;
-    let mut full = prefix;
-    append_varint(&mut full, message.len() as u64);
-    full.extend_from_slice(message);
-    let digest = outscript::hash::dsha256(&full);
 
     let acct = crate::models::account::fetch(env, account_id)?
         .ok_or_else(|| Error::Env("account not found".into()))?;
