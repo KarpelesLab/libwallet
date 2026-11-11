@@ -83,7 +83,7 @@ ciborium = "0.2"
 # `manager` is the device-management side (genuine check, apps, firmware); it
 # runs on rsurl, like our own HTTP.
 lsdk = { version = "0.1.1", default-features = false, features = ["apps", "manager"] }
-compcol = { version = "0.7.2", default-features = false, features = ["deflate"] }
+compcol = { version = "0.8", default-features = false, features = ["alloc", "deflate"] }
 # QR codes for the air-gap frames, with our own anyd (AnyDCode): rendering them
 # (Airgap:qr) for hosts without a renderer, and reading them out of camera
 # frames (Airgap:scanFrame) for hosts without a detector — the web wallet, in
