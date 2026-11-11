@@ -1,9 +1,10 @@
 //! `CatCard:*` — CatCard hardware wallets (see [`crate::catcard`]).
 //!
 //! Every route that talks to the device takes the link to use: `Transport`
-//! (`hid` on desktop, `webhid` in the browser, `bridge` anywhere — the default
-//! is the built-in one where there is one), `Device` (a `CatCard:list` path)
-//! and, for WebHID, `Request: true` to show the browser's device picker.
+//! (`hid` on desktop, `webhid` in the browser, `ccid` or `bridge` anywhere —
+//! the default is the built-in one where there is one, `ccid` on iOS and
+//! Android), `Device` (a `CatCard:list` path) and, for WebHID, `Request: true`
+//! to show the browser's device picker.
 //!
 //! The first route that needs the encrypted channel pairs it: a `catcard:pair`
 //! event `{id, code}` carries the six-digit code the user must compare with
@@ -26,6 +27,10 @@
 //!                                    → the user's answer to a `catcard:pair`
 //!                                      event
 //!   CatCard:disconnect               → end the paired session
+//!   CatCard:apduResponse {Id, Data|Error}
+//!                                    → the host's answer to a `catcard:apdu`
+//!                                      event (ccid transport): the response
+//!                                      APDU, status word included
 //!   CatCard:packetResponse {Id, Data|Error}
 //!                                    → the host's answer to a `catcard:packet`
 //!                                      event (bridge transport)
@@ -52,7 +57,8 @@ fn account_param(params: &Value) -> Result<&str, ApiError> {
 pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
     match action {
         "list" => Ok(json!({ "devices": transport::list().await?, "transports": transport::kinds(), "default": transport::default_kind() })),
-        "packetResponse" => packet_response(params),
+        "packetResponse" => host_response(params, "packet", transport::bridge_resolve),
+        "apduResponse" => host_response(params, "APDU", transport::apdu_resolve),
         "pairResponse" => pair_response(params),
         "import" => import_keys(env, params),
         "info" => catcard::info(&transport::open(env, params).await?).await,
@@ -77,16 +83,16 @@ pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
     }
 }
 
-/// The host's answer to a bridged message.
-fn packet_response(params: &Value) -> ApiResult {
+/// The host's answer to a bridged message, or to a relayed APDU.
+fn host_response(params: &Value, what: &str, resolve: fn(&str, Result<Vec<u8>, String>) -> bool) -> ApiResult {
     let id = str_param(params, "Id").ok_or_else(|| ApiError::new(400, "Id required"))?;
     let reply = match (str_param(params, "Error"), params.get("Data").and_then(Value::as_str)) {
         (Some(e), _) => Err(e.to_owned()),
         (None, Some(d)) => Ok(transport::unhex(d).ok_or_else(|| ApiError::new(400, "Data must be hex"))?),
         (None, None) => return Err(ApiError::new(400, "Data (hex) or Error required")),
     };
-    if !transport::bridge_resolve(id, reply) {
-        return Err(ApiError::new(404, format!("no packet {id} is waiting")));
+    if !resolve(id, reply) {
+        return Err(ApiError::new(404, format!("no {what} {id} is waiting")));
     }
     Ok(json!({ "id": id }))
 }

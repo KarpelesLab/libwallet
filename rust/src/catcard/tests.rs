@@ -1024,3 +1024,252 @@ fn bridge_relays_packets_through_the_host() {
     run(crate::handlers::catcard::route(&env, "disconnect", &bridge)).unwrap();
     env.set_event_sink(None);
 }
+
+// ── The smart-card reader ────────────────────────────────────────────────────
+
+#[test]
+fn apdus_match_the_reference_client() {
+    use proto::apdu;
+    // tools/ccidclient.py --selftest, byte for byte.
+    assert_eq!(apdu::commands(op::IDENTIFY, &[], false), [h("80cc00000000060200000000000000")]);
+    assert_eq!(apdu::commands(0x0001, b"hi", true), [h("80cc000008010002000000686900")]);
+    // Chained, short: 255 data bytes per APDU, the header on the first.
+    let payload: Vec<u8> = (0..512u32).map(|i| i as u8).collect();
+    let a = apdu::commands(op::NCRY_MSG, &payload, true);
+    assert_eq!(a.iter().map(|x| x[0]).collect::<Vec<_>>(), [0x90, 0x90, 0x80]);
+    assert_eq!((a[0][4], &a[0][5..11]), (255, &[0x41, 0, 0, 2, 0, 0][..]));
+    let joined: Vec<u8> = a.iter().flat_map(|x| x[5..x.len() - 1].to_vec()).collect();
+    assert_eq!(joined, proto::message(op::NCRY_MSG, &payload));
+    // Chained, extended: 1030 bytes on the first, the rest on the second.
+    let a = apdu::commands(op::NCRY_MSG, &[0u8; 1500], false);
+    assert_eq!((a.len(), a[0][0], a[1][0]), (2, 0x90, 0x80));
+    assert_eq!((&a[0][4..7], &a[1][4..7]), (&[0, 0x04, 0x06][..], &[0, 0x01, 0xdc][..]));
+    assert!(a.iter().all(|x| x.ends_with(&[0, 0])));
+    assert_eq!(apdu::get_response(false), h("00c00000000000"));
+    assert_eq!(apdu::get_response(true), h("00c0000000"));
+
+    // docs/PHONE-APP.md §2: the Identify exchange, response included.
+    let r = h("00000d000000020001c002713105372e302e309000");
+    let (data, sw) = apdu::response(&r).unwrap();
+    assert_eq!(sw, apdu::SW_OK);
+    let (st, body) = proto::parse_message(data).unwrap();
+    assert_eq!((st, Identity::decode(body).unwrap().board.as_str()), (status::OK, "q1"));
+    assert!(apdu::more(0x612C) && !apdu::more(0x9000));
+    assert!(apdu::response(&[0x90]).is_err());
+    assert!(apdu::refusal(0x6D00).contains("6D00"));
+}
+
+/// The card in the device's reader: the one APDU, command chaining, and
+/// replies paged by `Le` and `GET RESPONSE`, as the firmware documents them.
+struct FakeCard {
+    dev: FakeCatCard,
+    chain: Vec<u8>,
+    pending: Vec<u8>,
+    seen: Vec<Vec<u8>>,
+}
+
+impl FakeCard {
+    fn new(dev: FakeCatCard) -> Self {
+        FakeCard { dev, chain: Vec::new(), pending: Vec::new(), seen: Vec::new() }
+    }
+
+    fn page(&mut self, le: usize) -> Vec<u8> {
+        let n = le.min(self.pending.len());
+        let mut out: Vec<u8> = self.pending.drain(..n).collect();
+        let sw: u16 = if self.pending.is_empty() { 0x9000 } else { 0x6100 | self.pending.len().min(255) as u16 };
+        out.extend(sw.to_be_bytes());
+        out
+    }
+
+    fn transmit(&mut self, apdu: &[u8]) -> Vec<u8> {
+        self.seen.push(apdu.to_vec());
+        let sw = |w: u16| w.to_be_bytes().to_vec();
+        if apdu.len() < 4 {
+            return sw(0x6700);
+        }
+        let (cla, ins, rest) = (apdu[0], apdu[1], &apdu[4..]);
+        // ISO 7816-4's cases: (data, Le — zero when there is none).
+        let (data, le): (&[u8], usize) = match rest.len() {
+            0 => (&[], 0),
+            1 => (&[], if rest[0] == 0 { 256 } else { rest[0] as usize }),
+            _ if rest[0] != 0 => {
+                let lc = rest[0] as usize;
+                match rest.len() - 1 {
+                    n if n == lc => (&rest[1..], 0),
+                    n if n == lc + 1 => (&rest[1..1 + lc], if rest[1 + lc] == 0 { 256 } else { rest[1 + lc] as usize }),
+                    _ => return sw(0x6700),
+                }
+            }
+            n => {
+                let ext = |a: u8, b: u8| if (a, b) == (0, 0) { 65536 } else { u16::from_be_bytes([a, b]) as usize };
+                if n == 3 {
+                    (&[], ext(rest[1], rest[2]))
+                } else {
+                    let lc = u16::from_be_bytes([rest[1], rest[2]]) as usize;
+                    match n - 3 {
+                        m if m == lc => (&rest[3..], 0),
+                        m if m == lc + 2 => (&rest[3..3 + lc], ext(rest[3 + lc], rest[4 + lc])),
+                        _ => return sw(0x6700),
+                    }
+                }
+            }
+        };
+        if !matches!(cla, 0x80 | 0x90 | 0x00) {
+            return sw(0x6E00);
+        }
+        if apdu[2] != 0 || apdu[3] != 0 {
+            return sw(0x6A86);
+        }
+        match (cla, ins) {
+            (0x80 | 0x90, 0xCC) => {
+                self.chain.extend_from_slice(data);
+                if cla & 0x10 != 0 {
+                    return sw(0x9000);
+                }
+                // A new message drops a reply still being paged.
+                let message = std::mem::take(&mut self.chain);
+                self.pending = match proto::parse_message(&message) {
+                    Ok((opcode, payload)) => {
+                        let (st, body) = self.dev.handle(opcode, payload);
+                        proto::message(st, &body)
+                    }
+                    Err(_) => proto::message(status::BAD_REQUEST, &[3]),
+                };
+                self.page(le)
+            }
+            (0x00 | 0x80, 0xC0) if !data.is_empty() || le == 0 => sw(0x6700),
+            (0x00 | 0x80, 0xC0) if self.pending.is_empty() => sw(0x6985),
+            (0x00 | 0x80, 0xC0) => self.page(le),
+            _ => sw(0x6D00),
+        }
+    }
+}
+
+/// An environment whose host relays each `catcard:apdu` event to `card` and
+/// answers each pairing code, through the routes a real host calls.
+fn env_with_card(card: &Arc<Mutex<FakeCard>>) -> Arc<Env> {
+    let env = Arc::new(env_answering(true).0);
+    let (card, host_env) = (card.clone(), Arc::downgrade(&env));
+    env.set_event_sink(Some(Box::new(move |ev: &str| {
+        let ev: Value = serde_json::from_str(ev).unwrap();
+        let Some(env) = host_env.upgrade() else { return };
+        let id = ev["data"]["id"].as_str().unwrap_or_default().to_owned();
+        match ev["event"].as_str() {
+            Some("catcard:apdu") => {
+                let apdu = unhex(ev["data"]["apdu"].as_str().unwrap()).unwrap();
+                let card = card.clone();
+                std::thread::spawn(move || {
+                    let reply = card.lock().unwrap().transmit(&apdu);
+                    run(crate::handlers::catcard::route(&env, "apduResponse", &json!({ "Id": id, "Data": hex(&reply) }))).unwrap();
+                });
+            }
+            Some("catcard:pair") => {
+                std::thread::spawn(move || {
+                    run(crate::handlers::catcard::route(&env, "pairResponse", &json!({ "Id": id, "Accept": true }))).unwrap();
+                });
+            }
+            _ => {}
+        }
+    })));
+    env
+}
+
+#[test]
+fn every_operation_runs_through_the_smart_card_reader() {
+    let want = crate::walletcore::derive_addresses(MNEMONIC, "").unwrap();
+    // Extended APDUs (what a phone sends), then short ones only.
+    for short in [false, true] {
+        let mut dev = FakeCatCard::new(MNEMONIC);
+        dev.finalize = true;
+        let card = Arc::new(Mutex::new(FakeCard::new(dev)));
+        let env = env_with_card(&card);
+        let link = json!({ "Transport": "ccid", "ShortApdu": short });
+        let with = |extra: Value| {
+            let mut p = link.clone();
+            p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            p
+        };
+
+        let info = run(crate::handlers::catcard::route(&env, "info", &link)).unwrap();
+        assert_eq!((info["board"].as_str(), info["unlocked"].as_bool()), (Some("q1"), Some(true)));
+        assert_eq!(hex(&card.lock().unwrap().seen[0]), if short { "80cc00000602000000000000" } else { "80cc00000000060200000000000000" });
+
+        // Pairing, sharing and the import.
+        let keys = run(crate::handlers::catcard::route(&env, "getKeys", &link)).unwrap();
+        assert_eq!(keys["keys"][0]["address"], want.bitcoin.as_str());
+        run(crate::handlers::catcard::route(&env, "import", &json!({ "Keys": keys["keys"] }))).unwrap();
+        let account = |kind: &str| crate::models::account::list(&env).unwrap().into_iter().find(|a| a.kind == kind).unwrap();
+
+        // Signing on all three chains. The Bitcoin spend's upload fills whole
+        // sealed records: 1046 bytes of message, more than one APDU carries.
+        let btc = account("bitcoin");
+        let out = run(crate::handlers::catcard::route(&env, "signTransaction", &with(json!({ "Account": btc.id, "Transaction": btc_tx(&btc, 11), "Offline": true })))).unwrap();
+        assert!(outscript::btctx::BtcTx::from_bytes(&unhex(out["raw"].as_str().unwrap()).unwrap()).unwrap().inputs.len() >= 10);
+        let eth = account("ethereum");
+        let out = run(crate::handlers::catcard::route(&env, "signTransaction", &with(json!({ "Account": eth.id, "Transaction": evm_tx(), "Offline": true })))).unwrap();
+        assert!(crate::evm::recover_sender(&unhex(out["raw"].as_str().unwrap()).unwrap()).unwrap().eq_ignore_ascii_case(&want.evm));
+        let sol = account("solana");
+        let from = crate::solana::pubkey_from_b64url(&sol.pubkey).unwrap();
+        let message = crate::solana::build_transfer_message(&from, &[9u8; 32], 1_000, &[3u8; 32]);
+        let out = run(crate::handlers::catcard::route(&env, "signTransaction", &with(json!({ "Account": sol.id, "Transaction": { "message": bs58::encode(&message).into_string() }, "Offline": true })))).unwrap();
+        let sig: [u8; 64] = bs58::decode(out["id"].as_str().unwrap()).into_vec().unwrap().try_into().unwrap();
+        assert!(crate::tss::ed25519_verify(&from, &message, &sig));
+
+        {
+            let card = card.lock().unwrap();
+            // One pairing served everything.
+            assert_eq!(card.dev.count(&card.dev.clear_ops, op::PAIR_COMMIT), 1, "short={short} clear={:x?} sealed={:x?}", card.dev.clear_ops.borrow(), card.dev.sealed_ops.borrow());
+            let chained = card.seen.iter().filter(|a| a[0] == 0x90).count();
+            let paged = card.seen.iter().filter(|a| a[..2] == [0x00, 0xC0]).count();
+            assert!(chained > 0, "no message was long enough to chain");
+            if short {
+                // A sealed result page is over 256 bytes: paged by GET RESPONSE.
+                assert!(paged > 4, "{paged}");
+                assert!(card.seen.iter().all(|a| a.len() <= 5 + 255 + 1));
+            } else {
+                // With Le = 65536 every reply fits its first response.
+                assert_eq!(paged, 0);
+                assert!(card.seen.iter().all(|a| a.len() <= 7 + 1030 + 2 && a.ends_with(&[0, 0])));
+            }
+            assert!(card.pending.is_empty() && card.chain.is_empty());
+        }
+        run(crate::handlers::catcard::route(&env, "disconnect", &link)).unwrap();
+        env.set_event_sink(None);
+    }
+}
+
+#[test]
+fn a_card_that_is_not_a_catcard_is_reported() {
+    // Something else in the slot: it refuses the instruction.
+    let env = Arc::new(env());
+    let host_env = Arc::downgrade(&env);
+    env.set_event_sink(Some(Box::new(move |ev: &str| {
+        let ev: Value = serde_json::from_str(ev).unwrap();
+        let (Some(env), Some("catcard:apdu")) = (host_env.upgrade(), ev["event"].as_str()) else { return };
+        let id = ev["data"]["id"].as_str().unwrap().to_owned();
+        std::thread::spawn(move || {
+            run(crate::handlers::catcard::route(&env, "apduResponse", &json!({ "Id": id, "Data": "6d00" }))).unwrap();
+        });
+    })));
+    let err = run(crate::handlers::catcard::route(&env, "info", &json!({ "Transport": "ccid" }))).unwrap_err();
+    assert_eq!(err.code, 502, "{}", err.message);
+    assert!(err.message.contains("6D00"), "{}", err.message);
+    env.set_event_sink(None);
+
+    // The host reporting a failure, a malformed answer, and an unknown id.
+    let host_env = Arc::downgrade(&env);
+    env.set_event_sink(Some(Box::new(move |ev: &str| {
+        let ev: Value = serde_json::from_str(ev).unwrap();
+        let (Some(env), Some("catcard:apdu")) = (host_env.upgrade(), ev["event"].as_str()) else { return };
+        let id = ev["data"]["id"].as_str().unwrap().to_owned();
+        std::thread::spawn(move || {
+            run(crate::handlers::catcard::route(&env, "apduResponse", &json!({ "Id": id, "Error": "no card in the slot" }))).unwrap();
+        });
+    })));
+    let err = run(crate::handlers::catcard::route(&env, "info", &json!({ "Transport": "ccid" }))).unwrap_err();
+    assert!(err.message.contains("no card in the slot"), "{}", err.message);
+    env.set_event_sink(None);
+    assert_eq!(run(crate::handlers::catcard::route(&env, "apduResponse", &json!({ "Id": "apdu-nope", "Data": "9000" }))).unwrap_err().code, 404);
+    assert_eq!(run(crate::handlers::catcard::route(&env, "apduResponse", &json!({ "Id": "apdu-nope", "Data": "zz" }))).unwrap_err().code, 400);
+    assert!(super::transport::kinds().contains(&"ccid"));
+}

@@ -265,6 +265,89 @@ pub fn parse_message(m: &[u8]) -> Result<(u16, &[u8]), String> {
     Ok((u16::from_le_bytes([m[0], m[1]]), &m[6..]))
 }
 
+// ── The smart-card reader's one APDU ─────────────────────────────────────────
+
+/// The device is also a CCID smart-card reader whose card answers one
+/// proprietary APDU carrying a [`message`] as its data — the interface a
+/// phone can open. (Firmware `docs/PHONE-APP.md` §2; `tools/ccidclient.py`.)
+pub mod apdu {
+    const CLA: u8 = 0x80;
+    /// ISO 7816-4 command chaining: more chunks of this message follow.
+    const CLA_CHAIN: u8 = 0x10;
+    const INS_MESSAGE: u8 = 0xCC;
+    const INS_GET_RESPONSE: u8 = 0xC0;
+    /// Most data one extended APDU carries: what fits the reader's message
+    /// buffer (1024 bytes of payload and the six-byte message header).
+    const CHUNK_EXTENDED: usize = 1024 + 6;
+    /// A short APDU's data field.
+    const CHUNK_SHORT: usize = 255;
+
+    pub const SW_OK: u16 = 0x9000;
+
+    /// Case 2/4 short, or 2E/4E extended, always with the largest `Le`.
+    fn encode(cla: u8, ins: u8, data: &[u8], short: bool) -> Vec<u8> {
+        let mut out = vec![cla, ins, 0, 0];
+        if short {
+            if !data.is_empty() {
+                out.push(data.len() as u8);
+                out.extend_from_slice(data);
+            }
+            out.push(0);
+        } else {
+            out.push(0);
+            if !data.is_empty() {
+                out.extend_from_slice(&(data.len() as u16).to_be_bytes());
+                out.extend_from_slice(data);
+            }
+            out.extend_from_slice(&[0, 0]);
+        }
+        out
+    }
+
+    /// The APDUs that carry one message: the six-byte header on the first,
+    /// the chaining class on all but the last, an `Le` on every one. `short`
+    /// keeps to short APDUs (255 data bytes, `Le` 256), for a host whose
+    /// smart-card API has no extended ones.
+    pub fn commands(opcode: u16, payload: &[u8], short: bool) -> Vec<Vec<u8>> {
+        let data = super::message(opcode, payload);
+        let chunk = if short { CHUNK_SHORT } else { CHUNK_EXTENDED };
+        let count = data.len().div_ceil(chunk);
+        data.chunks(chunk).enumerate().map(|(i, piece)| encode(if i + 1 == count { CLA } else { CLA | CLA_CHAIN }, INS_MESSAGE, piece, short)).collect()
+    }
+
+    /// `GET RESPONSE`: the next page of a reply announced with `61 xx`.
+    pub fn get_response(short: bool) -> Vec<u8> {
+        encode(0x00, INS_GET_RESPONSE, &[], short)
+    }
+
+    /// A response APDU: `(data, status word)`.
+    pub fn response(r: &[u8]) -> Result<(&[u8], u16), String> {
+        if r.len() < 2 {
+            return Err("response APDU shorter than its status word".into());
+        }
+        let (data, sw) = r.split_at(r.len() - 2);
+        Ok((data, u16::from_be_bytes([sw[0], sw[1]])))
+    }
+
+    /// `61 xx`: more of the reply waits for `GET RESPONSE`.
+    pub fn more(sw: u16) -> bool {
+        sw & 0xFF00 == 0x6100
+    }
+
+    /// Why the card refused an APDU (not a message: those carry a status).
+    pub fn refusal(sw: u16) -> String {
+        let why = match sw {
+            0x6E00 => "class not supported: is this a CatCard's reader?",
+            0x6D00 => "instruction not supported: is this a CatCard's reader?",
+            0x6A86 => "P1 P2 must be zero",
+            0x6700 => "malformed APDU body",
+            0x6985 => "no reply is waiting",
+            _ => "unexpected status word",
+        };
+        format!("the card refused the APDU (SW {sw:04X}: {why})")
+    }
+}
+
 // ── Identify ─────────────────────────────────────────────────────────────────
 
 /// What `Identify` reports.

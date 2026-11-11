@@ -21,14 +21,18 @@ import 'airgap_api.dart' show AirgapKey;
 ///
 /// - `hid` — USB, opened by libwallet itself (desktop: macOS, Linux, Windows).
 /// - `webhid` — the browser build.
-/// - `bridge` — *your app* carries the messages. This is the only option on
-///   iOS and Android: a phone cannot open the device's HID interface, but it
-///   can drive its smart-card reader (CryptoTokenKit on iOS), whose one APDU
-///   carries exactly the bytes libwallet hands over. Install the relay once
-///   with [bridge].
+/// - `ccid` — *your app* carries APDUs to the device's smart-card reader.
+///   This is the way on iOS and Android: a phone cannot open the device's HID
+///   interface, but it can drive its reader (CryptoTokenKit on iOS). Install
+///   the relay once with [ccidBridge]:
+///   ```dart
+///   final sub = client.catcard.ccidBridge((apdu) => myCard.transmit(apdu));
+///   ```
+/// - `bridge` — *your app* carries whole messages, over anything else that
+///   reaches the device (see [bridge]).
 ///
 /// With no [CatCardLink] the platform's built-in transport is used where there
-/// is one, the bridge elsewhere.
+/// is one, `ccid` elsewhere (iOS, Android).
 ///
 /// **Pairing.** The device only shares addresses and signs inside an encrypted
 /// channel that is paired afresh on every connection, by a six-digit code the
@@ -202,6 +206,20 @@ class CatCardApi {
     return (data as Map)['signature'] as String;
   }
 
+  /// Relay APDUs for the `ccid` transport: [transmit] sends one command APDU
+  /// to the card in the device's smart-card reader and returns the response
+  /// APDU, status word included — on iOS, `TKSmartCard.transmit(_:)`; on
+  /// Android, the reader's transceive. Send the bytes as given (the class
+  /// byte is part of the protocol) and return whatever comes back, including
+  /// `61 xx`: libwallet does the chaining and the `GET RESPONSE` paging.
+  ///
+  /// Keep the subscription for as long as CatCard calls may run, and cancel
+  /// it when done. An exception from [transmit] fails the call that needed
+  /// the device.
+  StreamSubscription<void> ccidBridge(
+          Future<Uint8List> Function(Uint8List apdu) transmit) =>
+      _relay('catcard:apdu', 'apdu', 'CatCard:apduResponse', transmit);
+
   /// Relay messages for the `bridge` transport: [exchange] sends one message
   /// to the device and returns its reply.
   ///
@@ -213,21 +231,23 @@ class CatCardApi {
   /// run, and cancel it when done. An exception from [exchange] fails the
   /// call that needed the device.
   StreamSubscription<void> bridge(
-      Future<Uint8List> Function(Uint8List message) exchange) {
-    return _conn.events
-        .where((e) => e.event == 'catcard:packet')
-        .asyncMap((e) async {
+          Future<Uint8List> Function(Uint8List message) exchange) =>
+      _relay('catcard:packet', 'packet', 'CatCard:packetResponse', exchange);
+
+  StreamSubscription<void> _relay(String event, String field, String route,
+      Future<Uint8List> Function(Uint8List) exchange) {
+    return _conn.events.where((e) => e.event == event).asyncMap((e) async {
       final id = e.data['id'] as String? ?? '';
       if (id.isEmpty) return;
       Map<String, dynamic> answer;
       try {
-        final reply = await exchange(_unhex(e.data['packet'] as String? ?? ''));
+        final reply = await exchange(_unhex(e.data[field] as String? ?? ''));
         answer = {'Id': id, 'Data': _hex(reply)};
       } catch (err) {
         answer = {'Id': id, 'Error': err.toString()};
       }
       try {
-        await _conn.request('CatCard:packetResponse', 'POST', answer);
+        await _conn.request(route, 'POST', answer);
       } catch (_) {
         // The exchange timed out or was abandoned; nothing is waiting.
       }
@@ -251,8 +271,12 @@ class CatCardApi {
 
 /// Which link a CatCard call uses to reach the device.
 class CatCardLink {
-  /// `hid` | `webhid` | `bridge`; null = the platform default.
+  /// `hid` | `webhid` | `ccid` | `bridge`; null = the platform default.
   final String? transport;
+
+  /// `ccid`: keep to short APDUs (255 data bytes, replies paged by
+  /// `GET RESPONSE`), for a smart-card API without extended ones.
+  final bool shortApdu;
 
   /// A USB device path from [CatCardApi.list] (`hid`); null = the first one.
   final String? device;
@@ -261,7 +285,16 @@ class CatCardLink {
   /// instead of reusing a device already granted to the page.
   final bool request;
 
-  const CatCardLink({this.transport, this.device, this.request = false});
+  const CatCardLink(
+      {this.transport,
+      this.device,
+      this.request = false,
+      this.shortApdu = false});
+
+  /// The app relays APDUs to the device's smart-card reader (see
+  /// [CatCardApi.ccidBridge]).
+  const CatCardLink.ccid({bool shortApdu = false})
+      : this(transport: 'ccid', shortApdu: shortApdu);
 
   /// The app relays the messages (see [CatCardApi.bridge]).
   const CatCardLink.bridge() : this(transport: 'bridge');
@@ -274,6 +307,7 @@ class CatCardLink {
         if (transport != null) 'Transport': transport,
         if (device != null) 'Device': device,
         if (request) 'Request': true,
+        if (shortApdu) 'ShortApdu': true,
       };
 }
 
@@ -297,7 +331,7 @@ class CatCardDevice {
 class CatCardDevices {
   final List<CatCardDevice> devices;
 
-  /// The transports this build can open (`hid`/`webhid`, `bridge`).
+  /// The transports this build can open (`hid`/`webhid`, `ccid`, `bridge`).
   final List<String> transports;
 
   /// The transport used when a call names none.

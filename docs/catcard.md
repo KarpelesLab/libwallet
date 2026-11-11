@@ -28,7 +28,8 @@ Every `CatCard:*` call that talks to the device takes the link to use.
 |---|---|---|
 | `hid` | desktop (macOS, Linux, Windows) | libwallet, over USB (default there) |
 | `webhid` | the browser build (Chromium) | libwallet, through WebHID (default there) |
-| `bridge` | everywhere, and the only one on iOS / Android | the host app |
+| `ccid` | everywhere; the default on iOS / Android | the host app, through the device's smart-card reader |
+| `bridge` | everywhere | the host app, carrying whole messages |
 
 With `hid`, `Device` selects a device by the path `CatCard:list` returned
 (default: the first one). With `webhid`, `Request: true` shows the browser's
@@ -44,12 +45,63 @@ present. On Linux the device node is root-only by default:
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="39f2", ATTRS{idProduct}=="0401", TAG+="uaccess"
 ```
 
-### The bridge
+### The smart-card reader (`ccid`): iOS and Android
 
-A phone cannot open a vendor HID interface, but the device is also a
-class-compliant smart-card reader, which iOS (CryptoTokenKit) and Android can
-drive. With `bridge` the host carries the messages. For each one libwallet
-emits an event and waits up to thirty seconds for the answer:
+A phone cannot open a vendor HID interface — iOS gives an app no HID API at
+all — but in its CatCard USB mode the device is also a class-compliant CCID
+**smart-card reader** with one card that is always inserted, and a phone can
+drive that. The card answers one proprietary APDU that carries a CatCard
+message, so everything above (pairing, keys, signing) works unchanged.
+
+libwallet cannot open a smart-card slot itself; the host app does, and relays
+APDUs. For each one libwallet emits an event and waits up to thirty seconds
+for the answer:
+
+```
+event  catcard:apdu          {"id": "apdu-…", "apdu": "<hex of the command APDU>"}
+call   CatCard:apduResponse  {"Id": "apdu-…", "Data": "<hex of the response APDU, status word included>"}
+                          or {"Id": "apdu-…", "Error": "why it failed"}
+```
+
+Send the bytes exactly as given and return exactly what comes back —
+including a `61 xx` status. libwallet builds the APDUs (`CLA 80`, or `90` for
+a chunk with more to follow; `INS CC`; extended `Lc`/`Le`), chains a message
+longer than one APDU, pages a long reply with `GET RESPONSE`, and turns the
+card's status words into errors (`6D00`/`6E00`: not a CatCard's reader).
+`ShortApdu: true` keeps to short APDUs (255 data bytes, `Le` 256) for a
+smart-card API without extended ones; it costs more round trips.
+
+**On iOS**, use CryptoTokenKit, as the firmware's `docs/PHONE-APP.md` §1
+describes:
+
+1. `TKSmartCardSlotManager.default` lists the slots; the CatCard's is named
+   after its USB product string, "CatCard". It is there from power-on, before
+   the PIN is typed.
+2. `slot.makeSmartCard()` and `card.beginSession` power the card on. There is
+   no application to select — do not send `SELECT`.
+3. Relay each `catcard:apdu` with `card.transmit(_:)`, which returns the
+   response including the two status bytes — that is `Data`. Do not use the
+   `send(ins:p1:p2:data:le:)` convenience: the class byte is part of the
+   protocol.
+
+In Dart (the app supplies the platform channel to CryptoTokenKit):
+
+```dart
+final sub = client.catcard.ccidBridge((apdu) => catCardSlot.transmit(apdu));
+final keys = await client.catcard.getKeys();   // ccid is the default on iOS / Android
+```
+
+On Android the same APDUs go to the reader through the platform's USB CCID
+support (or a CCID library over `UsbManager`); the relay is identical.
+
+One APDU is in flight at a time, and only one session exists: a reconnect is
+a new pairing.
+
+### The message bridge (`bridge`)
+
+With `bridge` the host carries whole messages instead of APDUs, over whatever
+it has that reaches the device (an emulator socket, its own HID code). For
+each one libwallet emits an event and waits up to thirty seconds:
 
 ```
 event  catcard:packet          {"id": "pkt-…", "packet": "<hex>"}
@@ -57,22 +109,14 @@ call   CatCard:packetResponse  {"Id": "pkt-…", "Data": "<hex>"}
                             or {"Id": "pkt-…", "Error": "why it failed"}
 ```
 
-`packet` is a whole message, `[u16 opcode LE][u32 length LE][payload]`, and
-`Data` the whole reply, `[u16 status LE][u32 length LE][payload]`. That is
-exactly the data of the one APDU the reader answers, so a relay is:
+`packet` is `[u16 opcode LE][u32 length LE][payload]` and `Data` the whole
+reply, `[u16 status LE][u32 length LE][payload]` — the firmware's HID `START`
+frame without its kind and sequence bytes; over HID, split it into the
+firmware's 64-byte reports. In Dart, `client.catcard.bridge((message) => …)`.
 
-```
-→  80 CC 00 00  00 hh ll  <packet>  00 00        (extended Lc and Le)
-←  <Data>  90 00
-```
-
-(The firmware's `docs/PHONE-APP.md` has the details.) Over any other channel
-that reaches the HID interface, split the packet into the firmware's 64-byte
-reports instead. In Dart, `client.catcard.bridge((message) => …)` does the
-event and the answer.
-
-Everything that matters is sealed before it reaches the bridge: the relay sees
-`Identify`, the pairing handshake's public keys, and ciphertext.
+Over either relay, everything that matters is sealed before it leaves
+libwallet: the host sees `Identify`, the pairing handshake's public keys, and
+ciphertext.
 
 ## Pairing
 
@@ -214,7 +258,7 @@ arbitrary derivation paths, multisig, and signing for the address-only chains.
 Firmware upgrades and the bench/debug commands are deliberately not
 implemented here.
 
-Error codes: 404 no device, 423 device locked, 409 wrong device / wrong
+Error codes: 404 no device, 502 the link failed or the card refused the APDU, 423 device locked, 409 wrong device / wrong
 account shared / device busy, 4001 refused on the device or the pairing code
 not confirmed, 403 the device refused the request (with its reason), 408
 nobody answered, 410 the session ended, 501 not something this protocol or
@@ -228,11 +272,17 @@ No physical device was available when this was written.
   (commitment, device key, both directional keys, the code `398 660`, and two
   sealed records) byte for byte, and the host-wallet layouts match the vectors
   in the firmware's reference tools.
+- The APDUs match the firmware's reference client (`tools/ccidclient.py
+  --selftest`) and the worked `Identify` exchange in `docs/PHONE-APP.md`.
 - Everything else — pairing, sharing, signing for the three chains, the
-  refusals, the bridge — runs in tests against a simulated device that
+  refusals, both relays — runs in tests against a simulated device that
   implements the device's side of the protocol from its documentation and
-  signs for real from a test mnemonic.
+  signs for real from a test mnemonic. Every operation is also run through a
+  simulated card (command chaining, and with short APDUs replies paged by
+  `GET RESPONSE`).
 - Not exercised: a real device over USB HID (including which hidapi backend
   reports the vendor usage page on each OS), WebHID in a browser, the
-  smart-card reader relay on a phone, and the firmware's actual review and
-  signing behaviour.
+  smart-card reader on a phone (CryptoTokenKit, or Android's CCID path) or
+  through a desktop PC/SC stack, and the firmware's actual review and signing
+  behaviour. The firmware's own documentation says its reader has not yet been
+  exercised against an iPhone or on hardware.

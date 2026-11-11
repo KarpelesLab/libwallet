@@ -6,13 +6,17 @@
 //! - **hid** — the vendor HID interface over hidapi, on desktop (macOS / Linux
 //!   / Windows): the message framed into 64-byte reports.
 //! - **webhid** — the same reports over WebHID, in the browser (Chromium).
+//! - **ccid** — the host carries APDUs to the device's smart-card reader: a
+//!   phone cannot open the HID interface, but it can drive a class-compliant
+//!   reader (CryptoTokenKit on iOS), whose card answers one APDU carrying a
+//!   message. Each APDU is broadcast as a `catcard:apdu` event `{id, apdu}`
+//!   (hex) and the host answers with `CatCard:apduResponse {Id, Data}` (hex,
+//!   status word included) or `{Id, Error}` — the default on iOS / Android.
 //! - **bridge** — the host carries the messages: each one is broadcast as a
 //!   `catcard:packet` event `{id, packet}` (hex of `[u16 opcode][u32 length]
 //!   [payload]`) and the host answers with `CatCard:packetResponse {Id, Data}`
-//!   (hex of `[u16 status][u32 length][payload]`) or `{Id, Error}`. This is
-//!   what a mobile app uses: a phone cannot open the HID interface, but it can
-//!   drive the device's smart-card reader, whose one APDU carries exactly
-//!   these bytes as its data.
+//!   (hex of `[u16 status][u32 length][payload]`) or `{Id, Error}`, over
+//!   whatever it has that reaches the device.
 //!
 //! Nothing secret crosses a link in the clear: everything that matters travels
 //! sealed (see [`super::session`]), so the host relaying a bridge sees only
@@ -143,6 +147,77 @@ impl Transport for Bridge<'_> {
 
     fn id(&self) -> String {
         "bridge".into()
+    }
+}
+
+// ── The smart-card reader, through the host ─────────────────────────────────
+
+static APDU_WAITERS: Waiters<BridgeReply> = Waiters::new();
+
+/// Deliver the host's answer (the response APDU) to a relayed APDU.
+pub fn apdu_resolve(id: &str, reply: BridgeReply) -> bool {
+    APDU_WAITERS.resolve(id, reply)
+}
+
+/// Most GET RESPONSE pages one reply may take: every reply the firmware gives
+/// is at most a few hundred bytes.
+const MAX_PAGES: usize = 64;
+
+/// The device's smart-card reader, each APDU relayed by the host.
+pub struct Ccid<'a> {
+    env: &'a Env,
+    /// Short APDUs only (chunks of 255, replies paged by GET RESPONSE).
+    short: bool,
+}
+
+impl Ccid<'_> {
+    /// One APDU to the card: `(response data, status word)`.
+    async fn transmit(&self, apdu: &[u8]) -> Result<(Vec<u8>, u16), ApiError> {
+        let id = xuid::Xuid::new("apdu").to_string();
+        let got = APDU_WAITERS
+            .wait(&id, BRIDGE_TIMEOUT_MS, || self.env.broadcast(&crate::response::event("catcard:apdu", json!({ "id": id, "apdu": hex(apdu) }))))
+            .await
+            .ok_or_else(|| ApiError::new(408, "catcard: the host did not answer the catcard:apdu event"))?;
+        let reply = got.map_err(terr)?;
+        let (data, sw) = proto::apdu::response(&reply).map_err(terr)?;
+        Ok((data.to_vec(), sw))
+    }
+}
+
+impl Transport for Ccid<'_> {
+    async fn request(&self, opcode: u16, payload: &[u8]) -> Result<(u16, Vec<u8>), ApiError> {
+        let commands = proto::apdu::commands(opcode, payload, self.short);
+        let last = commands.len() - 1;
+        let mut body = Vec::new();
+        let mut sw = proto::apdu::SW_OK;
+        for (i, command) in commands.iter().enumerate() {
+            let (data, got) = self.transmit(command).await?;
+            // A chunk that is not the last is answered with no data and 9000.
+            if i < last && (got != proto::apdu::SW_OK || !data.is_empty()) {
+                return Err(terr(if got == proto::apdu::SW_OK { "a chained APDU was answered with data".to_owned() } else { proto::apdu::refusal(got) }));
+            }
+            body = data;
+            sw = got;
+        }
+        let mut pages = 0;
+        while proto::apdu::more(sw) {
+            pages += 1;
+            if pages > MAX_PAGES {
+                return Err(terr("the card's reply does not end"));
+            }
+            let (data, got) = self.transmit(&proto::apdu::get_response(self.short)).await?;
+            body.extend_from_slice(&data);
+            sw = got;
+        }
+        if sw != proto::apdu::SW_OK {
+            return Err(terr(proto::apdu::refusal(sw)));
+        }
+        let (status, reply) = proto::parse_message(&body).map_err(terr)?;
+        Ok((status, reply.to_vec()))
+    }
+
+    fn id(&self) -> String {
+        "ccid".into()
     }
 }
 
@@ -426,6 +501,7 @@ pub enum Link<'a> {
     Hid(hid::HidLink),
     #[cfg(target_arch = "wasm32")]
     WebHid(webhid::WebHidLink),
+    Ccid(Ccid<'a>),
     Bridge(Bridge<'a>),
 }
 
@@ -436,6 +512,7 @@ impl Transport for Link<'_> {
             Link::Hid(t) => t.request(opcode, payload).await,
             #[cfg(target_arch = "wasm32")]
             Link::WebHid(t) => t.request(opcode, payload).await,
+            Link::Ccid(c) => c.request(opcode, payload).await,
             Link::Bridge(b) => b.request(opcode, payload).await,
         }
     }
@@ -446,20 +523,22 @@ impl Transport for Link<'_> {
             Link::Hid(t) => t.id(),
             #[cfg(target_arch = "wasm32")]
             Link::WebHid(t) => t.id(),
+            Link::Ccid(c) => c.id(),
             Link::Bridge(b) => b.id(),
         }
     }
 }
 
 /// The transport used when the request names none: the built-in one where
-/// there is one, the host bridge elsewhere (iOS, Android).
+/// there is one; elsewhere (iOS, Android) the device's smart-card reader,
+/// relayed by the host — the one interface a phone can open.
 pub fn default_kind() -> &'static str {
     if cfg!(target_arch = "wasm32") {
         "webhid"
     } else if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
         "hid"
     } else {
-        "bridge"
+        "ccid"
     }
 }
 
@@ -471,18 +550,21 @@ pub fn kinds() -> Vec<&'static str> {
     } else if cfg!(any(target_os = "macos", target_os = "linux", target_os = "windows")) {
         v.push("hid");
     }
+    v.push("ccid");
     v.push("bridge");
     v
 }
 
 /// Open the link the request asks for: `Transport` (`hid` | `webhid` |
-/// `bridge`, default per platform); `Device` picks a USB device by the path
+/// `ccid` | `bridge`, default per platform); `ShortApdu: true` keeps `ccid`
+/// to short APDUs; `Device` picks a USB device by the path
 /// `CatCard:list` returned; `Request: true` shows the browser's device picker
 /// (WebHID — needs a user gesture) instead of reusing an already-granted device.
 pub async fn open<'a>(env: &'a Env, params: &Value) -> Result<Link<'a>, ApiError> {
     let kind = params.get("Transport").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or(default_kind());
     match kind {
         "bridge" => Ok(Link::Bridge(Bridge { env })),
+        "ccid" => Ok(Link::Ccid(Ccid { env, short: params.get("ShortApdu").and_then(Value::as_bool) == Some(true) })),
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         "hid" => Ok(Link::Hid(hid::HidLink::open(params.get("Device").and_then(Value::as_str).filter(|s| !s.is_empty()))?)),
         #[cfg(target_arch = "wasm32")]

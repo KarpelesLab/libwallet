@@ -7,8 +7,8 @@
   `signTransaction()` signs on the device. The channel is paired by a
   six-digit code the user compares on both screens (`pairing` /
   `confirmPairing()`). libwallet opens USB itself on desktop; on iOS and
-  Android the app relays the messages to the device's smart-card reader with
-  `client.catcard.bridge()`. The firmware's README says it is not ready for
+  Android the app relays APDUs to the device's smart-card reader with
+  `client.catcard.ccidBridge()`. The firmware's README says it is not ready for
   funds. See `docs/catcard.md`.
 - **Ledger hardware wallets (`client.ledger`).** Use a Ledger device as the
   signer for Ethereum, Bitcoin and Solana accounts: `getKeys()` /

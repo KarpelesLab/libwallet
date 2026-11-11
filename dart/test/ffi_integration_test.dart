@@ -1009,7 +1009,7 @@ void main() {
 
     test('list reports the transports of this build', () async {
       final l = await client.catcard.list();
-      expect(l.transports, contains('bridge'));
+      expect(l.transports, containsAll(['ccid', 'bridge']));
       expect(l.transports, contains(l.defaultTransport));
     });
 
@@ -1033,6 +1033,44 @@ void main() {
         expect(info.paired, isFalse);
         // Identify: opcode 2, no payload.
         expect(seen.single, [2, 0, 0, 0, 0, 0]);
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('ccidBridge relays APDUs to the card and back', () async {
+      // The "card": answers Identify, as docs/PHONE-APP.md §2 shows it.
+      final seen = <Uint8List>[];
+      final sub = client.catcard.ccidBridge((apdu) async {
+        seen.add(apdu);
+        return Uint8List.fromList([
+          ...reply(0,
+              [2, 0, 1, 0xC0, 2, ...'q1'.codeUnits, 5, ...'7.0.0'.codeUnits]),
+          0x90,
+          0x00
+        ]);
+      });
+      try {
+        final info = await client.catcard.info(link: const CatCardLink.ccid());
+        expect(info.board, 'q1');
+        expect(info.firmware, '7.0.0');
+        expect(info.unlocked, isTrue);
+        // 80 CC 00 00, extended Lc = 6, opcode 2 + total 0, extended Le.
+        expect(seen.single,
+            [0x80, 0xCC, 0, 0, 0, 0, 6, 2, 0, 0, 0, 0, 0, 0, 0]);
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('a card that refuses the APDU fails the call', () async {
+      final sub = client.catcard
+          .ccidBridge((apdu) async => Uint8List.fromList([0x6D, 0x00]));
+      try {
+        await expectLater(
+            client.catcard.info(link: const CatCardLink.ccid(shortApdu: true)),
+            throwsA(isA<LibwalletException>()
+                .having((e) => e.toString(), 'message', contains('6D00'))));
       } finally {
         await sub.cancel();
       }

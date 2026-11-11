@@ -238,8 +238,12 @@ impl Session {
     }
 }
 
-/// At most this many sessions are held at once.
+/// At most this many sessions are held at once. (The tests run many simulated
+/// devices side by side, each its own link.)
+#[cfg(not(test))]
 const MAX_HELD: usize = 8;
+#[cfg(test)]
+const MAX_HELD: usize = usize::MAX;
 
 /// The paired sessions this process holds, by link.
 static HELD: Mutex<Option<HashMap<String, Session>>> = Mutex::new(None);
