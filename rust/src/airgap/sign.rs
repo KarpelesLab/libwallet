@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use super::decoder::Payload;
 use super::import::{account_key_info, AccountKeyInfo};
-use super::registry::{self, EthDataType, EthSignRequest, EthSignature, KeyPath, SolSignRequest, SolSignType, SolSignature};
+use super::registry::{self, BtcSignRequest, BtcSignature, EthDataType, EthSignRequest, EthSignature, KeyPath, SolSignRequest, SolSignType, SolSignature, TronDataType, TronSignRequest, TronSignature};
 use super::Transport;
 use crate::models::account::Account;
 use crate::{Env, Error, Result};
@@ -50,10 +50,12 @@ const PENDING_TTL: Duration = Duration::from_secs(24 * 3600);
 pub struct Pending {
     pub request_id: String,
     pub account: String,
-    /// `bitcoin` | `ethereum` | `solana`.
+    /// `bitcoin` | `ethereum` | `solana` | `tron`.
     pub chain: String,
     /// bitcoin: the unsigned PSBT (hex). ethereum: the EvmTxRequest as JSON.
-    /// solana: the message bytes (hex).
+    /// solana: the message bytes (hex). tron: `{rawData}` (hex). A message
+    /// request: `{sign: "message", scheme, message}` (hex) — see
+    /// [`build_message_request`].
     pub unsigned: Json,
     /// What the signer is asked to sign (hex): PSBT bytes, EVM sign-data,
     /// Solana message.
@@ -139,8 +141,175 @@ pub fn build_request(env: &Env, account_id: &str, tx: &Json, framing: &Framing, 
         "bitcoin" => build_bitcoin(env, &account, &info, tx, framing, rpc, &rid),
         "ethereum" => build_ethereum(env, &account, &info, tx, framing, rpc, request_id),
         "solana" => build_solana(env, &account, &info, tx, framing, rpc, request_id),
+        "tron" => build_tron(env, &account, &info, tx, framing, request_id),
         other => Err(Error::Env(format!("air-gap signing not supported for {other} accounts"))),
     }
+}
+
+// ── Messages ─────────────────────────────────────────────────────────────────
+
+/// What a message request asks the signer to sign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageKind {
+    /// The chain's plain signed message: EIP-191 `personal_sign`, a Solana
+    /// message, a Bitcoin signed message (BIP-137), TronWeb `signMessageV2`.
+    Plain,
+    /// EIP-712 typed data — `message` is the typed-data JSON (EVM only).
+    TypedData,
+}
+
+fn is_message(p: &Pending) -> bool {
+    p.unsigned.get("sign").and_then(Json::as_str) == Some("message")
+}
+
+/// The key a Bitcoin account signs messages with — its first receive address
+/// (`…/0/0`): `(path, compressed public key)`.
+fn bitcoin_message_key(account: &Account, info: &AccountKeyInfo) -> Result<(KeyPath, [u8; 33])> {
+    let account_pub: [u8; 33] = b64url_decode(&account.pubkey)?.try_into().map_err(|_| Error::Env("account pubkey not 33 bytes".into()))?;
+    let account_cc: [u8; 32] = b64url_decode(&account.chaincode)?.try_into().map_err(|_| Error::Env("account chaincode not 32 bytes".into()))?;
+    let (child, _) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[0, 0]).map_err(|e| Error::Env(e.to_string()))?;
+    Ok((KeyPath::parse(&info.path)?.child(&[0, 0]), child))
+}
+
+/// Build the request for `account_id` to sign `message` — arbitrary bytes, or
+/// the typed-data JSON for [`MessageKind::TypedData`] — as the signer's own
+/// request type: `eth-sign-request` (personal message / typed data),
+/// `sol-sign-request` (message), `btc-sign-request`, `tron-sign-request`
+/// (personal message). The answer comes back through [`accept`] like a
+/// transaction's, and is only accepted if it is the account's signature over
+/// exactly this message.
+pub fn build_message_request(env: &Env, account_id: &str, message: &[u8], kind: MessageKind, framing: &Framing) -> Result<Built> {
+    let (account, info) = load_airgap_account(env, account_id)?;
+    if message.is_empty() {
+        return Err(Error::Env("nothing to sign: the message is empty".into()));
+    }
+    let request_id = registry::new_request_id();
+    let rid = registry::uuid_hyphenated(&request_id);
+    let mut path = KeyPath::parse(&info.path)?;
+    path.source_fingerprint = fp_u32(&info);
+    let origin = Some("libwallet".to_owned());
+    if kind == MessageKind::TypedData && account.kind != "ethereum" {
+        return Err(Error::Env(format!("typed data is signed by ethereum accounts, not {}", account.kind)));
+    }
+    let (scheme, ur_type, cbor) = match account.kind.as_str() {
+        "ethereum" => {
+            let data_type = match kind {
+                MessageKind::Plain => EthDataType::PersonalMessage,
+                MessageKind::TypedData => {
+                    // What we will verify against must be what the signer shows.
+                    let text = std::str::from_utf8(message).map_err(|_| Error::Env("typed data must be JSON text".into()))?;
+                    crate::eip712::parse(text).and_then(|td| td.hash()).map_err(Error::Env)?;
+                    EthDataType::TypedData
+                }
+            };
+            let address: Option<[u8; 20]> = super::unhex(&account.address).ok().and_then(|a| a.try_into().ok());
+            let r = EthSignRequest { request_id, sign_data: message.to_vec(), data_type, chain_id: None, derivation_path: path, address, origin };
+            (if kind == MessageKind::TypedData { "eip712" } else { "eip191" }, registry::UR_ETH_SIGN_REQUEST, r.to_cbor())
+        }
+        "solana" => {
+            let pk = crate::solana::pubkey_from_b64url(&account.pubkey).ok_or_else(|| Error::Env("bad account pubkey".into()))?;
+            if crate::solana::payload_is_signable_tx(message, &pk) {
+                return Err(Error::Env("refusing to sign: the message parses as a Solana transaction for this account".into()));
+            }
+            let r = SolSignRequest { request_id, sign_data: message.to_vec(), derivation_path: path, address: Some(pk), origin, sign_type: SolSignType::Message };
+            ("solana", registry::UR_SOL_SIGN_REQUEST, r.to_cbor())
+        }
+        "bitcoin" => {
+            let (mut key_path, _) = bitcoin_message_key(&account, &info)?;
+            key_path.source_fingerprint = fp_u32(&info);
+            let r = BtcSignRequest { request_id, sign_data: message.to_vec(), derivation_paths: vec![key_path], addresses: Some(vec![account.address.clone()]), origin };
+            ("bip137", registry::UR_BTC_SIGN_REQUEST, r.to_cbor())
+        }
+        "tron" => {
+            let r = TronSignRequest { request_id, sign_data: message.to_vec(), data_type: TronDataType::PersonalMessage, derivation_path: path, address: None, origin };
+            ("tron", registry::UR_TRON_SIGN_REQUEST, r.to_cbor())
+        }
+        other => return Err(Error::Env(format!("air-gap message signing not supported for {other} accounts"))),
+    };
+    let cbor = super::cbor::to_bytes(&cbor)?;
+    let (format, parts) = frames(ur_type, &cbor, outscript::bbqr::FileType::CBOR, &cbor, framing)?;
+    pending_save(
+        env,
+        &Pending {
+            request_id: rid.clone(),
+            account: account.id.clone(),
+            chain: account.kind.clone(),
+            unsigned: json!({ "sign": "message", "scheme": scheme, "message": super::hex(message) }),
+            sign_data: super::hex(message),
+            created: crate::now_rfc3339(),
+        },
+    )?;
+    use base64::Engine;
+    Ok(Built {
+        request_id: rid,
+        chain: account.kind.clone(),
+        account: account.id.clone(),
+        transport: framing.transport.as_str().into(),
+        format,
+        parts,
+        payload: json!({ "message": base64::engine::general_purpose::STANDARD.encode(message), "scheme": scheme, "derivationPath": info.path }),
+    })
+}
+
+/// The signer's answer to a message request: its signature in the encoding
+/// the chain's software path returns (EVM / Tron `0x` hex `r ‖ s ‖ v`, Solana
+/// base58, Bitcoin base64), once it verifies under the account's key over the
+/// pending message.
+fn accept_message(env: &Env, p: &Pending, signature: &[u8]) -> Result<Accepted> {
+    use base64::Engine;
+    let account = crate::models::account::fetch(env, &p.account)?.ok_or_else(|| Error::Env("account not found".into()))?;
+    let message = super::unhex(p.unsigned.get("message").and_then(Json::as_str).unwrap_or(""))?;
+    let scheme = p.unsigned.get("scheme").and_then(Json::as_str).unwrap_or("");
+    let wrong = |e: Error| Error::Env(format!("signature does not match account {}: {e}", account.address));
+    let encoded = match scheme {
+        "eip191" => format!("0x{}", super::hex(&crate::evm::rsv_for_address(&crate::evm::personal_sign_digest(&message), signature, &account.address).map_err(wrong)?)),
+        "eip712" => {
+            let digest = std::str::from_utf8(&message).map_err(|e| e.to_string()).and_then(crate::eip712::parse).and_then(|td| td.hash()).map_err(Error::Env)?;
+            format!("0x{}", super::hex(&crate::evm::rsv_for_address(&digest, signature, &account.address).map_err(wrong)?))
+        }
+        "tron" => format!("0x{}", super::hex(&crate::tron::message_signature(&account, &message, signature).map_err(wrong)?)),
+        "solana" => {
+            let sig: [u8; 64] = signature.try_into().map_err(|_| Error::Env(format!("sol signature must be 64 bytes, got {}", signature.len())))?;
+            let pk = crate::solana::pubkey_from_b64url(&account.pubkey).ok_or_else(|| Error::Env("bad account pubkey".into()))?;
+            if !crate::tss::ed25519_verify(&pk, &message, &sig) {
+                return Err(Error::Env(format!("sol signature does not verify under account {}", account.address)));
+            }
+            bs58::encode(sig).into_string()
+        }
+        "bip137" => {
+            let info = account_key_info(env, &account.id)?.ok_or_else(|| Error::Env("signer key info missing for this account".into()))?;
+            let (_, key) = bitcoin_message_key(&account, &info)?;
+            if !crate::bitcoin::verify_message_compact("bitcoin", &message, signature, &key) {
+                return Err(Error::Env(format!("bitcoin message signature does not verify under {}", account.address)));
+            }
+            base64::engine::general_purpose::STANDARD.encode(signature)
+        }
+        other => return Err(Error::Env(format!("unknown message scheme {other:?}"))),
+    };
+    pending_delete(env, &p.request_id)?;
+    Ok(Accepted {
+        request_id: Some(p.request_id.clone()),
+        kind: "message",
+        chain: p.chain.clone(),
+        account: p.account.clone(),
+        raw: String::new(),
+        id: String::new(),
+        signature: encoded,
+        psbt: None,
+    })
+}
+
+/// A Bitcoin message signature as text: bare base64, or the armoured block
+/// (`-----BEGIN BITCOIN SIGNED MESSAGE-----` … `-----BEGIN SIGNATURE-----`,
+/// address, signature) some signers show.
+fn bitcoin_signature_text(text: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let decode = |l: &str| base64::engine::general_purpose::STANDARD.decode(l.trim()).ok().filter(|b| b.len() == 65);
+    if let Some(sig) = decode(text) {
+        return Some(sig);
+    }
+    let after = text.split("-----BEGIN SIGNATURE-----").nth(1)?;
+    after.lines().take_while(|l| !l.starts_with("-----END")).find_map(decode)
 }
 
 fn frames(ur_type: &str, cbor: &[u8], bbqr_type: outscript::bbqr::FileType, raw_for_bbqr: &[u8], f: &Framing) -> Result<(String, Vec<String>)> {
@@ -157,8 +326,29 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
     use outscript::btcraw::{RawTx, RawTxIn, RawTxOut};
     use outscript::psbt::Psbt;
 
-    let to = tx.get("To").or_else(|| tx.get("to")).and_then(Json::as_str).ok_or_else(|| Error::Env("Transaction.To required".into()))?;
-    let want_sats = tx.get("Amount").or_else(|| tx.get("amount")).and_then(Json::as_u64).ok_or_else(|| Error::Env("Transaction.Amount (sats) required".into()))?;
+    // Two shapes: `{To, Amount}` — inputs are selected and the change comes
+    // back to the account — or `{UTXOs, Outputs}`, the software path's
+    // explicit one: every listed input is spent, the outputs are exactly the
+    // ones listed, and what is left over is the fee.
+    let explicit: Option<Vec<(String, u64, Option<String>)>> = match tx.get("Outputs").and_then(Json::as_array) {
+        Some(arr) if !arr.is_empty() => Some(
+            arr.iter()
+                .map(|o| {
+                    let address = o.get("address").and_then(Json::as_str).ok_or_else(|| Error::Env("output address required".into()))?;
+                    let amount = o.get("amount").and_then(Json::as_u64).ok_or_else(|| Error::Env("output amount (sats) required".into()))?;
+                    Ok((address.to_owned(), amount, o.get("path").and_then(Json::as_str).map(str::to_owned)))
+                })
+                .collect::<Result<_>>()?,
+        ),
+        _ => None,
+    };
+    let (to, want_sats) = match &explicit {
+        Some(outs) => (outs[0].0.as_str(), outs.iter().map(|o| o.1).sum::<u64>()),
+        None => (
+            tx.get("To").or_else(|| tx.get("to")).and_then(Json::as_str).ok_or_else(|| Error::Env("Transaction.To (or Outputs) required".into()))?,
+            tx.get("Amount").or_else(|| tx.get("amount")).and_then(Json::as_u64).ok_or_else(|| Error::Env("Transaction.Amount (sats) required".into()))?,
+        ),
+    };
     let fee_rate = tx.get("FeeRate").and_then(Json::as_u64).unwrap_or(10);
     let chain_id = tx.get("ChainId").and_then(Json::as_str).unwrap_or("bitcoin");
     let script = if info.script.is_empty() { "p2wpkh" } else { info.script.as_str() };
@@ -174,11 +364,18 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
             .iter()
             .map(|u| {
                 Ok(DiscoveredUtxo {
-                    txo: u.get("txo").and_then(Json::as_str).ok_or_else(|| Error::Env("UTXO txo required".into()))?.to_owned(),
+                    // `txo` ("txid:vout"), or the software path's `txid` + `vout`.
+                    txo: match (u.get("txo").and_then(Json::as_str), u.get("txid").and_then(Json::as_str)) {
+                        (Some(txo), _) => txo.to_owned(),
+                        (None, Some(txid)) => format!("{}:{}", txid.trim_start_matches("0x"), u.get("vout").and_then(Json::as_u64).unwrap_or(0)),
+                        (None, None) => return Err(Error::Env("UTXO txo (or txid + vout) required".into())),
+                    },
                     amount_sats: u.get("amount_sats").or_else(|| u.get("amount")).and_then(Json::as_u64).ok_or_else(|| Error::Env("UTXO amount_sats required".into()))?,
                     height: u.get("height").and_then(Json::as_i64).unwrap_or(0),
                     path: u.get("path").and_then(Json::as_str).unwrap_or("m/0/0").to_owned(),
-                    script: u.get("script").and_then(Json::as_str).unwrap_or(script).to_owned(),
+                    // A script *kind* (`p2wpkh`, …). The software path's raw
+                    // scriptPubKey hex is not one: the account's own is used.
+                    script: u.get("script").and_then(Json::as_str).filter(|k| matches!(*k, "p2pkh" | "p2sh:p2wpkh" | "p2wpkh" | "p2tr")).unwrap_or(script).to_owned(),
                 })
             })
             .collect::<Result<_>>()?,
@@ -190,12 +387,21 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
     if all.is_empty() {
         return Err(Error::Env("no spendable UTXOs".into()));
     }
-    let (selected, total_in) = crate::bitcoin::select_utxos(&all, want_sats, fee_rate)?;
-    let fee = crate::bitcoin::estimate_vsize(&selected, 2) * fee_rate;
-    if total_in < want_sats + fee {
-        return Err(Error::Env(format!("insufficient funds: {total_in} < {want_sats} + fee {fee}")));
-    }
-    let change = total_in - want_sats - fee;
+    let (selected, fee, change) = match &explicit {
+        Some(_) => {
+            let total_in: u64 = all.iter().map(|u| u.amount_sats).sum();
+            let fee = total_in.checked_sub(want_sats).ok_or_else(|| Error::Env(format!("insufficient funds: inputs {total_in} < outputs {want_sats}")))?;
+            (all.clone(), fee, 0)
+        }
+        None => {
+            let (selected, total_in) = crate::bitcoin::select_utxos(&all, want_sats, fee_rate)?;
+            let fee = crate::bitcoin::estimate_vsize(&selected, 2) * fee_rate;
+            if total_in < want_sats + fee {
+                return Err(Error::Env(format!("insufficient funds: {total_in} < {want_sats} + fee {fee}")));
+            }
+            (selected, fee, total_in - want_sats - fee)
+        }
+    };
 
     // Per-input key + scriptPubKey.
     struct In {
@@ -224,19 +430,45 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
 
     // Outputs via BtcTx::add_output for address → scriptPubKey.
     let mut btx = outscript::btctx::BtcTx { version: 2, locktime: 0, ..Default::default() };
-    btx.add_output(to, want_sats).map_err(|e| Error::Env(format!("recipient: {e}")))?;
-    let mut change_info: Option<([u8; 33], Vec<u32>)> = None;
+    // Outputs that pay back to the account: (index, key, path) — what tells
+    // the signer they are change.
+    let mut own_outputs: Vec<(usize, [u8; 33], Vec<u32>)> = Vec::new();
+    let mut amounts: Vec<u64> = Vec::new();
+    let tag = if chain_id == "bitcoin-cash" { "bitcoincash" } else { chain_id };
+    if let Some(outs) = &explicit {
+        for (n, (address, amount, path)) in outs.iter().enumerate() {
+            btx.add_output(address, *amount).map_err(|e| Error::Env(format!("output {n}: {e}")))?;
+            amounts.push(*amount);
+            // `path` ("m/1/5") names the account key an output pays to; it is
+            // only taken as the account's when that key really gives the address.
+            if let Some(path) = path {
+                let rel: Vec<u32> = KeyPath::parse(path)?.components;
+                if rel.len() != 2 || rel.iter().any(|c| c & 0x8000_0000 != 0) {
+                    return Err(Error::Env(format!("output path {path} is not a <change>/<index> path under the account")));
+                }
+                let (child, _) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &rel).map_err(|e| Error::Env(e.to_string()))?;
+                if crate::bitcoin::address_for(&child, script, tag)? != *address {
+                    return Err(Error::Env(format!("output {address} is not this account's address at {path}")));
+                }
+                let mut p = origin.components.clone();
+                p.extend(rel);
+                own_outputs.push((n, child, p));
+            }
+        }
+    } else {
+        btx.add_output(to, want_sats).map_err(|e| Error::Env(format!("recipient: {e}")))?;
+        amounts.push(want_sats);
+    }
     if change > 546 {
         let idx = crate::bitcoin::next_change_index(&all);
         let (child, _) = crate::hdderive::derive_pub_tweak(&account_pub, &account_cc, &[1, idx]).map_err(|e| Error::Env(e.to_string()))?;
-        let tag = if chain_id == "bitcoin-cash" { "bitcoincash" } else { chain_id };
         let addr = crate::bitcoin::address_for(&child, script, tag)?;
         btx.add_output(&addr, change).map_err(|e| Error::Env(format!("change: {e}")))?;
+        amounts.push(change);
         let mut p = origin.components.clone();
         p.extend([1, idx]);
-        change_info = Some((child, p));
+        own_outputs.push((1, child, p));
     }
-    let amounts = [want_sats, change];
     let raw_ins: Vec<RawTxIn> = ins.iter().map(|i| RawTxIn { txid: i.txid, vout: i.vout, script_sig: &[], sequence: 0xffff_fffd, witness: &[] }).collect();
     let raw_outs: Vec<RawTxOut> = btx.outputs.iter().enumerate().map(|(n, o)| RawTxOut { amount: amounts[n], script: &o.script }).collect();
     let raw = RawTx { version: 2, inputs: &raw_ins, outputs: &raw_outs, locktime: 0 };
@@ -288,8 +520,8 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
             psbt = with_psbt(&psbt, |p, out| p.set_sighash_type(n, sighash, out))?;
         }
     }
-    if let Some((child, path)) = &change_info {
-        psbt = with_psbt(&psbt, |p, out| p.add_output_bip32_derivation(1, child, fp, path, out))?;
+    for (n, child, path) in &own_outputs {
+        psbt = with_psbt(&psbt, |p, out| p.add_output_bip32_derivation(*n, child, fp, path, out))?;
     }
 
     use base64::Engine;
@@ -314,7 +546,7 @@ fn build_bitcoin(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json,
         parts,
         payload: json!({
             "psbt": psbt_b64,
-            "summary": { "to": to, "amount_sats": want_sats, "fee_sats": fee, "change_sats": change, "inputs": ins.len(), "feeRate": fee_rate, "chainId": chain_id },
+            "summary": { "to": to, "amount_sats": want_sats, "fee_sats": fee, "change_sats": change, "inputs": ins.len(), "outputs": amounts.len(), "feeRate": fee_rate, "chainId": chain_id },
         }),
     })
 }
@@ -477,6 +709,9 @@ fn decode_b58_or_b64(s: &str) -> Result<Vec<u8>> {
 #[derive(Debug, Clone, Serialize)]
 pub struct Accepted {
     pub request_id: Option<String>,
+    /// `transaction` (`raw` + `id`) or `message` (`signature` only).
+    #[serde(rename = "type")]
+    pub kind: &'static str,
     pub chain: String,
     pub account: String,
     /// bitcoin/ethereum: `0x`-hex raw tx; solana: base58 raw tx.
@@ -511,6 +746,16 @@ pub fn accept(env: &Env, payload: &Payload, request_id: Option<&str>) -> Result<
                     let rid = resolve_rid(s.request_id.as_ref(), request_id)?;
                     accept_sol(env, &rid, &s.signature)
                 }
+                registry::UR_TRON_SIGNATURE => {
+                    let s = TronSignature::from_cbor(&v)?;
+                    let rid = resolve_rid(s.request_id.as_ref(), request_id)?;
+                    accept_tron(env, &rid, &s.signature)
+                }
+                registry::UR_BTC_SIGNATURE => {
+                    let s = BtcSignature::from_cbor(&v)?;
+                    let rid = resolve_rid(s.request_id.as_ref(), request_id)?;
+                    accept_bytes(env, &s.signature, Some(&rid))
+                }
                 registry::UR_BYTES => {
                     let b = outscript::bcur::cbor_to_bytes(cbor).map_err(|e| Error::Env(format!("{e}")))?.to_vec();
                     accept_bytes(env, &b, request_id)
@@ -530,6 +775,12 @@ pub fn accept(env: &Env, payload: &Payload, request_id: Option<&str>) -> Result<
                 if b.starts_with(b"psbt\xff") {
                     return accept_psbt(env, &b, request_id);
                 }
+            }
+            // A Bitcoin message signature is base64 text (bare or armoured).
+            let pending = request_id.and_then(|rid| pending_load(env, rid).ok().flatten());
+            if pending.as_ref().is_some_and(|p| p.chain == "bitcoin" && is_message(p)) {
+                let sig = bitcoin_signature_text(t).ok_or_else(|| Error::Env("not a Bitcoin message signature (base64, 65 bytes)".into()))?;
+                return accept_bytes(env, &sig, request_id);
             }
             if let Ok(b) = super::unhex(t) {
                 return accept_bytes(env, &b, request_id);
@@ -564,9 +815,13 @@ fn accept_bytes(env: &Env, bytes: &[u8], request_id: Option<&str>) -> Result<Acc
     }
     let rid = request_id.ok_or_else(|| Error::Env("bare signature: pass RequestId".into()))?;
     let p = pending_load(env, rid)?.ok_or_else(|| Error::Env(format!("no pending request {rid} (expired?)")))?;
+    if is_message(&p) {
+        return accept_message(env, &p, bytes);
+    }
     match p.chain.as_str() {
         "ethereum" => accept_eth(env, rid, bytes),
         "solana" => accept_sol(env, rid, bytes),
+        "tron" => accept_tron(env, rid, bytes),
         "bitcoin" => accept_signed_raw_tx(env, bytes, Some(rid)),
         other => Err(Error::Env(format!("unexpected chain {other}"))),
     }
@@ -584,6 +839,9 @@ fn pending_bitcoin(env: &Env, request_id: Option<&str>) -> Result<(Pending, Vec<
     let p = pending_load(env, rid)?.ok_or_else(|| Error::Env(format!("no pending request {rid} (expired?)")))?;
     if p.chain != "bitcoin" {
         return Err(Error::Env(format!("request {rid} is a {} request, not bitcoin", p.chain)));
+    }
+    if is_message(&p) {
+        return Err(Error::Env(format!("request {rid} asks for a message signature, not a transaction")));
     }
     let ours = super::unhex(p.unsigned.get("psbt").and_then(Json::as_str).unwrap_or(""))?;
     Ok((p, ours))
@@ -621,6 +879,7 @@ pub(crate) fn accept_psbt(env: &Env, signed: &[u8], request_id: Option<&str>) ->
     let _ = pending_delete(env, &pending.request_id);
     Ok(Accepted {
         request_id: Some(pending.request_id),
+        kind: "transaction",
         chain: "bitcoin".into(),
         account: pending.account,
         raw: format!("0x{}", super::hex(&raw)),
@@ -658,6 +917,7 @@ fn accept_signed_raw_tx(env: &Env, raw: &[u8], request_id: Option<&str>) -> Resu
     let _ = pending_delete(env, &pending.request_id);
     Ok(Accepted {
         request_id: Some(pending.request_id),
+        kind: "transaction",
         chain: "bitcoin".into(),
         account: pending.account,
         raw: format!("0x{}", super::hex(raw)),
@@ -696,6 +956,9 @@ fn accept_eth(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
     if p.chain != "ethereum" {
         return Err(Error::Env(format!("request {rid} is a {} request, not ethereum", p.chain)));
     }
+    if is_message(&p) {
+        return accept_message(env, &p, signature);
+    }
     if signature.len() != 65 && signature.len() != 64 {
         return Err(Error::Env(format!("eth signature must be 64/65 bytes, got {}", signature.len())));
     }
@@ -727,6 +990,7 @@ fn accept_eth(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
                     pending_delete(env, rid)?;
                     return Ok(Accepted {
                         request_id: Some(rid.to_owned()),
+                        kind: "transaction",
                         chain: "ethereum".into(),
                         account: p.account.clone(),
                         raw: format!("0x{}", super::hex(&raw)),
@@ -749,6 +1013,9 @@ fn accept_sol(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
     if p.chain != "solana" {
         return Err(Error::Env(format!("request {rid} is a {} request, not solana", p.chain)));
     }
+    if is_message(&p) {
+        return accept_message(env, &p, signature);
+    }
     let sig: [u8; 64] = signature.try_into().map_err(|_| Error::Env(format!("sol signature must be 64 bytes, got {}", signature.len())))?;
     let account = crate::models::account::fetch(env, &p.account)?.ok_or_else(|| Error::Env("account not found".into()))?;
     let pk = crate::solana::pubkey_from_b64url(&account.pubkey).ok_or_else(|| Error::Env("bad account pubkey".into()))?;
@@ -760,11 +1027,74 @@ fn accept_sol(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
     pending_delete(env, rid)?;
     Ok(Accepted {
         request_id: Some(rid.to_owned()),
+        kind: "transaction",
         chain: "solana".into(),
         account: p.account.clone(),
         raw: bs58::encode(&raw).into_string(),
         id: bs58::encode(&sig).into_string(),
         signature: super::hex(&sig),
+        psbt: None,
+    })
+}
+
+// ── Tron: tron-sign-request ──────────────────────────────────────────────────
+
+/// A Tron request carries the transaction's protobuf `raw_data`: either the
+/// caller's `rawDataHex` (it must be a contract we can read, owned by the
+/// account) or a transfer built here on `refBlock`. The signer answers
+/// `tron-signature` (65 bytes); it is attached only if it recovers to the
+/// account.
+fn build_tron(env: &Env, account: &Account, info: &AccountKeyInfo, tx: &Json, framing: &Framing, request_id: [u8; 16]) -> Result<Built> {
+    let raw = crate::tron::unsigned_raw_data(account, tx)?;
+    let mut path = KeyPath::parse(&info.path)?;
+    path.source_fingerprint = fp_u32(info);
+    let r = TronSignRequest { request_id, sign_data: raw.clone(), data_type: TronDataType::Transaction, derivation_path: path, address: None, origin: Some("libwallet".into()) };
+    let cbor = super::cbor::to_bytes(&r.to_cbor())?;
+    let (format, parts) = frames(registry::UR_TRON_SIGN_REQUEST, &cbor, outscript::bbqr::FileType::CBOR, &cbor, framing)?;
+    let rid = registry::uuid_hyphenated(&request_id);
+    pending_save(
+        env,
+        &Pending {
+            request_id: rid.clone(),
+            account: account.id.clone(),
+            chain: "tron".into(),
+            unsigned: json!({ "rawData": super::hex(&raw) }),
+            sign_data: super::hex(&raw),
+            created: crate::now_rfc3339(),
+        },
+    )?;
+    Ok(Built {
+        request_id: rid,
+        chain: "tron".into(),
+        account: account.id.clone(),
+        transport: framing.transport.as_str().into(),
+        format,
+        parts,
+        payload: json!({ "rawDataHex": super::hex(&raw), "derivationPath": info.path }),
+    })
+}
+
+fn accept_tron(env: &Env, rid: &str, signature: &[u8]) -> Result<Accepted> {
+    let p = pending_load(env, rid)?.ok_or_else(|| Error::Env(format!("no pending request {rid} (expired?)")))?;
+    if p.chain != "tron" {
+        return Err(Error::Env(format!("request {rid} is a {} request, not tron", p.chain)));
+    }
+    if is_message(&p) {
+        return accept_message(env, &p, signature);
+    }
+    let account = crate::models::account::fetch(env, &p.account)?.ok_or_else(|| Error::Env("account not found".into()))?;
+    let raw = super::unhex(&p.sign_data)?;
+    let (txid, signed) = crate::tron::attach_device_signature(&account, &raw, signature)?;
+    pending_delete(env, rid)?;
+    Ok(Accepted {
+        request_id: Some(rid.to_owned()),
+        kind: "transaction",
+        chain: "tron".into(),
+        account: p.account.clone(),
+        // What `broadcasthex` takes, and the txid — as the software path returns them.
+        raw: super::hex(&signed),
+        id: super::hex(&txid),
+        signature: format!("0x{}", super::hex(signature)),
         psbt: None,
     })
 }
@@ -775,6 +1105,7 @@ pub fn broadcast(url: &str, a: &Accepted) -> Result<Json> {
         "ethereum" => node_call(url, "eth_sendRawTransaction", json!([a.raw])),
         "bitcoin" => node_call(url, "sendrawtransaction", json!([a.raw.trim_start_matches("0x")])),
         "solana" => node_call(url, "sendTransaction", json!([a.raw, { "encoding": "base58" }])),
+        _ if a.kind != "transaction" => Err(Error::Env("a message signature is not broadcast".into())),
         other => Err(Error::Env(format!("cannot broadcast {other}"))),
     }
 }

@@ -596,6 +596,16 @@ pub fn sign_message(
     Ok(compact)
 }
 
+/// Whether `sig` — a 65-byte compact (BIP-137) signature, `[header][r][s]` —
+/// is `pubkey`'s (33-byte compressed) over `message` on `chain_id`. The
+/// header's address-type bits are ignored: only the key matters.
+pub fn verify_message_compact(chain_id: &str, message: &[u8], sig: &[u8], pubkey: &[u8]) -> bool {
+    let (Some(digest), true) = (message_digest(chain_id, message), sig.len() == 65 && (27..=42).contains(&sig[0])) else { return false };
+    let recid = (sig[0] - 27) & 3;
+    let (Ok(r), Ok(s)) = (<[u8; 32]>::try_from(&sig[1..33]), <[u8; 32]>::try_from(&sig[33..65])) else { return false };
+    recover_compressed(&digest, &r, &s, recid).is_some_and(|c| c[..] == pubkey[..])
+}
+
 /// Recover the compressed signer pubkey from `(r, s, recid)` over `digest`.
 fn recover_compressed(digest: &[u8; 32], r32: &[u8; 32], s32: &[u8; 32], recid: u8) -> Option<[u8; 33]> {
     use purecrypto::bignum::BoxedUint;

@@ -22,6 +22,10 @@ pub const UR_ETH_SIGN_REQUEST: &str = "eth-sign-request";
 pub const UR_ETH_SIGNATURE: &str = "eth-signature";
 pub const UR_SOL_SIGN_REQUEST: &str = "sol-sign-request";
 pub const UR_SOL_SIGNATURE: &str = "sol-signature";
+pub const UR_TRON_SIGN_REQUEST: &str = "tron-sign-request";
+pub const UR_TRON_SIGNATURE: &str = "tron-signature";
+pub const UR_BTC_SIGN_REQUEST: &str = "btc-sign-request";
+pub const UR_BTC_SIGNATURE: &str = "btc-signature";
 pub const UR_BYTES: &str = "bytes";
 
 pub const TAG_UUID: u64 = 37;
@@ -623,6 +627,121 @@ impl SolSignature {
     }
 }
 
+// ── tron-sign-request / tron-signature (Keystone) ───────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TronDataType {
+    /// The transaction's protobuf `raw_data`.
+    Transaction = 1,
+    /// Arbitrary message bytes (`\x19TRON Signed Message:\n` + length + message).
+    PersonalMessage = 2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TronSignRequest {
+    pub request_id: [u8; 16],
+    pub sign_data: Vec<u8>,
+    pub data_type: TronDataType,
+    pub derivation_path: KeyPath,
+    /// 21-byte address (`41` + key hash), when known.
+    pub address: Option<Vec<u8>>,
+    pub origin: Option<String>,
+}
+
+impl TronSignRequest {
+    pub fn to_cbor(&self) -> Value {
+        MapBuilder::new()
+            .put(1, uuid_to_cbor(&self.request_id))
+            .put(2, cbor::bytes(&self.sign_data))
+            .put(3, cbor::uint(self.data_type as u64))
+            .put(4, cbor::tagged(TAG_KEYPATH, self.derivation_path.to_cbor()))
+            .opt(5, self.address.as_ref().map(|a| cbor::bytes(a)))
+            .opt(6, self.origin.as_ref().map(|s| cbor::text(s)))
+            .build()
+    }
+    pub fn from_cbor(v: &Value) -> Result<Self> {
+        let (v, _) = cbor::untag(v);
+        Ok(Self {
+            request_id: uuid_from_cbor(cbor::need(v, 1, "tron-sign-request")?)?,
+            sign_data: cbor::as_bytes(cbor::need(v, 2, "tron-sign-request")?).ok_or_else(|| Error::Env("sign-data not bytes".into()))?.to_vec(),
+            data_type: match cbor::get(v, 3).and_then(cbor::as_u64).unwrap_or(1) {
+                2 => TronDataType::PersonalMessage,
+                _ => TronDataType::Transaction,
+            },
+            derivation_path: KeyPath::from_cbor(cbor::need(v, 4, "tron-sign-request")?)?,
+            address: cbor::get(v, 5).and_then(cbor::as_bytes).map(<[u8]>::to_vec),
+            origin: cbor::get(v, 6).and_then(cbor::as_text).map(str::to_owned),
+        })
+    }
+}
+
+/// `tron-signature`: the same `{1: request-id, 2: signature}` map as
+/// `eth-signature` (65 bytes, r ‖ s ‖ v).
+pub type TronSignature = EthSignature;
+
+// ── btc-sign-request / btc-signature (Keystone, messages only) ──────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BtcSignRequest {
+    pub request_id: [u8; 16],
+    /// The message to sign (data type 1, the only one there is).
+    pub sign_data: Vec<u8>,
+    pub derivation_paths: Vec<KeyPath>,
+    pub addresses: Option<Vec<String>>,
+    pub origin: Option<String>,
+}
+
+impl BtcSignRequest {
+    pub fn to_cbor(&self) -> Value {
+        MapBuilder::new()
+            .put(1, uuid_to_cbor(&self.request_id))
+            .put(2, cbor::bytes(&self.sign_data))
+            .put(3, cbor::uint(1))
+            .put(4, Value::Array(self.derivation_paths.iter().map(|p| cbor::tagged(TAG_KEYPATH, p.to_cbor())).collect()))
+            .opt(5, self.addresses.as_ref().map(|a| Value::Array(a.iter().map(|s| cbor::text(s)).collect())))
+            .opt(6, self.origin.as_ref().map(|s| cbor::text(s)))
+            .build()
+    }
+    pub fn from_cbor(v: &Value) -> Result<Self> {
+        let (v, _) = cbor::untag(v);
+        let paths = cbor::as_array(cbor::need(v, 4, "btc-sign-request")?).ok_or_else(|| Error::Env("derivation-paths not an array".into()))?;
+        Ok(Self {
+            request_id: uuid_from_cbor(cbor::need(v, 1, "btc-sign-request")?)?,
+            sign_data: cbor::as_bytes(cbor::need(v, 2, "btc-sign-request")?).ok_or_else(|| Error::Env("sign-data not bytes".into()))?.to_vec(),
+            derivation_paths: paths.iter().map(KeyPath::from_cbor).collect::<Result<_>>()?,
+            addresses: cbor::get(v, 5).and_then(cbor::as_array).map(|a| a.iter().filter_map(cbor::as_text).map(str::to_owned).collect()),
+            origin: cbor::get(v, 6).and_then(cbor::as_text).map(str::to_owned),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BtcSignature {
+    pub request_id: Option<[u8; 16]>,
+    /// The 65-byte compact (BIP-137) signature.
+    pub signature: Vec<u8>,
+    pub public_key: Option<Vec<u8>>,
+}
+
+impl BtcSignature {
+    pub fn to_cbor(&self) -> Value {
+        MapBuilder::new()
+            .opt(1, self.request_id.map(|id| uuid_to_cbor(&id)))
+            .put(2, cbor::bytes(&self.signature))
+            .opt(3, self.public_key.as_ref().map(|k| cbor::bytes(k)))
+            .build()
+    }
+    pub fn from_cbor(v: &Value) -> Result<Self> {
+        let (v, _) = cbor::untag(v);
+        Ok(Self {
+            request_id: cbor::get(v, 1).map(uuid_from_cbor).transpose()?,
+            signature: cbor::as_bytes(cbor::need(v, 2, "btc-signature")?).ok_or_else(|| Error::Env("signature not bytes".into()))?.to_vec(),
+            public_key: cbor::get(v, 3).and_then(cbor::as_bytes).map(<[u8]>::to_vec),
+        })
+    }
+}
+
 // ── Generic description (for the decoder's `decoded` view) ──────────────────
 
 fn fp_hex(fp: u32) -> String {
@@ -704,6 +823,37 @@ pub fn describe(ur_type: &str, cbor_bytes: &[u8]) -> serde_json::Value {
         UR_SOL_SIGNATURE => SolSignature::from_cbor(&v).ok().map(|s| {
             serde_json::json!({ "requestId": s.request_id.map(|id| uuid_hyphenated(&id)), "signature": format!("0x{}", super::hex(&s.signature)) })
         }),
+        UR_TRON_SIGN_REQUEST => TronSignRequest::from_cbor(&v).ok().map(|r| {
+            serde_json::json!({
+                "requestId": uuid_hyphenated(&r.request_id),
+                "signData": format!("0x{}", super::hex(&r.sign_data)),
+                "dataType": r.data_type as u8,
+                "derivationPath": r.derivation_path.to_string(),
+                "masterFingerprint": r.derivation_path.source_fingerprint.map(fp_hex),
+                "origin": r.origin,
+            })
+        }),
+        UR_TRON_SIGNATURE => TronSignature::from_cbor(&v).ok().map(|s| {
+            serde_json::json!({ "requestId": s.request_id.map(|id| uuid_hyphenated(&id)), "signature": format!("0x{}", super::hex(&s.signature)) })
+        }),
+        UR_BTC_SIGN_REQUEST => BtcSignRequest::from_cbor(&v).ok().map(|r| {
+            serde_json::json!({
+                "requestId": uuid_hyphenated(&r.request_id),
+                "signData": format!("0x{}", super::hex(&r.sign_data)),
+                "dataType": 1,
+                "derivationPath": r.derivation_paths.first().map(|p| p.to_string()),
+                "masterFingerprint": r.derivation_paths.first().and_then(|p| p.source_fingerprint).map(fp_hex),
+                "addresses": r.addresses, "origin": r.origin,
+            })
+        }),
+        UR_BTC_SIGNATURE => BtcSignature::from_cbor(&v).ok().map(|s| {
+            use base64::Engine;
+            serde_json::json!({
+                "requestId": s.request_id.map(|id| uuid_hyphenated(&id)),
+                "signature": base64::engine::general_purpose::STANDARD.encode(&s.signature),
+                "publicKey": s.public_key.map(|k| format!("0x{}", super::hex(&k))),
+            })
+        }),
         UR_BYTES => outscript::bcur::cbor_to_bytes(cbor_bytes).ok().map(|b| {
             use base64::Engine;
             serde_json::json!({ "bytes": base64::engine::general_purpose::STANDARD.encode(b), "text": std::str::from_utf8(b).ok() })
@@ -716,6 +866,37 @@ pub fn describe(ur_type: &str, cbor_bytes: &[u8]) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Keystone's own test vector for `tron-sign-request` (ur-registry).
+    #[test]
+    fn tron_sign_request_matches_keystone_vector() {
+        let sign_data = crate::airgap::unhex("0a0207902208e1b9de559665c6714080c49789bb2c5aae01081f12a9010a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e54726967676572536d617274436f6e747261637412740a1541c79f045e4d48ad8dae00e6a6714dae1e000adfcd1215410d292c98a5eca06c2085fff993996423cf66c93b2244a9059cbb0000000000000000000000009bbce520d984c3b95ad10cb4e32a9294e6338da300000000000000000000000000000000000000000000000000000000000f424070c0b6e087bb2c90018094ebdc03").unwrap();
+        let mut path = KeyPath::parse("m/44'/195'/0'/0/0").unwrap();
+        path.source_fingerprint = Some(0x1212_1212);
+        let r = TronSignRequest {
+            request_id: crate::airgap::unhex("9b1deb4d3b7d4bad9bdd2b0d7b3dcb6d").unwrap().try_into().unwrap(),
+            sign_data: sign_data.clone(),
+            data_type: TronDataType::Transaction,
+            derivation_path: path,
+            address: None,
+            origin: Some("tron wallet".into()),
+        };
+        let want = format!("a501d825509b1deb4d3b7d4bad9bdd2b0d7b3dcb6d0258d4{}030104d90130a2018a182cf518c3f500f500f400f4021a12121212066b74726f6e2077616c6c6574", crate::airgap::hex(&sign_data));
+        let bytes = cbor::to_bytes(&r.to_cbor()).unwrap();
+        assert_eq!(crate::airgap::hex(&bytes), want);
+        assert_eq!(TronSignRequest::from_cbor(&cbor::from_bytes(&bytes).unwrap()).unwrap(), r);
+    }
+
+    #[test]
+    fn btc_sign_request_roundtrip() {
+        let mut path = KeyPath::parse("m/84'/0'/0'/0/0").unwrap();
+        path.source_fingerprint = Some(7);
+        let r = BtcSignRequest { request_id: [9; 16], sign_data: b"hello".to_vec(), derivation_paths: vec![path], addresses: Some(vec!["bc1qexample".into()]), origin: Some("libwallet".into()) };
+        let bytes = cbor::to_bytes(&r.to_cbor()).unwrap();
+        assert_eq!(BtcSignRequest::from_cbor(&cbor::from_bytes(&bytes).unwrap()).unwrap(), r);
+        let s = BtcSignature { request_id: Some([9; 16]), signature: vec![1; 65], public_key: Some(vec![2; 33]) };
+        assert_eq!(BtcSignature::from_cbor(&cbor::from_bytes(&cbor::to_bytes(&s.to_cbor()).unwrap()).unwrap()).unwrap(), s);
+    }
 
     #[test]
     fn keypath_parse_format_cbor_roundtrip() {

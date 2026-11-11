@@ -8,8 +8,8 @@
 //! through one of the [`transport`] links.
 //!
 //! The device runs one app at a time, and each app only knows its own chain:
-//! [`keys`] reads the keys of whichever of the Ethereum / Bitcoin / Solana apps
-//! is open, and signing needs the account's app open.
+//! [`keys`] reads the keys of whichever of the Ethereum / Bitcoin / Solana /
+//! Tron apps is open, and signing needs the account's app open.
 //!
 //! Nothing the device returns is trusted on its own. A signature is only
 //! handed back once it verifies under the account's key over exactly what was
@@ -19,6 +19,7 @@
 
 pub mod manage;
 pub mod transport;
+pub mod tron;
 
 use lsdk::apps::eth::EthApp;
 use lsdk::apps::sol::SolApp;
@@ -69,6 +70,7 @@ fn app_for(kind: &str) -> Result<&'static str, ApiError> {
         "ethereum" => Ok("Ethereum"),
         "bitcoin" => Ok("Bitcoin"),
         "solana" => Ok("Solana"),
+        "tron" => Ok("Tron"),
         other => Err(bad(format!("Ledger signing is not supported for {other} accounts"))),
     }
 }
@@ -177,6 +179,7 @@ fn key(chain: &str, curve: &str, coin: u32, path: String, pubkey: &[u8], address
 /// - **Bitcoin**: the account extended key at `m/84'/0'/i'` (and/or the BIP-49
 ///   / BIP-44 accounts named by `Scripts`), with the master fingerprint.
 /// - **Solana**: one key per account at `m/44'/501'/i'/0'`, or at each of `Paths`.
+/// - **Tron**: one leaf key per account at `m/44'/195'/i'/0/0`, or at each of `Paths`.
 pub async fn keys<T: Transport>(env: &Env, device: &Device<T>, q: &KeyQuery) -> Result<Export, ApiError> {
     let app = current_app(device).await?;
     let mut export = Export { format: "ledger".into(), device: Some("Ledger".into()), version: Some(format!("{} {}", app.name, app.version)), ..Default::default() };
@@ -220,8 +223,23 @@ pub async fn keys<T: Transport>(env: &Env, device: &Device<T>, q: &KeyQuery) -> 
                 }
             }
         }
-        "BOLOS" => return Err(ApiError::new(409, "open the Ethereum, Bitcoin or Solana app on the device")),
-        other => return Err(ApiError::new(409, format!("the {other} app is not supported: open the Ethereum, Bitcoin or Solana app"))),
+        "Tron" => {
+            let app = tron::TronApp::new(device);
+            let paths: Vec<String> = if q.paths.is_empty() { accounts.map(|i| format!("m/44'/195'/{i}'/0/0")).collect() } else { q.paths.clone() };
+            for path in paths {
+                let (pk, shown) = app.get_address(&parse_path(&path)?, false).await.map_err(lerr)?;
+                let pk = compress(&pk)?;
+                // As for Ethereum: the address comes from the key, and the
+                // device's own must agree with it.
+                let address = crate::hdderive::tron_address(&pk).map_err(ApiError::internal)?;
+                if address != shown {
+                    return Err(ApiError::new(502, format!("ledger: device address {shown} does not match its public key ({address})")));
+                }
+                export.keys.push(key("tron", "secp256k1", 195, path, &pk, address));
+            }
+        }
+        "BOLOS" => return Err(ApiError::new(409, "open the Ethereum, Bitcoin, Solana or Tron app on the device")),
+        other => return Err(ApiError::new(409, format!("the {other} app is not supported: open the Ethereum, Bitcoin, Solana or Tron app"))),
     }
     Ok(export)
 }
@@ -281,6 +299,7 @@ pub async fn show_address<T: Transport>(device: &Device<T>, account: &Account, i
     let shown = match account.kind.as_str() {
         "ethereum" => EthApp::new(device).get_address(&parse_path(&info.path)?, true, false).await.map_err(lerr)?.address,
         "solana" => SolApp::new(device).get_address(&parse_path(&info.path)?, true).await.map_err(lerr)?,
+        "tron" => tron::TronApp::new(device).get_address(&parse_path(&info.path)?, true).await.map_err(lerr)?.1,
         _ => {
             let (kind, key) = btc_policy(account, info)?;
             lsdk::apps::btc::BtcApp::new(device).get_wallet_address_checked(kind, false, &key, false, 0, true).await.map_err(lerr)?
@@ -293,8 +312,33 @@ pub async fn show_address<T: Transport>(device: &Device<T>, account: &Account, i
     Ok(json!({ "address": shown, "account": account.id }))
 }
 
-/// `Ledger:signMessage` — Ethereum `personal_sign` (EIP-191) or a Bitcoin
-/// message signature (BIP-137) over `message`.
+/// The Solana off-chain message (v0) the Solana app signs for `message`: the
+/// app refuses bare bytes, so the text is wrapped in the header that says it
+/// is a message and not a transaction — signing domain, version, application
+/// domain (none), format, the one signer, the length.
+pub fn solana_offchain_message(signer: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, ApiError> {
+    let text = std::str::from_utf8(message).map_err(|_| bad("a Ledger signs Solana text messages only (UTF-8)"))?;
+    // Format 0: printable ASCII, which the device shows; 1: other UTF-8.
+    let format = u8::from(!text.bytes().all(|b| (0x20..0x7f).contains(&b)));
+    let len = u16::try_from(message.len()).ok().filter(|l| *l > 0 && *l <= 1212).ok_or_else(|| bad("a Ledger signs Solana messages of 1 to 1212 bytes"))?;
+    let mut out = b"\xffsolana offchain".to_vec();
+    out.push(0); // header version
+    out.extend_from_slice(&[0u8; 32]); // application domain
+    out.push(format);
+    out.push(1); // signers
+    out.extend_from_slice(signer);
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(message);
+    Ok(out)
+}
+
+/// `Ledger:signMessage` — Ethereum `personal_sign` (EIP-191), a Bitcoin
+/// message signature (BIP-137), a TronWeb `signMessageV2` signature, or a
+/// Solana off-chain message over `message`.
+///
+/// The Solana signature is over the off-chain message wrapping the text
+/// ([`solana_offchain_message`], returned as `signedMessage`), not over the
+/// bare bytes: that is the only thing the Solana app signs.
 pub async fn sign_message<T: Transport>(device: &Device<T>, account: &Account, info: &AccountKeyInfo, message: &[u8]) -> ApiResult {
     use base64::Engine;
     require_app(device, app_for(&account.kind)?).await?;
@@ -319,8 +363,49 @@ pub async fn sign_message<T: Transport>(device: &Device<T>, account: &Account, i
             let sig = lsdk::apps::btc::BtcApp::new(device).sign_message(&path, message).await.map_err(lerr)?;
             Ok(json!({ "signature": base64::engine::general_purpose::STANDARD.encode(sig), "path": path.to_string(), "account": account.id }))
         }
+        "tron" => {
+            let sig = tron::TronApp::new(device).sign_message(&parse_path(&info.path)?, message).await.map_err(lerr)?;
+            let rsv = crate::tron::message_signature(account, message, &sig).map_err(|e| ApiError::new(409, format!("{e}: wrong device?")))?;
+            Ok(json!({ "signature": format!("0x{}", hex(&rsv)), "account": account.id }))
+        }
+        "solana" => {
+            let pk = crate::solana::pubkey_from_b64url(&account.pubkey).ok_or_else(|| ApiError::new(500, "bad account pubkey"))?;
+            let wrapped = solana_offchain_message(&pk, message)?;
+            let sig = SolApp::new(device).sign_offchain_message(&parse_path(&info.path)?, &wrapped).await.map_err(lerr)?;
+            if !crate::tss::ed25519_verify(&pk, &wrapped, &sig) {
+                return Err(ApiError::new(409, format!("the device's signature is not from this account ({}): wrong device, or wrong passphrase?", account.address)));
+            }
+            Ok(json!({
+                "signature": bs58::encode(sig).into_string(),
+                "signedMessage": base64::engine::general_purpose::STANDARD.encode(&wrapped),
+                "format": "offchain",
+                "account": account.id,
+            }))
+        }
         other => Err(bad(format!("Ledger message signing is not supported for {other} accounts"))),
     }
+}
+
+/// `Ledger:signTypedData` — an EIP-712 signature over `typed_data` (the
+/// JSON). The Ethereum app is given the two hashes the digest is made of —
+/// the domain separator and the message's struct hash — and shows those: it
+/// does not parse the typed data, so the owner cannot read it on the device
+/// (the app's blind-signing setting must allow it).
+pub async fn sign_typed_data<T: Transport>(device: &Device<T>, account: &Account, info: &AccountKeyInfo, typed_data: &str) -> ApiResult {
+    if account.kind != "ethereum" {
+        return Err(bad(format!("typed data is signed by ethereum accounts, not {}", account.kind)));
+    }
+    let td = crate::eip712::parse(typed_data).map_err(bad)?;
+    let (domain, message) = td.hashes().map_err(bad)?;
+    let digest = td.hash().map_err(bad)?;
+    require_app(device, "Ethereum").await?;
+    let sig = EthApp::new(device).sign_eip712_hashed(&parse_path(&info.path)?, &domain, &message).await.map_err(lerr)?;
+    let mut rsv = Vec::with_capacity(65);
+    rsv.extend_from_slice(&sig.r);
+    rsv.extend_from_slice(&sig.s);
+    rsv.push((sig.v & 0xff) as u8);
+    let rsv = crate::evm::rsv_for_address(&digest, &rsv, &account.address).map_err(|e| ApiError::new(409, format!("{e}: wrong device?")))?;
+    Ok(json!({ "signature": format!("0x{}", hex(&rsv)), "account": account.id }))
 }
 
 /// The node for a signing request: none when `Offline: true`; else the `RPC`
@@ -512,6 +597,36 @@ pub async fn sign_bitcoin<T: Transport>(env: &Env, device: &Device<T>, account: 
     Ok(out)
 }
 
+/// `Ledger:signTransaction` for a Tron account: `Transaction.rawDataHex` (it
+/// must be a contract we can read, owned by the account) or a transfer `{to,
+/// value, token?, feeLimit?}` anchored on the node's current block — or on
+/// the `refBlock` given, when there is no node. The device signs the raw
+/// data; its signature is attached only if it recovers to the account.
+pub async fn sign_tron<T: Transport>(env: &Env, device: &Device<T>, account: &Account, info: &AccountKeyInfo, params: &Value) -> ApiResult {
+    let tx = params.get("Transaction").ok_or_else(|| bad("Transaction required"))?;
+    let rpc = rpc_for(env, params, "tron")?;
+    let tx = match &rpc {
+        Some(url) => crate::handlers::airgap::prefill_tron(tx, url).await?,
+        None => tx.clone(),
+    };
+    let raw = crate::tron::unsigned_raw_data(account, &tx).map_err(|e| bad(e.to_string()))?;
+    require_app(device, "Tron").await?;
+    let sig = tron::TronApp::new(device).sign_transaction(&parse_path(&info.path)?, &raw).await.map_err(lerr)?;
+    let (txid, signed) = crate::tron::attach_device_signature(account, &raw, &sig).map_err(|e| ApiError::new(409, format!("{e}: wrong device, or wrong passphrase?")))?;
+    let mut out = json!({
+        "chain": "tron",
+        "account": account.id,
+        "raw": hex(&signed),
+        "id": hex(&txid),
+    });
+    if wants_broadcast(params) {
+        let url = rpc.ok_or_else(|| bad("Broadcast needs an RPC/Network (not Offline)"))?;
+        let reply = crate::tron::post_async(&url, "broadcasthex", &crate::tron::broadcast_body(&signed)).await.map_err(ApiError::internal)?;
+        out["broadcast"] = json!(crate::tron::parse_broadcast(&reply, &txid).map_err(|e| ApiError::new(502, e.to_string()))?);
+    }
+    Ok(out)
+}
+
 /// `Ledger:signTransaction` — sign (and with `Broadcast: true`, send) the
 /// `Transaction` for a Ledger account on the device.
 pub async fn sign_transaction<T: Transport>(env: &Env, device: &Device<T>, account: &Account, info: &AccountKeyInfo, params: &Value) -> ApiResult {
@@ -519,6 +634,7 @@ pub async fn sign_transaction<T: Transport>(env: &Env, device: &Device<T>, accou
         "ethereum" => sign_evm(env, device, account, info, params).await,
         "solana" => sign_solana(env, device, account, info, params).await,
         "bitcoin" => sign_bitcoin(env, device, account, info, params).await,
+        "tron" => sign_tron(env, device, account, info, params).await,
         other => Err(bad(format!("Ledger signing is not supported for {other} accounts"))),
     }
 }

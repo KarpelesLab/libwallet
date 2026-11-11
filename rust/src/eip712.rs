@@ -61,11 +61,17 @@ impl TypedData {
         Ok(())
     }
 
+    /// The two hashes the digest is made of — `(domainSeparator,
+    /// hashStruct(message))` — which is what a device that cannot parse the
+    /// typed data itself is given to sign.
+    pub fn hashes(&self) -> Result<([u8; 32], [u8; 32]), String> {
+        self.check_limits()?;
+        Ok((self.hash_struct("EIP712Domain", &self.domain)?, self.hash_struct(&self.primary_type, &self.message)?))
+    }
+
     /// The EIP-712 signable digest: `keccak256("\x19\x01" || domainSep || hashStruct(message))`.
     pub fn hash(&self) -> Result<[u8; 32], String> {
-        self.check_limits()?;
-        let domain_sep = self.hash_struct("EIP712Domain", &self.domain)?;
-        let msg_hash = self.hash_struct(&self.primary_type, &self.message)?;
+        let (domain_sep, msg_hash) = self.hashes()?;
         let mut raw = vec![0x19u8, 0x01];
         raw.extend_from_slice(&domain_sep);
         raw.extend_from_slice(&msg_hash);

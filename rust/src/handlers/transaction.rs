@@ -373,7 +373,7 @@ pub fn sign_and_send(env: &Env, params: &Value) -> ApiResult {
 /// `Transaction:signAndSend` for a hardware wallet's account: the same
 /// high-level tx, turned into what the device signs — the EVM call
 /// [`evm_call`] derives, the Solana message the shared builder produces, a
-/// Bitcoin `{To, Amount}` spend — then signed on the device, broadcast, and
+/// Bitcoin `{To, Amount}` spend, a Tron transfer — then signed on the device, broadcast, and
 /// persisted as a Transaction row like any other send.
 fn sign_and_send_hardware(
     env: &Env,
@@ -418,6 +418,14 @@ fn sign_and_send_hardware(
             let sats = amount_significand(tx.get("amount")).and_then(|b| bigint_to_u64(&b)).ok_or_else(|| ApiError::new(400, "amount (satoshi) is required"))?;
             json!({ "To": to, "Amount": sats, "FeeRate": bitcoin_fee_rate(rpc, tx), "ChainId": net.chain_id })
         }
+        "tron" => {
+            let (transfer, amount) = tron_transfer_of(env, tx, account, net, rpc)?;
+            value = Some(amount);
+            match transfer {
+                crate::tron::Transfer::Trx { to, amount } => json!({ "to": to, "value": amount.to_string() }),
+                crate::tron::Transfer::Trc20 { contract, to, amount, fee_limit } => json!({ "to": to, "value": amount.to_string(), "token": contract, "feeLimit": fee_limit }),
+            }
+        }
         other => return Err(ApiError::new(501, format!("{other} accounts cannot be signed for on a hardware wallet"))),
     };
 
@@ -438,10 +446,12 @@ fn sign_and_send_hardware(
     let out = crate::rt::block_on(super::signer::sign_transaction(env, account, protocol, &p, true))?;
 
     let hash = ["hash", "txid", "signature"].iter().find_map(|k| out.get(*k).and_then(Value::as_str)).unwrap_or_default().to_string();
-    // The signed transaction as bytes: 0x-hex (EVM, Bitcoin) or base58 (Solana).
+    // The signed transaction as bytes: 0x-hex (EVM, Bitcoin), bare hex
+    // (Tron) or base58 (Solana).
     let raw_str = out.get("raw").and_then(Value::as_str).unwrap_or_default();
     let raw = match raw_str.strip_prefix("0x") {
         Some(h) => super::simulate::hex_bytes_strict(h).unwrap_or_default(),
+        None if net.kind == "tron" => super::simulate::hex_bytes_strict(raw_str).unwrap_or_default(),
         None => bs58::decode(raw_str).into_vec().unwrap_or_default(),
     };
     let filled = out.get("transaction");
@@ -648,21 +658,16 @@ fn sign_and_send_bitcoin(
     Ok(serde_json::to_value(&record).unwrap())
 }
 
-/// Tron `Transaction:signAndSend`: a TRX transfer, or a TRC-20 transfer when
-/// the asset resolves to a registered token (the same resolution as Solana's
-/// SPL routing). The amount is in base units (sun / token units); MAX resolves
-/// for TRX to the balance less the bandwidth and new-account fees. `feeLimit`
-/// (sun) caps a TRC-20 transfer's energy burn. Built and signed locally,
-/// anchored on the node's current block, broadcast via `broadcasthex`.
-fn sign_and_send_tron(
+/// The transfer a Tron `Transaction:signAndSend` describes, and its amount:
+/// TRX, or TRC-20 when the asset resolves to a registered token. MAX resolves
+/// for TRX to the balance less the bandwidth and new-account fees.
+fn tron_transfer_of(
     env: &Env,
     tx: &Value,
-    params: &Value,
     account: &crate::models::account::Account,
     net: &crate::models::network::Network,
     rpc: &str,
-) -> ApiResult {
-    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
+) -> Result<(crate::tron::Transfer, crate::Amount), ApiError> {
     let asset = tx.get("asset").and_then(Value::as_str).unwrap_or("");
     let to = tx
         .get("to")
@@ -705,6 +710,29 @@ fn sign_and_send_tron(
             let transfer = crate::tron::Transfer::Trx { to: to.to_owned(), amount: sun };
             (transfer, crate::Amount::new_raw(BigInt::from(sun), crate::tron::TRX_DECIMALS))
         }
+    };
+    Ok((transfer, amount))
+}
+
+/// Tron `Transaction:signAndSend`: a TRX transfer, or a TRC-20 transfer when
+/// the asset resolves to a registered token (the same resolution as Solana's
+/// SPL routing). The amount is in base units (sun / token units); MAX resolves
+/// for TRX to the balance less the bandwidth and new-account fees. `feeLimit`
+/// (sun) caps a TRC-20 transfer's energy burn. Built and signed locally,
+/// anchored on the node's current block, broadcast via `broadcasthex`.
+fn sign_and_send_tron(
+    env: &Env,
+    tx: &Value,
+    params: &Value,
+    account: &crate::models::account::Account,
+    net: &crate::models::network::Network,
+    rpc: &str,
+) -> ApiResult {
+    let typ = tx.get("type").and_then(Value::as_str).unwrap_or("transfer");
+    let asset = tx.get("asset").and_then(Value::as_str).unwrap_or("");
+    let (transfer, amount) = tron_transfer_of(env, tx, account, net, rpc)?;
+    let to = match &transfer {
+        crate::tron::Transfer::Trx { to, .. } | crate::tron::Transfer::Trc20 { to, .. } => to.as_str(),
     };
 
     let unlock = unlock_from_params(params)?;

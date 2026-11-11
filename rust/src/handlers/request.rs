@@ -403,6 +403,22 @@ fn approve_solana_sign_tx(env: &Env, req: &Request, params: &Value, broadcast: b
         .ok_or_else(|| ApiError::new(404, "account not found"))?;
     let raw_b64 = req.value.as_ref().and_then(|v| v.get("raw")).and_then(Value::as_str).unwrap_or("");
 
+    // A hardware wallet's account: the device signs the transaction's
+    // message, and the signature goes into this account's slot.
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        let mut p = params.clone();
+        if !p.is_object() {
+            p = json!({});
+        }
+        p["Transaction"] = json!({ "transaction": raw_b64 });
+        let out = crate::rt::block_on(super::signer::sign_transaction(env, &account, &protocol, &p, broadcast))?;
+        if broadcast {
+            return Ok(json!({ "signature": out.get("signature").cloned().unwrap_or(Value::Null) }));
+        }
+        let signed = out.get("raw").and_then(Value::as_str).and_then(|r| bs58::decode(r).into_vec().ok()).ok_or_else(|| ApiError::new(502, "the device returned no transaction"))?;
+        return Ok(json!({ "transaction": base64::engine::general_purpose::STANDARD.encode(&signed) }));
+    }
+
     let keys: Vec<crate::sign::KeyDescription> = params.get("Keys").and_then(|k| serde_json::from_value(k.clone()).ok()).unwrap_or_default();
     let unlock: Vec<(String, String)> = keys.iter().filter(|k| matches!(k.kind.as_str(), "Password" | "StoreKey" | "Plain")).map(|k| (k.id.clone(), k.key.clone())).collect();
     if unlock.is_empty() {
@@ -435,19 +451,33 @@ fn approve_message_sign(env: &Env, req: &Request, params: &Value) -> Result<(), 
     let method = value.get("method").and_then(Value::as_str).unwrap_or("");
     let account_id = req.account.as_deref().ok_or_else(|| ApiError::new(400, "message_sign: missing account"))?;
 
-    // A hardware wallet's account signs on the device — no Keys, and only what
-    // the device can show: a personal_sign or a Bitcoin message.
+    // A hardware wallet's account signs on the device — no Keys.
     let hw_account = crate::models::account::find(env, account_id).ok().flatten();
     if let Some((account, protocol)) = hw_account.and_then(|a| super::signer::hardware_protocol(env, &a).map(|p| (a, p))) {
-        if !matches!(method, "personal_sign" | "mpurse_signMessage") {
-            return Err(ApiError::new(501, format!("{method} cannot be signed on a hardware wallet")));
+        use super::signer::Message;
+        let typed = matches!(method, "eth_signTypedData" | "eth_signTypedData_v3" | "eth_signTypedData_v4");
+        if !typed && !matches!(method, "personal_sign" | "mpurse_signMessage" | "solana_signMessage") {
+            return Err(ApiError::new(400, format!("unknown message_sign method {method}")));
         }
         let message = base64::engine::general_purpose::STANDARD
             .decode(value.get("messageBytes").and_then(Value::as_str).unwrap_or(""))
             .map_err(|e| ApiError::new(400, format!("decode message bytes: {e}")))?;
-        let out = crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, &message))?;
+        let asked = if typed { Message::TypedData(value.get("typedData").and_then(Value::as_str).unwrap_or("")) } else { Message::Plain(&message) };
+        let out = crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, asked))?;
+        let signature = out.get("signature").cloned().unwrap_or(Value::Null);
+        let result = if method == "solana_signMessage" {
+            // A Ledger signs the message wrapped as an off-chain message:
+            // `signedMessage` (base64) is then what the signature is over.
+            let mut r = json!({ "signature": signature, "publicKey": account.address });
+            if let Some(signed) = out.get("signedMessage") {
+                r["signedMessage"] = signed.clone();
+            }
+            r
+        } else {
+            signature
+        };
         let mut r = request::fetch(env, &req.id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "request not found"))?;
-        r.result = Some(out.get("signature").cloned().unwrap_or(Value::Null));
+        r.result = Some(result);
         r.updated = crate::now_rfc3339();
         return request::save(env, &r).map_err(ApiError::internal);
     }

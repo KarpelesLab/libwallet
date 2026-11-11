@@ -196,7 +196,7 @@ pub fn check_block_time(block: &RefBlock, now_ms: u64) -> Result<()> {
 /// The reference block of a `getnowblock` reply just fetched from a node,
 /// checked against the local clock ([`check_block_time`]). The network sends
 /// use this; [`parse_ref_block`] alone is for a block the caller vouches for.
-fn fresh_ref_block(v: &Value) -> Result<RefBlock> {
+pub fn fresh_ref_block(v: &Value) -> Result<RefBlock> {
     let block = parse_ref_block(v)?;
     let now_ms = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0);
     check_block_time(&block, now_ms)?;
@@ -283,18 +283,32 @@ pub enum Transfer {
     Trc20 { contract: String, to: String, amount: u128, fee_limit: u64 },
 }
 
-/// Build, sign and serialize `transfer` from `account`, anchored on `block`.
-/// Returns `(txid, signed Transaction bytes)`. Fails before signing when an
-/// address does not parse, and after signing when the signature does not
-/// recover to the account (a wrong tweak or path must never reach the network).
-pub fn sign_transfer(
-    env: &Env,
-    account: &Account,
-    unlock: &[(String, String)],
-    transfer: &Transfer,
-    block: &RefBlock,
-) -> Result<([u8; 32], Vec<u8>)> {
-    let owner = parse_address(&account.address)?;
+impl Transfer {
+    /// The transfer an Account-level `Transaction` describes: `to` and `value`
+    /// (base units, decimal string or number), with `token` naming a TRC-20
+    /// contract (absent / "NATIVE": TRX) and `feeLimit` (sun) capping its energy.
+    pub fn from_json(tx: &Value) -> Result<Transfer> {
+        let to = tx.get("to").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| Error::Env("to required".into()))?.to_owned();
+        let value: u128 = match tx.get("value") {
+            Some(Value::String(s)) => s.parse().map_err(|_| Error::Env("value must be a base-unit integer".into()))?,
+            Some(Value::Number(n)) => n.as_u64().ok_or_else(|| Error::Env("value must be a base-unit integer".into()))?.into(),
+            _ => return Err(Error::Env("value required".into())),
+        };
+        match tx.get("token").and_then(Value::as_str).filter(|t| !t.is_empty() && *t != "NATIVE") {
+            Some(contract) => Ok(Transfer::Trc20 {
+                contract: contract.to_owned(),
+                to,
+                amount: value,
+                fee_limit: tx.get("feeLimit").and_then(Value::as_u64).unwrap_or(DEFAULT_TRC20_FEE_LIMIT),
+            }),
+            None => Ok(Transfer::Trx { to, amount: u64::try_from(value).map_err(|_| Error::Env("value exceeds the TRX supply".into()))? }),
+        }
+    }
+}
+
+/// Build `transfer` from `owner`, anchored on `block`, and hand it to `f`.
+fn with_transfer_tx<R>(owner: &str, transfer: &Transfer, block: &RefBlock, f: impl FnOnce(&TronTx) -> Result<R>) -> Result<R> {
+    let owner = parse_address(owner)?;
     let calldata;
     let (contract, fee_limit) = match transfer {
         Transfer::Trx { to, amount } => (
@@ -320,7 +334,90 @@ pub fn sign_transfer(
         ..TronTx::new(contract)
     }
     .with_ref_block(block.height, &block.id);
-    sign_tx(env, account, unlock, &tx)
+    f(&tx)
+}
+
+/// Build, sign and serialize `transfer` from `account`, anchored on `block`.
+/// Returns `(txid, signed Transaction bytes)`. Fails before signing when an
+/// address does not parse, and after signing when the signature does not
+/// recover to the account (a wrong tweak or path must never reach the network).
+pub fn sign_transfer(
+    env: &Env,
+    account: &Account,
+    unlock: &[(String, String)],
+    transfer: &Transfer,
+    block: &RefBlock,
+) -> Result<([u8; 32], Vec<u8>)> {
+    with_transfer_tx(&account.address, transfer, block, |tx| sign_tx(env, account, unlock, tx))
+}
+
+// --- signing on an external device ------------------------------------------
+
+/// The `raw_data` an external signer (hardware wallet) is asked to sign for
+/// `account`'s `Transaction`: `rawDataHex` — parsed, and refused unless it is
+/// a contract we can read that the account owns — or a transfer `{to, value,
+/// token?, feeLimit?}` anchored on `refBlock` (a `getnowblock` reply).
+pub fn unsigned_raw_data(account: &Account, tx: &Value) -> Result<Vec<u8>> {
+    match tx.get("rawDataHex").and_then(Value::as_str) {
+        Some(raw) => {
+            let raw = unhex(raw.trim_start_matches("0x")).ok_or_else(|| Error::Env("rawDataHex is not hex".into()))?;
+            check_owned(account, &raw)?;
+            Ok(raw)
+        }
+        None => {
+            let block = tx.get("refBlock").ok_or_else(|| Error::Env("rawDataHex or refBlock (a getnowblock reply) required".into()))?;
+            with_transfer_tx(&account.address, &Transfer::from_json(tx)?, &parse_ref_block(block)?, |tx| Ok(tx.raw_data()))
+        }
+    }
+}
+
+/// `raw_data` must parse as a contract we model whose owner is `account`.
+fn check_owned(account: &Account, raw_data: &[u8]) -> Result<()> {
+    let tx = TronTx::parse(raw_data).map_err(|e| Error::Env(format!("cannot parse tron raw data: {e}")))?;
+    let owner = parse_address(&account.address)?;
+    match tx_owner(&tx) {
+        Some(o) if o == owner => Ok(()),
+        Some(_) => Err(Error::Env("tron transaction is not owned by this account".into())),
+        None => Err(Error::Env("refusing to sign an uninterpreted tron contract".into())),
+    }
+}
+
+/// Attach an external signer's 65-byte signature (`r ‖ s ‖ v`, v as a
+/// recovery id or 27/28) to `raw_data`. Accepted only if it recovers to the
+/// account — the parity the device reported is tried first, then the other.
+/// Returns `(txid, signed Transaction bytes)`.
+pub fn attach_device_signature(account: &Account, raw_data: &[u8], signature: &[u8]) -> Result<([u8; 32], Vec<u8>)> {
+    if signature.len() != 65 && signature.len() != 64 {
+        return Err(Error::Env(format!("tron signature must be 64/65 bytes, got {}", signature.len())));
+    }
+    let tx = TronTx::parse(raw_data).map_err(|e| Error::Env(format!("cannot parse tron raw data: {e}")))?;
+    let owner = parse_address(&account.address)?;
+    let hint = signature.get(64).map_or(0, |v| if *v >= 27 { (v - 27) & 1 } else { v & 1 });
+    let mut sig = [0u8; 65];
+    sig[..64].copy_from_slice(&signature[..64]);
+    for parity in [hint, 1 - hint] {
+        sig[64] = parity;
+        if tx.signer(&sig).is_ok_and(|s| s == owner) {
+            return Ok((tx.txid(), tx.encode_signed(&[sig])));
+        }
+    }
+    Err(Error::Env(format!("the signature is not from this account ({})", account.address)))
+}
+
+/// The digest of a TronWeb `signMessageV2` message: keccak of
+/// `"\x19TRON Signed Message:\n" + len + message`.
+pub fn message_digest(message: &[u8]) -> [u8; 32] {
+    let mut full = format!("\x19TRON Signed Message:\n{}", message.len()).into_bytes();
+    full.extend_from_slice(message);
+    purecrypto::hash::keccak256(&full)
+}
+
+/// An external signer's signature over [`message_digest`], as `r ‖ s ‖ v`
+/// with v 27/28 — accepted only if it is the account's.
+pub fn message_signature(account: &Account, message: &[u8], signature: &[u8]) -> Result<[u8; 65]> {
+    // A Tron address is the EVM key hash behind another encoding.
+    let evm = format!("0x{}", hex(&parse_address(&account.address)?[1..]));
+    crate::evm::rsv_for_address(&message_digest(message), signature, &evm)
 }
 
 /// Sign an already-built `tx` with `account`'s key, checking the signature
@@ -351,13 +448,8 @@ pub fn tx_owner(tx: &TronTx) -> Option<TronAddress> {
 /// can read whose owner is the account, so nothing is signed blind.
 pub fn sign_raw_data(env: &Env, account: &Account, unlock: &[(String, String)], raw_data_hex: &str) -> Result<([u8; 32], Vec<u8>)> {
     let raw = unhex(raw_data_hex.trim_start_matches("0x")).ok_or_else(|| Error::Env("rawDataHex is not hex".into()))?;
+    check_owned(account, &raw)?;
     let tx = TronTx::parse(&raw).map_err(|e| Error::Env(format!("cannot parse tron raw data: {e}")))?;
-    let owner = parse_address(&account.address)?;
-    match tx_owner(&tx) {
-        Some(o) if o == owner => {}
-        Some(_) => return Err(Error::Env("tron transaction is not owned by this account".into())),
-        None => return Err(Error::Env("refusing to sign an uninterpreted tron contract".into())),
-    }
     sign_tx(env, account, unlock, &tx)
 }
 

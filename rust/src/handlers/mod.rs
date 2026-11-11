@@ -299,6 +299,7 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Wallet:restore" => wallet::restore(&handle.env, params),
         "Account" => account::route(&handle.env, verb, params),
         "Account:signMessage" => account::sign_message(&handle.env, params),
+        "Account:signTypedData" => account::sign_typed_data(&handle.env, params),
         "Account:signTransaction" => account::sign_transaction(&handle.env, params),
         #[cfg(not(target_arch = "wasm32"))]
         "Account:signAndSendTransaction" => account::sign_and_send_transaction(&handle.env, params),

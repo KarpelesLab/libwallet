@@ -8,9 +8,11 @@
 //! Displaying: `Airgap:encode` {Type|FileType, Cbor|Bytes, Transport, …} → {parts}.
 //! Keys: `Airgap:parseKeys` (preview) / `Airgap:importKeys` {Payload|Parts|
 //!   DecoderId, Name?, EthAccounts?, Select?} → signer wallet + accounts.
-//! Signing: `Airgap:signRequest` {Account, Transaction, Transport?, RPC|Network?,
-//!   Offline?} → {requestId, parts, payload}; `Airgap:submitSignature`
+//! Signing: `Airgap:signRequest` {Account, Transaction | Message (base64) |
+//!   TypedData (EIP-712 JSON), Transport?, RPC|Network?, Offline?} →
+//!   {requestId, parts, payload}; `Airgap:submitSignature`
 //!   {Payload|Parts|DecoderId, RequestId?, Broadcast?, RPC|Network?} → signed tx
+//!   (`type: "transaction"`) or the message signature (`type: "message"`)
 //! Display: `Airgap:qr` {Text|Parts} → QR modules, for hosts without a renderer.
 //! Camera: `Airgap:scanFrame` {Width, Height, Luma, Id?} → the QR codes in a frame.
 //!   (RequestId is mandatory for bitcoin answers — signed PSBT / raw tx — which
@@ -279,13 +281,52 @@ async fn prefill(env: &Env, account: &crate::models::account::Account, params: &
             }
             Ok(tx)
         }
+        "tron" => prefill_tron(tx, url).await,
         _ => Ok(tx.clone()),
+    }
+}
+
+/// A Tron transfer `Transaction` anchored on the node's current block
+/// (`refBlock`), unless it already is or carries ready `rawDataHex`. The
+/// block's time is checked against this device's clock, as for a software
+/// send: it decides how long the signed transfer stays valid.
+pub(crate) async fn prefill_tron(tx: &Value, url: &str) -> Result<Value, ApiError> {
+    let mut tx = tx.clone();
+    if tx.is_object() && tx.get("rawDataHex").is_none() && tx.get("refBlock").is_none() {
+        let block = crate::tron::post_async(url, "getnowblock", &json!({})).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+        crate::tron::fresh_ref_block(&block).map_err(|e| ApiError::new(502, e.to_string()))?;
+        tx["refBlock"] = block;
+    }
+    Ok(tx)
+}
+
+/// The message a signing request carries instead of a `Transaction`:
+/// `Message` (base64 bytes) or `TypedData` (EIP-712, the JSON as text or as
+/// an object).
+pub(crate) fn message_from_params(params: &Value) -> Result<Option<(Vec<u8>, airgap::sign::MessageKind)>, ApiError> {
+    use airgap::sign::MessageKind;
+    use base64::Engine;
+    match (params.get("TypedData"), str_param(params, "Message")) {
+        (Some(Value::String(s)), _) if !s.is_empty() => Ok(Some((s.clone().into_bytes(), MessageKind::TypedData))),
+        (Some(td @ Value::Object(_)), _) => Ok(Some((td.to_string().into_bytes(), MessageKind::TypedData))),
+        (Some(Value::Null) | None, Some(m)) => {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(m).map_err(|e| ApiError::new(400, format!("Message: {e}")))?;
+            Ok(Some((bytes, MessageKind::Plain)))
+        }
+        (Some(Value::Null) | None, None) => Ok(None),
+        (Some(_), _) => Err(ApiError::new(400, "TypedData must be the EIP-712 JSON (text or object)")),
     }
 }
 
 pub async fn sign_request_impl(env: &Env, params: &Value) -> ApiResult {
     let account_id = str_param(params, "Account").or_else(|| str_param(params, "Id")).ok_or_else(|| ApiError::new(400, "Account required"))?;
-    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction required"))?;
+    if let Some((message, kind)) = message_from_params(params)? {
+        let built = airgap::sign::build_message_request(env, account_id, &message, kind, &framing_from_params(params)?).map_err(bad)?;
+        let mut j = serde_json::to_value(&built).unwrap();
+        j["count"] = json!(built.parts.len());
+        return Ok(j);
+    }
+    let tx = params.get("Transaction").ok_or_else(|| ApiError::new(400, "Transaction, Message or TypedData required"))?;
     let account = crate::models::account::fetch(env, account_id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "account not found"))?;
     let rpc = rpc_from_params(env, params, &account.kind)?;
     let framing = framing_from_params(params)?;
@@ -310,7 +351,9 @@ pub async fn submit_signature_impl(env: &Env, params: &Value) -> ApiResult {
         j["delivered"] = json!(super::signer::airgap_deliver(rid, Ok(j.clone())));
         return Ok(j);
     }
-    if params.get("Broadcast").and_then(Value::as_bool) == Some(true) {
+    // (A message signature has nothing to send: `Broadcast` is ignored for it,
+    // rather than failing an answer that has already been accepted.)
+    if params.get("Broadcast").and_then(Value::as_bool) == Some(true) && accepted.kind == "transaction" {
         j["broadcast"] = broadcast_accepted(env, params, &j).await?;
     }
     Ok(j)
@@ -320,7 +363,16 @@ pub async fn submit_signature_impl(env: &Env, params: &Value) -> ApiResult {
 pub(crate) async fn broadcast_accepted(env: &Env, params: &Value, accepted: &Value) -> ApiResult {
     let chain = accepted.get("chain").and_then(Value::as_str).unwrap_or_default();
     let raw = accepted.get("raw").and_then(Value::as_str).unwrap_or_default();
+    if accepted.get("type").and_then(Value::as_str) == Some("message") {
+        return Err(ApiError::new(400, "a message signature is not broadcast"));
+    }
     let url = rpc_from_params(env, params, chain)?.ok_or_else(|| ApiError::new(400, "Broadcast needs an RPC/Network (not Offline)"))?;
+    if chain == "tron" {
+        let signed = airgap::unhex(raw).map_err(bad)?;
+        let txid: [u8; 32] = accepted.get("id").and_then(Value::as_str).and_then(|h| airgap::unhex(h).ok()).and_then(|b| b.try_into().ok()).unwrap_or([0; 32]);
+        let reply = crate::tron::post_async(&url, "broadcasthex", &crate::tron::broadcast_body(&signed)).await.map_err(|e| ApiError::new(502, e.to_string()))?;
+        return crate::tron::parse_broadcast(&reply, &txid).map(Value::String).map_err(|e| ApiError::new(502, e.to_string()));
+    }
     let (method, args) = match chain {
         "ethereum" => ("eth_sendRawTransaction", json!([raw])),
         "bitcoin" => ("sendrawtransaction", json!([raw.trim_start_matches("0x")])),

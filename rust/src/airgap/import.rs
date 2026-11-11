@@ -100,6 +100,7 @@ fn chain_for_coin(coin: u32) -> &'static str {
     match coin {
         0 | 1 | 2 | 3 | 145 => "bitcoin", // btc, testnet, ltc, doge, bch share the bitcoin account model
         60 => "ethereum",
+        195 => "tron",
         501 => "solana",
         _ => "unsupported",
     }
@@ -191,10 +192,11 @@ fn key_from_hdkey(env: &Env, k: &HdKey, script_hint: Option<&str>, xfp: Option<u
                 }
             }
         }
-        "ethereum" => {
+        "ethereum" | "tron" => {
+            let chain = dk.chain.clone();
             let Some(pk) = k.secp_key().filter(is_secp_point) else {
                 dk.chain = "unsupported".into();
-                dk.reason = Some("ethereum key is not a valid compressed secp256k1 key".into());
+                dk.reason = Some(format!("{chain} key is not a valid compressed secp256k1 key"));
                 return dk;
             };
             // An account-level xpub (chain code present, depth 3) addresses …/0/0;
@@ -204,11 +206,12 @@ fn key_from_hdkey(env: &Env, k: &HdKey, script_hint: Option<&str>, xfp: Option<u
                 Some(cc) if origin.components.len() <= 3 => crate::hdderive::derive_pub(&pk, &cc, &[0, 0]).map_err(|e| e.to_string()),
                 _ => Ok(pk),
             };
-            match leaf.and_then(|l| crate::hdderive::evm_address(&l).map_err(|e| e.to_string())) {
+            let address = |l: [u8; 33]| if chain == "tron" { crate::hdderive::tron_address(&l) } else { crate::hdderive::evm_address(&l) }.map_err(|e| e.to_string());
+            match leaf.and_then(address) {
                 Ok(a) => dk.address = a,
                 Err(e) => {
                     dk.chain = "unsupported".into();
-                    dk.reason = Some(format!("cannot derive the ethereum address: {e}"));
+                    dk.reason = Some(format!("cannot derive the {chain} address: {e}"));
                     return dk;
                 }
             }
@@ -688,22 +691,24 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
             "bitcoin" => {
                 push(env, "bitcoin", "secp256k1", k.path.clone(), &pk, cc.as_deref(), k.address.clone(), &k.script, k, None)?;
             }
-            "ethereum" => match (&cc, k.path.matches('/').count()) {
-                // Account-level xpub → leaf accounts …/0/i.
-                (Some(cc), depth) if depth <= 3 => {
-                    let root: [u8; 33] = pk.as_slice().try_into().map_err(|_| Error::Env("ethereum xpub key is not 33 bytes".into()))?;
-                    let ccb: [u8; 32] = cc.as_slice().try_into().map_err(|_| Error::Env("chain code is not 32 bytes".into()))?;
-                    let origin = KeyPath::parse(&k.path)?;
-                    for i in 0..opts.eth_accounts.unwrap_or(1).max(1) {
-                        let leaf = crate::hdderive::derive_pub(&root, &ccb, &[0, i]).map_err(|e| Error::Env(e.to_string()))?;
-                        let addr = crate::hdderive::evm_address(&leaf).map_err(|e| Error::Env(e.to_string()))?;
-                        push(env, "ethereum", "secp256k1", origin.child(&[0, i]).to_string(), &leaf, None, addr, "", k, None)?;
+            chain @ ("ethereum" | "tron") => {
+                let address = |l: &[u8]| if chain == "tron" { crate::hdderive::tron_address(l) } else { crate::hdderive::evm_address(l) }.map_err(|e| Error::Env(e.to_string()));
+                match (&cc, k.path.matches('/').count()) {
+                    // Account-level xpub → leaf accounts …/0/i.
+                    (Some(cc), depth) if depth <= 3 => {
+                        let root: [u8; 33] = pk.as_slice().try_into().map_err(|_| Error::Env(format!("{chain} xpub key is not 33 bytes")))?;
+                        let ccb: [u8; 32] = cc.as_slice().try_into().map_err(|_| Error::Env("chain code is not 32 bytes".into()))?;
+                        let origin = KeyPath::parse(&k.path)?;
+                        for i in 0..opts.eth_accounts.unwrap_or(1).max(1) {
+                            let leaf = crate::hdderive::derive_pub(&root, &ccb, &[0, i]).map_err(|e| Error::Env(e.to_string()))?;
+                            push(env, chain, "secp256k1", origin.child(&[0, i]).to_string(), &leaf, None, address(&leaf)?, "", k, None)?;
+                        }
+                    }
+                    _ => {
+                        push(env, chain, "secp256k1", k.path.clone(), &pk, None, k.address.clone(), "", k, None)?;
                     }
                 }
-                _ => {
-                    push(env, "ethereum", "secp256k1", k.path.clone(), &pk, None, k.address.clone(), "", k, None)?;
-                }
-            },
+            }
             "solana" => {
                 push(env, "solana", "ed25519", k.path.clone(), &pk, None, k.address.clone(), "", k, None)?;
             }
@@ -914,8 +919,8 @@ mod tests {
                 HdKey { key_data: btc_root, chain_code: Some(btc_cc), origin: Some(KeyPath { components: KeyPath::parse("m/84'/0'/0'").unwrap().components, source_fingerprint: Some(xfp), depth: Some(3) }), ..Default::default() },
                 HdKey { key_data: eth_root, chain_code: Some(eth_cc), origin: Some(KeyPath { components: KeyPath::parse("m/44'/60'/0'").unwrap().components, source_fingerprint: Some(xfp), depth: Some(3) }), children: Some(KeyPath::parse("0/*").ok().unwrap_or_default()), note: Some("account.standard".into()), ..Default::default() },
                 HdKey { key_data: sol_leaf.clone(), origin: Some(KeyPath { components: KeyPath::parse("m/44'/501'/0'/0'").unwrap().components, source_fingerprint: Some(xfp), depth: None }), note: Some("account.standard".into()), ..Default::default() },
-                // A Tron key: reported but not importable.
-                HdKey { key_data: vec![2; 33], chain_code: Some([0; 32]), origin: Some(KeyPath::parse("m/44'/195'/0'").unwrap()), ..Default::default() },
+                // A key of a chain libwallet has no accounts for: reported, not importable.
+                HdKey { key_data: vec![2; 33], chain_code: Some([0; 32]), origin: Some(KeyPath::parse("m/44'/118'/0'").unwrap()), ..Default::default() },
             ],
             device: Some("Keystone 3 Pro".into()),
             device_id: Some("K3P-1".into()),
@@ -929,7 +934,7 @@ mod tests {
         assert_eq!(export.keys[1].address, "0x9858EfFD232B4033E47d90003D41EC34EcaEda94", "eth xpub → …/0/0 = MetaMask vector");
         assert_eq!(export.keys[2].chain, "solana");
         assert_eq!(export.keys[3].chain, "unsupported");
-        assert!(export.keys[3].reason.as_deref().unwrap().contains("195"));
+        assert!(export.keys[3].reason.as_deref().unwrap().contains("118"));
 
         let imported = import(&env, &export, &ImportOptions { eth_accounts: Some(2), ..Default::default() }).unwrap();
         assert_eq!(imported.wallet.name, "Keystone 3 Pro");

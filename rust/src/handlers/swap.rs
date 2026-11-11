@@ -552,6 +552,8 @@ fn execute_error(e: crate::Error) -> ApiError {
 }
 
 /// `Swap:execute` {quoteId, Keys, from?, mevProtection?} — run a cached quote
+/// (`Keys` unlock a software wallet; a hardware wallet's account signs the swap
+/// transaction on its device instead, and the device link params pass through)
 /// (Go `swapExecute`): fetch the OKX swap tx, check it against the approved
 /// quote, sign locally, broadcast through OKX, and confirm settlement. Returns a
 /// Dart `SwapResult` {quoteId, provider, chain, hash, url, orderId, quote}. The
@@ -561,15 +563,20 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
         return execute_direct(env, params);
     };
     let unlock = unlock_keys(params);
-    if unlock.is_empty() {
-        return Err(swap_err(400, "invalid_request", "Keys are required for execute"));
-    }
     let (entry, net) = load_quote(env, quote_id)?;
     let q = entry.quote.clone();
     if !q.status.is_empty() {
         return Err(swap_err(400, "invalid_request", format!("quote is advisory ({}), not executable", q.status)));
     }
     let account = execute_account(env, params, &entry, &net)?;
+    // A hardware wallet's account signs the swap on its device; any other
+    // needs the Keys that unlock its shares.
+    let protocol = super::signer::hardware_protocol(env, &account);
+    let signer = match &protocol {
+        Some(protocol) => swap::Signer::Device { protocol, params },
+        None if unlock.is_empty() => return Err(swap_err(400, "invalid_request", "Keys are required for execute")),
+        None => swap::Signer::Keys(&unlock),
+    };
     let cid = client_id(env);
     let mev = swap::mev_enabled(param(params, &["mevProtection", "MevProtection"]).and_then(Value::as_bool));
     let amount_in = q.amount_in.value().map(|v| v.to_string()).unwrap_or_default();
@@ -577,13 +584,13 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
 
     let res = match net.kind.as_str() {
         "solana" => swap::execute_solana_guarded(
-            env, &account.id, &unlock, cid.as_deref(), backend(params), "", &net.chain_id, &q.token_in, &q.token_out,
+            env, &account.id, &signer, cid.as_deref(), backend(params), "", &net.chain_id, &q.token_in, &q.token_out,
             &amount_in, q.slippage_bps, mev, &q.quote_id, &guard,
         ),
         "evm" => {
             let rpc = resolve_rpc(env, params, &net)?;
             swap::execute_evm_guarded(
-                env, &account.id, &unlock, cid.as_deref(), backend(params), &rpc, &net.chain_id, &q.token_in,
+                env, &account.id, &signer, cid.as_deref(), backend(params), &rpc, &net.chain_id, &q.token_in,
                 &q.token_out, &amount_in, q.slippage_bps, mev, &q.quote_id, &guard,
             )
         }
@@ -619,13 +626,18 @@ fn execute_direct(env: &Env, params: &Value) -> ApiResult {
     let rpc = str_param(params, &["RPC"]).ok_or_else(|| ApiError::new(400, "RPC required"))?;
     let cid = client_id(env);
     let unlock = unlock_keys(params);
+    let protocol = crate::models::account::fetch(env, account_id).ok().flatten().and_then(|a| super::signer::hardware_protocol(env, &a));
+    let signer = match &protocol {
+        Some(protocol) => swap::Signer::Device { protocol, params },
+        None => swap::Signer::Keys(&unlock),
+    };
     let mev = swap::mev_enabled(param(params, &["MevProtection", "mevProtection"]).and_then(Value::as_bool));
     let quote_id = str_param(params, &["QuoteId", "quoteId"]).map(str::to_owned).unwrap_or_else(swap::new_quote_id);
     let slip = slippage(params);
     let res = if net.kind == "solana" {
-        swap::execute_solana(env, account_id, &unlock, cid.as_deref(), backend(params), rpc, &net.chain_id, &token_in, &token_out, amount_in, slip, mev, &quote_id)
+        swap::execute_solana(env, account_id, &signer, cid.as_deref(), backend(params), rpc, &net.chain_id, &token_in, &token_out, amount_in, slip, mev, &quote_id)
     } else {
-        swap::execute_evm(env, account_id, &unlock, cid.as_deref(), backend(params), rpc, &net.chain_id, &token_in, &token_out, amount_in, slip, mev, &quote_id)
+        swap::execute_evm(env, account_id, &signer, cid.as_deref(), backend(params), rpc, &net.chain_id, &token_in, &token_out, amount_in, slip, mev, &quote_id)
     };
     res.map_err(ApiError::internal)
 }

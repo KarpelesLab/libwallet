@@ -77,7 +77,7 @@ fn execute_solana_splices_and_broadcasts() {
     let token_out = TokenRef { address: "EPjF...".into(), symbol: "USDC".into(), decimals: 6 };
 
     let res = swap::execute_solana(
-        &env, &acct.id, &unlock, None, &okx, node, "mainnet", &token_in, &token_out, "1000000000", 50, false, "q_test",
+        &env, &acct.id, &libwallet::swap::Signer::Keys(&unlock), None, &okx, node, "mainnet", &token_in, &token_out, "1000000000", 50, false, "q_test",
     )
     .unwrap();
     assert_eq!(res["orderId"], "ord-sol");
@@ -136,7 +136,7 @@ fn execute_evm_signs_and_broadcasts() {
     let token_out = TokenRef { address: "0xOUT".into(), symbol: "OUT".into(), decimals: 6 };
 
     let res = swap::execute_evm(
-        &env, &a.id, &unlock, None, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50, true, "q_test",
+        &env, &a.id, &libwallet::swap::Signer::Keys(&unlock), None, &okx, &node, "1", &token_in, &token_out, "1000000000000000000", 50, true, "q_test",
     )
     .unwrap();
     // Hash comes from the OKX orderStatus (the confirmed on-chain tx), not our node.
@@ -460,7 +460,7 @@ fn execute_evm_with_tx(chain_id: &str, tx: &str) -> Result<serde_json::Value, li
         r#"{"jsonrpc":"2.0","id":1,"result":"0x4a817c800"}"#.to_string(),
     ]);
     swap::execute_evm(
-        &env, &account_id, &unlock, None, &okx, &node, chain_id, &token("0xIN", "IN", 18), &token("0xOUT", "OUT", 6),
+        &env, &account_id, &libwallet::swap::Signer::Keys(&unlock), None, &okx, &node, chain_id, &token("0xIN", "IN", 18), &token("0xOUT", "OUT", 6),
         "1000000000000000000", 50, true, "q_test",
     )
 }
@@ -491,7 +491,7 @@ fn execute_evm_refuses_non_numeric_chain_id() {
     // Used to sign for chain id 1 (mainnet) via `parse().unwrap_or(1)`.
     let (env, account_id, unlock) = evm_account();
     let err = swap::execute_evm(
-        &env, &account_id, &unlock, None, "http://unused.invalid", "http://unused.invalid", "mainnet",
+        &env, &account_id, &libwallet::swap::Signer::Keys(&unlock), None, "http://unused.invalid", "http://unused.invalid", "mainnet",
         &token("0xIN", "IN", 18), &token("0xOUT", "OUT", 6), "1000000000000000000", 50, true, "q_test",
     )
     .unwrap_err()

@@ -426,7 +426,7 @@ fn okx_slippage_percent(bps: u16) -> String {
 pub fn execute_evm(
     env: &Env,
     account_id: &str,
-    unlock: &[(String, String)],
+    signer: &Signer<'_>,
     client_id: Option<&str>,
     base: &str,
     rpc: &str,
@@ -439,7 +439,7 @@ pub fn execute_evm(
     quote_id: &str,
 ) -> Result<serde_json::Value> {
     execute_evm_guarded(
-        env, account_id, unlock, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
+        env, account_id, signer, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
         quote_id, &ExecuteGuard::default(),
     )
 }
@@ -494,13 +494,22 @@ impl ExecuteGuard {
     }
 }
 
+/// Who signs a swap's transaction.
+pub enum Signer<'a> {
+    /// The wallet's own key shares, unlocked with these secrets.
+    Keys(&'a [(String, String)]),
+    /// The account's hardware wallet (`protocol`: `ledger`, `catcard`,
+    /// `airgap`); `params` are the route's, for the device link.
+    Device { protocol: &'a str, params: &'a Value },
+}
+
 /// [`execute_evm`] with the quote-approval tripwires of `guard` applied to the
 /// fetched swap tx before signing.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_evm_guarded(
     env: &Env,
     account_id: &str,
-    unlock: &[(String, String)],
+    signer: &Signer<'_>,
     client_id: Option<&str>,
     base: &str,
     rpc: &str,
@@ -586,7 +595,11 @@ pub fn execute_evm_guarded(
         chain_id: evm_chain_id,
         eip1559: false,
     };
-    let raw = crate::evm::sign_tx(env, account_id, unlock, &req)?;
+    let raw = match signer {
+        Signer::Keys(unlock) => crate::evm::sign_tx(env, account_id, unlock, &req)?,
+        // The owner confirms the swap transaction on the device's own screen.
+        Signer::Device { protocol, params } => crate::rt::block_on(crate::handlers::signer::sign_evm_request(env, &acct, protocol, params, &req)).map_err(|e| Error::Env(e.message))?,
+    };
     let raw_hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     // Local tx hash = keccak256(signed RLP), used as a fallback until OKX
     // reports the on-chain hash.
@@ -699,7 +712,7 @@ const OKX_SOLANA_BROADCAST_ATTEMPTS: u32 = 3;
 pub fn execute_solana(
     env: &Env,
     account_id: &str,
-    unlock: &[(String, String)],
+    signer: &Signer<'_>,
     client_id: Option<&str>,
     base: &str,
     rpc: &str,
@@ -712,7 +725,7 @@ pub fn execute_solana(
     quote_id: &str,
 ) -> Result<serde_json::Value> {
     execute_solana_guarded(
-        env, account_id, unlock, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
+        env, account_id, signer, client_id, base, rpc, chain_id, token_in, token_out, amount_in, slippage_bps, mev,
         quote_id, &ExecuteGuard::default(),
     )
 }
@@ -723,7 +736,7 @@ pub fn execute_solana(
 pub fn execute_solana_guarded(
     env: &Env,
     account_id: &str,
-    unlock: &[(String, String)],
+    signer_keys: &Signer<'_>,
     client_id: Option<&str>,
     base: &str,
     _rpc: &str,
@@ -779,10 +792,13 @@ pub fn execute_solana_guarded(
             .to_vec();
 
         // FROST-sign the message and self-verify under the fee-payer key.
-        let sig = crate::models::wallet::sign_ed25519_for_account(env, &acct, unlock, &message)?;
-        let sig64: [u8; 64] = sig
-            .try_into()
-            .map_err(|_| Error::Env("unexpected signature length".into()))?;
+        let sig64: [u8; 64] = match signer_keys {
+            Signer::Keys(unlock) => crate::models::wallet::sign_ed25519_for_account(env, &acct, unlock, &message)?
+                .try_into()
+                .map_err(|_| Error::Env("unexpected signature length".into()))?,
+            // A retried broadcast is a new transaction: the device asks again.
+            Signer::Device { protocol, params } => crate::rt::block_on(crate::handlers::signer::sign_solana_message(env, &acct, protocol, params, &message)).map_err(|e| Error::Env(e.message))?,
+        };
         if !crate::tss::ed25519_verify(&signer, &message, &sig64) {
             return Err(Error::Env("signature does not verify under fee-payer pubkey".into()));
         }

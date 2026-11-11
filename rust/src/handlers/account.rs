@@ -42,7 +42,7 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
     // build awaits this from dispatch::handle_parsed_async instead.)
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
-        return crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, &msg));
+        return crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, super::signer::Message::Plain(&msg)));
     }
 
     match account.kind.as_str() {
@@ -56,9 +56,7 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
         // TronWeb signMessageV2: keccak of "\x19TRON Signed Message:\n<len>" +
         // message, 65-byte R‖S‖V (V 27/28), hex-encoded.
         "tron" => {
-            let mut full = format!("\x19TRON Signed Message:\n{}", msg.len()).into_bytes();
-            full.extend_from_slice(&msg);
-            let digest = purecrypto::hash::keccak256(&full);
+            let digest = crate::tron::message_digest(&msg);
             let mut sig = crate::evm::sign_digest_recoverable(env, &account, &unlock, &digest)
                 .map_err(ApiError::internal)?;
             sig[64] += 27;
@@ -82,6 +80,27 @@ pub fn sign_message(env: &Env, params: &Value) -> ApiResult {
             Ok(serde_json::json!({ "signature": bs58::encode(&sig).into_string() }))
         }
     }
+}
+
+/// `Account:signTypedData` {Id, TypedData, Keys} — an EIP-712 signature by an
+/// EVM account over `TypedData` (the JSON, as text or as an object): `{signature}`,
+/// 65-byte R‖S‖V as `0x` hex. A hardware wallet's account signs on its device.
+pub fn sign_typed_data(env: &Env, params: &Value) -> ApiResult {
+    let account_id = params.get("Id").and_then(Value::as_str).ok_or_else(|| ApiError::new(400, "Id (account) required"))?;
+    let typed = super::signer::typed_data_param(params)?;
+    let account = crate::models::account::fetch(env, account_id).map_err(ApiError::internal)?.ok_or_else(|| ApiError::new(404, "account not found"))?;
+    if account.kind != "ethereum" {
+        return Err(ApiError::new(400, format!("typed data is signed by ethereum accounts, not {}", account.kind)));
+    }
+    // (The browser build awaits this from dispatch::handle_parsed_async instead.)
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(protocol) = super::signer::hardware_protocol(env, &account) {
+        return crate::rt::block_on(super::signer::sign_message(env, &account, &protocol, params, super::signer::Message::TypedData(&typed)));
+    }
+    let digest = crate::eip712::parse(&typed).and_then(|td| td.hash()).map_err(|e| ApiError::new(400, e))?;
+    let sig = crate::evm::sign_eth_digest(env, account_id, &unlock_keys(params), &digest).map_err(ApiError::internal)?;
+    let hex: String = sig.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(serde_json::json!({ "signature": format!("0x{hex}") }))
 }
 
 /// `Account:signTransaction` — build and threshold-sign an EVM transaction for
@@ -368,29 +387,7 @@ fn sign_tx_tron(env: &Env, account: &crate::models::account::Account, params: &V
 /// (base units, decimal string or number), with `token` naming a TRC-20
 /// contract (absent / "NATIVE": TRX) and `feeLimit` (sun) capping its energy.
 fn tron_transfer(tx: &Value) -> Result<crate::tron::Transfer, ApiError> {
-    let to = tx
-        .get("to")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::new(400, "to required"))?
-        .to_owned();
-    let value: u128 = match tx.get("value") {
-        Some(Value::String(s)) => s.parse().map_err(|_| ApiError::new(400, "value must be a base-unit integer"))?,
-        Some(Value::Number(n)) => n.as_u64().ok_or_else(|| ApiError::new(400, "value must be a base-unit integer"))?.into(),
-        _ => return Err(ApiError::new(400, "value required")),
-    };
-    match tx.get("token").and_then(Value::as_str).filter(|t| !t.is_empty() && *t != "NATIVE") {
-        Some(contract) => Ok(crate::tron::Transfer::Trc20 {
-            contract: contract.to_owned(),
-            to,
-            amount: value,
-            fee_limit: tx.get("feeLimit").and_then(Value::as_u64).unwrap_or(crate::tron::DEFAULT_TRC20_FEE_LIMIT),
-        }),
-        None => Ok(crate::tron::Transfer::Trx {
-            to,
-            amount: u64::try_from(value).map_err(|_| ApiError::new(400, "value exceeds the TRX supply"))?,
-        }),
-    }
+    crate::tron::Transfer::from_json(tx).map_err(|e| ApiError::new(400, e.to_string()))
 }
 
 fn sign_tx_bitcoin(env: &Env, account: &crate::models::account::Account, params: &Value) -> ApiResult {

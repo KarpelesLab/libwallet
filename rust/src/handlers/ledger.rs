@@ -14,6 +14,7 @@
 //!                                    → a `ledger` wallet + accounts (no device)
 //!   Ledger:showAddress {Account}     → display + verify the address on device
 //!   Ledger:signMessage {Account, Message (base64)}
+//!   Ledger:signTypedData {Account, TypedData (EIP-712 JSON)}
 //!   Ledger:signTransaction {Account, Transaction, Network|RPC?, Offline?,
 //!                           Broadcast?}
 //!   Ledger:quitApp                   → back to the dashboard
@@ -76,6 +77,16 @@ pub async fn route(env: &Env, action: &str, params: &Value) -> ApiResult {
             let message = base64::engine::general_purpose::STANDARD.decode(message).map_err(|e| ApiError::new(400, format!("Message: {e}")))?;
             let device = lsdk::Device::new(transport::open(env, params).await?);
             ledger::sign_message(&device, &account, &info, &message).await
+        }
+        "signTypedData" => {
+            let (account, info) = ledger::load_account(env, account_param(params)?)?;
+            let typed = match params.get("TypedData") {
+                Some(Value::String(s)) if !s.is_empty() => s.clone(),
+                Some(td @ Value::Object(_)) => td.to_string(),
+                _ => return Err(ApiError::new(400, "TypedData (the EIP-712 JSON) required")),
+            };
+            let device = lsdk::Device::new(transport::open(env, params).await?);
+            ledger::sign_typed_data(&device, &account, &info, &typed).await
         }
         "signTransaction" => {
             let (account, info) = ledger::load_account(env, account_param(params)?)?;

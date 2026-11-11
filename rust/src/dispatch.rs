@@ -130,15 +130,21 @@ async fn handle_parsed_async(handle: &Handle, req: &mut Request) -> String {
         ("Bitfi:prepareSend", _) => crate::handlers::bitfi::prepare_send(&req.params).await,
         ("Bitfi:broadcast", _) => crate::handlers::bitfi::broadcast(&req.params).await,
         // Signing for a hardware wallet's account waits on the device.
-        ("Account:signTransaction", _) | ("Account:signMessage", _) if crate::handlers::signer::hardware_account(&handle.env, &req.params).is_some() => {
-            let (account, protocol) = crate::handlers::signer::hardware_account(&handle.env, &req.params).expect("checked above");
-            if req.path == "Account:signTransaction" {
-                crate::handlers::signer::sign_transaction(&handle.env, &account, &protocol, &req.params, false).await
-            } else {
-                use base64::Engine;
-                match req.params.get("Message").and_then(serde_json::Value::as_str).map(|m| base64::engine::general_purpose::STANDARD.decode(m)) {
-                    Some(Ok(msg)) => crate::handlers::signer::sign_message(&handle.env, &account, &protocol, &req.params, &msg).await,
-                    _ => Err(crate::handlers::ApiError::new(400, "Message (base64) required")),
+        ("Account:signTransaction", _) | ("Account:signMessage", _) | ("Account:signTypedData", _) if crate::handlers::signer::hardware_account(&handle.env, &req.params).is_some() => {
+            use crate::handlers::signer::{self, Message};
+            let (account, protocol) = signer::hardware_account(&handle.env, &req.params).expect("checked above");
+            match req.path.as_str() {
+                "Account:signTransaction" => signer::sign_transaction(&handle.env, &account, &protocol, &req.params, false).await,
+                "Account:signTypedData" => match signer::typed_data_param(&req.params) {
+                    Ok(typed) => signer::sign_message(&handle.env, &account, &protocol, &req.params, Message::TypedData(&typed)).await,
+                    Err(e) => Err(e),
+                },
+                _ => {
+                    use base64::Engine;
+                    match req.params.get("Message").and_then(serde_json::Value::as_str).map(|m| base64::engine::general_purpose::STANDARD.decode(m)) {
+                        Some(Ok(msg)) => signer::sign_message(&handle.env, &account, &protocol, &req.params, Message::Plain(&msg)).await,
+                        _ => Err(crate::handlers::ApiError::new(400, "Message (base64) required")),
+                    }
                 }
             }
         }

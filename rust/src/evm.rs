@@ -259,23 +259,50 @@ pub fn recover_sender(raw: &[u8]) -> Result<String> {
 /// Recover the EIP-55 signer address from an EIP-191 personal-sign `message`
 /// and its 65-byte `R || S || V` signature (`web3_provider` / `personal_ecRecover`).
 pub fn personal_ec_recover(message: &[u8], signature: &[u8]) -> Result<String> {
+    recover_digest_address(&personal_sign_digest(message), signature).map_err(|e| Error::Env(format!("personal_ecRecover: {e}")))
+}
+
+/// The EIP-55 address whose key made the 65-byte `R || S || V` signature over
+/// `digest`. V is 27/28 or a raw 0/1 recovery id.
+pub fn recover_digest_address(digest: &[u8; 32], signature: &[u8]) -> Result<String> {
     use purecrypto::bignum::BoxedUint;
     use purecrypto::ec::boxed::BoxedEcdsaSignature;
     use purecrypto::ec::CurveId;
     if signature.len() != 65 {
-        return Err(Error::Env("personal_ecRecover: signature must be 65 bytes".into()));
+        return Err(Error::Env("signature must be 65 bytes".into()));
     }
-    let digest = personal_sign_digest(message);
     let r = BoxedUint::from_be_bytes(&signature[0..32]);
     let s = BoxedUint::from_be_bytes(&signature[32..64]);
-    // V is 27/28 (EIP-191) or, from some libraries, a raw 0/1 recovery id.
     let recid = if signature[64] >= 27 { signature[64] - 27 } else { signature[64] };
     let sig = BoxedEcdsaSignature::from_components(r, s);
-    let pk = sig
-        .recover_prehash(CurveId::Secp256k1, &digest, recid)
-        .map_err(|e| Error::Env(format!("personal_ecRecover: {e:?}")))?;
+    let pk = sig.recover_prehash(CurveId::Secp256k1, digest, recid).map_err(|e| Error::Env(format!("{e:?}")))?;
     let addr = outscript::hash::ether_hash(&pk.to_sec1()); // strips the 0x04 prefix
     Ok(outscript::address::eip55(&addr))
+}
+
+/// A device's 64/65-byte signature over `digest`, as `R || S || V` with V
+/// 27/28 — accepted only if it recovers to `address` (an EVM `0x…` address).
+/// The V the device reported is tried first, then the other parity: what
+/// decides is the recovered signer.
+pub fn rsv_for_address(digest: &[u8; 32], signature: &[u8], address: &str) -> Result<[u8; 65]> {
+    if signature.len() != 64 && signature.len() != 65 {
+        return Err(Error::Env(format!("signature must be 64/65 bytes, got {}", signature.len())));
+    }
+    let hint = match signature.get(64).copied() {
+        Some(v) if v >= 35 => ((v as u64 - 35) % 2) as u8,
+        Some(v) if v >= 27 => (v - 27) & 1,
+        Some(v) => v & 1,
+        None => 0,
+    };
+    let mut rsv = [0u8; 65];
+    rsv[..64].copy_from_slice(&signature[..64]);
+    for parity in [hint, 1 - hint] {
+        rsv[64] = 27 + parity;
+        if recover_digest_address(digest, &rsv).is_ok_and(|from| from.eq_ignore_ascii_case(address)) {
+            return Ok(rsv);
+        }
+    }
+    Err(Error::Env(format!("the signature is not from {address}")))
 }
 
 fn parse_dec(s: &str) -> Result<BigInt> {
