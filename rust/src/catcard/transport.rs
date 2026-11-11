@@ -239,6 +239,7 @@ pub mod hid {
 
     fn api() -> Result<&'static Mutex<HidApi>, ApiError> {
         static API: OnceLock<Result<Mutex<HidApi>, String>> = OnceLock::new();
+        crate::rt::hid_init();
         API.get_or_init(|| HidApi::new().map(Mutex::new).map_err(|e| e.to_string())).as_ref().map_err(terr)
     }
 

@@ -132,6 +132,7 @@ pub async fn open<'a>(env: &'a Env, params: &Value) -> Result<Link<'a>, ApiError
         #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
         "hid" => {
             use lsdk::transport::hid::HidTransport;
+            crate::rt::hid_init();
             let t = match params.get("Device").and_then(Value::as_str).filter(|s| !s.is_empty()) {
                 Some(path) => {
                     let list = HidTransport::list().map_err(super::lerr)?;
@@ -161,6 +162,7 @@ pub async fn open<'a>(env: &'a Env, params: &Value) -> Result<Link<'a>, ApiError
 pub async fn list() -> Result<Value, ApiError> {
     #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
     {
+        crate::rt::hid_init();
         let list = lsdk::transport::hid::HidTransport::list().map_err(super::lerr)?;
         return Ok(Value::Array(
             list.iter()
