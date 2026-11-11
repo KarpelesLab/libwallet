@@ -183,6 +183,10 @@ pub fn build_message_request(env: &Env, account_id: &str, message: &[u8], kind: 
     if message.is_empty() {
         return Err(Error::Env("nothing to sign: the message is empty".into()));
     }
+    // These are Keystone's request types; a BBQr signer has no reader for them.
+    if framing.transport != Transport::Ur {
+        return Err(Error::Env("message requests are UR requests (Keystone's): BBQr signers are not asked to sign messages this way".into()));
+    }
     let request_id = registry::new_request_id();
     let rid = registry::uuid_hyphenated(&request_id);
     let mut path = KeyPath::parse(&info.path)?;

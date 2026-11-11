@@ -632,6 +632,9 @@ fn messages_and_typed_data_are_signed_by_the_air_gapped_signer() {
     assert_eq!(done["result"], "success", "{done}");
     let sig = libwallet::airgap::unhex(done["data"]["signature"].as_str().unwrap()).unwrap();
     assert_eq!(libwallet::evm::recover_digest_address(&digest, &sig).unwrap(), "0x9858EfFD232B4033E47d90003D41EC34EcaEda94");
+    // Message requests are UR requests: there is no BBQr form of them.
+    let r = request(h, &serde_json::json!({ "path": "Airgap:signRequest", "params": { "Account": eth, "Message": b64(b"x"), "Transport": "bbqr" } }).to_string());
+    assert_eq!(r["result"], "error", "{r}");
     // Typed data is an EVM thing.
     let sol = account_of(&imported, "solana")["Id"].as_str().unwrap().to_owned();
     let r = request(h, &serde_json::json!({ "path": "Airgap:signRequest", "params": { "Account": sol, "TypedData": typed } }).to_string());
