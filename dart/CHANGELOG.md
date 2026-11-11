@@ -10,6 +10,23 @@
   Android the app relays APDUs to the device's smart-card reader with
   `client.catcard.ccidBridge()`. The firmware's README says it is not ready for
   funds. See `docs/catcard.md`.
+- **CatCard: show an address, sign messages, read keys by path.** These need
+  firmware that has the requests; older firmware answers them with code 501,
+  and `info().hostInfo` (available once a call has paired) says what a device
+  can do.
+  - `showAddress()` displays the account's address on the device for the user
+    to compare, and fails if the device shows another one.
+  - `signMessage()` signs an Ethereum `personal_sign` message or a Bitcoin
+    message (BIP-137 by default; the new optional `scheme` asks for `bip322`
+    or `bip322-full`). The device signs printable ASCII text only, of limited
+    length. EIP-712 typed data and Solana messages are not signed. A BIP-322
+    signature is returned without being verified by libwallet;
+    `signMessageDetailed()` reports the scheme and whether it was verified.
+  - `getKeys(paths: [...])` reads individual keys by derivation path, with
+    optional `chain` and `format`. Ethereum and Solana keys can be imported;
+    a Bitcoin path is a single address, not an account, and is not imported.
+  - After a reconnect, signing for an Ethereum or Solana account asks the
+    user to share that one key rather than the whole account again.
 - **Ledger hardware wallets (`client.ledger`).** Use a Ledger device as the
   signer for Ethereum, Bitcoin and Solana accounts: `getKeys()` /
   `importKeys()` read the open app's keys into a `Protocol: ledger` wallet,

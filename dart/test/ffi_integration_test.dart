@@ -1031,6 +1031,9 @@ void main() {
         expect(info.pairing && info.hostWallet, isTrue);
         expect(info.bench, isFalse);
         expect(info.paired, isFalse);
+        // What the firmware can do is only told inside a paired channel,
+        // and info never pairs to find out.
+        expect(info.hostInfo, isNull);
         // Identify: opcode 2, no payload.
         expect(seen.single, [2, 0, 0, 0, 0, 0]);
       } finally {
@@ -1133,6 +1136,126 @@ void main() {
           client.catcard.signTransaction(
               account: 'acct-nope', transaction: {'to': '0x00', 'value': '1'}),
           throwsA(isA<LibwalletException>()));
+    });
+
+    test('showing an address and signing a message need a CatCard account',
+        () async {
+      final notFound = throwsA(isA<LibwalletException>().having(
+          (e) => e.toString(), 'message', contains('account not found')));
+      await expectLater(client.catcard.showAddress('acct-nope'), notFound);
+      await expectLater(
+          client.catcard.signMessage(
+              account: 'acct-nope',
+              message: Uint8List.fromList('hi'.codeUnits),
+              scheme: 'bip322'),
+          notFound);
+      await expectLater(
+          client.catcard.signMessageDetailed(
+              account: 'acct-nope', message: Uint8List.fromList([1])),
+          notFound);
+    });
+
+    test('keys by path are checked before the device is asked', () async {
+      // Nothing may reach a device for a request that cannot be made.
+      final seen = <Uint8List>[];
+      final sub = client.catcard.bridge((message) async {
+        seen.add(message);
+        return reply(1, []);
+      });
+      try {
+        Future<void> refused(Future<CatCardKeys> call, String why) =>
+            expectLater(
+                call,
+                throwsA(isA<LibwalletException>()
+                    .having((e) => e.toString(), 'message', contains(why))));
+        const link = CatCardLink.bridge();
+        // A path that names no chain, a chain the device does not sign for,
+        // a Solana path that is not hardened throughout, a bad script kind.
+        await refused(
+            client.catcard.getKeys(paths: ['m/0/1'], link: link), 'Chain');
+        await refused(
+            client.catcard
+                .getKeys(paths: ["m/44'/60'/0'/0/1"], chain: 'tron', link: link),
+            'Chain must be');
+        await refused(
+            client.catcard.getKeys(paths: ["m/44'/501'/0'/0"], link: link),
+            'hardened throughout');
+        await refused(
+            client.catcard.getKeys(
+                paths: ["m/84'/0'/0'/0/1"], format: 'p2wsh', link: link),
+            'Format');
+        await refused(
+            client.catcard
+                .getKeys(paths: ["m/44'/60'/0'/0/1"], account: 1, link: link),
+            'Account');
+        expect(seen, isEmpty);
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('the models read what the firmware says of itself', () {
+      final info = CatCardInfo.fromJson({
+        'board': 'q1',
+        'firmware': '7.1.0',
+        'protocol': 2,
+        'unlocked': true,
+        'paired': true,
+        'hostInfo': {
+          'legacy': false,
+          'addressAt': true,
+          'signMessage': true,
+          'pathsAllowed': true,
+          'shared': false,
+          'messageMax': 960,
+          'chains': [
+            {
+              'chain': 1,
+              'name': 'Bitcoin',
+              'addresses': true,
+              'sign': true,
+              'messages': true,
+              'formats': ['p2wpkh', 'p2tr']
+            },
+            {
+              'chain': 3,
+              'name': 'Solana',
+              'addresses': true,
+              'sign': true,
+              'messages': false,
+              'formats': ['solana']
+            },
+          ],
+        },
+      });
+      final host = info.hostInfo!;
+      expect(host.legacy, isFalse);
+      expect(host.addressAt && host.signMessage && host.pathsAllowed, isTrue);
+      expect(host.shared, isFalse);
+      expect(host.messageMax, 960);
+      expect(host.chains.map((c) => c.name), ['Bitcoin', 'Solana']);
+      expect(host.chains.first.formats, ['p2wpkh', 'p2tr']);
+      expect(host.chains.last.messages, isFalse);
+      // Older firmware: the first six requests only.
+      final old = CatCardInfo.fromJson({
+        'paired': true,
+        'hostInfo': {'legacy': true, 'addressAt': false, 'signMessage': false}
+      }).hostInfo!;
+      expect(old.legacy, isTrue);
+      expect(old.addressAt || old.signMessage, isFalse);
+      expect(old.chains, isEmpty);
+
+      final signed = CatCardSignedMessage.fromJson({
+        'account': 'acct-1',
+        'address': 'bc1p…',
+        'scheme': 'bip322',
+        'verified': false,
+        'signature': 'AkgwRQ==',
+        'path': "m/86'/0'/0'/0/0",
+      });
+      expect(signed.scheme, 'bip322');
+      expect(signed.verified, isFalse);
+      expect(signed.path, "m/86'/0'/0'/0/0");
     });
   });
 
