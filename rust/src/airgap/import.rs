@@ -548,7 +548,7 @@ pub struct ImportOptions {
     pub eth_accounts: Option<u32>,
     /// Only import keys whose `path` is in this list (default: all usable).
     pub select_paths: Option<Vec<String>>,
-    /// The signer wallet's protocol: `airgap` (default) or `ledger`.
+    /// The signer wallet's protocol: `airgap` (default), `ledger` or `catcard`.
     pub protocol: Option<String>,
     /// Add the accounts to this existing signer wallet (same protocol) instead
     /// of creating one — a device exports one app's keys at a time. Keys the
@@ -559,7 +559,7 @@ pub struct ImportOptions {
 /// Whether `protocol` names a wallet whose keys live on an external signer
 /// (watch-only accounts + the key provenance in `airgap:account:<id>`).
 pub fn is_signer_protocol(protocol: &str) -> bool {
-    matches!(protocol, "airgap" | "ledger")
+    matches!(protocol, "airgap" | "ledger" | "catcard")
 }
 
 /// Result of [`import`].
@@ -593,7 +593,11 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
     if !is_signer_protocol(protocol) {
         return Err(Error::Env(format!("{protocol} is not an external-signer wallet protocol")));
     }
-    let default_name = if protocol == "ledger" { "Ledger" } else { "Air-gapped signer" };
+    let default_name = match protocol {
+        "ledger" => "Ledger",
+        "catcard" => "CatCard",
+        _ => "Air-gapped signer",
+    };
     // Existing accounts of the wallet being extended: (kind, address) pairs to
     // skip, and how many accounts each chain already has (for index / naming).
     let mut existing: std::collections::HashSet<(String, String)> = Default::default();

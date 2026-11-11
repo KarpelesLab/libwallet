@@ -134,6 +134,8 @@ async fn handle_parsed_async(handle: &Handle, req: &mut Request) -> String {
         ("Airgap:submitSignature", _) => crate::handlers::airgap::submit_signature_impl(&handle.env, &req.params).await,
         // Ledger devices over WebHID (or a host-relayed APDU bridge).
         (p, _) if p.starts_with("Ledger:") => crate::handlers::ledger::route(&handle.env, &p["Ledger:".len()..], &req.params).await,
+        // CatCard devices over WebHID (or a host-relayed packet bridge).
+        (p, _) if p.starts_with("CatCard:") => crate::handlers::catcard::route(&handle.env, &p["CatCard:".len()..], &req.params).await,
         ("Transaction:simulate", _) => crate::handlers::simulate::simulate_impl(&handle.env, &req.params).await,
         _ => return route_bound(handle, req),
     };

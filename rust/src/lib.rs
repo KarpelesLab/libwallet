@@ -78,6 +78,8 @@ pub mod tron;
 pub mod airgap;
 /// Ledger (BOLOS) hardware wallets over USB HID / WebHID / a host APDU bridge.
 pub mod ledger;
+/// CatCard hardware wallets over USB HID / WebHID / a host packet bridge.
+pub mod catcard;
 // rpc: the blocking JSON-RPC `call` is native-only, but the async `call_async`
 // (rsurl::aio) is shared — the browser uses it for chain RPC, so the module is
 // compiled on wasm too (its blocking items are individually gated).

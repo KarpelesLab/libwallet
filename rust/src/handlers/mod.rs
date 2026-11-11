@@ -7,6 +7,7 @@
 pub(crate) mod account;
 pub(crate) mod airgap;
 pub(crate) mod ledger;
+pub(crate) mod catcard;
 #[cfg(not(target_arch = "wasm32"))]
 mod asset;
 #[cfg(not(target_arch = "wasm32"))]
@@ -373,6 +374,9 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         // the same router from dispatch::handle_parsed_async.
         #[cfg(not(target_arch = "wasm32"))]
         p if p.starts_with("Ledger:") => crate::rt::block_on(ledger::route(&handle.env, &p["Ledger:".len()..], params)),
+        // CatCard hardware wallets (see handlers/catcard.rs), likewise.
+        #[cfg(not(target_arch = "wasm32"))]
+        p if p.starts_with("CatCard:") => crate::rt::block_on(catcard::route(&handle.env, &p["CatCard:".len()..], params)),
         // Air-gapped signer interop (QR payload strings; see handlers/airgap.rs).
         "Airgap:decoderNew" => airgap::decoder_new(&handle.env, params),
         "Airgap:decoderFeed" => airgap::decoder_feed(&handle.env, params),
