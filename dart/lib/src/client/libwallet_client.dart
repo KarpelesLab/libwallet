@@ -26,6 +26,7 @@ import '../api/wallet_key_api.dart';
 import '../api/wallet_connect_api.dart';
 import '../api/airgap_api.dart';
 import '../api/ledger_api.dart';
+import '../api/catcard_api.dart';
 import '../api/web3_api.dart';
 import '../api/web3_connection_api.dart';
 import '../models/wc_session.dart';
@@ -74,6 +75,7 @@ class LibwalletClient {
   late final WalletConnectApi walletConnect = WalletConnectApi(_transport);
   late final AirgapApi airgap = AirgapApi(_transport);
   late final LedgerApi ledger = LedgerApi(_transport);
+  late final CatCardApi catcard = CatCardApi(_transport);
   late final CrashApi crashes = CrashApi(_transport);
   late final ClawdWalletApi clawdWallet = ClawdWalletApi(_transport);
   late final ContractsApi contracts = ContractsApi(_transport);

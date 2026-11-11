@@ -123,6 +123,18 @@ export 'src/api/ledger_api.dart'
         LedgerKeys,
         LedgerImportResult,
         LedgerSignedTransaction;
+export 'src/api/catcard_api.dart'
+    show
+        CatCardApi,
+        CatCardLink,
+        CatCardDevice,
+        CatCardDevices,
+        CatCardInfo,
+        CatCardPairing,
+        CatCardWaiting,
+        CatCardKeys,
+        CatCardImportResult,
+        CatCardSignedTransaction;
 export 'src/api/airgap_api.dart'
     show
         AirgapApi,

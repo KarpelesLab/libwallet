@@ -995,6 +995,109 @@ void main() {
     });
   });
 
+  group('CatCard', () {
+    // A reply as the device frames it: [u16 status][u32 length][payload].
+    Uint8List reply(int status, List<int> payload) => Uint8List.fromList([
+          status & 0xff,
+          status >> 8,
+          payload.length & 0xff,
+          payload.length >> 8,
+          0,
+          0,
+          ...payload
+        ]);
+
+    test('list reports the transports of this build', () async {
+      final l = await client.catcard.list();
+      expect(l.transports, contains('bridge'));
+      expect(l.transports, contains(l.defaultTransport));
+    });
+
+    test('bridge relays messages to the app and back', () async {
+      // The "device": answers Identify as an unlocked Q1 running 7.0.0.
+      final seen = <Uint8List>[];
+      final sub = client.catcard.bridge((message) async {
+        seen.add(message);
+        return reply(
+            0, [2, 0, 1, 0xC0, 2, ...'q1'.codeUnits, 5, ...'7.0.0'.codeUnits]);
+      });
+      try {
+        final info =
+            await client.catcard.info(link: const CatCardLink.bridge());
+        expect(info.board, 'q1');
+        expect(info.firmware, '7.0.0');
+        expect(info.protocol, 2);
+        expect(info.unlocked, isTrue);
+        expect(info.pairing && info.hostWallet, isTrue);
+        expect(info.bench, isFalse);
+        expect(info.paired, isFalse);
+        // Identify: opcode 2, no payload.
+        expect(seen.single, [2, 0, 0, 0, 0, 0]);
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('a pairing code the user turns down pairs nothing', () async {
+      // The device answers the handshake; the user says the codes differ.
+      final opcodes = <int>[];
+      final sub = client.catcard.bridge((message) async {
+        final opcode = message[0] | (message[1] << 8);
+        opcodes.add(opcode);
+        switch (opcode) {
+          case 0x0002:
+            return reply(0,
+                [2, 0, 1, 0xC0, 2, ...'q1'.codeUnits, 5, ...'7.0.0'.codeUnits]);
+          case 0x0042: // PairCommit: the device's X25519 key (RFC 7748 §6.1)
+            return reply(0, [
+              0xde, 0x9e, 0xdb, 0x7d, 0x7b, 0x7d, 0xc1, 0xb4, 0xd3, 0x5b, 0x61,
+              0xc2, 0xec, 0xe4, 0x35, 0x37, 0x3f, 0x83, 0x43, 0xc8, 0x5b, 0x78,
+              0x67, 0x4d, 0xad, 0xfc, 0x7e, 0x14, 0x6f, 0x88, 0x2b, 0x4f
+            ]);
+          default: // PairReveal, PairAbort
+            return reply(0, []);
+        }
+      });
+      final codes = <String>[];
+      final pairing = client.catcard.pairing.listen((p) async {
+        codes.add(p.code);
+        await client.catcard.confirmPairing(p, accept: false);
+      });
+      try {
+        await expectLater(
+            client.catcard.getKeys(link: const CatCardLink.bridge()),
+            throwsA(isA<LibwalletException>().having((e) => e.toString(),
+                'message', contains('pairing code was not confirmed'))));
+        expect(codes.single, matches(RegExp(r'^\d{3} \d{3}$')));
+        // Identify, commit, reveal, then the abort — and nothing sealed.
+        expect(opcodes, [0x0002, 0x0042, 0x0043, 0x0045]);
+      } finally {
+        await pairing.cancel();
+        await sub.cancel();
+      }
+    });
+
+    test('a failing bridge fails the call, with the reason', () async {
+      final sub = client.catcard
+          .bridge((message) async => throw StateError('no reader'));
+      try {
+        await expectLater(
+            client.catcard.info(link: const CatCardLink.bridge()),
+            throwsA(isA<LibwalletException>()
+                .having((e) => e.toString(), 'message', contains('no reader'))));
+      } finally {
+        await sub.cancel();
+      }
+    });
+
+    test('signing needs an account on a CatCard wallet', () async {
+      await expectLater(
+          client.catcard.signTransaction(
+              account: 'acct-nope', transaction: {'to': '0x00', 'value': '1'}),
+          throwsA(isA<LibwalletException>()));
+    });
+  });
+
   group('Vault', () {
     const vaultPw = 'vault password 1';
 

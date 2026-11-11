@@ -1,5 +1,15 @@
 ## Unreleased
 
+- **CatCard hardware wallets (`client.catcard`).** Use a CatCard (our open
+  firmware for Coldcard hardware) as the signer for Bitcoin, Ethereum and
+  Solana accounts over its own USB protocol: `getKeys()` / `importKeys()` read
+  the account the user shares on the device into a `Protocol: catcard` wallet,
+  `signTransaction()` signs on the device. The channel is paired by a
+  six-digit code the user compares on both screens (`pairing` /
+  `confirmPairing()`). libwallet opens USB itself on desktop; on iOS and
+  Android the app relays the messages to the device's smart-card reader with
+  `client.catcard.bridge()`. The firmware's README says it is not ready for
+  funds. See `docs/catcard.md`.
 - **Ledger hardware wallets (`client.ledger`).** Use a Ledger device as the
   signer for Ethereum, Bitcoin and Solana accounts: `getKeys()` /
   `importKeys()` read the open app's keys into a `Protocol: ledger` wallet,
