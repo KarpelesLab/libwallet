@@ -469,7 +469,7 @@
             </div>
             <div class="asset">
               <div class="form-grid">
-                <p class="subtitle">Read the account keys from the device. They are kept for this session only; reconnect and add them again after reloading the page.</p>
+                <p class="subtitle">Read the account keys from the device. Once added, balances, Send and Receive are on the Accounts and Send tabs, like any wallet. Accounts are kept for this session only: reconnect and add them again after reloading the page.</p>
                 <div class="btn-row wrap">
                   <button class="btn subtle" type="button" data-lg-add="Ethereum" disabled>Add Ethereum</button>
                   <button class="btn subtle" type="button" data-lg-add="Bitcoin" disabled>Add Bitcoin</button>
@@ -481,30 +481,6 @@
             </div>
           </div>
 
-          <div class="bk-block">
-            <div class="section-head">
-              <div class="eyebrow muted">Send · signed on the device</div>
-            </div>
-            <div class="asset">
-              <div class="form-grid">
-                <div>
-                  <label class="field-label" for="lgSendAccount">From</label>
-                  <select class="input mono" id="lgSendAccount" style="font-size:12.5px"><option value="">Add an account first</option></select>
-                </div>
-                <div>
-                  <label class="field-label" for="lgSendTo">To</label>
-                  <input class="input mono" id="lgSendTo" placeholder="Recipient address" autocomplete="off" spellcheck="false" />
-                </div>
-                <div>
-                  <label class="field-label" for="lgSendAmount">Amount</label>
-                  <input class="input mono" id="lgSendAmount" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-                </div>
-                <div class="err-inline" id="lgSendErr"></div>
-                <button class="btn primary block" type="button" id="lgSendBtn" disabled>Review on device &amp; send</button>
-                <p class="subtitle">You review and approve the transaction on the device's screen; nothing is sent until you do.</p>
-              </div>
-            </div>
-          </div>
           </div><!-- /#hwLedger -->
 
           <!-- Air-gapped signers: Keystone (UR), CatCard / Coldcard (BBQr, files) -->
@@ -548,30 +524,6 @@
               </div>
             </div>
 
-            <div class="bk-block">
-              <div class="section-head">
-                <div class="eyebrow muted">Send · signed on the device</div>
-              </div>
-              <div class="asset">
-                <div class="form-grid">
-                  <div>
-                    <label class="field-label" for="qrSendAccount">From</label>
-                    <select class="input mono" id="qrSendAccount" style="font-size:12.5px"><option value="">Add an account first</option></select>
-                  </div>
-                  <div>
-                    <label class="field-label" for="qrSendTo">To</label>
-                    <input class="input mono" id="qrSendTo" placeholder="Recipient address" autocomplete="off" spellcheck="false" />
-                  </div>
-                  <div>
-                    <label class="field-label" for="qrSendAmount">Amount</label>
-                    <input class="input mono" id="qrSendAmount" placeholder="0.0" inputmode="decimal" autocomplete="off" />
-                  </div>
-                  <div class="err-inline" id="qrSendErr"></div>
-                  <button class="btn primary block" type="button" id="qrSendBtn" disabled>Create transaction to sign</button>
-                  <p class="subtitle">The unsigned transaction is shown as a QR code for your device. After you approve it there, scan the device's answer to send.</p>
-                </div>
-              </div>
-            </div>
           </div>
         </div>
 

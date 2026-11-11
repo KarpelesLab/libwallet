@@ -45,6 +45,7 @@ const session = {
   mnemonic:  null,   // string, only while unlocked (walletcore path)
   passphrase: null,  // BIP-39 passphrase for this session; never persisted
   mpc:       false,  // true when the dashboard is backed by the MPC committee
+  hw:        null,   // { device } when the dashboard is backed by a hardware wallet
   addresses: null,   // { evm, bitcoin, solana }
   balances:  {}      // chain → formatted string
 };
@@ -276,6 +277,7 @@ async function unlockWith(mnemonic, passphrase = '') {
   session.mnemonic = mnemonic;
   session.passphrase = passphrase;
   session.mpc = false;   // walletcore path: not MPC-backed
+  session.hw = null;
   try {
     session.addresses = wasm.derive_addresses(mnemonic, passphrase);
   } catch (err) {
@@ -309,6 +311,8 @@ async function unlockWith(mnemonic, passphrase = '') {
 }
 
 function lock() {
+  // A hardware-wallet session has nothing to lock: disconnect it.
+  if (session.hw) return hwDisconnect();
   // MPC-backed session: locking returns to the MPC unlock screen (passkey /
   // password), not the walletcore password prompt. Drop the in-session unlock
   // material and restored wallet handles so nothing can sign until re-unlocked.
@@ -362,6 +366,21 @@ function renderAccounts() {
   for (const chain of ['evm', 'bitcoin', 'solana']) {
     const addr = session.addresses[chain];
     const m = CHAIN_META[chain];
+    if (!addr) {
+      // A hardware wallet only has the chains whose keys were read from it.
+      const none = el('div', 'asset');
+      none.dataset.chain = chain;
+      none.innerHTML = `
+        <div class="asset-head">
+          <div class="asset-name">
+            <span class="chain-badge">${m.badge}</span>
+            <span class="meta"><span class="n">${m.name}</span><br><span class="t">Not added from your device yet</span></span>
+          </div>
+          <button class="btn ghost sm" type="button" data-hw-add>Add</button>
+        </div>`;
+      list.appendChild(none);
+      continue;
+    }
     const card = el('div', 'asset');
     card.dataset.chain = chain;
     card.innerHTML = `
@@ -378,6 +397,7 @@ function renderAccounts() {
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a2 2 0 012-2h10" stroke="currentColor" stroke-width="1.8"/></svg>
           Copy
         </button>
+        <button class="copy" type="button" data-receive="${chain}">Receive</button>
       </div>`;
     list.appendChild(card);
   }
@@ -398,8 +418,9 @@ function setBalance(chain, text, isLoading) {
 // path (see ensureViewAccounts). session.accounts maps chain → {id, address}.
 async function refreshAllBalances() {
   if (!session.accounts) return;
-  ['evm', 'bitcoin', 'solana'].forEach(c => setBalance(c, null, true));
-  await Promise.allSettled(['evm', 'bitcoin', 'solana'].map(fetchChainBalance));
+  const chains = ['evm', 'bitcoin', 'solana'].filter(c => session.accounts[c]);
+  chains.forEach(c => setBalance(c, null, true));
+  await Promise.allSettled(chains.map(fetchChainBalance));
 }
 
 async function fetchChainBalance(chain) {
@@ -689,7 +710,7 @@ async function signingKeys(wallet) {
 async function prepareSend(chain, to, amount) {
   validateSendAddress(chain, to);
   const acct = session.accounts?.[chain];
-  if (!acct) throw new Error(`No account for ${chain}.`);
+  if (!acct) throw new Error(session.hw ? `Add a ${CHAIN_META[chain].name} account from your device first (Hardware tab).` : `No account for ${chain}.`);
   const base = toBaseUnits(amount, DECIMALS[chain]);
   const mpcTx = chain === 'bitcoin'
     ? { To: to, Amount: Number(base) }
@@ -715,8 +736,12 @@ async function prepareSend(chain, to, amount) {
   }
 
   return {
-    chain, to, amount, rows,
+    chain, to, amount, rows, hw: !!session.hw,
     broadcast: async () => {
+      if (session.hw) {
+        const id = await hwSignAndSend(acct, to, base);
+        return { id, url: explorerUrl(chain, id) };
+      }
       // Runs in the confirm-modal click so any committee biometric inside
       // signingKeys has transient activation.
       const wallet = chain === 'solana' ? backend.walletEd : backend.wallet;
@@ -737,13 +762,13 @@ function confirmSend(p) {
   const rows = p.rows.map(([k, v]) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join('');
   openModal(`
     <div class="card-pad stack" style="--gap:18px">
-      <div class="eyebrow">Confirm · signed on this device</div>
+      <div class="eyebrow">${p.hw ? 'Confirm · signed on your hardware wallet' : 'Confirm · signed on this device'}</div>
       <h2 class="title">Review transaction</h2>
       <div class="panel" style="padding:4px 16px">${rows}</div>
       <div class="err-inline" id="confirmErr"></div>
       <div class="btn-row">
         <button class="btn subtle" type="button" data-close>Cancel</button>
-        <button class="btn primary grow" type="button" id="confirmBroadcast">Sign &amp; broadcast</button>
+        <button class="btn primary grow" type="button" id="confirmBroadcast">${p.hw ? 'Continue on device' : 'Sign &amp; broadcast'}</button>
       </div>
     </div>`);
 
@@ -751,7 +776,7 @@ function confirmSend(p) {
     const btn = $('#confirmBroadcast');
     const cerr = $('#confirmErr');
     cerr.textContent = '';
-    btn.disabled = true; btn.textContent = 'Broadcasting…';
+    btn.disabled = true; btn.textContent = p.hw ? 'Waiting for your device…' : 'Broadcasting…';
     try {
       const { id, url } = await p.broadcast();
       closeModal();
@@ -767,8 +792,14 @@ function confirmSend(p) {
       }
       setTimeout(refreshAllBalances, 2500);
     } catch (e) {
-      cerr.textContent = e.message || String(e);
-      btn.disabled = false; btn.textContent = 'Sign & broadcast';
+      // A hardware flow may have replaced (or closed) this modal meanwhile.
+      const msg = e.code === 4001 ? 'Cancelled on the device.' : (e.message || String(e));
+      if ($('#confirmBroadcast') === btn) {
+        cerr.textContent = msg;
+        btn.disabled = false; btn.textContent = p.hw ? 'Continue on device' : 'Sign & broadcast';
+      } else if (msg !== 'Cancelled.') {
+        toast('error', 'Not sent', msg);
+      }
     }
   };
 }
@@ -1069,10 +1100,17 @@ function wireStaticEvents() {
   $('#revealPhrase').onclick = openReveal;
   // MPC-backed dashboards forget the on-device committee record (its own
   // confirm + onboarding fallback); walletcore wallets clear the vault.
-  $('#removeWallet').onclick = () => session.mpc ? mpcForget() : confirmRemove();
+  $('#removeWallet').onclick = () => session.hw ? hwDisconnect() : session.mpc ? mpcForget() : confirmRemove();
 
   // Copy buttons (event delegation for dynamically-rendered addresses)
   $('#assetList').addEventListener('click', e => {
+    const rc = e.target.closest('[data-receive]');
+    if (rc) return void openReceive(rc.dataset.receive);
+    if (e.target.closest('[data-hw-add]')) {
+      $$('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === 'ledger'));
+      $$('.tabpane').forEach(p => p.classList.toggle('on', p.dataset.pane === 'ledger'));
+      return void hardwareSelect(hardware.device);
+    }
     const btn = e.target.closest('[data-copy]');
     if (btn) copyText(btn.dataset.copy, btn);
   });
@@ -1216,6 +1254,7 @@ async function enterMpcDashboard() {
   session.mnemonic = null;      // MPC has no single mnemonic
   session.passphrase = null;    // (nor a BIP-39 passphrase)
   session.mpc = true;           // dashboard is backed by the MPC committee
+  session.hw = null;
   session.balances = {};
   // Always derive: this populates session.mpcAccounts (the Account Ids committee
   // send needs), which the cached record does not carry. Display the freshly
@@ -1245,7 +1284,7 @@ function applyMpcGuards() {
   updateSendAvailability();
   // --- Settings: reveal recovery phrase is walletcore-only ---
   const reveal = $('#revealPhrase');
-  if (reveal) reveal.classList.toggle('hidden', mpc);
+  if (reveal) reveal.classList.toggle('hidden', mpc || !!session.hw);
 }
 
 // Enable/disable Send per chain. Committee send now works on every chain
@@ -2324,7 +2363,6 @@ function ledgerEnable() {
   $$('[data-lg-add]').forEach(b => { b.disabled = !on; });
   $$('#lgNeeded button, #lgInstalled button, #lgAccounts button').forEach(b => { b.disabled = !on; });
   $('#lgConnect').disabled = ledger.busy;
-  $('#lgSendBtn').disabled = !on || !ledger.accounts.some(a => LEDGER_DECIMALS[a.Type] != null);
 }
 
 // Run one user action: serialise them (the device does one thing at a time),
@@ -2519,10 +2557,6 @@ function ledgerRenderAccounts() {
       toast('ok', 'Address confirmed', a.Address);
     });
   });
-  const sendable = ledger.accounts.filter(a => LEDGER_DECIMALS[a.Type] != null);
-  $('#lgSendAccount').innerHTML = sendable.length
-    ? sendable.map(a => `<option value="${esc(a.Id)}">${esc(LEDGER_SYMBOL[a.Type])} · ${esc(short(a.Address, 10, 8))}</option>`).join('')
-    : '<option value="">Add an account first</option>';
   ledgerEnable();
   ledger.accounts.forEach(async a => {
     const cell = $(`[data-lg-bal="${CSS.escape(a.Id)}"]`);
@@ -2546,27 +2580,7 @@ function ledgerAddAccounts(app) {
     for (const a of res.accounts) if (!ledger.accounts.some(x => x.Id === a.Id)) ledger.accounts.push(a);
     ledgerRenderAccounts();
     toast('ok', res.accounts.length ? `${app} account added` : `${app} account already added`);
-  });
-}
-
-function ledgerSend() {
-  return ledgerRun('#lgSendErr', async () => {
-    const a = ledger.accounts.find(x => x.Id === $('#lgSendAccount').value);
-    if (!a) throw new Error('Choose an account.');
-    const to = $('#lgSendTo').value.trim();
-    if (!to) throw new Error('Enter a recipient address.');
-    const units = toBaseUnits($('#lgSendAmount').value, LEDGER_DECIMALS[a.Type]);
-    if (units <= 0n) throw new Error('Enter an amount.');
-    // Each chain's Transaction shape (see docs/ledger.md).
-    const tx = a.Type === 'ethereum' ? { to, value: units.toString() }
-      : a.Type === 'bitcoin' ? { To: to, Amount: Number(units) }
-      : { to, amount: units.toString() };
-    await ledgerEnsureApp(LEDGER_APPS[a.Type]);
-    toast('ok', 'Review the transaction on your device');
-    const out = await backendRequest('Ledger:signTransaction', 'POST', { Account: a.Id, Transaction: tx, Broadcast: true });
-    $('#lgSendTo').value = ''; $('#lgSendAmount').value = '';
-    toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
-    setTimeout(ledgerRenderAccounts, 2500);
+    await hwSyncSession();
   });
 }
 
@@ -2639,7 +2653,6 @@ function ledgerInit() {
     if (name) ledgerInstall(name).then(() => { $('#lgAppName').value = ''; });
   };
   $$('[data-lg-add]').forEach(b => { b.onclick = () => ledgerAddAccounts(b.dataset.lgAdd); });
-  $('#lgSendBtn').onclick = ledgerSend;
   $('#lgFirmwareBtn').onclick = ledgerFirmwareStart;
   $('#lgFirmwareContinue').onclick = ledgerFirmwareContinue;
 }
@@ -2677,13 +2690,14 @@ function hardwareSelect(device) {
   const usb = !!HW_PROFILES[device].usb;
   $('#hwLedger').classList.toggle('hidden', !usb);
   $('#hwQr').classList.toggle('hidden', usb);
-  if (usb) { ledgerInit(); return; }
+  if (usb) { ledgerInit(); hwSyncSession(); return; }
   qrInit();
   const p = HW_PROFILES[device];
   $('#qrDeviceName').textContent = p.name;
   $('#qrImportHelp').textContent = p.importHelp;
   $('#qrScanKeys').classList.toggle('hidden', !navigator.mediaDevices?.getUserMedia);
   $('#ccUsb').classList.toggle('hidden', device !== 'catcard' || !('hid' in navigator));
+  hwSyncSession();
   qrRenderAccounts();
 }
 
@@ -2795,6 +2809,7 @@ async function qrImport(source) {
   const list = qrAccountsOf(hardware.device);
   for (const a of res.accounts) list.push(a);
   qrRenderAccounts();
+  await hwSyncSession();
   const skipped = (res.skipped || []).length;
   toast('ok', `${res.accounts.length} account${res.accounts.length === 1 ? '' : 's'} added`, skipped ? `${skipped} key${skipped === 1 ? '' : 's'} not supported` : '');
 }
@@ -2806,11 +2821,6 @@ function qrRenderAccounts() {
       <span class="k">${esc(LEDGER_SYMBOL[a.Type] || a.Type)} · <span data-qr-bal="${esc(a.Id)}">…</span></span>
       <span class="v">${esc(a.Address)}</span>
     </div>`).join('');
-  const sendable = list.filter(a => QR_DECIMALS[a.Type] != null);
-  $('#qrSendAccount').innerHTML = sendable.length
-    ? sendable.map(a => `<option value="${esc(a.Id)}">${esc(LEDGER_SYMBOL[a.Type])} · ${esc(short(a.Address, 10, 8))}</option>`).join('')
-    : '<option value="">Add an account first</option>';
-  $('#qrSendBtn').disabled = !sendable.length;
   list.forEach(async a => {
     const cell = $(`[data-qr-bal="${CSS.escape(a.Id)}"]`);
     try {
@@ -2834,95 +2844,73 @@ function qrDraw(canvas, code) {
   });
 }
 
-function qrSend() {
-  return qrRun('#qrSendErr', async () => {
-    const p = HW_PROFILES[hardware.device];
-    const a = qrAccountsOf(hardware.device).find(x => x.Id === $('#qrSendAccount').value);
-    if (!a) throw new Error('Choose an account.');
-    const to = $('#qrSendTo').value.trim();
-    if (!to) throw new Error('Enter a recipient address.');
-    const units = toBaseUnits($('#qrSendAmount').value, QR_DECIMALS[a.Type]);
-    if (units <= 0n) throw new Error('Enter an amount.');
-    const tx = a.Type === 'bitcoin' ? { To: to, Amount: Number(units) } : { to, value: units.toString() };
-    // An account read over CatCard USB is signed over USB, not QR.
-    if (a.usb) {
-      const usbTx = a.Type === 'solana' ? { to, amount: units.toString() } : tx;
-      toast('ok', 'Review the transaction on your CatCard');
-      const out = await backendRequest('CatCard:signTransaction', 'POST', { Account: a.Id, Transaction: usbTx, Broadcast: true });
-      $('#qrSendTo').value = ''; $('#qrSendAmount').value = '';
-      toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
-      setTimeout(qrRenderAccounts, 2500);
-      return;
-    }
-    // Small frames scan reliably from a laptop screen.
-    const req = await backendRequest('Airgap:signRequest', 'POST',
-      { Account: a.Id, Transaction: tx, Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
-    const { codes } = await backendRequest('Airgap:qr', 'POST', { Parts: req.parts });
-    qrShowRequest(p, a, req, codes);
+// Show an unsigned request as an (animated) QR for the device and take its
+// signed answer back — by camera, file or paste — then broadcast. Resolves with
+// the transaction id; rejects with "Cancelled." when the user backs out.
+function qrSignFlow(profile, req, codes) {
+  return new Promise((resolve, reject) => {
+    const canScan = !!navigator.mediaDevices?.getUserMedia;
+    const psbt = req.payload && req.payload.psbt;
+    let timer = null, scanning = false, settled = false;
+    const finish = (fn, v) => { if (settled) return; settled = true; clearInterval(timer); fn(v); };
+    const submit = async source => {
+      const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id, Broadcast: true });
+      finish(resolve, String(out.id ?? ''));
+    };
+    const show = error => {
+      openModal(`
+        <div class="card-pad stack" style="--gap:16px">
+          <div class="eyebrow">${esc(profile.name)} · step 1 of 2</div>
+          <h2 class="title">Scan with your device</h2>
+          <canvas id="qrCanvas" style="width:100%;max-width:360px;margin:0 auto;border-radius:10px"></canvas>
+          <p class="subtitle">${codes.length > 1 ? `Animated QR · ${codes.length} frames. ` : ''}Review and approve the transaction on the device, then bring its answer back.</p>
+          <div class="err-inline" id="qrReqErr">${esc(error || '')}</div>
+          <div class="btn-row wrap">
+            ${canScan ? '<button class="btn primary grow" type="button" id="qrAnswerScan">Scan the signed answer</button>' : ''}
+            <label class="btn subtle" for="qrAnswerFile">Upload signed file</label>
+            <input type="file" id="qrAnswerFile" class="hidden" />
+            ${profile.files && psbt ? '<button class="btn subtle" type="button" id="qrPsbtSave">Save .psbt for microSD</button>' : ''}
+          </div>
+          <textarea class="textarea mono" id="qrAnswerText" spellcheck="false" placeholder="…or paste the signed answer" style="min-height:64px"></textarea>
+          <div class="btn-row">
+            <button class="btn subtle" type="button" data-close>Cancel</button>
+            <button class="btn subtle grow" type="button" id="qrAnswerPaste">Send pasted answer</button>
+          </div>
+        </div>`);
+      const canvas = $('#qrCanvas');
+      let frame = 0;
+      qrDraw(canvas, codes[0]);
+      clearInterval(timer);
+      timer = setInterval(() => {
+        // The modal going away (Cancel, backdrop) while not scanning = cancelled.
+        if ($('#qrCanvas') !== canvas) { if (!scanning) finish(reject, new Error('Cancelled.')); return; }
+        frame = (frame + 1) % codes.length;
+        qrDraw(canvas, codes[frame]);
+      }, 280);
+      // A failed answer keeps the request on screen, with the reason.
+      const guard = fn => async () => { try { await fn(); } catch (e) { if (!settled) show(e.message || String(e)); } };
+      if (canScan) $('#qrAnswerScan').onclick = guard(async () => {
+        scanning = true;
+        let decoderId;
+        try { decoderId = await qrScan('Scan the signed answer'); } finally { scanning = false; }
+        if (decoderId) await submit({ DecoderId: decoderId }); else show();
+      });
+      $('#qrAnswerFile').onchange = guard(async e => { const f = e.target.files[0]; if (f) await submit({ Payload: await qrReadFile(f) }); });
+      $('#qrAnswerPaste').onclick = guard(async () => {
+        const t = $('#qrAnswerText').value.trim();
+        if (!t) throw new Error('Paste the signed answer first.');
+        await submit({ Payload: t });
+      });
+      if ($('#qrPsbtSave')) $('#qrPsbtSave').onclick = () => {
+        const bin = atob(psbt), bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+        const link = el('a'); link.href = url; link.download = 'unsigned.psbt'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      };
+    };
+    show();
   });
-}
-
-function qrShowRequest(profile, account, req, codes) {
-  const canScan = !!navigator.mediaDevices?.getUserMedia;
-  const psbt = req.payload && req.payload.psbt;
-  openModal(`
-    <div class="card-pad stack" style="--gap:16px">
-      <div class="eyebrow">${esc(profile.name)} · step 1 of 2</div>
-      <h2 class="title">Scan with your device</h2>
-      <canvas id="qrCanvas" style="width:100%;max-width:360px;margin:0 auto;border-radius:10px"></canvas>
-      <p class="subtitle">${codes.length > 1 ? `Animated QR · ${codes.length} frames. ` : ''}Review and approve the transaction on the device, then bring its answer back.</p>
-      <div class="err-inline" id="qrReqErr"></div>
-      <div class="btn-row wrap">
-        ${canScan ? '<button class="btn primary grow" type="button" id="qrAnswerScan">Scan the signed answer</button>' : ''}
-        <label class="btn subtle" for="qrAnswerFile">Upload signed file</label>
-        <input type="file" id="qrAnswerFile" class="hidden" />
-        ${profile.files && psbt ? '<button class="btn subtle" type="button" id="qrPsbtSave">Save .psbt for microSD</button>' : ''}
-      </div>
-      <textarea class="textarea mono" id="qrAnswerText" spellcheck="false" placeholder="…or paste the signed answer" style="min-height:64px"></textarea>
-      <div class="btn-row">
-        <button class="btn subtle" type="button" data-close>Cancel</button>
-        <button class="btn subtle grow" type="button" id="qrAnswerPaste">Send pasted answer</button>
-      </div>
-    </div>`);
-  const canvas = $('#qrCanvas');
-  let frame = 0;
-  qrDraw(canvas, codes[0]);
-  const timer = setInterval(() => {
-    if ($('#qrCanvas') !== canvas) { clearInterval(timer); return; }
-    frame = (frame + 1) % codes.length;
-    qrDraw(canvas, codes[frame]);
-  }, 280);
-
-  const submit = async source => {
-    const out = await backendRequest('Airgap:submitSignature', 'POST', { ...source, RequestId: req.request_id, Broadcast: true });
-    clearInterval(timer);
-    closeModal();
-    $('#qrSendTo').value = ''; $('#qrSendAmount').value = '';
-    toast('ok', 'Transaction sent', short(String(out.id ?? ''), 14, 12));
-    setTimeout(qrRenderAccounts, 2500);
-  };
-  const guard = fn => async () => {
-    try { await fn(); } catch (e) { if ($('#qrReqErr')) $('#qrReqErr').textContent = e.message || String(e); else toast('error', 'Could not send', e.message || String(e)); }
-  };
-  if (canScan) $('#qrAnswerScan').onclick = guard(async () => {
-    clearInterval(timer);
-    const decoderId = await qrScan('Scan the signed answer');
-    if (decoderId) await submit({ DecoderId: decoderId });
-    else qrShowRequest(profile, account, req, codes); // cancelled: back to the request
-  });
-  $('#qrAnswerFile').onchange = guard(async e => { const f = e.target.files[0]; if (f) await submit({ Payload: await qrReadFile(f) }); });
-  $('#qrAnswerPaste').onclick = guard(async () => {
-    const t = $('#qrAnswerText').value.trim();
-    if (!t) throw new Error('Paste the signed answer first.');
-    await submit({ Payload: t });
-  });
-  if ($('#qrPsbtSave')) $('#qrPsbtSave').onclick = () => {
-    const bin = atob(psbt), bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
-    const link = el('a'); link.href = url; link.download = 'unsigned.psbt'; link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  };
 }
 
 function qrInit() {
@@ -2943,7 +2931,6 @@ function qrInit() {
     await qrImport({ Payload: t });
     $('#qrKeysText').value = '';
   });
-  $('#qrSendBtn').onclick = qrSend;
   // The WebHID picker needs the click's user activation.
   $('#ccConnect').onclick = () => qrRun('#ccErr', async () => {
     const info = await backendRequest('CatCard:info', 'POST', { Request: true });
@@ -2963,6 +2950,7 @@ function qrInit() {
     const list = qrAccountsOf('catcard');
     for (const a of res.accounts) if (!list.some(x => x.Id === a.Id)) list.push({ ...a, usb: true });
     qrRenderAccounts();
+    await hwSyncSession();
     toast('ok', `${res.accounts.length} account${res.accounts.length === 1 ? '' : 's'} added`);
   });
 }
@@ -2987,4 +2975,141 @@ function catcardEvent(name, d) {
     </div>`);
   $('#ccPairNo').onclick = () => answer(false);
   $('#ccPairYes').onclick = () => answer(true);
+}
+
+
+// ============================================================================
+// Hardware wallet as the session wallet.
+//
+// Once a device's accounts are read, the dashboard is the same one a software
+// wallet gets — Accounts with balances, Send, Receive — backed by those
+// accounts. Only signing differs: it happens on the device (hwSignAndSend).
+// The Hardware tab stays for the device itself: adding accounts, apps, firmware.
+// ============================================================================
+
+const HW_CHAIN = { ethereum: 'evm', bitcoin: 'bitcoin', solana: 'solana' };
+const HW_NAMES = { ledger: 'Ledger', keystone: 'Keystone', catcard: 'CatCard · Coldcard' };
+
+function hwAccountList(device) {
+  return device === 'ledger' ? ledger.accounts : qrAccountsOf(device);
+}
+
+// Make the selected device's accounts the session's (first account per chain).
+// A device with no accounts yet leaves the current session alone.
+async function hwSyncSession() {
+  const device = hardware.device;
+  const list = hwAccountList(device);
+  if (!list.length) return;
+  const first = !session.hw;
+  const accounts = {};
+  for (const a of list) {
+    const chain = HW_CHAIN[a.Type];
+    if (chain && !accounts[chain]) accounts[chain] = { id: a.Id, address: a.Address, type: a.Type, usb: !!a.usb };
+  }
+  session.hw = { device };
+  session.mpc = false;
+  session.mnemonic = null;
+  session.passphrase = null;
+  session.accounts = accounts;
+  session.addresses = Object.fromEntries(Object.entries(accounts).map(([c, a]) => [c, a.address]));
+  session.balances = {};
+  await loadChainMeta();
+  setConsoleMode(false);   // Accounts / Send / Settings tabs alongside Hardware
+  applyMpcGuards();
+  renderAccounts();
+  onSendChainChange();
+  refreshAllBalances();
+  if (first) toast('ok', `${HW_NAMES[device]} wallet ready`, 'Balances, Send and Receive are on the Accounts and Send tabs.');
+}
+
+// Forget the hardware session (nothing is stored; the device is untouched).
+function hwDisconnect() {
+  session.hw = null;
+  session.addresses = null;
+  session.accounts = null;
+  session.balances = {};
+  ledger.accounts = []; ledger.wallet = null;
+  hardware.accounts = {}; hardware.wallets = {};
+  if (ledger.wired) ledgerRenderAccounts();
+  if (hardware.wired) qrRenderAccounts();
+  showScreen('onboarding');
+  goStep('choose');
+}
+
+// Sign `base` units to `to` from a hardware account on its device, broadcast,
+// and return the transaction id.
+async function hwSignAndSend(acct, to, base) {
+  const device = session.hw.device;
+  if (device === 'ledger') {
+    const tx = acct.type === 'ethereum' ? { to, value: base.toString() }
+      : acct.type === 'bitcoin' ? { To: to, Amount: Number(base) }
+      : { to, amount: base.toString() };
+    await ledgerEnsureApp(LEDGER_APPS[acct.type]);
+    toast('ok', 'Review the transaction on your Ledger');
+    const out = await backendRequest('Ledger:signTransaction', 'POST', { Account: acct.id, Transaction: tx, Broadcast: true });
+    return String(out.id ?? '');
+  }
+  if (acct.usb) {
+    const tx = acct.type === 'bitcoin' ? { To: to, Amount: Number(base) }
+      : acct.type === 'solana' ? { to, amount: base.toString() }
+      : { to, value: base.toString() };
+    toast('ok', 'Review the transaction on your CatCard');
+    const out = await backendRequest('CatCard:signTransaction', 'POST', { Account: acct.id, Transaction: tx, Broadcast: true });
+    return String(out.id ?? '');
+  }
+  // Air-gapped: QR out, signed answer back.
+  const p = HW_PROFILES[device];
+  const tx = acct.type === 'bitcoin' ? { To: to, Amount: Number(base) } : { to, value: base.toString() };
+  // Small frames scan reliably from a laptop screen.
+  const req = await backendRequest('Airgap:signRequest', 'POST',
+    { Account: acct.id, Transaction: tx, Transport: p.transport, MaxFragmentLen: 120, MaxPartLen: 300 });
+  const { codes } = await backendRequest('Airgap:qr', 'POST', { Parts: req.parts });
+  const id = await qrSignFlow(p, req, codes);
+  closeModal();
+  return id;
+}
+
+// Receive: the account's address as text and as a QR code. A hardware wallet
+// that can show addresses gets "Verify on device" — the check that this page
+// is displaying the device's own address.
+async function openReceive(chain) {
+  const acct = session.accounts?.[chain];
+  const addr = session.addresses?.[chain];
+  if (!addr) return;
+  const m = CHAIN_META[chain];
+  const device = session.hw?.device;
+  const canVerify = !!session.hw && (device === 'ledger' || acct?.usb);
+  openModal(`
+    <div class="card-pad stack" style="--gap:16px">
+      <div class="eyebrow">Receive · ${esc(m.name)}</div>
+      <canvas id="rcCanvas" style="width:100%;max-width:260px;margin:0 auto;border-radius:10px"></canvas>
+      <div class="panel mono" style="word-break:break-all;text-align:center">${esc(addr)}</div>
+      <div class="err-inline" id="rcErr"></div>
+      <div class="btn-row wrap">
+        <button class="btn subtle" type="button" data-close>Close</button>
+        ${canVerify ? '<button class="btn subtle" type="button" id="rcVerify">Verify on device</button>' : ''}
+        <button class="btn primary grow" type="button" id="rcCopy">Copy address</button>
+      </div>
+    </div>`);
+  $('#rcCopy').onclick = () => copyText(addr, $('#rcCopy'), 'Copy address');
+  if (canVerify) $('#rcVerify').onclick = async () => {
+    const btn = $('#rcVerify');
+    btn.disabled = true;
+    try {
+      if (device === 'ledger') {
+        await ledgerEnsureApp(LEDGER_APPS[acct.type]);
+        // ledgerEnsureApp may have replaced this modal to offer an app install.
+        if (!$('#rcErr')) return openReceive(chain);
+      }
+      toast('ok', 'Compare the address with the one on your device');
+      await backendRequest(device === 'ledger' ? 'Ledger:showAddress' : 'CatCard:showAddress', 'POST', { Account: acct.id });
+      toast('ok', 'Address confirmed on the device');
+    } catch (e) {
+      if ($('#rcErr')) $('#rcErr').textContent = e.code === 4001 ? 'Not confirmed on the device.' : (e.message || String(e));
+    } finally { btn.disabled = false; }
+  };
+  try {
+    const { codes } = await backendRequest('Airgap:qr', 'POST', { Text: addr, Ecc: 'M' });
+    if ($('#rcCanvas')) qrDraw($('#rcCanvas'), codes[0]);
+  } catch { $('#rcCanvas')?.remove(); }
 }
