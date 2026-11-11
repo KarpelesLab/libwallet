@@ -2,7 +2,7 @@
 
 libwallet can use a Ledger device (Nano S / S Plus / X, Stax, Flex) as the
 signer for Ethereum, Bitcoin and Solana accounts, through the
-[`lsdk`](https://crates.io/crates/lsdk) crate (0.1).
+[`lsdk`](https://crates.io/crates/lsdk) crate (0.1.1).
 
 A Ledger wallet has `Protocol: "ledger"`. Like an air-gapped signer wallet it
 holds watch-only accounts: the public keys were read from the device, and each
@@ -102,7 +102,7 @@ Error codes: 404 no device / app not installed, 409 wrong app or wrong device,
 ## Device management
 
 The device can also be managed, through the vendor's manager API and HSM
-channel (both reached with rsurl, natively and in the browser). These routes
+channel (lsdk reaches both with rsurl, natively and in the browser). These routes
 need the dashboard:
 
 ```
