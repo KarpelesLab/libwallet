@@ -193,6 +193,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "2EezXNFBntMF1m7Mp4SJ9jc7vUDN9KaAGjwGhe2Xjupx",
+    "symbol": "LIVED",
+    "name": "LIVED IT",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/jup-create/images/2EezXNFBntMF1m7Mp4SJ9jc7vUDN9KaAGjwGhe2Xjupx.jpeg",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "2FPyTwcZLUg1MDrwsyoP4D6s1tM7hAkHYRjkNb5w6Pxk",
     "symbol": "soETH",
     "name": "Wrapped Ethereum (Sollet)",
@@ -265,6 +275,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "2UEZt6T7Ter9jXCoeEN2PLdN2keyDub5ZrTwK1U4pump",
+    "symbol": "nyantama",
+    "name": "にゃんたまω",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibz6p7nwjm5mrnfzpqjrrlthc43bv3p3w7csqu7gi3ixlqx3kmthu",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "2uQsyo1fXXQkDtcpXnLofWy88PxcvnfH2L8FPSE62FVU",
     "symbol": "jlWSOL",
     "name": "jupiter lend WSOL",
@@ -289,6 +309,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://arweave.net/BW67hICaKGd2_wamSB0IQq-x7Xwtmr2oJj1WnWGJRHU"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "2ZvFgTyLMrgyLmoPHtD5KsTyALh14ffzxJoni4oPpump",
+    "symbol": "BOGE",
+    "name": "Bogecoin",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://desperate-moccasin-minnow.myfilebase.com/ipfs/QmZ5zwH5r7YvQCwuu15SLsQSBxnfLWLBfKP2bRNv86tqQw",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -388,6 +418,16 @@
     "decimals": 9,
     "type": "spl-token",
     "logoURI": "https://bafybeiaxwonn35jbb7xexmlmguibskmbg5vlv7wzabht3prfespwde6e6u.ipfs.dweb.link"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "3FqgF9qvJjsxKRPj8HSkFbV4hjhntujqDuCouQWwpump",
+    "symbol": "AK47",
+    "name": "0xKalashnikov",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmPs6kuW5ytn5kvi329yjCkmLkkwmTBrFWN2L1f8R9CkmY",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -520,6 +560,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "45MmvSSjtEd2jFkkytrXEj2FZSsc8533Z1w3Nwaapump",
+    "symbol": "shd6900",
+    "name": "Shitcoin Hentai Device",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreihlnprr4bigdabwqsufdoewh2arinx6eg4bc256e7ahn5yey6wyvq",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "463SK47VkB7uE7XenTHKiVcMtxRsfNE2X4Q9wByaURVA",
     "symbol": "TSUKI",
     "name": "Tsuki",
@@ -637,6 +687,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "4X9mk1nkfaXPqsqA9aeHuSc6dEMzshdopSBpi7QTpump",
+    "symbol": "ANI",
+    "name": "Annika",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmWewkfQwsngJU42zUFEGKrSp2nFsbJmRsvYfgH8uvr8xr",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "54CoRF2FYMZNJg9tS36xq5BUcLZ7rju1r59jGc2ondo",
     "symbol": "BIDUon",
     "name": "Baidu (Ondo Tokenized)",
@@ -688,6 +748,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://moneyoneth.com/wp-content/uploads/2026/04/Animation-GIF-1.gif"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5eHSjLZahnEwSiWQizHp2ND69Wna3HjNJZEpQJMQhXLJ",
+    "symbol": "AARUSH",
+    "name": "Aarush Coin",
+    "decimals": 9,
+    "type": "spl-token",
+    "logoURI": "https://raw.githubusercontent.com/aarushasoffical/token-list/main/assets/mainnet/5eHSjLZahnEwSiWQizHp2ND69Wna3HjNJZEpQJMQhXLJ/logo.png",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -763,6 +833,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://ipfs.io/ipfs/QmWV8QgmH1gSw41yapzsFwkC8yPbzoSreAcJbzqfvo2sVq"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "5x89k1jty8zDZ9mVQc93UNof64tbYNqakb9VZFVMpump",
+    "symbol": "VALUELESS",
+    "name": "Valueless",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://metadata.rapidlaunch.io/images/690aa05e-9abc-4203-9229-366e13c3ae67.png",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1013,6 +1093,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "6ztpBm31cmBNPwa396ocmDfaWyKKY95Bu8T664QfCe7f",
+    "symbol": "DEGEN",
+    "name": "Degenerate ",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmbZ7zzrP5oy89jKWMwKbXgr2qCEkmmmjfi4mhmjYr2gy5",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "71S9cppWipeUEQDFngYwxjoxB6Sz1MUqX72byLsVYJqy",
     "symbol": "XSGD",
     "name": "StraitsX SGD",
@@ -1055,6 +1145,16 @@
     "decimals": 8,
     "type": "spl-token",
     "logoURI": "https://res.cloudinary.com/du2uctdqr/image/upload/v1757071099/GMRX_Token_khqo23.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "79fmkspuv6ryKyjGJ947FiwL5Ao4UxsSocx7iMT1pump",
+    "symbol": "CYCLE",
+    "name": "ITS OVER WERE BACK",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreicjiqcdeuje3dcg2jlqnv52pin44w4gqah6qjw2dbjtwrurq6pu7e",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1157,6 +1257,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "7rXf6QrnEgH8AAx9xnYRSkm8bGBzfem5b1b4gr3Cpump",
+    "symbol": "PMF",
+    "name": "Pull My Finger",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreickcd6axm3vz577pezlgq43illkg25qlgfrccgqyzf3nfxvh6ecdy",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "7s9MoSt7VV1J3jVNnw2AyocsQDBdCkPYz5apQDPKy9i5",
     "symbol": "PIPE",
     "name": "Pipe",
@@ -1181,6 +1291,16 @@
     "decimals": 8,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "7X84qLj14hs5j1YNGimWfhMEVMrnrCtkMUDnkWyk8jKA",
+    "symbol": "GOAT",
+    "name": "SAPIJIJU",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmeXjz6KYVozxkZmD2cyXHE9vQ5YLbd4zQsVn331gqWoiC",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1211,6 +1331,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "86c2tH78mCPqe5Krr1UmSQATK9MKdJzL6LHNxVkwpump",
+    "symbol": "TOKEN",
+    "name": "Your Token",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreidmwxwzgmvevigpnto36y55ennwt3fkbm44mru5slg6e3qwh6szxu",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "8Aq4fWMgPqJbF3w8w8PnLDRVUAFe4mzsCvPKxAArbonk",
     "symbol": "Real",
     "name": "Real",
@@ -1226,6 +1356,16 @@
     "decimals": 9,
     "type": "spl-token",
     "logoURI": "https://api.zeralabs.org/image/1"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "8C26TfKAzze6NRtX6SFbf6aJcNXBUh8cbp9K6BJmpump",
+    "symbol": "VOID",
+    "name": "Void Kitty",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreib7hnfwuege2mk3hskrc2e3ng5aw3oeoynza7xjprmpfpz2i52t3q",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1304,6 +1444,7 @@
     "address": "8XtRWb4uAAJFMP4QQhoYYCWR6XXb7ybcCdiqPwz9s5WS",
     "symbol": "ALON",
     "name": "alon",
+    "verified": true,
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://ipfs.io/ipfs/QmavnBN2FbwW8o43KYBEQSnjYyGrRZKXbEN6N598dkFCLz"
@@ -1325,6 +1466,16 @@
     "decimals": 9,
     "type": "spl-token-2022",
     "logoURI": "https://cdn.ondo.finance/tokens/logos/eemon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "93VXFhKsGXsraivwdwAwoVXHKd4U1TFL64oQYpVjpump",
+    "symbol": "DNET",
+    "name": "Deepnets",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreic7iwcqcjmdy3ou4qxbkzkzufqopojfvw7svlgxictycgw6lexwqu",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1418,6 +1569,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "9feLoTgT3rA3w7xab2pb1Nw7TQz7Y1yUn6SoQfcGjups",
+    "symbol": "WARCH",
+    "name": "City Of Warchester",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/images/9feLoTgT3rA3w7xab2pb1Nw7TQz7Y1yUn6SoQfcGjups",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "9fvHrYNw1A8Evpcj7X2yy4k4fT7nNHcA9L6UsamNHAif",
     "symbol": "jlUSDG",
     "name": "jupiter lend USDG",
@@ -1469,6 +1630,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E/logo.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "9PQecLugrrEmFERg8NfT9Ldx8BBP9kYtwX9KNyJApump",
+    "symbol": "Blocktard",
+    "name": "Average Crypto Enthusiast",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreib5kdeds7jjgnroorjmv3wxzxdqe672t2qx2k4xum6kzxba2hfxji",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1555,6 +1726,16 @@
     "tags": [
       "stablecoin"
     ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "A1zvkas7XaGYaV9ztokfN11VwaiNGHkhqGCi4AYwpump",
+    "symbol": "spong",
+    "name": "spongmonkeys",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://desperate-moccasin-minnow.myfilebase.com/ipfs/QmNWD6RTnNoT1xJ9dPYJvUBhCAhJ7jLcHaWjDyXyoXxRoY",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1675,6 +1856,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "Ak9ptp86tfJMrKwBwoe49pNkHxPjZk8GRQxZKB78pump",
+    "symbol": "$TOWEL",
+    "name": "Towel",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeifxhcn5i5ef3imbi5eebpx34jbw4lr5ixbdhiux37axcrfsxbrzom",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "AMjzRn1TBQwQfNAjHFeBb7uGbbqbJB7FzXAnGgdFPk6K",
     "symbol": "SOLCEX",
     "name": "SolCex ",
@@ -1690,6 +1881,16 @@
     "decimals": 9,
     "type": "spl-token-2022",
     "logoURI": "https://cdn.ondo.finance/tokens/logos/futuon_160x160.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "AR5JGQTiy7WuKjt1f27knFBLUwoLPsRJdTeZodoJpump",
+    "symbol": "Teacat",
+    "name": "Bubble Tea Cat",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeie6ghe7wirm7bu6gmwou72f3snjkacxt3phqn5tnrecubyzavyrry",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -1873,6 +2074,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "BamGMvaMWeE19Rs5ACWqWLoyUoiu3PoZdxgY3ZcCpump",
+    "symbol": "TUNA",
+    "name": "MOTHER OF WIF",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreibteppha25folxplonp6yh4vr5oqpe3rwrjmff364hv5goxsyjeye",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "BANKJmvhT8tiJRsBSS1n2HryMBPvT5Ze4HU95DUAmeta",
     "symbol": "AVICI",
     "name": "Avici",
@@ -1959,6 +2170,26 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://ipfs.io/ipfs/QmWQbrb8AMX4NrDbLfLwqK8QZrjKB3bmuyKMqcXV8BNntb"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BGjQfjXFf9wVwrmVeaMnmzsgzpbJEAkarjzj3pshpump",
+    "symbol": "DAWAE",
+    "name": "Ugandan Knuckles",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreifk5uop2titcmgiago4qyas4bk6e53f6opwcp6ju6t6c4c4zd25o4",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "BGWhhm3LQyZkMJw7SVAz2owXSwGJYwm45oeAx86Ypump",
+    "symbol": "STAKE",
+    "name": "Everybody is going to eat",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeigjqoecy5pfqhe7is2c3rgum4kn3kos67i6h4j5xnn2pya6gs4eiy",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -2163,6 +2394,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "C9djW6sBteaHMcBgw4VMAL6TCEoXJnZtcUNdfozwSLeQ",
+    "symbol": "MAXXING",
+    "name": "shitcoin maxxing",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmeyczLidevQLvtGFPxYRJxvRUjHSU3Cf8ZtBbLjRMkEpR",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "C9J9vZ8N79GzzxFoRkPWCkGtMKU8akg4FhUk4r9ondo",
     "symbol": "IEFAon",
     "name": "iShares Core MSCI EAFE ETF (Ondo Tokenized)",
@@ -2292,6 +2533,7 @@
     "address": "Cm6fNnMk7NfzStP9CZpsQA2v3jjzbcYGAxdJySmHpump",
     "symbol": "Buttcoin",
     "name": "Buttcoin",
+    "verified": true,
     "decimals": 6,
     "type": "spl-token-2022",
     "logoURI": "https://ipfs.io/ipfs/bafkreiftg7kl6h2aflu3i6je2vdsdnrtbxiyuxr6n6pk6txpkigbz7cmvq"
@@ -2448,6 +2690,16 @@
     "decimals": 9,
     "type": "spl-token-2022",
     "logoURI": "https://cdn.crosstheages.com/cta-token/icon-512.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "CtsDk7Mo1wwhxhQp6zqB2oHEFXPEHhgjTBE8VvcUpump",
+    "symbol": "METATOWEL",
+    "name": "MetaTowel",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeifcnkwvk7vkwz2tqzb5cecfmw2rpjjkohjew2csctxfehacje77vy",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -2688,12 +2940,32 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "DqmabHLJSi8PUUhyVqECgbjJKPvt1VnYEdHv44Zzpump",
+    "symbol": "HOMER",
+    "name": "HOMER",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeieaucpjcem6yey5oummca4rswhu22nw56rsj2m2n54e5mf22xuoiq",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "DQnkBM4eYYMnVE8Qy2K3BB7uts1fh2EwBVktEz6jpump",
     "symbol": "DJI6930",
     "name": "DOWGE",
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://ipfs.io/ipfs/bafybeic4lupxyxjdzqr5vdvq6j4f3toceacxw2tovubvyiqzevnzyr6uhu"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "DRtvTCzfiKGhCVREmBbZdN9sB8PHeq9KdRZ3VmFhpump",
+    "symbol": "ChiefPussy",
+    "name": "Tibanne Thecat",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreig5sxgvcglyesmi3hybfuom5igvvyetj33jzre62tygawxh77xa6u",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -2850,6 +3122,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "E8HgMzNm3dVuQoYzdiyAzUuHUZqXp75dPC38YPqkpump",
+    "symbol": "tau",
+    "name": "testtau",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreihilrdywe7zdp5us3hps23go2pjfcvoh5qo5b7bdnympvo7moklti",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "Ea5SjE2Y6yvCeW5dYTn7PYMuW5ikXkvbGdcmSnXeaLjS",
     "symbol": "PAI",
     "name": "PAI (Parrot USD)",
@@ -3000,9 +3282,20 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+    "verified": true,
     "tags": [
       "stablecoin"
     ]
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "EpY9EurXwPnQbVM6fk84goG1kBf9K3GZRCuqgV6Tpump",
+    "symbol": "CLOWN",
+    "name": "CLOWN",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreidl7ilezodezcykatcfbns34mfn4ym2dwxjtgievpmiqhasjodtoy",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -3012,6 +3305,7 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg",
+    "verified": true,
     "tags": [
       "stablecoin"
     ]
@@ -3054,6 +3348,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "EVrGfAj99Xr1NjqqZv6E2msVKZVmhGaThHhcZXzrpump",
+    "symbol": "Choctopus",
+    "name": "Choctopus",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmWCtkmH9XUTZ2Y6BMDAFqBPDPkZgaQXx1YbD3bUpKHn7m",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "Ex5DaKYMCN6QWFA4n67TmMwsH8MJV68RX6YXTmVM532C",
     "symbol": "USDv",
     "name": "USDv",
@@ -3084,6 +3388,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "F2DPUse4YSC56NHYE1AQEpU5L1TFU88VtgC8Cvzkjupx",
+    "symbol": "Hope",
+    "name": "Hopium",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/jup-create/images/F2DPUse4YSC56NHYE1AQEpU5L1TFU88VtgC8Cvzkjupx.jpeg",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "F35yYmTR6PqkbTx449P1eGhB57mRhWAdYs93eCo2dMZR",
     "symbol": "pbUSDC",
     "name": "PiggyBank USDC",
@@ -3101,12 +3415,32 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "F4CVhyKjH8gGbfpT6pUv9mjuZB74yuWLYCZ2j7ACpump",
+    "symbol": "WEATHER",
+    "name": "Weather",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmeJQFSZHdHExEMwLyuZK2xVXtbeGGpjvh4TJYxWiMfzZ3",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "FAFxVxnkzZHMCodkWyoccgUNgVScqMw2mhhQBYDFjFAF",
     "symbol": "FAF",
     "name": "Flash.Trade",
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://res.cloudinary.com/dxj5wwzxe/image/upload/v1758549077/FAF_CIRCLE_ckdiww.png"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "FCaPNUJbWfECeeCeA3tvqkGUQ1BFPuon71KphJM5pump",
+    "symbol": "MOTION",
+    "name": "MOTION",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/QmQ8ULxtppFEZCd5gSRssPX7frxampT9vAyuZQvAXsZxeJ",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -3272,6 +3606,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "G4QRtYNRPyxdKwcAqqW3xSeEynDDxEyRvrDT9FJEpump",
+    "symbol": "forg",
+    "name": "forg",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreieomq6au2b44chuures57jhsjid3dzyhc2pjw7voj4foxbvjo2rem",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "G4uJcvo5UAJ3fU1gj96e5DjBJU2RDDPx9Txzbjw6Y3LA",
     "symbol": "CAESAR",
     "name": "Caesar",
@@ -3406,6 +3750,26 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "GGEikGvJgRqgoFajyfMAsha5GjKg6suAmhBVW91zjupx",
+    "symbol": "balls",
+    "name": "balls",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://static-create.jup.ag/images/GGEikGvJgRqgoFajyfMAsha5GjKg6suAmhBVW91zjupx",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "GGV2LcQsvJc2oFZFESnWBVW5AFoMknNX9r31wS2Apump",
+    "symbol": "P8BCI",
+    "name": "Telepath8",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeibrollgr4cid6pf4q32nh2jxjn2dq4us7ccft5efzhnj5vmaqqsfe",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "Gj4TowizfdkRJNsTgBEkj2WpBZZmGE7o9nN8q6RhBAGS",
     "symbol": "LORIA",
     "name": "Upward Spiral",
@@ -3472,6 +3836,7 @@
     "address": "GnM6XZ7DN9KSPW2ZVMNqCggsxjnxHMGb2t4kiWrUpump",
     "symbol": "WAGMI",
     "name": "WAGMI",
+    "verified": true,
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://assets.coingecko.com/coins/images/55910/standard/HBzEY-hakAA75zS.jpg?1771994289"
@@ -3568,6 +3933,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "GvQH1VGGbrjeRSbsCreptYN4GUcZ9w7vMFJ5ic8ypump",
+    "symbol": "wiener",
+    "name": "wiener",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/QmUzi4M2tAHxpjyYNwypKAF8ND9LrCai1JxbkqTwGBirX3",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "Gwh9fPsX1qWATXy63vNaJnAFfwebWQtZaVmPko6ondo",
     "symbol": "PFEon",
     "name": "Pfizer (Ondo Tokenized)",
@@ -3601,6 +3976,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://ipfs.io/ipfs/bafkreicrdi3icewusvj5ff53uwnlzng53dmkk3llrmdbn35eb2ozamnhpq"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "H9BkzwHKyBAnKmaxuLPKKRZGu8whbigdhhqQVkRapump",
+    "symbol": "FLASH",
+    "name": "FlashScreener",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeiagakzt7mexds2iehvwzlit6lf4r4rcvzch6qhork5ty7bwktslci",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -3814,6 +4199,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "HWKjcth8p4rZZdZHLbhW4r31gigfdDzxH5o9Uwtepump",
+    "symbol": "EOS",
+    "name": "Everything On Solana",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafybeibukyltzwcvvaf67ufob3p62ayb25ijwzm2qszg7tyq6cnc37zzuu",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "HxhWkVpk5NS4Ltg5nij2G671CKXFRKPK8vy271Ub4uEK",
     "symbol": "HXRO",
     "name": "Hxro (Portal)",
@@ -3982,6 +4377,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "J7rNhDLbfB4DCh8mVrmf6ZURvSQjooD1JAjbYAPapump",
+    "symbol": "thumbsup",
+    "name": "thumbsupguy420",
+    "decimals": 6,
+    "type": "spl-token",
+    "logoURI": "https://ipfs.io/ipfs/bafkreihslpcfihg5q4w4clpouu2bpk4uupuqwukbq6m3ebxk7gmht2ybhe",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "J8PSdNP3QewKq2Z1JJJFDMaqF7KcaiJhR7gbr5KZpump",
     "symbol": "TripleT",
     "name": "Tung Tung Tung Sahur",
@@ -4069,6 +4474,7 @@
     "address": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
     "symbol": "JUP",
     "name": "Jupiter",
+    "verified": true,
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://static.jup.ag/jup/icon.png"
@@ -4877,7 +5283,8 @@
     "name": "Wrapped SOL",
     "decimals": 9,
     "type": "spl-token",
-    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
@@ -5858,6 +6265,16 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://arweave.net/fy1UKY3u-u21ceXyR5NWbcx_jepJy3ci_Ue3hGO7urg"
+  },
+  {
+    "chainKey": "solana.mainnet",
+    "address": "yWFy573en7GjiUjU9uKnMv4eUvWHFZbw7hRnPa4pump",
+    "symbol": "STEAK",
+    "name": "Everybody is Going to Eat",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafybeifieffelwwttjn4tnct6mopfljyrmzjjkp2zi4vdgvbe3su23mkwy",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",
