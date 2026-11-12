@@ -50,6 +50,10 @@ class CuratedToken {
   /// default view; frontends can use them as filters or badges.
   final List<String> tags;
 
+  /// Whether this network and address are explicitly verified in the registry.
+  /// This identifies the token; it is not a guarantee of safety.
+  final bool verified;
+
   const CuratedToken({
     required this.chainKey,
     required this.address,
@@ -61,6 +65,7 @@ class CuratedToken {
     this.coingeckoId = '',
     this.cmcId = 0,
     this.tags = const [],
+    this.verified = false,
   });
 
   factory CuratedToken.fromJson(Map<String, dynamic> json) => CuratedToken(
@@ -75,6 +80,7 @@ class CuratedToken {
         cmcId: (json['cmcId'] as num?)?.toInt() ?? 0,
         tags: (json['tags'] as List?)?.whereType<String>().toList() ??
             const [],
+        verified: json['verified'] == true,
       );
 
   /// Convenience: true when this token is tagged `stablecoin`.

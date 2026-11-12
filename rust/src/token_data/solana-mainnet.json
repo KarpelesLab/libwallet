@@ -2697,6 +2697,16 @@
   },
   {
     "chainKey": "solana.mainnet",
+    "address": "DRtvTCzfiKGhCVREmBbZdN9sB8PHeq9KdRZ3VmFhpump",
+    "symbol": "ChiefPussy",
+    "name": "Tibanne Thecat",
+    "decimals": 6,
+    "type": "spl-token-2022",
+    "logoURI": "https://ipfs.io/ipfs/bafkreig5sxgvcglyesmi3hybfuom5igvvyetj33jzre62tygawxh77xa6u",
+    "verified": true
+  },
+  {
+    "chainKey": "solana.mainnet",
     "address": "DriFtupJYLTosbwoN8koMbEYSx54aFAVLddWsbksjwg7",
     "symbol": "DRIFT",
     "name": "Drift",
@@ -3000,6 +3010,7 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png",
+    "verified": true,
     "tags": [
       "stablecoin"
     ]
@@ -3012,6 +3023,7 @@
     "decimals": 6,
     "type": "spl-token",
     "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg",
+    "verified": true,
     "tags": [
       "stablecoin"
     ]
@@ -4877,7 +4889,8 @@
     "name": "Wrapped SOL",
     "decimals": 9,
     "type": "spl-token",
-    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png"
+    "logoURI": "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+    "verified": true
   },
   {
     "chainKey": "solana.mainnet",

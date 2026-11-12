@@ -2,6 +2,15 @@ import 'package:test/test.dart';
 import 'package:libwallet/libwallet.dart';
 
 void main() {
+  group('CuratedToken', () {
+    test('only an explicit boolean true marks a token verified', () {
+      expect(CuratedToken.fromJson({'verified': true}).verified, isTrue);
+      expect(CuratedToken.fromJson({'verified': false}).verified, isFalse);
+      expect(CuratedToken.fromJson({'verified': 'true'}).verified, isFalse);
+      expect(CuratedToken.fromJson({}).verified, isFalse);
+    });
+  });
+
   group('Wallet', () {
     test('fromJson parses wallet', () {
       final w = Wallet.fromJson({
