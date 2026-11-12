@@ -21,3 +21,40 @@ fn for_chain_returns_embedded_list() {
     assert!(curated::for_chain("evm.999999").is_empty());
     assert!(curated::for_chain("bitcoin.bitcoin").is_empty());
 }
+
+/// Every embedded list must parse (`for_chain` swallows parse errors and would
+/// silently serve an empty list), carry no duplicate addresses, and use a real
+/// boolean for the optional `verified` flag.
+#[test]
+fn embedded_lists_are_well_formed() {
+    let chains = [
+        "evm.1", "evm.10", "evm.56", "evm.100", "evm.137", "evm.250", "evm.324",
+        "evm.8453", "evm.42161", "evm.43114", "evm.59144", "solana.mainnet",
+    ];
+    for chain in chains {
+        let list = curated::for_chain(chain);
+        let mut seen = std::collections::HashSet::new();
+        for t in &list {
+            assert_eq!(t["chainKey"], chain, "{chain}: wrong chainKey in {t}");
+            let addr = t["address"].as_str().unwrap_or_else(|| panic!("{chain}: no address in {t}"));
+            assert!(seen.insert(addr.to_ascii_lowercase()), "{chain}: duplicate {addr}");
+            if let Some(v) = t.get("verified") {
+                assert!(v.is_boolean(), "{chain}: non-boolean verified on {addr}");
+            }
+        }
+    }
+    // A hand-edit that breaks the JSON would empty the list instead of failing.
+    assert!(curated::for_chain("solana.mainnet").len() >= 693, "solana list parses");
+}
+
+#[test]
+fn solana_verified_flag_passes_through() {
+    let sol = curated::for_chain("solana.mainnet");
+    let jup = sol
+        .iter()
+        .find(|t| t["address"] == "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN")
+        .expect("JUP present");
+    assert_eq!(jup["verified"], true);
+    assert!(sol.iter().filter(|t| t["verified"] == true).count() >= 48);
+    assert!(curated::for_chain("evm.1").iter().all(|t| t.get("verified").is_none()));
+}
