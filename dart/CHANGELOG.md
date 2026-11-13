@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.10
 
 - **Selling a whole Solana token balance closes its account.** When a swap
   quote came from `amountIn: "MAX"` or `swap.maxSpendable()`,
