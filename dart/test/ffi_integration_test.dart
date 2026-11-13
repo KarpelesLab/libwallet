@@ -756,17 +756,21 @@ void main() {
           .firstWhere((r) => r.host.startsWith('https://example.org'))
           .timeout(const Duration(seconds: 5));
 
-      final callFuture = client.web3.request(
-        origin: 'https://example.org',
-        query: {'method': 'mpurse_getAddress', 'params': []},
+      // Expect the rejection up front: the call can fail before
+      // requests.reject() returns, and an error with no listener yet would
+      // fail the test as unhandled.
+      final callDone = expectLater(
+        client.web3.request(
+          origin: 'https://example.org',
+          query: {'method': 'mpurse_getAddress', 'params': []},
+        ),
+        throwsA(isA<LibwalletException>()),
       );
 
       final req = await future;
       expect(req, isA<ConnectRequest>());
       await client.requests.reject(req.id);
-      try {
-        await callFuture;
-      } catch (_) {/* expected: call rejected */}
+      await callDone;
     });
 
     test('mpurse_signRawTransaction rejects calls without a connection',
