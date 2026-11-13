@@ -47,7 +47,7 @@ val libwalletVersion: String =
 
 android {
     namespace = "com.karpeleslabs.libwallet"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 21
