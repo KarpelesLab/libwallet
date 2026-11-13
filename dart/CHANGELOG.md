@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.9
 
 - **Hardware wallets sign more.** All of this goes through the generic routes
   (`Account.signTransaction`, `signAndSendTransaction`, `signMessage`, the new
@@ -31,6 +31,10 @@
   (`Ledger.list` / `CatCard.list` from different requests), which also made
   the FFI integration test abort now and then.
 - `AirgapSignedTransaction.type` / `isMessage`.
+- **`CuratedToken.verified`.** True for tokens whose owner has been
+  identified and confirmed (it says who issued the token, not that it is
+  safe). 48 Solana tokens are marked, 41 of them new to the catalog. Only a
+  JSON `true` counts; anything else reads as false.
 
 - **CatCard hardware wallets (`client.catcard`).** Use a CatCard (our open
   firmware for Coldcard hardware) as the signer for Bitcoin, Ethereum and
