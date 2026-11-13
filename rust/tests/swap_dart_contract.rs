@@ -491,6 +491,113 @@ fn solana_max_spendable_native_and_spl() {
     LibwalletDestroy(h);
 }
 
+// ── Solana MAX sell closes the token account (issue #7) ─────────────────────
+
+/// A stateful Solana mock for selling the whole USDC balance: 2.5 USDC until
+/// the swap is broadcast, then the one base unit OKX's rounding leaves behind.
+fn max_sell_mock(tx_b58: String) -> (String, Arc<Mutex<Vec<Seen>>>) {
+    let swapped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    mock_server(Box::new(move |route, params| match route {
+        "Crypto/Okx:quote" => okx_quote_entry(params, 20, 3),
+        "Crypto/Okx:swap" => {
+            let q = okx_quote_entry(params, 20, 3);
+            let out: u128 = q[0]["toTokenAmount"].as_str().unwrap().parse().unwrap();
+            json!([{ "tx": { "data": tx_b58, "minReceiveAmount": (out * 995 / 1000).to_string() } }])
+        }
+        "Crypto/Okx:broadcastTransaction" => {
+            swapped.store(true, Ordering::SeqCst);
+            json!([{ "orderId": "ord-sol" }])
+        }
+        "Crypto/Okx:orderStatus" => {
+            json!([{ "cursor": "", "orders": [{ "orderId": "ord-sol", "txStatus": "2", "txHash": "5LandedSig" }] }])
+        }
+        "getTokenAccountsByOwner" => {
+            let amount = if swapped.load(Ordering::SeqCst) { "1" } else { "2500000" };
+            json!({ "value": [{
+                "pubkey": "GwcWm3WPivMjURVzMwJXJmWAENKgUS4wjV7j7kzW6Fca",
+                "account": {
+                    "lamports": 2_039_280u64,
+                    "owner": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+                    "data": { "parsed": { "info": { "tokenAmount": { "amount": amount, "decimals": 6 } } } },
+                },
+            }]})
+        }
+        "getLatestBlockhash" => json!({ "value": { "blockhash": "11111111111111111111111111111111" } }),
+        "simulateTransaction" => json!({ "value": { "err": null, "logs": [] } }),
+        "sendTransaction" => json!("5CloseSig"),
+        other => panic!("unexpected mock call {other}"),
+    }))
+}
+
+fn max_sell_quote(h: usize, mock: &str, amount_in: &str) -> Value {
+    ok(request(
+        h,
+        "Swap:quote",
+        json!({
+            "tokenIn": { "address": USDC, "decimals": 6 },
+            "tokenOut": { "address": "NATIVE", "decimals": 9 },
+            "amountIn": amount_in,
+            "Backend": mock,
+        }),
+    ))
+}
+
+#[test]
+fn solana_max_sell_closes_token_account() {
+    let h = new_env();
+    let w = create_wallet(h, "ed25519", "solana");
+    let (mock, seen) = max_sell_mock(solana_swap_tx_b58(&w.pubkey));
+    use_network(h, "solana", "mainnet", &mock);
+
+    let q = max_sell_quote(h, &mock, "MAX");
+    let r = ok(request(h, "Swap:execute", json!({ "quoteId": q["quoteId"], "Keys": w.keys, "Backend": mock })));
+    assert_eq!(r["hash"], "5LandedSig");
+    let c = &r["closeAccount"];
+    assert_eq!(c["status"], "closed", "{c}");
+    assert_eq!(c["signature"], "5CloseSig");
+    assert_eq!(c["burned"], "1");
+    assert_eq!(c["rentRecovered"], "2039280");
+    assert_eq!(c["accounts"][0], "GwcWm3WPivMjURVzMwJXJmWAENKgUS4wjV7j7kzW6Fca");
+
+    // The broadcast tx: owner-signed, Burn(1) then CloseAccount to the owner.
+    let sent = &seen_for(&seen, "sendTransaction")[0];
+    let raw = bs58::decode(sent[0].as_str().unwrap()).into_vec().unwrap();
+    assert_eq!(raw[0], 1, "one signature");
+    let (sig, msg) = (&raw[1..65], &raw[65..]);
+    use base64::Engine as _;
+    let owner = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&w.pubkey).unwrap();
+    assert_eq!(&msg[4..36], owner.as_slice(), "owner pays and signs");
+    assert!(sig.iter().any(|&b| b != 0), "signed");
+    let n = msg.len();
+    assert_eq!(&msg[n - 16..n - 7], &[8, 1, 0, 0, 0, 0, 0, 0, 0], "Burn 1 unit");
+    assert_eq!(&msg[n - 6..], &[3, 1, 0, 0, 1, 9], "then CloseAccount(account, owner, owner)");
+    LibwalletDestroy(h);
+}
+
+#[test]
+fn solana_non_max_or_opted_out_sell_keeps_token_account() {
+    let h = new_env();
+    let w = create_wallet(h, "ed25519", "solana");
+    let (mock, seen) = max_sell_mock(solana_swap_tx_b58(&w.pubkey));
+    use_network(h, "solana", "mainnet", &mock);
+
+    // An explicit amount (even the whole balance) is not a MAX sell.
+    let q = max_sell_quote(h, &mock, "2500000");
+    let r = ok(request(h, "Swap:execute", json!({ "quoteId": q["quoteId"], "Keys": w.keys, "Backend": mock })));
+    assert!(r.get("closeAccount").is_none(), "{r}");
+
+    // MAX with closeTokenAccount: false.
+    let q = max_sell_quote(h, &mock, "MAX");
+    let r = ok(request(
+        h,
+        "Swap:execute",
+        json!({ "quoteId": q["quoteId"], "Keys": w.keys, "closeTokenAccount": false, "Backend": mock }),
+    ));
+    assert!(r.get("closeAccount").is_none(), "{r}");
+    assert!(seen_for(&seen, "sendTransaction").is_empty());
+    LibwalletDestroy(h);
+}
+
 // ── errors the Dart docs name ───────────────────────────────────────────────
 
 #[test]

@@ -47,6 +47,10 @@ struct CachedQuote {
     network: String,
     kind: String,
     chain_id: String,
+    /// The amount came from `"MAX"` / `Swap:maxSpendable`: the whole balance.
+    /// A token sold this way gets its account closed after the swap.
+    #[serde(default)]
+    max: bool,
 }
 
 fn cache_key(quote_id: &str) -> String {
@@ -239,7 +243,7 @@ fn resolve_max_amount_in(
 
 /// Stamp id + expiry on a fresh quote, fill the EVM approval fields, and cache
 /// it with the account + network it was issued for (Go `finalizeQuote`).
-fn finalize_quote(env: &Env, params: &Value, q: &mut Quote, account: Option<&Account>, net: &Network) -> Result<(), ApiError> {
+fn finalize_quote(env: &Env, params: &Value, q: &mut Quote, account: Option<&Account>, net: &Network, max: bool) -> Result<(), ApiError> {
     if let Some(a) = account {
         let rpc = resolve_rpc(env, params, net).ok();
         swap::apply_evm_approval(q, client_id(env).as_deref(), backend(params), &net.chain_id, rpc.as_deref(), &a.address);
@@ -253,6 +257,7 @@ fn finalize_quote(env: &Env, params: &Value, q: &mut Quote, account: Option<&Acc
         network: net.id.clone(),
         kind: net.kind.clone(),
         chain_id: net.chain_id.clone(),
+        max,
     };
     let bytes = serde_json::to_vec(&entry).map_err(ApiError::internal)?;
     env.cache_store(&cache_key(&q.quote_id), &bytes, QUOTE_CACHE_TTL).map_err(ApiError::internal)
@@ -300,8 +305,9 @@ fn quote_request(env: &Env, params: &Value) -> Result<QuoteRequest, ApiError> {
     Ok(QuoteRequest { provider, account, token_in, token_out, slippage: slippage(params), net })
 }
 
-/// `amountIn` as base units; `"MAX"` resolves to the account's max spendable.
-fn resolve_amount_in(env: &Env, params: &Value, req: &QuoteRequest) -> Result<String, ApiError> {
+/// `amountIn` as base units, and whether it was `"MAX"` (resolved to the
+/// account's max spendable).
+fn resolve_amount_in(env: &Env, params: &Value, req: &QuoteRequest) -> Result<(String, bool), ApiError> {
     let amount = str_param(params, &["amountIn", "AmountIn"]).ok_or_else(|| {
         swap_err(400, "invalid_request", "amountIn is required (use \"MAX\" to swap the full balance)")
     })?;
@@ -309,14 +315,14 @@ fn resolve_amount_in(env: &Env, params: &Value, req: &QuoteRequest) -> Result<St
         if BigInt::parse_bytes(amount.as_bytes(), 10).is_none_or(|v| v <= BigInt::from(0)) {
             return Err(swap_err(400, "invalid_request", format!("amountIn {amount:?} is not a positive base-unit integer")));
         }
-        return Ok(amount.to_owned());
+        return Ok((amount.to_owned(), false));
     }
     let account = require_account(req.account.clone(), &req.net.kind)?;
     let max = resolve_max_amount_in(env, params, &account, &req.net, &req.token_in, &req.token_out)?;
     if max <= BigInt::from(0) {
         return Err(swap_err(400, "invalid_request", "balance does not cover network fee + rent"));
     }
-    Ok(max.to_string())
+    Ok((max.to_string(), true))
 }
 
 fn fetch_quote(env: &Env, params: &Value, req: &QuoteRequest, amount_in: &str) -> Result<Quote, crate::Error> {
@@ -336,9 +342,9 @@ fn fetch_quote(env: &Env, params: &Value, req: &QuoteRequest, amount_in: &str) -
 /// provider?} — an OKX DEX quote, cached for Swap:execute by its `quoteId`.
 pub fn quote(env: &Env, params: &Value) -> ApiResult {
     let req = quote_request(env, params)?;
-    let amount_in = resolve_amount_in(env, params, &req)?;
+    let (amount_in, max) = resolve_amount_in(env, params, &req)?;
     let mut q = fetch_quote(env, params, &req, &amount_in).map_err(quote_error)?;
-    finalize_quote(env, params, &mut q, req.account.as_ref(), &req.net)?;
+    finalize_quote(env, params, &mut q, req.account.as_ref(), &req.net, max)?;
     Ok(serde_json::to_value(q).unwrap())
 }
 
@@ -347,12 +353,12 @@ pub fn quote(env: &Env, params: &Value) -> ApiResult {
 /// single entry carrying either the (cached) quote or a typed error.
 pub fn quotes(env: &Env, params: &Value) -> ApiResult {
     let req = quote_request(env, params)?;
-    let amount_in = resolve_amount_in(env, params, &req)?;
+    let (amount_in, max) = resolve_amount_in(env, params, &req)?;
     let mut attempt = json!({ "provider": req.provider, "providerLabel": swap::provider_label(req.provider) });
     // A quote failure becomes an attempt-level error, not an endpoint failure.
     match fetch_quote(env, params, &req, &amount_in) {
         Ok(mut q) => {
-            finalize_quote(env, params, &mut q, req.account.as_ref(), &req.net)?;
+            finalize_quote(env, params, &mut q, req.account.as_ref(), &req.net, max)?;
             attempt["quote"] = serde_json::to_value(q).unwrap();
         }
         Err(e) => {
@@ -380,7 +386,7 @@ pub fn max_spendable(env: &Env, params: &Value) -> ApiResult {
     }
     match fetch_quote(env, params, &req, &max.to_string()) {
         Ok(mut q) => {
-            finalize_quote(env, params, &mut q, Some(&account), &req.net)?;
+            finalize_quote(env, params, &mut q, Some(&account), &req.net, true)?;
             Ok(serde_json::to_value(q).unwrap())
         }
         Err(e) if quote_error_code(&e.to_string()).1 == "no_liquidity" => {
@@ -599,7 +605,7 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
     .map_err(execute_error)?;
 
     let hash = res.get("hash").and_then(Value::as_str).unwrap_or("").to_owned();
-    Ok(json!({
+    let mut out = json!({
         "quoteId": q.quote_id,
         "provider": q.provider,
         "chain": net.kind,
@@ -607,7 +613,22 @@ pub fn execute(env: &Env, params: &Value) -> ApiResult {
         "url": net.transaction_url(&hash),
         "orderId": res.get("orderId").cloned().unwrap_or(Value::String(String::new())),
         "quote": q,
-    }))
+    });
+    // Selling a whole Solana token balance: close its account so the rent comes
+    // back (OKX leaves up to a unit behind, which is burned). Software wallets
+    // only — a hardware wallet would have to confirm a second transaction.
+    let close = param(params, &["closeTokenAccount", "CloseTokenAccount"]).and_then(Value::as_bool).unwrap_or(true);
+    let mint_in = swap::solana_native_mint_or_addr(&q.token_in.address);
+    if entry.max && close && net.kind == "solana" && !swap::is_native_token_address(&mint_in) {
+        out["closeAccount"] = match &signer {
+            swap::Signer::Keys(unlock) => match resolve_rpc(env, params, &net) {
+                Ok(rpc) => swap::close_after_max_sell(env, &account, unlock, &rpc, &mint_in),
+                Err(e) => json!({ "status": "skipped", "reason": e.message }),
+            },
+            swap::Signer::Device { .. } => json!({ "status": "skipped", "reason": "hardware wallet" }),
+        };
+    }
+    Ok(out)
 }
 
 /// Legacy `Swap:execute` {Account, TokenIn, TokenOut, AmountIn, SlippageBps?,

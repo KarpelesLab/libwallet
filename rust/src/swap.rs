@@ -1456,3 +1456,146 @@ pub fn solana_swap_sol_reservation(
     }
     total
 }
+
+// ── Close the input token account after a MAX sell ──────────────────────────
+
+/// The most base units a MAX sell may leave behind and still be burned when
+/// the account is closed. OKX's Solana router floors its fee and the swapped
+/// portion separately, so it pulls up to one unit less than asked (issue #7);
+/// 2 leaves room for that and nothing more, so a balance that grew in the
+/// meantime is never burned.
+pub const MAX_SELL_DUST_UNITS: u64 = 2;
+
+/// How long to wait for the RPC to show the post-swap balance.
+const CLOSE_BALANCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CLOSE_BALANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// The owner's token accounts for `mint`: (pubkey, balance, lamports, program).
+fn solana_token_accounts(rpc: &str, owner: &str, mint: &str) -> Result<Vec<(String, u64, u64, String)>> {
+    let res = crate::rpc::call(
+        rpc,
+        "getTokenAccountsByOwner",
+        json!([owner, { "mint": mint }, { "encoding": "jsonParsed", "commitment": "confirmed" }]),
+    )?;
+    let mut out = Vec::new();
+    for a in res.get("value").and_then(Value::as_array).into_iter().flatten() {
+        let pubkey = a.get("pubkey").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let acct = a.get("account").cloned().unwrap_or(Value::Null);
+        let amount = acct
+            .pointer("/data/parsed/info/tokenAmount/amount")
+            .and_then(Value::as_str)
+            .and_then(|s| s.parse::<u64>().ok())
+            .ok_or_else(|| Error::Env(format!("token account {pubkey}: no balance")))?;
+        let lamports = acct.get("lamports").and_then(Value::as_u64).unwrap_or(0);
+        let program = acct.get("owner").and_then(Value::as_str).unwrap_or_default().to_owned();
+        out.push((pubkey, amount, lamports, program));
+    }
+    Ok(out)
+}
+
+/// After a MAX sell of SPL `mint`, burn what the swap left (at most
+/// [`MAX_SELL_DUST_UNITS`]) and close the owner's token accounts for it, so the
+/// rent comes back to the wallet. Waits for the RPC to show the post-swap
+/// balance; anything larger is left alone. The transaction is simulated
+/// before it is signed, so an account the token program won't close (frozen,
+/// Token-2022 withheld fees, ...) is skipped instead of failing on-chain.
+///
+/// Never fails the swap: returns `{status: "closed", signature, accounts,
+/// burned, rentRecovered}`, or `{status: "skipped" | "failed", reason}`.
+pub fn close_after_max_sell(
+    env: &Env,
+    acct: &crate::models::account::Account,
+    unlock: &[(String, String)],
+    rpc: &str,
+    mint: &str,
+) -> Value {
+    match close_after_max_sell_inner(env, acct, unlock, rpc, mint) {
+        Ok(v) => v,
+        Err(e) => json!({ "status": "failed", "reason": e.to_string() }),
+    }
+}
+
+fn close_after_max_sell_inner(
+    env: &Env,
+    acct: &crate::models::account::Account,
+    unlock: &[(String, String)],
+    rpc: &str,
+    mint: &str,
+) -> Result<Value> {
+    use crate::solana_spl::{CloseTarget, SPL_TOKEN_PROGRAM_B58, TOKEN_2022_PROGRAM_B58};
+    let skipped = |reason: &str| Ok(json!({ "status": "skipped", "reason": reason }));
+    if rpc.is_empty() {
+        return skipped("no RPC endpoint");
+    }
+    let owner = crate::solana::pubkey_from_b64url(&acct.pubkey).ok_or_else(|| Error::Env("bad account pubkey".into()))?;
+
+    // Wait for the swap to show up: every account at dust or empty.
+    let deadline = std::time::Instant::now() + CLOSE_BALANCE_TIMEOUT;
+    let accounts = loop {
+        let accounts = solana_token_accounts(rpc, &acct.address, mint)?;
+        if accounts.iter().all(|a| a.1 <= MAX_SELL_DUST_UNITS) {
+            break accounts;
+        }
+        if std::time::Instant::now() >= deadline {
+            return skipped("token balance remains after the swap");
+        }
+        std::thread::sleep(CLOSE_BALANCE_INTERVAL);
+    };
+    if accounts.is_empty() {
+        return skipped("no token account to close");
+    }
+
+    let b58 = |s: &str| -> Result<[u8; 32]> {
+        bs58::decode(s)
+            .into_vec()
+            .ok()
+            .and_then(|v| <[u8; 32]>::try_from(v).ok())
+            .ok_or_else(|| Error::Env(format!("bad base58 key {s:?}")))
+    };
+    let mint_key = b58(mint)?;
+    let mut targets = Vec::new();
+    for (pubkey, amount, _, program) in &accounts {
+        if program != SPL_TOKEN_PROGRAM_B58 && program != TOKEN_2022_PROGRAM_B58 {
+            return skipped("token account is not owned by a token program");
+        }
+        targets.push(CloseTarget { account: b58(pubkey)?, mint: mint_key, program: b58(program)?, burn: *amount });
+    }
+
+    let bh = crate::rpc::call(rpc, "getLatestBlockhash", json!([{ "commitment": "finalized" }]))?;
+    let bh = bh
+        .pointer("/value/blockhash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Env("no blockhash in getLatestBlockhash response".into()))?;
+    let message = crate::solana_spl::build_close_accounts_message(&owner, &targets, &b58(bh)?);
+
+    // Dry run first: a refusal from the token program skips, it doesn't burn a fee.
+    use base64::Engine as _;
+    let unsigned = base64::engine::general_purpose::STANDARD.encode(crate::solana::assemble_tx(&message, &[0u8; 64]));
+    let sim = crate::rpc::call(
+        rpc,
+        "simulateTransaction",
+        json!([unsigned, { "encoding": "base64", "sigVerify": false, "commitment": "confirmed" }]),
+    )?;
+    if let Some(err) = sim.pointer("/value/err").filter(|e| !e.is_null()) {
+        return Ok(json!({ "status": "skipped", "reason": format!("the token program refuses to close the account: {err}") }));
+    }
+
+    let sig: [u8; 64] = crate::models::wallet::sign_ed25519_for_account(env, acct, unlock, &message)?
+        .try_into()
+        .map_err(|_| Error::Env("unexpected signature length".into()))?;
+    if !crate::tss::ed25519_verify(&owner, &message, &sig) {
+        return Err(Error::Env("signature does not verify under the account key".into()));
+    }
+    let raw = bs58::encode(crate::solana::assemble_tx(&message, &sig)).into_string();
+    let signature = crate::rpc::call(rpc, "sendTransaction", json!([raw, { "encoding": "base58" }]))?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| Error::Env("sendTransaction did not return a signature".into()))?;
+    Ok(json!({
+        "status": "closed",
+        "signature": signature,
+        "accounts": accounts.iter().map(|a| a.0.clone()).collect::<Vec<_>>(),
+        "burned": accounts.iter().map(|a| a.1).sum::<u64>().to_string(),
+        "rentRecovered": accounts.iter().map(|a| a.2).sum::<u64>().to_string(),
+    }))
+}

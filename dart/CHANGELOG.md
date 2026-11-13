@@ -1,3 +1,17 @@
+## Unreleased
+
+- **Selling a whole Solana token balance closes its account.** When a swap
+  quote came from `amountIn: "MAX"` or `swap.maxSpendable()`,
+  `swap.execute()` waits for the swap to land, then burns what it left and
+  closes the token account in a second transaction, so the rent (~0.002 SOL)
+  comes back to the wallet. OKX rounds its fee and the swapped part down
+  separately and can leave one base unit, which kept the account from being
+  closed (#7). At most 2 base units are burned: a balance that grew in the
+  meantime is left alone. The transaction is simulated first, so an account
+  the token program won't close is skipped. The outcome is in
+  `SwapResult.closeAccount` (`SwapCloseAccount`); pass
+  `closeTokenAccount: false` to keep the account. Software wallets only.
+
 ## 0.5.9
 
 - **Hardware wallets sign more.** All of this goes through the generic routes

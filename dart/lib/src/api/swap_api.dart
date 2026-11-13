@@ -239,11 +239,20 @@ class SwapApi {
   /// [mevProtection] toggles OKX's MEV-protected broadcast for EVM swaps.
   /// Leave `null` to use the default (on); pass `false` to opt out (e.g.
   /// when the protected mempool is landing slowly). Ignored on Solana.
+  ///
+  /// Selling a whole Solana token balance (a quote from `amountIn: "MAX"`
+  /// or [maxSpendable]) also closes the token's account once the swap
+  /// lands: the up-to-one base unit the swap leaves is burned and the rent
+  /// (~0.002 SOL) comes back, reported in [SwapResult.closeAccount]. Pass
+  /// [closeTokenAccount] `false` to keep the account. Software wallets only;
+  /// on a hardware wallet the close is skipped rather than asking the
+  /// device to confirm a second transaction.
   Future<SwapResult> execute({
     required String quoteId,
     required List<SigningKey> keys,
     String? from,
     bool? mevProtection,
+    bool? closeTokenAccount,
   }) async {
     final params = <String, dynamic>{
       'quoteId': quoteId,
@@ -251,6 +260,9 @@ class SwapApi {
     };
     if (from != null) params['from'] = from;
     if (mevProtection != null) params['mevProtection'] = mevProtection;
+    if (closeTokenAccount != null) {
+      params['closeTokenAccount'] = closeTokenAccount;
+    }
     final data = await _conn.request('Swap:execute', 'POST', params);
     return SwapResult.fromJson(data as Map<String, dynamic>);
   }

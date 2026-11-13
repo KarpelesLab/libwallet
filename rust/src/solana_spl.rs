@@ -343,9 +343,118 @@ pub fn fee_lamports(cu_limit: u32, cu_price: u64) -> u64 {
     BASE_FEE + priority
 }
 
+/// One token account to empty and close: the account, its mint, its owning
+/// token program, and the base units to burn first (0 when already empty).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseTarget {
+    pub account: [u8; 32],
+    pub mint: [u8; 32],
+    pub program: [u8; 32],
+    pub burn: u64,
+}
+
+/// Build a legacy message that, for each target, burns its remaining balance
+/// (`Burn`, opcode 8, when `burn > 0`) and closes it (`CloseAccount`, opcode 9)
+/// with the rent going to `owner`, who signs and pays the fee. Works for
+/// Token-1 and Token-2022 (same opcodes). Account layout follows the legacy
+/// ordering rule: owner (signer+writable) · token accounts and burned mints
+/// (writable) · token programs (readonly), each listed once.
+pub fn build_close_accounts_message(owner: &[u8; 32], targets: &[CloseTarget], recent_blockhash: &[u8; 32]) -> Vec<u8> {
+    let mut writable: Vec<[u8; 32]> = Vec::new();
+    let mut readonly: Vec<[u8; 32]> = Vec::new();
+    let mut push = |list: &mut Vec<[u8; 32]>, k: [u8; 32]| {
+        if !list.contains(&k) {
+            list.push(k);
+        }
+    };
+    for t in targets {
+        push(&mut writable, t.account);
+        if t.burn > 0 {
+            push(&mut writable, t.mint);
+        }
+    }
+    for t in targets {
+        push(&mut readonly, t.program);
+    }
+    let mut keys = vec![*owner];
+    keys.extend_from_slice(&writable);
+    keys.extend_from_slice(&readonly);
+    let idx = |k: &[u8; 32]| keys.iter().position(|x| x == k).expect("key listed") as u8;
+
+    let mut msg = vec![1u8, 0, readonly.len() as u8];
+    push_compact_u16(keys.len() as u16, &mut msg);
+    for k in &keys {
+        msg.extend_from_slice(k);
+    }
+    msg.extend_from_slice(recent_blockhash);
+
+    let n_ix = targets.iter().map(|t| if t.burn > 0 { 2 } else { 1 }).sum::<usize>();
+    push_compact_u16(n_ix as u16, &mut msg);
+    for t in targets {
+        if t.burn > 0 {
+            // Burn: account (w), mint (w), owner (signer).
+            msg.push(idx(&t.program));
+            push_compact_u16(3, &mut msg);
+            msg.extend_from_slice(&[idx(&t.account), idx(&t.mint), 0]);
+            let mut data = vec![8u8];
+            data.extend_from_slice(&t.burn.to_le_bytes());
+            push_compact_u16(data.len() as u16, &mut msg);
+            msg.extend_from_slice(&data);
+        }
+        // CloseAccount: account (w), destination (w), owner (signer).
+        msg.push(idx(&t.program));
+        push_compact_u16(3, &mut msg);
+        msg.extend_from_slice(&[idx(&t.account), 0, 0]);
+        push_compact_u16(1, &mut msg);
+        msg.push(9);
+    }
+    msg
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn close_accounts_message_layout() {
+        let owner = [1u8; 32];
+        let tp = program_id(SPL_TOKEN_PROGRAM_B58);
+        let tp22 = program_id(TOKEN_2022_PROGRAM_B58);
+        let bh = [5u8; 32];
+        let targets = [
+            CloseTarget { account: [2u8; 32], mint: [3u8; 32], program: tp22, burn: 1 },
+            CloseTarget { account: [4u8; 32], mint: [6u8; 32], program: tp, burn: 0 },
+        ];
+        let m = build_close_accounts_message(&owner, &targets, &bh);
+        // Header: 1 signer, 0 readonly signed, 2 readonly unsigned (programs).
+        assert_eq!(&m[..3], &[1, 0, 2]);
+        // Keys: owner, acct1, mint1 (burned), acct2, tp22, tp — mint2 not listed.
+        assert_eq!(m[3], 6);
+        let key = |i: usize| &m[4 + 32 * i..4 + 32 * (i + 1)];
+        assert_eq!(key(0), &owner);
+        assert_eq!(key(1), &[2u8; 32]);
+        assert_eq!(key(2), &[3u8; 32]);
+        assert_eq!(key(3), &[4u8; 32]);
+        assert_eq!(key(4), &tp22);
+        assert_eq!(key(5), &tp);
+        let mut p = 4 + 32 * 6;
+        assert_eq!(&m[p..p + 32], &bh);
+        p += 32;
+        assert_eq!(m[p], 3, "burn + close + close");
+        p += 1;
+        // Burn(1) on acct1 via Token-2022.
+        assert_eq!(&m[p..p + 5], &[4, 3, 1, 2, 0]);
+        p += 5;
+        assert_eq!(m[p], 9);
+        assert_eq!(&m[p + 1..p + 10], &[8, 1, 0, 0, 0, 0, 0, 0, 0]);
+        p += 10;
+        // CloseAccount acct1 → owner.
+        assert_eq!(&m[p..p + 7], &[4, 3, 1, 0, 0, 1, 9]);
+        p += 7;
+        // CloseAccount acct2 → owner via Token-1.
+        assert_eq!(&m[p..p + 7], &[5, 3, 3, 0, 0, 1, 9]);
+        assert_eq!(p + 7, m.len());
+    }
 
     #[test]
     fn program_ids_decode_to_32_bytes() {

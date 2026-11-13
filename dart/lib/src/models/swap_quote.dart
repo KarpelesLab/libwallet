@@ -411,6 +411,11 @@ class SwapResult {
   /// to display "you swapped X for Y" without caching separately.
   final SwapQuote quote;
 
+  /// What happened to the input token's account after a Solana MAX sell
+  /// (the quote came from `amountIn: "MAX"` or [SwapApi.maxSpendable]).
+  /// Null when no close was attempted.
+  final SwapCloseAccount? closeAccount;
+
   const SwapResult({
     required this.quoteId,
     required this.provider,
@@ -419,6 +424,7 @@ class SwapResult {
     required this.url,
     required this.quote,
     this.orderId = '',
+    this.closeAccount,
   });
 
   factory SwapResult.fromJson(Map<String, dynamic> json) => SwapResult(
@@ -429,6 +435,59 @@ class SwapResult {
         url: (json['url'] as String?) ?? '',
         orderId: (json['orderId'] as String?) ?? '',
         quote: SwapQuote.fromJson(Map<String, dynamic>.from(json['quote'] as Map)),
+        closeAccount: json['closeAccount'] is Map
+            ? SwapCloseAccount.fromJson(
+                Map<String, dynamic>.from(json['closeAccount'] as Map))
+            : null,
+      );
+}
+
+/// The follow-up to a Solana MAX sell: the swap leaves up to one base unit
+/// of the token behind (the provider rounds its fee and the swapped part
+/// down separately), so libwallet burns that dust and closes the token
+/// account in a second transaction, returning its rent to the wallet.
+class SwapCloseAccount {
+  /// `closed`, `skipped` (nothing done: see [reason]) or `failed`.
+  final String status;
+
+  /// Signature of the burn-and-close transaction when [isClosed]. It was
+  /// broadcast, not awaited.
+  final String signature;
+
+  /// The closed token accounts.
+  final List<String> accounts;
+
+  /// Base units burned (the dust the swap left).
+  final BigInt burned;
+
+  /// Lamports of rent returned to the wallet (before the 5000-lamport fee).
+  final BigInt rentRecovered;
+
+  /// Why nothing was closed, for `skipped` / `failed`.
+  final String reason;
+
+  SwapCloseAccount({
+    required this.status,
+    this.signature = '',
+    this.accounts = const [],
+    BigInt? burned,
+    BigInt? rentRecovered,
+    this.reason = '',
+  })  : burned = burned ?? BigInt.zero,
+        rentRecovered = rentRecovered ?? BigInt.zero;
+
+  bool get isClosed => status == 'closed';
+
+  factory SwapCloseAccount.fromJson(Map<String, dynamic> json) =>
+      SwapCloseAccount(
+        status: (json['status'] as String?) ?? '',
+        signature: (json['signature'] as String?) ?? '',
+        accounts: (json['accounts'] as List?)?.whereType<String>().toList() ??
+            const [],
+        burned: BigInt.tryParse((json['burned'] as String?) ?? ''),
+        rentRecovered:
+            BigInt.tryParse((json['rentRecovered'] as String?) ?? ''),
+        reason: (json['reason'] as String?) ?? '',
       );
 }
 

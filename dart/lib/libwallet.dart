@@ -103,6 +103,7 @@ export 'src/models/swap_quote.dart'
         SwapTokenRef,
         SwapRouteHop,
         SwapResult,
+        SwapCloseAccount,
         ApprovalPreview,
         SwapAvailability,
         QuoteAttempt,

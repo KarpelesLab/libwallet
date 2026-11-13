@@ -2,6 +2,31 @@ import 'package:test/test.dart';
 import 'package:libwallet/libwallet.dart';
 
 void main() {
+  group('SwapCloseAccount', () {
+    test('parses a closed account', () {
+      final c = SwapCloseAccount.fromJson({
+        'status': 'closed',
+        'signature': '5CloseSig',
+        'accounts': ['GwcW'],
+        'burned': '1',
+        'rentRecovered': '2039280',
+      });
+      expect(c.isClosed, isTrue);
+      expect(c.signature, '5CloseSig');
+      expect(c.accounts, ['GwcW']);
+      expect(c.burned, BigInt.one);
+      expect(c.rentRecovered, BigInt.from(2039280));
+    });
+
+    test('parses a skip reason', () {
+      final c = SwapCloseAccount.fromJson(
+          {'status': 'skipped', 'reason': 'hardware wallet'});
+      expect(c.isClosed, isFalse);
+      expect(c.reason, 'hardware wallet');
+      expect(c.burned, BigInt.zero);
+    });
+  });
+
   group('CuratedToken', () {
     test('only an explicit boolean true marks a token verified', () {
       expect(CuratedToken.fromJson({'verified': true}).verified, isTrue);
