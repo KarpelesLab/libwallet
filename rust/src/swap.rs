@@ -1462,8 +1462,11 @@ pub fn solana_swap_sol_reservation(
 /// The most base units a MAX sell may leave behind and still be burned when
 /// the account is closed. OKX's Solana router floors its fee and the swapped
 /// portion separately, so it pulls up to one unit less than asked (issue #7);
-/// 2 leaves room for that and nothing more, so a balance that grew in the
-/// meantime is never burned.
+/// 2 leaves room for that and nothing more. Tokens that arrive after the
+/// balance is read are protected by the transaction itself: it burns only
+/// the units seen here and must close the account in the same transaction,
+/// which the token program refuses unless the balance is then zero (see
+/// [`crate::solana_spl::build_close_accounts_message`]).
 pub const MAX_SELL_DUST_UNITS: u64 = 2;
 
 /// How long to wait for the RPC to show the post-swap balance.

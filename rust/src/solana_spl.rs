@@ -356,7 +356,15 @@ pub struct CloseTarget {
 /// Build a legacy message that, for each target, burns its remaining balance
 /// (`Burn`, opcode 8, when `burn > 0`) and closes it (`CloseAccount`, opcode 9)
 /// with the rent going to `owner`, who signs and pays the fee. Works for
-/// Token-1 and Token-2022 (same opcodes). Account layout follows the legacy
+/// Token-1 and Token-2022 (same opcodes).
+///
+/// Safety: `Burn` destroys exactly `burn` units, never "the balance", and
+/// every burn is followed by `CloseAccount` on the same account in this same
+/// transaction. The token program refuses to close an account whose balance
+/// is not zero (error 0xb), and a failed instruction reverts the whole
+/// transaction, burn included. So tokens that arrive after the balance was
+/// read can never be burned: the transaction just fails. Keep both
+/// instructions in one message. Account layout follows the legacy
 /// ordering rule: owner (signer+writable) · token accounts and burned mints
 /// (writable) · token programs (readonly), each listed once.
 pub fn build_close_accounts_message(owner: &[u8; 32], targets: &[CloseTarget], recent_blockhash: &[u8; 32]) -> Vec<u8> {
@@ -454,6 +462,45 @@ mod tests {
         // CloseAccount acct2 → owner via Token-1.
         assert_eq!(&m[p..p + 7], &[5, 3, 3, 0, 0, 1, 9]);
         assert_eq!(p + 7, m.len());
+    }
+
+    /// Every Burn is immediately followed by CloseAccount on the same account,
+    /// in the same message: that pairing is what makes the burn safe (see
+    /// `build_close_accounts_message`).
+    #[test]
+    fn close_accounts_message_pairs_every_burn_with_its_close() {
+        let owner = [1u8; 32];
+        let tp = program_id(SPL_TOKEN_PROGRAM_B58);
+        let targets: Vec<CloseTarget> = (0..4u8)
+            .map(|i| CloseTarget { account: [10 + i; 32], mint: [20; 32], program: tp, burn: (i % 2) as u64 })
+            .collect();
+        let m = build_close_accounts_message(&owner, &targets, &[0u8; 32]);
+        let n_keys = m[3] as usize;
+        let mut p = 4 + 32 * n_keys + 32;
+        let n_ix = m[p] as usize;
+        p += 1;
+        let mut ixs = Vec::new();
+        for _ in 0..n_ix {
+            let accts = m[p + 2..p + 2 + m[p + 1] as usize].to_vec();
+            p += 2 + accts.len();
+            let data = m[p + 1..p + 1 + m[p] as usize].to_vec();
+            p += 1 + data.len();
+            ixs.push((accts, data));
+        }
+        assert_eq!(p, m.len());
+        let mut i = 0;
+        for t in &targets {
+            let acct = (0..n_keys).find(|&k| m[4 + 32 * k..4 + 32 * (k + 1)] == t.account).unwrap() as u8;
+            if t.burn > 0 {
+                assert_eq!(ixs[i].1[0], 8, "burn");
+                assert_eq!(ixs[i].0[0], acct);
+                i += 1;
+            }
+            assert_eq!(ixs[i].1, vec![9], "close right after");
+            assert_eq!(ixs[i].0, vec![acct, 0, 0]);
+            i += 1;
+        }
+        assert_eq!(i, ixs.len());
     }
 
     #[test]
