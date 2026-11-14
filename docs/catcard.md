@@ -268,7 +268,8 @@ call waits up to fifteen minutes.
 `CatCard:import` creates the wallet, or with `Wallet` adds to an existing
 CatCard wallet — to import a second account, run `getKeys` again and pick it
 on the device; keys the wallet already holds are skipped. It does not need the
-device.
+device. It refuses `Keys` whose
+address is not the one the key derives, and then creates nothing.
 
 ## Signing
 

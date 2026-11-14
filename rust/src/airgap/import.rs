@@ -590,6 +590,12 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
         return Err(Error::Env("export contains no importable keys".into()));
     }
     let skipped: Vec<DiscoveredKey> = export.keys.iter().filter(|k| k.chain == "unsupported").cloned().collect();
+    // The keys may come from the host (`Ledger:import`, `CatCard:import` take
+    // them as parameters) rather than from `parse` here: an account is never
+    // created at an address its key does not derive.
+    for k in &usable {
+        check_key_address(env, k)?;
+    }
 
     let now = crate::now_rfc3339();
     let protocol = opts.protocol.as_deref().unwrap_or("airgap");
@@ -705,7 +711,7 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
                         }
                     }
                     _ => {
-                        push(env, chain, "secp256k1", k.path.clone(), &pk, None, k.address.clone(), "", k, None)?;
+                        push(env, chain, "secp256k1", k.path.clone(), &pk, None, address(&pk)?, "", k, None)?;
                     }
                 }
             }
@@ -721,6 +727,56 @@ pub fn import(env: &Env, export: &Export, opts: &ImportOptions) -> Result<Import
         }
     }
     Ok(Imported { wallet, accounts, skipped })
+}
+
+/// Bitcoin-family address networks a bitcoin key's address may be encoded for.
+const BITCOIN_NETWORKS: &[&str] = &["bitcoin", "litecoin", "monacoin", "dogecoin", "bitcoincash"];
+
+/// Refuse a key whose `address` is not the one its `pubkey` derives (see
+/// [`DiscoveredKey::address`] for which address that is per chain).
+fn check_key_address(env: &Env, k: &DiscoveredKey) -> Result<()> {
+    let bad = |why: &str| Error::Env(format!("key {} ({}): {why}", k.path, k.chain));
+    let mismatch = |expected: &str| bad(&format!("address {} does not match its public key ({expected})", k.address));
+    let pk = super::unhex(&k.pubkey)?;
+    let cc = k.chain_code.as_deref().map(super::unhex).transpose()?;
+    let secp = || -> Result<[u8; 33]> { pk.as_slice().try_into().ok().filter(is_secp_point).ok_or_else(|| bad("not a valid compressed secp256k1 key")) };
+    let cc32 = |cc: &[u8]| -> Result<[u8; 32]> { cc.try_into().map_err(|_| bad("chain code is not 32 bytes")) };
+    match k.chain.as_str() {
+        "bitcoin" => {
+            let root = secp()?;
+            let cc = cc32(cc.as_deref().ok_or_else(|| bad("no chain code (need an account extended key)"))?)?;
+            let child = crate::hdderive::derive_pub(&root, &cc, &[0, 0]).map_err(|e| bad(&e.to_string()))?;
+            let current = bitcoin_display_address(env, &root, &cc, &k.script).ok();
+            let matches = current.as_deref() == Some(k.address.as_str())
+                || BITCOIN_NETWORKS.iter().any(|n| crate::bitcoin::address_for(&child, &k.script, n).is_ok_and(|a| a == k.address));
+            if !matches {
+                return Err(mismatch(current.as_deref().unwrap_or("none for this script")));
+            }
+        }
+        chain @ ("ethereum" | "tron") => {
+            let key = secp()?;
+            let leaf = match &cc {
+                Some(cc) if k.path.matches('/').count() <= 3 => crate::hdderive::derive_pub(&key, &cc32(cc)?, &[0, 0]).map_err(|e| bad(&e.to_string()))?,
+                _ => key,
+            };
+            let expected = if chain == "tron" { crate::hdderive::tron_address(&leaf) } else { crate::hdderive::evm_address(&leaf) }.map_err(|e| bad(&e.to_string()))?;
+            let ok = if chain == "tron" { expected == k.address } else { expected.eq_ignore_ascii_case(&k.address) };
+            if !ok {
+                return Err(mismatch(&expected));
+            }
+        }
+        "solana" => {
+            if pk.len() != 32 {
+                return Err(bad("not a 32-byte ed25519 key"));
+            }
+            let expected = bs58::encode(&pk).into_string();
+            if expected != k.address {
+                return Err(mismatch(&expected));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn b64url(b: &[u8]) -> String {
@@ -947,5 +1003,59 @@ mod tests {
         // Per-type indexes start at 0 each.
         assert_eq!(imported.accounts.iter().map(|a| a.index).collect::<Vec<_>>(), vec![0, 0, 1, 0]);
         assert_eq!(crate::models::account::for_wallet(&env, &imported.wallet.id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn import_refuses_a_key_whose_address_is_not_its_own() {
+        // Ledger:import / CatCard:import take the keys from the host: an
+        // address that the pubkey does not derive must not become an account.
+        let seed = crate::bip39::mnemonic_to_seed("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about", "");
+        let eth_pk = crate::hdderive::derive_pubkey_for_path(&seed, "secp256k1", "m/44'/60'/0'/0/0").unwrap();
+        let sol_pk = crate::hdderive::derive_pubkey_for_path(&seed, "ed25519", "m/44'/501'/0'/0'").unwrap();
+        let eth_addr = crate::hdderive::evm_address(&eth_pk).unwrap();
+        let tron_addr = crate::hdderive::tron_address(&eth_pk).unwrap();
+        let leaf = |chain: &str, curve: &str, path: &str, pk: &[u8], address: &str| DiscoveredKey {
+            chain: chain.into(),
+            curve: curve.into(),
+            coin_type: None,
+            path: path.into(),
+            master_fingerprint: Some("73c5da0a".into()),
+            pubkey: super::super::hex(pk),
+            chain_code: None,
+            script: String::new(),
+            address: address.into(),
+            name: None,
+            note: None,
+            reason: None,
+        };
+        let btc = parse_text(&env(), &format!("[73c5da0a/84'/0'/0']{ZPUB}")).unwrap().keys.remove(0);
+        let bad_keys: Vec<DiscoveredKey> = [
+            leaf("ethereum", "secp256k1", "m/44'/60'/0'/0/0", &eth_pk, "0x000000000000000000000000000000000000dEaD"),
+            leaf("tron", "secp256k1", "m/44'/195'/0'/0/0", &eth_pk, "TLsV52sRDL79HXGGm9yzwKibb6BeruhUzy"),
+            leaf("solana", "ed25519", "m/44'/501'/0'/0'", &sol_pk, &bs58::encode([7u8; 32]).into_string()),
+            // m/84'/0'/0'/0/1: an address of the same account, not the key's m/0/0.
+            DiscoveredKey { address: "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g".into(), ..btc.clone() },
+        ]
+        .into_iter()
+        .collect();
+        for k in bad_keys {
+            let env = env();
+            let export = Export { format: "ledger".into(), keys: vec![k.clone()], ..Default::default() };
+            let err = import(&env, &export, &ImportOptions { protocol: Some("ledger".into()), ..Default::default() }).unwrap_err();
+            assert!(err.to_string().contains("does not match its public key"), "{}: {err}", k.chain);
+            assert!(crate::models::wallet::list(&env).unwrap().is_empty(), "{}: no wallet is created", k.chain);
+        }
+        // The same keys with their own addresses import (eth in lowercase is
+        // accepted and stored checksummed).
+        let env = env();
+        let good = vec![
+            leaf("ethereum", "secp256k1", "m/44'/60'/0'/0/0", &eth_pk, &eth_addr.to_lowercase()),
+            leaf("tron", "secp256k1", "m/44'/195'/0'/0/0", &eth_pk, &tron_addr),
+            leaf("solana", "ed25519", "m/44'/501'/0'/0'", &sol_pk, &bs58::encode(&sol_pk).into_string()),
+            btc,
+        ];
+        let imported = import(&env, &Export { format: "catcard".into(), keys: good, ..Default::default() }, &ImportOptions { protocol: Some("catcard".into()), ..Default::default() }).unwrap();
+        assert_eq!(imported.accounts.len(), 4);
+        assert_eq!(imported.accounts[0].address, eth_addr);
     }
 }

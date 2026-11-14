@@ -59,7 +59,8 @@ Ledger:import    {Keys, Name?, Wallet?}                      → {wallet, accoun
 - **Tron** — one account per index at `m/44'/195'/i'/0/0`, or at each of `Paths`.
 
 `Ledger:import` creates the wallet, or with `Wallet` adds to an existing Ledger
-wallet; keys it already holds are skipped. It does not need the device.
+wallet; keys it already holds are skipped. It does not need the device. It refuses `Keys` whose
+address is not the one the key derives, and then creates nothing.
 
 `Ledger:info` reports the running app (`BOLOS` on the dashboard),
 `Ledger:openApp {Name}` and `Ledger:quitApp` switch apps (over USB the device

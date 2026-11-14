@@ -1,3 +1,12 @@
+## Unreleased
+
+- **Signer imports check every key's address.** `Ledger:import`,
+  `CatCard:import` and `Airgap:importKeys` refuse a key whose `address` is not
+  the one its public key derives (bitcoin: the account's first receive
+  address; ethereum/tron/solana: the key's own address). Nothing is created
+  when one is refused. They used to create an account at whatever address the
+  host passed.
+
 ## 0.5.10
 
 - **Selling a whole Solana token balance closes its account.** When a swap
