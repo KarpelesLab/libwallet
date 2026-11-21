@@ -18,6 +18,9 @@ The short version:
 - **Always keep a recovery path.** Device-bound secrets are deliberately lost
   with the device.
 
+For the standard wallet layout (which share goes where, backups, and the
+checks to run after a restore), see [key-handling.md](key-handling.md).
+
 ---
 
 ## Why not keep secrets in the app?

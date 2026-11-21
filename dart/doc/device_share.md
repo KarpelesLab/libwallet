@@ -18,6 +18,10 @@
 > Existing apps migrate once with `vault.import(kind: 'storekey', secret: <stored private>)`.
 > See [`docs/secret-storage.md`](../../docs/secret-storage.md).
 
+> The overall key-handling policy (share layout, password in the enclave,
+> backup and restore checks) is in
+> [`docs/key-handling.md`](../../docs/key-handling.md).
+
 libwallet wallets are 1-of-3 threshold-signed: every new wallet
 holds three key shares — `StoreKey` + `RemoteKey` + `Password` —
 and any two of them can sign or reshare. The `StoreKey` share is
@@ -120,14 +124,15 @@ final freshPair = await client.storeKeys.create();
 // freshPair = { private: <64-byte base64>, public: <X.509 PKIX b64> }
 await keystore.writeDeviceShare(value: freshPair.private, password: password);
 
-// 3a. Derive the Password share's pubkey for this wallet's WalletKey
-//     id (the password's pubkey is salted with the WalletKey uuid
-//     server-side — see StoreKeyApi.derivePassword).
+// 3a. Check the password against the Password share. Its pubkey is
+//     derived from the password salted with the WalletKey uuid (see
+//     StoreKeyApi.derivePassword) and must equal the share's `key`.
 final oldPassword = wallet.keys.firstWhere((k) => k.type == 'Password');
 final passwordPub = await client.storeKeys.derivePassword(
   password: password,
   walletKeyId: oldPassword.id,
 );
+if (passwordPub != oldPassword.key) throw WrongPasswordException();
 
 // 4. Reshare. The same newRemoteKey value goes on BOTH the
 //    old-committee RemoteKey AND the new-committee RemoteKey
@@ -144,13 +149,13 @@ await client.wallets.reshare(
                    key: newRemoteKey,        // ← NEW id, NOT oldRemoteKey.key
                    type: 'RemoteKey'),
     KeyDescription(id: oldPassword.id,
-                   key: passwordPub.publicKey,
+                   key: password,              // the password itself
                    type: 'Password'),
   ],
   newKeys: [
     KeyDescription(type: 'StoreKey',  key: freshPair.public),
     KeyDescription(type: 'RemoteKey', key: newRemoteKey),       // ← same NEW id
-    KeyDescription(type: 'Password',  key: passwordPub.publicKey),
+    KeyDescription(type: 'Password',  key: password), // NOT a pubkey
   ],
 );
 

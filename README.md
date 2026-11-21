@@ -101,6 +101,10 @@ final wallets = await client.wallets.list();
 
 The Dart package's build hook downloads the matching native binary from the GitHub Release for the target platform at install time — no Rust toolchain needed for consumers.
 
+## Key handling
+
+Every wallet is a 2-of-3 committee: a device share in the Secure Enclave / Keystore, a password share, and a share on Tibane's servers. [docs/key-handling.md](docs/key-handling.md) is the reference for implementors: layout, backups, and what to check and reshare after a restore. Where secrets are stored on each platform is covered in [docs/secret-storage.md](docs/secret-storage.md).
+
 ## Browser (WASM)
 
 The WASM build runs the same `libwallet_request` handlers in the browser. To sign Solana swaps and SPL transfers, see [docs/solana-signing.md](docs/solana-signing.md).
