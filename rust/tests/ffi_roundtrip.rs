@@ -3538,3 +3538,72 @@ fn device_transfer_keeps_the_device_share_in_the_vault() {
     LibwalletDestroy(ha);
     LibwalletDestroy(hb);
 }
+
+#[test]
+fn remotekey_reshare_multicreate_pair_over_live_wdrone() {
+    // A Wallet:multiCreate pair shares one RemoteKey. Restoring it means
+    // resharing both wallets: this pins down whether one fresh RemoteKey
+    // session can serve both reshares (docs/key-handling.md says no: one per
+    // wallet, one at a time), and that resharing one wallet leaves the other's
+    // server-side share usable. Gated behind SPOT_LIVE=1.
+    if std::env::var("SPOT_LIVE").ok().as_deref() != Some("1") {
+        return;
+    }
+    let h = new_env();
+    let wi = request(h, r#"{"path":"Info:setWalletInfo","params":{"ClientId":"com.ellipx.walletapp","Name":"libwallet-tests"}}"#);
+    assert_eq!(wi["result"], "success", "{wi}");
+
+    let validate = |session: &str| -> String {
+        let v = request(h, &format!(r#"{{"path":"RemoteKey:validate","params":{{"session":"{session}","code":"000000"}}}}"#));
+        v["data"]["RemoteKey"].as_str().unwrap_or_else(|| panic!("validate: {v}")).to_string()
+    };
+    let fresh = |key: &str| -> String {
+        let rn = request(h, &format!(r#"{{"path":"RemoteKey:reshare","params":{{"key":"{key}"}}}}"#));
+        assert_eq!(rn["result"], "success", "RemoteKey:reshare failed: {rn}");
+        validate(rn["data"]["session"].as_str().expect("session"))
+    };
+    let n = request(h, r#"{"path":"RemoteKey:new","params":{"number":"+14045551234"}}"#);
+    let rk1 = validate(n["data"]["session"].as_str().expect("session"));
+
+    let m = request(h, &format!(
+        r#"{{"path":"Wallet:multiCreate","params":{{"Name":"Pair","Keys":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk1}"}}]}}}}"#
+    ));
+    assert_eq!(m["result"], "success", "multiCreate failed: {m}");
+
+    let reshare = |w: &serde_json::Value, rk: &str| -> serde_json::Value {
+        let id = w["Id"].as_str().unwrap();
+        let keys = w["Keys"].as_array().unwrap();
+        let plain0 = keys.iter().find(|k| k["Type"] == "Plain").unwrap()["Id"].as_str().unwrap();
+        let rk_wk = keys.iter().find(|k| k["Type"] == "RemoteKey").unwrap()["Id"].as_str().unwrap();
+        let body = format!(
+            r#"{{"path":"Wallet/{id}:reshare","params":{{"Old":[{{"Id":"{plain0}"}},{{"Type":"RemoteKey","Id":"{rk_wk}","Key":"{rk}"}}],"New":[{{"Type":"Plain"}},{{"Type":"Plain"}},{{"Type":"RemoteKey","Key":"{rk}"}}]}}}}"#
+        );
+        let (rx, ud) = request_async(h, &body);
+        let resp = rx.recv_timeout(Duration::from_secs(240)).expect("reshare resolved");
+        drop(unsafe { Box::from_raw(ud as *mut Sender<String>) });
+        serde_json::from_str(&resp).unwrap()
+    };
+
+    let ed = m["data"]["ed25519"].clone();
+    let secp = m["data"]["secp256k1"].clone();
+
+    // Wallet A (ed25519) with a fresh session.
+    let rk2 = fresh(&rk1);
+    let a = reshare(&ed, &rk2);
+    assert_eq!(a["result"], "success", "ed25519 reshare failed: {a}");
+    assert_eq!(a["data"]["Pubkey"], ed["Pubkey"]);
+
+    // Wallet B (secp256k1) on the SAME session: report what the fleet does.
+    let reuse = reshare(&secp, &rk2);
+    eprintln!("multiCreate pair: second reshare on a reused RemoteKey session -> {}", reuse);
+
+    if reuse["result"] != "success" {
+        // B with its own fresh session (from the key B has stored) must work,
+        // which also shows A's reshare left B's server-side share intact.
+        let rk3 = fresh(&rk1);
+        let b = reshare(&secp, &rk3);
+        assert_eq!(b["result"], "success", "secp256k1 reshare on a fresh session failed: {b}");
+        assert_eq!(b["data"]["Pubkey"], secp["Pubkey"]);
+    }
+    LibwalletDestroy(h);
+}
