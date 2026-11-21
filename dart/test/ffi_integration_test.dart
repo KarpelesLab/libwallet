@@ -1383,4 +1383,58 @@ void main() {
       expect(wrong.valid, isFalse);
     });
   });
+
+  group('Recovery', () {
+    const phrase = 'abandon abandon abandon abandon abandon abandon '
+        'abandon abandon abandon abandon abandon about';
+
+    test('a mnemonic lists every wallet layout, offline', () async {
+      final session = await client.recovery.open(RecoverySource.mnemonic(phrase));
+      expect(session.type, 'mnemonic');
+      expect(session.chains.map((c) => c.chain),
+          containsAll(['bitcoin', 'ethereum', 'solana', 'tron']));
+      final list = await session.addresses(chains: ['bitcoin', 'ethereum'], count: 1);
+      final byId = {for (final a in list) a.id: a};
+      // BIP-84's own test vector.
+      expect(byId["bitcoin:p2wpkh:m/84'/0'/0'/0/0"]!.address,
+          'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu');
+      expect(byId["ethereum:evm:m/44'/60'/0'/0/0"]!.address.toLowerCase(),
+          '0x9858effd232b4033e47d90003d41ec34ecaeda94');
+      expect(byId["bitcoin:p2pkh:m/44'/0'/0'/0/0"]!.label, contains('BIP44'));
+      expect(list.every((a) => a.assets == null && !a.hasFunds), isTrue,
+          reason: 'addresses() does not scan');
+
+      final keys = await session.export(byId["bitcoin:p2wpkh:m/84'/0'/0'/0/0"]!);
+      expect(keys.wif, startsWith('K'));
+      expect(keys.privateKey, hasLength(64));
+
+      await session.close();
+      expect(session.isClosed, isTrue);
+      await expectLater(session.addresses(), throwsA(isA<LibwalletException>()));
+      await session.close(); // twice is fine
+    });
+
+    test('private keys, keystores and bad input', () async {
+      final key = await client.recovery.open(RecoverySource.privateKey(
+          '0000000000000000000000000000000000000000000000000000000000000001'));
+      final list = await key.addresses(chains: ['bitcoin']);
+      expect(list.map((a) => a.address),
+          containsAll(['1BgGZ9tcN4rm9KBzDn7KprQz87SZ26SAMH', '1EHNa6Q4Jz2uvNExL497mE43ikXhwF6kZm']));
+      await key.close();
+
+      await expectLater(
+          client.recovery.open(RecoverySource.mnemonic(phrase.replaceFirst('about', 'abandon'))),
+          throwsA(isA<LibwalletException>()));
+      await expectLater(client.recovery.open(RecoverySource.privateKey('nope')),
+          throwsA(isA<LibwalletException>()));
+      await expectLater(
+          client.recovery.open(RecoverySource.keystore('{"version":3}', password: 'x')),
+          throwsA(isA<LibwalletException>()));
+
+      final session = await client.recovery.open(RecoverySource.mnemonic(phrase));
+      expect(() => session.prepareSweep('bitcoin:p2wpkh:key'),
+          throwsA(isA<ArgumentError>()), reason: 'needs to or toAccount');
+      await session.close();
+    });
+  });
 }

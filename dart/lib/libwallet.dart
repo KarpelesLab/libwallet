@@ -179,6 +179,16 @@ export 'src/api/remote_key_api.dart' show RemoteKeyApi;
 export 'src/api/wallet_api.dart' show WalletApi, CreateAgentWalletResult;
 export 'src/models/probe_activity.dart' show ProbeActivityRow, ChainMigration;
 export 'src/api/wallet_key_api.dart' show WalletKeyApi, WalletKeyCheck;
+export 'src/api/recovery_api.dart'
+    show
+        RecoveryApi,
+        RecoverySource,
+        RecoverySession,
+        RecoveryChain,
+        RecoveredAddress,
+        RecoveredAsset,
+        RecoverySweep,
+        RecoveredKeys;
 export 'src/api/network_api.dart' show NetworkApi;
 export 'src/api/account_api.dart'
     show

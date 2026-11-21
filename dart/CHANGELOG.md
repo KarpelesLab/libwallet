@@ -1,3 +1,20 @@
+## Unreleased
+
+- **Wallet recovery: `client.recovery`.** Bring funds over from another
+  wallet. `open` a `RecoverySource` (a recovery phrase with its passphrase, a
+  private key as hex, WIF or Solana keypair, an Ethereum keystore file and
+  password, or a Bitfi salt and phrase) and get a `RecoverySession`:
+  `addresses()` lists every address the source may have used, offline, and
+  `scan()` adds what each holds. A failed check is an `error`, never an empty
+  list. `prepareSweep()` signs a transfer to one of the user's accounts
+  (`toAccount:`) or an address without broadcasting it, and `broadcast()`
+  sends it. `export()` gives one address's key, and `close()` wipes the
+  secret, which never leaves memory. The session covers Bitcoin, Litecoin,
+  Dogecoin, Bitcoin Cash and Monacoin (every script type, BIP-44/49/84
+  receive and change), Ethereum with ERC-20 (MetaMask and Ledger Live
+  layouts), Solana with SPL (Phantom, Trust Wallet, Sollet) and Tron (TRX,
+  USDT), plus Monero keys for Bitfi. See `docs/wallet-recovery.md`.
+
 ## 0.5.12
 
 - **Password shares record their KDF.** Every new Password share carries a
@@ -211,7 +228,9 @@
   `close`. They cover BTC, LTC, DOGE, BCH, MONA and ETH with ERC-20 tokens,
   including Bitfi's uncompressed legacy addresses. For Monero they give the
   address and keys, without balances or sending. The web wallet adds a
-  no-login page for this at `recover/bitfi.html`.
+  no-login page for this at `recover/bitfi.html`. (These are request-API
+  endpoints with no Dart wrapper; from Dart, use `client.recovery` with
+  `RecoverySource.bitfi`, added after 0.5.12.)
 - **Docs:** `docs/solana-signing.md` covers the request and response
   format, with a working browser example in `web/examples/`.
 

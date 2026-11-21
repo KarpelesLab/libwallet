@@ -105,6 +105,10 @@ The Dart package's build hook downloads the matching native binary from the GitH
 
 Every wallet is a 2-of-3 committee: a device share in the Secure Enclave / Keystore, a password share, and a share on Tibane's servers. [docs/key-handling.md](docs/key-handling.md) is the reference for implementors: layout, backups, and what to check and reshare after a restore. Where secrets are stored on each platform is covered in [docs/secret-storage.md](docs/secret-storage.md).
 
+## Wallet recovery
+
+`client.recovery` (or the `Recovery:*` requests) brings funds over from another wallet: open a recovery phrase, private key, Ethereum keystore or Bitfi in memory, scan the addresses it may have used across Bitcoin-family chains, Ethereum, Solana and Tron, and sweep what it finds into the user's own accounts. See [docs/wallet-recovery.md](docs/wallet-recovery.md).
+
 ## Browser (WASM)
 
 The WASM build runs the same `libwallet_request` handlers in the browser. To sign Solana swaps and SPL transfers, see [docs/solana-signing.md](docs/solana-signing.md).
