@@ -41,13 +41,13 @@ pub fn derive_password(env: &Env, params: &Value) -> ApiResult {
         .map_err(ApiError::internal)?
         .filter(|k| k.kind == "Password");
     let (pk, kdf) = match existing {
-        Some(wk) => crate::keystore::password_unlock_key(password, salt.as_bytes(), &wk.key)
+        Some(wk) => crate::keystore::password_unlock_key(password, salt.as_bytes(), &wk.key, &wk.data)
             .map_err(|e| ApiError::new(400, e.to_string()))?,
         None => (
             crate::keystore::password_to_ed25519(password, salt.as_bytes()).map_err(|e| ApiError::new(400, e.to_string()))?,
-            crate::keystore::PasswordKdf::Argon2id,
+            crate::keystore::PasswordKdf::CURRENT,
         ),
     };
     let pub_b64 = crate::keystore::public_key_to_pkix_b64(&pk.public()).map_err(ApiError::internal)?;
-    Ok(json!({ "Public_Key": pub_b64, "Kdf": kdf.as_str() }))
+    Ok(json!({ "Public_Key": pub_b64, "Kdf": kdf.name() }))
 }

@@ -114,7 +114,7 @@ pub fn open_local_share(wk: &crate::models::wallet::WalletKey, material: &str) -
     let json = if wk.kind == "Plain" {
         crate::keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
     } else {
-        let k = crate::models::wallet::resolve_unlock_key(&wk.kind, material, &uuid, &wk.key)?;
+        let k = crate::models::wallet::resolve_unlock_key(&wk.kind, material, &uuid, &wk.key, &wk.data)?;
         crate::keystore::open(&wk.data, [k]).map_err(|e| Error::Env(e.to_string()))?
     };
     String::from_utf8(json).map_err(|e| Error::Env(e.to_string()))

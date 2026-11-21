@@ -87,10 +87,18 @@ class WalletKeyCheck {
   /// compared).
   final String checked;
 
-  /// Password shares: `argon2id`, or `pbkdf2` for a share sealed before
-  /// libwallet 0.5.11. Re-seal a `pbkdf2` share with [WalletKeyApi.recrypt]
-  /// (same password on both sides is fine) to move it to Argon2id.
+  /// Password shares: the KDF scheme, `argon2id`, or `pbkdf2` for a share
+  /// sealed before libwallet 0.5.11.
   final String? kdf;
+
+  /// Password shares: the exact KDF parameters the share records, e.g.
+  /// `argon2id$v=19$m=65536,t=3,p=1`.
+  final String? kdfParams;
+
+  /// Password shares: whether the share's KDF differs from what new shares
+  /// get. Re-seal it with [WalletKeyApi.recrypt] (the same password on both
+  /// sides is fine) when the user next types the password.
+  final bool? kdfUpgrade;
 
   /// StoreKey shares checked without a key: the vault entry holding the key.
   final String? entryId;
@@ -100,17 +108,21 @@ class WalletKeyCheck {
     required this.valid,
     required this.checked,
     this.kdf,
+    this.kdfParams,
+    this.kdfUpgrade,
     this.entryId,
   });
 
-  /// Whether this is a Password share still on the legacy KDF.
-  bool get needsKdfUpgrade => kdf == 'pbkdf2';
+  /// Whether this Password share should be re-sealed ([kdfUpgrade]).
+  bool get needsKdfUpgrade => kdfUpgrade ?? false;
 
   factory WalletKeyCheck.fromJson(Map<String, dynamic> json) => WalletKeyCheck(
         id: json['Id'] as String? ?? '',
         valid: json['Valid'] as bool? ?? false,
         checked: json['Checked'] as String? ?? '',
         kdf: json['Kdf'] as String?,
+        kdfParams: json['KdfParams'] as String?,
+        kdfUpgrade: json['KdfUpgrade'] as bool?,
         entryId: json['Entry'] as String?,
       );
 }

@@ -120,20 +120,38 @@ Rules:
 
 ## Password KDF
 
-Since libwallet 0.5.11, new Password shares are sealed to a key derived with
-**Argon2id** (64 MiB, 3 passes), the same cost as the vault's password
-backend: about 0.1 s natively and up to a second in a browser, per
+Every Password share **records how its key was derived**: a cleartext `kdf`
+header on the sealed share, for example `argon2id$v=19$m=65536,t=3,p=1`. It
+travels with the share everywhere the share goes (database, backup, device
+transfer), and libwallet derives the key with exactly those parameters. This
+is what keeps compatibility incremental: the cost of new shares can go up in a
+later release without breaking any share sealed before it, and a share naming
+a scheme the running libwallet doesn't know fails with an "update libwallet"
+error, not a bogus "wrong password". The header isn't secret and doesn't need
+to be authenticated: altered parameters derive a key that doesn't open the
+share. Parameters read from a share are bounded (Argon2 memory ≤ 1 GiB, ≤ 16
+passes) before any memory is spent, since a backup is untrusted input.
+
+New shares get **Argon2id** (64 MiB, 3 passes), the same cost as the vault's
+password backend: about 0.1 s natively and up to a second in a browser, per
 derivation. Every place a Password share is *created* uses it: wallet
 creation, reshare, promote, import and the target side of `recrypt`. Sealing
 refuses passwords shorter than **8 characters**.
 
-Shares sealed earlier used PBKDF2-SHA256 with 4,096 iterations, which is cheap
-to brute-force offline. They keep working: libwallet tries the legacy
-derivation first and uses it when it matches the share's recorded public key,
-so an old share opens (and an old backup restores) with the same password,
-even one shorter than 8 characters.
+Shares without the header predate it, and still open:
 
-To move an old share to Argon2id, re-seal it to the same password:
+| Sealed by | KDF | How libwallet tells |
+|---|---|---|
+| libwallet before 0.5.11, Go wltwallet | PBKDF2-SHA256, 4,096 iterations: cheap to brute-force offline | The PBKDF2 key matches the share's recorded public key (`key`) |
+| libwallet 0.5.11 | Argon2id 64 MiB × 3, not recorded | Otherwise |
+| libwallet 0.5.12 and later | Whatever the `kdf` header says | The header |
+
+Old shares open with the same password, even one shorter than 8 characters,
+and old backups restore.
+
+`walletKeys.verify` reports a share's `kdf`, its exact `kdfParams`, and
+`kdfUpgrade` when they differ from what new shares get. Re-seal such a share
+to the same password:
 
 ```dart
 final c = await client.walletKeys.verify(key.id, key: KeyDescription.password(pw));
@@ -145,11 +163,12 @@ if (c.valid && c.needsKdfUpgrade) {
 A password shorter than 8 characters can't be re-sealed: ask the user for a
 new one (`newPassword`). A good moment for this is the next time the user types
 the password. After the upgrade, take a new backup (see below): the previous
-backup still holds the PBKDF2-sealed copy.
+backup still holds the old copy.
 
-**Compatibility:** libwallet older than 0.5.11 can't open Argon2id shares. A
-backup made by an up-to-date app won't restore its Password share in an app
-still on an older libwallet.
+**Compatibility:** libwallet older than 0.5.11 can't open Argon2id shares, and
+0.5.11 ignores the `kdf` header (it assumes its own fixed cost, which is what
+0.5.12 writes today). A backup made by an up-to-date app may not restore its
+Password share in an app on an older libwallet.
 
 ## Backup
 
@@ -206,7 +225,7 @@ For each restored wallet, check its local keys (`wallet.keys`) with
 | Share | Check | Usable when |
 |---|---|---|
 | `StoreKey` | `verify(key.id)`, no key | `valid`: a vault entry on this device holds the share's key (`entryId` names it). Nothing is unsealed and there's no prompt. On a new device, or after a reinstall, it's `false`. |
-| `Password` | `verify(key.id, key: KeyDescription.password(p))`, or `KeyDescription.vault(pwEntry.id)` if the password is remembered in the vault | `valid`: the share opened with that password. `kdf == 'pbkdf2'` means it should be [upgraded](#password-kdf). |
+| `Password` | `verify(key.id, key: KeyDescription.password(p))`, or `KeyDescription.vault(pwEntry.id)` if the password is remembered in the vault | `valid`: the share opened with that password. `needsKdfUpgrade` means it should be [re-sealed](#password-kdf). |
 | `RemoteKey` | Not checked up front: it costs the user a 2FA code. It's used in step 2. | |
 
 ```dart
@@ -316,7 +335,7 @@ the `repairRemoteKey` doc comment in `dart/lib/src/api/wallet_api.dart`).
       unusable, reshare with two working shares onto three fresh ones (one
       fresh RemoteKey session per wallet, one wallet at a time), verify the
       new local shares, back up again. No signing UI until then.
-- [ ] Password shares with `kdf: 'pbkdf2'`: re-seal them (`recrypt` to the
+- [ ] Password shares with `needsKdfUpgrade`: re-seal them (`recrypt` to the
       same password, or a new one if it's under 8 characters), then back up.
 - [ ] Never put a device share secret in a default backup.
 - [ ] Tell the user plainly that losing both the device and the password

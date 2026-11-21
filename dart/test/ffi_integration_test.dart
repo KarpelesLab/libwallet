@@ -1375,6 +1375,8 @@ void main() {
           key: KeyDescription.password('old-pass-2'));
       expect(p2.valid, isTrue);
       expect(p2.kdf, 'argon2id');
+      expect(p2.kdfParams, r'argon2id$v=19$m=65536,t=3,p=1');
+      expect(p2.kdfUpgrade, isFalse);
       expect(p2.needsKdfUpgrade, isFalse);
       final wrong = await client.walletKeys.verify(w.keys[1].id,
           key: KeyDescription.password('old-pass-3'));

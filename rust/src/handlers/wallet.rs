@@ -100,7 +100,7 @@ mod probe_tests {
         let pkix = crate::keystore::public_key_to_pkix_b64(&priv_key.public()).unwrap();
         let entropy_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
         let share = format!(r#"{{"curve":"secp256k1","entropy":"{entropy_b64}","language":"english","passphrase":""}}"#);
-        let sealed = crate::keystore::seal(share.as_bytes(), &[priv_key.public()]).unwrap();
+        let sealed = crate::keystore::seal_to(share.as_bytes(), &priv_key.public(), Some(crate::keystore::PasswordKdf::CURRENT)).unwrap();
 
         let wallet_id = Xuid::new("wlt").to_string();
         env.exec(
@@ -143,7 +143,7 @@ mod probe_tests {
         let xid: Xuid = wk_id.parse().unwrap();
         let uuid = xid.uuid().as_bytes().to_vec();
         let priv_key = crate::keystore::password_to_ed25519("password1", &uuid).unwrap();
-        let sealed = crate::keystore::seal(br#"{"curve":"secp256k1","entropy":"AAAAAAAAAAAAAAAAAAAAAA==","language":"english","passphrase":""}"#, &[priv_key.public()]).unwrap();
+        let sealed = crate::keystore::seal_to(br#"{"curve":"secp256k1","entropy":"AAAAAAAAAAAAAAAAAAAAAA==","language":"english","passphrase":""}"#, &priv_key.public(), Some(crate::keystore::PasswordKdf::CURRENT)).unwrap();
         let wallet_id = Xuid::new("wlt").to_string();
         env.exec(r#"INSERT INTO "Wallet" ("Id","Name","Curve","Protocol","Threshold","Gen","Pubkey","Chaincode","Created","Modified") VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)"#,
             vec![SqlValue::Text(wallet_id.clone()), SqlValue::Text("S".into()), SqlValue::Text("secp256k1".into()), SqlValue::Text("mnemonic".into()), SqlValue::Int(0), SqlValue::Int(1), SqlValue::Text(String::new()), SqlValue::Text(String::new()), SqlValue::Text(crate::now_rfc3339()), SqlValue::Text(crate::now_rfc3339())]).unwrap();

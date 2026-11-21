@@ -23,8 +23,10 @@ pub struct KeyDescription {
 
 /// How a share is protected once resolved.
 pub enum Recipient {
-    /// Encrypt the share to this public key (StoreKey / Password).
-    Encrypt(PublicKey),
+    /// Encrypt the share to this public key (StoreKey / Password). A Password
+    /// recipient carries the KDF its key was derived with, which the sealed
+    /// share must record (`keystore::seal_to`).
+    Encrypt(PublicKey, Option<keystore::PasswordKdf>),
     /// Store the share unencrypted (Plain).
     Plain,
     /// Held by a remote party (RemoteKey) — resolved server-side, not locally.
@@ -36,10 +38,10 @@ impl KeyDescription {
     /// (used only by the Password scheme, matching Go passwordToEd25519).
     pub fn resolve(&self, salt: &[u8]) -> Result<Recipient, KeystoreError> {
         match self.kind.as_str() {
-            "StoreKey" => Ok(Recipient::Encrypt(keystore::public_key_from_pkix_b64(&self.key)?)),
+            "StoreKey" => Ok(Recipient::Encrypt(keystore::public_key_from_pkix_b64(&self.key)?, None)),
             "Password" => {
                 let k = keystore::password_to_ed25519(&self.key, salt)?;
-                Ok(Recipient::Encrypt(k.public()))
+                Ok(Recipient::Encrypt(k.public(), Some(keystore::PasswordKdf::CURRENT)))
             }
             "Plain" => Ok(Recipient::Plain),
             "RemoteKey" => Ok(Recipient::Remote),

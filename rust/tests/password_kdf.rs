@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::time::Duration;
 
-use libwallet::keystore;
+use libwallet::keystore::{self, PasswordKdf};
 use libwallet::models::{account, wallet};
 use libwallet::sign::KeyDescription;
 use libwallet::{Env, LibwalletDestroy, LibwalletFree, LibwalletInit, LibwalletRequest, ResponseCallback, SqlValue};
@@ -55,6 +55,117 @@ fn signs(env: &Env, account_id: &str, address: &str, key_id: &str, password: &st
     }
 }
 
+fn header(env: &Env, key_id: &str) -> Option<String> {
+    let wk = wallet::fetch_key(env, key_id).unwrap().unwrap();
+    keystore::share_kdf(&wk.data).unwrap().map(|k| k.to_header())
+}
+
+/// Re-seal a share's payload under `kdf` for `password`, recording `header`
+/// (None: no header, as libwallet 0.5.11 and older wrote).
+fn reseal(env: &Env, key_id: &str, open_with: &str, password: &str, kdf: PasswordKdf, header: Option<&str>) {
+    let wk = wallet::fetch_key(env, key_id).unwrap().unwrap();
+    let salt = uuid(key_id);
+    let cur = keystore::password_unlock_key(open_with, &salt, &wk.key, &wk.data).unwrap().0;
+    let payload = keystore::open(&wk.data, [cur]).unwrap();
+    let k = kdf.derive(password.as_bytes(), &salt).unwrap();
+    let mut b = bottlers::Bottle::from_cbor(&keystore::seal(&payload, &[k.public()]).unwrap()).unwrap();
+    if let Some(h) = header {
+        b.header.insert(keystore::KDF_HEADER.into(), bottlers::HeaderValue::Text(h.into()));
+    }
+    let key = keystore::public_key_to_pkix_b64(&k.public()).unwrap();
+    env.exec(
+        r#"UPDATE "WalletKey" SET "Key" = ?1, "Data" = ?2 WHERE "Id" = ?3"#,
+        vec![SqlValue::Text(key), SqlValue::Blob(b.to_cbor().unwrap()), SqlValue::Text(key_id.into())],
+    )
+    .unwrap();
+}
+
+#[test]
+fn kdf_header_roundtrips_and_is_bounded() {
+    for k in [PasswordKdf::CURRENT, PasswordKdf::LEGACY, PasswordKdf::Argon2id { m_kib: 8192, t: 1, p: 2 }] {
+        assert_eq!(PasswordKdf::parse(&k.to_header()).unwrap(), k);
+    }
+    assert_eq!(PasswordKdf::CURRENT.to_header(), "argon2id$v=19$m=65536,t=3,p=1");
+    for bad in [
+        "scrypt$n=16384,r=8,p=1",            // a scheme this version doesn't know
+        "argon2id$v=16$m=65536,t=3,p=1",     // another Argon2 version
+        "argon2id$v=19$m=65536,t=3",         // missing p
+        "argon2id$v=19$m=65536,t=3,p=1,x=1", // unknown parameter
+        "argon2id$v=19$m=65536,t=3,t=4,p=1", // repeated parameter
+        "argon2id$v=19$m=2097152,t=3,p=1",   // 2 GiB: refused before allocating
+        "argon2id$v=19$m=65536,t=0,p=1",
+        "pbkdf2-sha256$i=0",
+        "",
+    ] {
+        let e = PasswordKdf::parse(bad).unwrap_err().to_string();
+        assert!(e.contains("update libwallet") || e.contains("unsupported"), "{bad}: {e}");
+    }
+}
+
+#[test]
+fn new_shares_record_their_kdf() {
+    let env = env();
+    let w = wallet::import_private_key(&env, "k", "secp256k1", &[0x60u8; 32], &pw(PW)).unwrap();
+    assert_eq!(header(&env, &w.keys[0].id).as_deref(), Some("argon2id$v=19$m=65536,t=3,p=1"));
+}
+
+#[test]
+fn a_recorded_kdf_is_used_whatever_its_cost() {
+    // A share sealed at another cost (as an older or newer libwallet would)
+    // opens with the parameters it records.
+    let env = env();
+    let w = wallet::import_private_key(&env, "k", "secp256k1", &[0x66u8; 32], &pw(PW)).unwrap();
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let id = w.keys[0].id.clone();
+    let cheap = PasswordKdf::Argon2id { m_kib: 8192, t: 1, p: 2 };
+    reseal(&env, &id, PW, PW, cheap, Some(&cheap.to_header()));
+    assert!(signs(&env, &a.id, &a.address, &id, PW));
+    let c = wallet::verify_key(&env, &id, Some(&pw(PW))).unwrap();
+    assert_eq!((c.valid, c.kdf), (true, Some("argon2id")));
+    assert_eq!(c.kdf_params, Some(cheap.to_header()));
+    assert_eq!(c.kdf_upgrade, Some(true), "a cheaper Argon2 cost than today's is flagged");
+
+    // Recrypt re-seals at the current cost and records it.
+    wallet::recrypt_key(&env, &id, &pw(PW), &pw(PW)).unwrap();
+    assert_eq!(header(&env, &id), Some(PasswordKdf::CURRENT.to_header()));
+    assert!(signs(&env, &a.id, &a.address, &id, PW));
+    assert_eq!(wallet::verify_key(&env, &id, Some(&pw(PW))).unwrap().kdf_upgrade, Some(false));
+
+    // A header naming a scheme this version doesn't know: a clear error, not a
+    // silent "wrong password".
+    reseal(&env, &id, PW, PW, PasswordKdf::CURRENT, Some("scrypt$n=16384,r=8,p=1"));
+    let e = wallet::verify_key(&env, &id, Some(&pw(PW))).unwrap_err().to_string();
+    assert!(e.contains("update libwallet"), "{e}");
+}
+
+#[test]
+fn shares_sealed_by_0_5_11_without_a_header_open() {
+    let env = env();
+    let w = wallet::import_private_key(&env, "k", "secp256k1", &[0x67u8; 32], &pw(PW)).unwrap();
+    let a = account::create(&env, &w.id, "", "ethereum", 0).unwrap();
+    let id = w.keys[0].id.clone();
+    reseal(&env, &id, PW, PW, PasswordKdf::V0_5_11, None);
+    assert_eq!(header(&env, &id), None);
+    assert!(signs(&env, &a.id, &a.address, &id, PW));
+    assert!(!signs(&env, &a.id, &a.address, &id, "wrong password"));
+    assert_eq!(wallet::verify_key(&env, &id, Some(&pw(PW))).unwrap().kdf, Some("argon2id"));
+}
+
+#[test]
+fn backup_restore_keeps_the_recorded_kdf() {
+    let src = env();
+    let w = wallet::import_private_key(&src, "k", "secp256k1", &[0x68u8; 32], &pw(PW)).unwrap();
+    let id = w.keys[0].id.clone();
+    let cheap = PasswordKdf::Argon2id { m_kib: 16384, t: 2, p: 1 };
+    reseal(&src, &id, PW, PW, cheap, Some(&cheap.to_header()));
+    let entry = wallet::backup_entry(&src, &wallet::fetch(&src, &w.id).unwrap().unwrap()).unwrap();
+
+    let dst = env();
+    wallet::restore_entry(&dst, entry["data"].as_str().unwrap()).unwrap();
+    assert_eq!(header(&dst, &id), Some(cheap.to_header()));
+    assert!(wallet::verify_key(&dst, &id, Some(&pw(PW))).unwrap().valid);
+}
+
 #[test]
 fn new_shares_use_argon2id() {
     let env = env();
@@ -87,6 +198,7 @@ fn legacy_shares_open_and_recrypt_upgrades_them() {
     let c = wallet::verify_key(&env, &id, Some(&pw("short77"))).unwrap();
     assert!(c.valid);
     assert_eq!(c.kdf, Some("pbkdf2"));
+    assert_eq!((c.kdf_params.as_deref(), c.kdf_upgrade), (Some("pbkdf2-sha256$i=4096"), Some(true)));
 
     // Re-sealing to the same short password is refused (the floor is 8 now);
     // nothing changes.

@@ -13,7 +13,10 @@ fn store_key_resolves_and_roundtrips() {
 
     let kd = KeyDescription { kind: "StoreKey".into(), key: pkix_b64, id: String::new() };
     let recipient = match kd.resolve(b"walletkey-id").unwrap() {
-        Recipient::Encrypt(pk) => pk,
+        Recipient::Encrypt(pk, kdf) => {
+            assert_eq!(kdf, None, "a StoreKey has no password KDF");
+            pk
+        }
         _ => panic!("StoreKey should encrypt"),
     };
 
@@ -29,7 +32,10 @@ fn password_resolves_and_roundtrips() {
     let salt = b"walletkey-uuid";
     let kd = KeyDescription { kind: "Password".into(), key: "hunter2hunter".into(), id: String::new() };
     let recipient = match kd.resolve(salt).unwrap() {
-        Recipient::Encrypt(pk) => pk,
+        Recipient::Encrypt(pk, kdf) => {
+            assert_eq!(kdf, Some(keystore::PasswordKdf::CURRENT), "the share must record its KDF");
+            pk
+        }
         _ => panic!("Password should encrypt"),
     };
     let sealed = keystore::seal(b"share", &[recipient]).unwrap();

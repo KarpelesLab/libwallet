@@ -1,3 +1,17 @@
+## Unreleased
+
+- **Password shares record their KDF.** Every new Password share carries a
+  cleartext `kdf` header with its exact parameters (e.g.
+  `argon2id$v=19$m=65536,t=3,p=1`), and libwallet derives the key from it. The
+  cost of new shares can now go up in a later release without breaking older
+  shares, and a share naming an unknown scheme fails with an "update
+  libwallet" error rather than "wrong password". Parameters read from a share
+  (a backup is untrusted) are bounded before use. Shares without the header
+  still open: PBKDF2 (before 0.5.11) or Argon2id at 0.5.11's fixed cost.
+- **`WalletKeyCheck` gives `kdfParams` and `kdfUpgrade`.** `needsKdfUpgrade` is
+  now true for any share whose KDF differs from what new shares get, not only
+  PBKDF2 ones.
+
 ## 0.5.11
 
 - **Password shares are sealed with Argon2id.** New Password shares (wallet

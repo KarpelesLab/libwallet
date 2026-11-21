@@ -142,7 +142,7 @@ pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescr
         "Plain" => keystore::open(&wk.data, std::iter::empty())
             .map_err(|e| Error::Env(format!("open plain: {e}")))?,
         "Password" | "StoreKey" => {
-            let priv_key = resolve_unlock_key(&old.kind, &old.key, &uuid, &wk.key)?;
+            let priv_key = resolve_unlock_key(&old.kind, &old.key, &uuid, &wk.key, &wk.data)?;
             keystore::open(&wk.data, std::iter::once(priv_key))
                 .map_err(|e| Error::Env(format!("decrypt with old key: {e}")))?
         }
@@ -158,13 +158,14 @@ pub fn recrypt_key(env: &Env, key_id: &str, old: &KeyDescription, new: &KeyDescr
         "Password" | "StoreKey" => {
             // A vault StoreKey target is sealed to its stored public key: no
             // need to unseal (and prompt for) the entry just to derive it.
-            let pub_key = if new.kind == "StoreKey" && crate::vault::session::is_token(&new.key) {
-                keystore::public_key_from_pkix_b64(&new.key).map_err(|e| Error::Env(e.to_string()))?
+            let (pub_key, kdf) = if new.kind == "StoreKey" && crate::vault::session::is_token(&new.key) {
+                (keystore::public_key_from_pkix_b64(&new.key).map_err(|e| Error::Env(e.to_string()))?, None)
             } else {
-                resolve_seal_key(&new.kind, &new.key, &uuid)?.public()
+                let (k, kdf) = resolve_seal_key(&new.kind, &new.key, &uuid)?;
+                (k.public(), kdf)
             };
             wk.key = keystore::public_key_to_pkix_b64(&pub_key).map_err(|e| Error::Env(e.to_string()))?;
-            wk.data = keystore::seal(&payload, &[pub_key]).map_err(|e| Error::Env(e.to_string()))?;
+            wk.data = keystore::seal_to(&payload, &pub_key, kdf).map_err(|e| Error::Env(e.to_string()))?;
         }
         other => return Err(Error::Env(format!("recrypt new type {other} not supported locally"))),
     }
@@ -201,10 +202,18 @@ pub struct KeyCheck {
     /// compared; nothing was unsealed and no prompt was shown.
     #[serde(rename = "Checked")]
     pub checked: &'static str,
-    /// Password shares: `"pbkdf2"` (sealed before 0.5.11: re-seal it with
-    /// `Wallet/Key:recrypt` to move it to Argon2id) or `"argon2id"`.
+    /// Password shares: the KDF scheme, `"pbkdf2"` (sealed before 0.5.11) or
+    /// `"argon2id"`.
     #[serde(rename = "Kdf", skip_serializing_if = "Option::is_none")]
     pub kdf: Option<&'static str>,
+    /// Password shares: the exact parameters, as the share's `kdf` header
+    /// spells them (e.g. `argon2id$v=19$m=65536,t=3,p=1`).
+    #[serde(rename = "KdfParams", skip_serializing_if = "Option::is_none")]
+    pub kdf_params: Option<String>,
+    /// Password shares: true when they differ from what new shares get, i.e. a
+    /// `recrypt` (same password is fine) would strengthen or update the share.
+    #[serde(rename = "KdfUpgrade", skip_serializing_if = "Option::is_none")]
+    pub kdf_upgrade: Option<bool>,
     /// StoreKey shares checked without a key: the vault entry that holds it.
     #[serde(rename = "Entry", skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
@@ -228,7 +237,7 @@ pub struct KeyCheck {
 /// locally.
 pub fn verify_key(env: &Env, key_id: &str, key: Option<&KeyDescription>) -> Result<KeyCheck> {
     let wk = fetch_key(env, key_id)?.ok_or_else(|| Error::Env("wallet key not found".into()))?;
-    let mut check = KeyCheck { id: wk.id.clone(), valid: false, checked: "unsealed", kdf: None, entry: None };
+    let mut check = KeyCheck { id: wk.id.clone(), valid: false, checked: "unsealed", kdf: None, kdf_params: None, kdf_upgrade: None, entry: None };
     if wk.kind == "RemoteKey" {
         return Err(Error::Env("a RemoteKey share is held by the WalletSign servers and can't be verified locally".into()));
     }
@@ -252,9 +261,11 @@ pub fn verify_key(env: &Env, key_id: &str, key: Option<&KeyDescription>) -> Resu
         return Err(Error::Env(format!("wallet key {} is a {} share, not {}", wk.id, wk.kind, kd.kind)));
     }
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id {}: {e}", wk.id)))?;
-    let (unlock, kdf) = resolve_unlock_key_kdf(&wk.kind, &kd.key, xid.uuid().as_bytes(), &wk.key)?;
+    let (unlock, kdf) = resolve_unlock_key_kdf(&wk.kind, &kd.key, xid.uuid().as_bytes(), &wk.key, &wk.data)?;
     check.valid = keystore::open(&wk.data, std::iter::once(unlock)).is_ok();
-    check.kdf = kdf.map(keystore::PasswordKdf::as_str);
+    check.kdf = kdf.map(keystore::PasswordKdf::name);
+    check.kdf_params = kdf.map(keystore::PasswordKdf::to_header);
+    check.kdf_upgrade = kdf.map(|k| k != keystore::PasswordKdf::CURRENT);
     Ok(check)
 }
 
@@ -440,8 +451,8 @@ pub async fn create_at_async(env: &Env, name: &str, curve: &str, key_descs: &[Ke
             .ok_or_else(|| Error::Env("share/party mismatch".into()))?;
 
         let (data, key_field) = match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
-            Recipient::Encrypt(pk) => {
-                let sealed = keystore::seal(json.as_bytes(), &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+            Recipient::Encrypt(pk, kdf) => {
+                let sealed = keystore::seal_to(json.as_bytes(), &pk, kdf).map_err(|e| Error::Env(e.to_string()))?;
                 let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
                 (sealed, pkix)
             }
@@ -866,7 +877,7 @@ pub fn promote(
             let json = if imported.kind == "Plain" {
                 keystore::open(&imported.data, []).map_err(|e| Error::Env(e.to_string()))?
             } else {
-                let k = resolve_unlock_key(&imported.kind, &secret, &uuid, &imported.key)?;
+                let k = resolve_unlock_key(&imported.kind, &secret, &uuid, &imported.key, &imported.data)?;
                 keystore::open(&imported.data, [k]).map_err(|e| Error::Env(e.to_string()))?
             };
             tsslib::dklstss::Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
@@ -1066,8 +1077,8 @@ pub async fn persist_agent_keygen_async(
 /// Remote → error (needs the backend).
 fn seal_share(payload: &[u8], key_desc: &KeyDescription, uuid: &[u8]) -> Result<(Vec<u8>, String)> {
     match key_desc.resolve(uuid).map_err(|e| Error::Env(e.to_string()))? {
-        Recipient::Encrypt(pk) => {
-            let sealed = keystore::seal(payload, &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+        Recipient::Encrypt(pk, kdf) => {
+            let sealed = keystore::seal_to(payload, &pk, kdf).map_err(|e| Error::Env(e.to_string()))?;
             let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
             Ok((sealed, pkix))
         }
@@ -1388,8 +1399,8 @@ pub(crate) fn seal_share_full(
     share: &[u8],
 ) -> Result<(Vec<u8>, String)> {
     match kd.resolve(uuid_bytes).map_err(|e| Error::Env(e.to_string()))? {
-        Recipient::Encrypt(pk) => {
-            let sealed = keystore::seal(share, &[pk.clone()]).map_err(|e| Error::Env(e.to_string()))?;
+        Recipient::Encrypt(pk, kdf) => {
+            let sealed = keystore::seal_to(share, &pk, kdf).map_err(|e| Error::Env(e.to_string()))?;
             let pkix = keystore::public_key_to_pkix_b64(&pk).map_err(|e| Error::Env(e.to_string()))?;
             Ok((sealed, pkix))
         }
@@ -1740,22 +1751,24 @@ pub(crate) fn b64url_decode(s: &str) -> Result<Vec<u8>> {
 /// host-supplied 64-byte store key through `storeKeyToEd25519` (PBKDF2 with the
 /// store key's own halves), matching Go `walletkey.go`. (RemoteKey unlock happens
 /// on the backend and is not handled here.)
-pub fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8], sealed_to: &str) -> Result<bottlers::PrivateKey> {
-    resolve_unlock_key_kdf(kind, material, uuid, sealed_to).map(|(k, _)| k)
+pub fn resolve_unlock_key(kind: &str, material: &str, uuid: &[u8], sealed_to: &str, sealed: &[u8]) -> Result<bottlers::PrivateKey> {
+    resolve_unlock_key_kdf(kind, material, uuid, sealed_to, sealed).map(|(k, _)| k)
 }
 
 /// [`resolve_unlock_key`], also saying which KDF a Password share uses (None
-/// for a StoreKey). `sealed_to` is the share's recorded recipient
-/// (`WalletKey.Key`): it picks the legacy or the current password KDF.
+/// for a StoreKey). `sealed_to` and `sealed` are the share's recorded
+/// recipient and blob (`WalletKey.Key` / `.Data`): the blob names its password
+/// KDF (see `keystore::password_unlock_key`).
 pub fn resolve_unlock_key_kdf(
     kind: &str,
     material: &str,
     uuid: &[u8],
     sealed_to: &str,
+    sealed: &[u8],
 ) -> Result<(bottlers::PrivateKey, Option<keystore::PasswordKdf>)> {
     match kind {
         "Password" => {
-            let (k, kdf) = keystore::password_unlock_key(material, uuid, sealed_to).map_err(|e| Error::Env(e.to_string()))?;
+            let (k, kdf) = keystore::password_unlock_key(material, uuid, sealed_to, sealed).map_err(|e| Error::Env(e.to_string()))?;
             Ok((k, Some(kdf)))
         }
         "StoreKey" => Ok((keystore::store_key_to_ed25519(material).map_err(|e| Error::Env(e.to_string()))?, None)),
@@ -1763,12 +1776,15 @@ pub fn resolve_unlock_key_kdf(
     }
 }
 
-/// The key a NEW share of type `kind` is sealed to (Password: the current
-/// Argon2id KDF).
-pub fn resolve_seal_key(kind: &str, material: &str, uuid: &[u8]) -> Result<bottlers::PrivateKey> {
+/// The key a NEW share of type `kind` is sealed to, and (Password) the KDF the
+/// sealed share must record (`keystore::seal_to`).
+pub fn resolve_seal_key(kind: &str, material: &str, uuid: &[u8]) -> Result<(bottlers::PrivateKey, Option<keystore::PasswordKdf>)> {
     match kind {
-        "Password" => keystore::password_to_ed25519(material, uuid).map_err(|e| Error::Env(e.to_string())),
-        "StoreKey" => keystore::store_key_to_ed25519(material).map_err(|e| Error::Env(e.to_string())),
+        "Password" => Ok((
+            keystore::password_to_ed25519(material, uuid).map_err(|e| Error::Env(e.to_string()))?,
+            Some(keystore::PasswordKdf::CURRENT),
+        )),
+        "StoreKey" => Ok((keystore::store_key_to_ed25519(material).map_err(|e| Error::Env(e.to_string()))?, None)),
         other => Err(Error::Env(format!("seal type {other} not supported locally"))),
     }
 }
@@ -1786,7 +1802,7 @@ pub fn decrypt_mnemonic_seed(env: &Env, wallet_id: &str, unlock: &[(String, Stri
     let wk = &wallet.keys[0];
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
     let uuid_bytes = xid.uuid().as_bytes().to_vec();
-    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid_bytes, &wk.key)?;
+    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid_bytes, &wk.key, &wk.data)?;
     let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
     let _ = wk_id; // the unlock id is validated by the successful decrypt above
     Ok(mnemonic_share_seed(&payload)?.0)
@@ -1815,7 +1831,7 @@ pub fn export_secret(env: &Env, wallet_id: &str, unlock: &[(String, String)]) ->
         keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
     } else {
         let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
-        let unlock_key = resolve_unlock_key(&wk.kind, secret, xid.uuid().as_bytes(), &wk.key)?;
+        let unlock_key = resolve_unlock_key(&wk.kind, secret, xid.uuid().as_bytes(), &wk.key, &wk.data)?;
         keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?
     };
     let hex = |b: &[u8]| format!("0x{}", hex_bytes(b));
@@ -1928,7 +1944,7 @@ fn sign_ed25519_mnemonic(wallet: &Wallet, unlock: &[(String, String)], path: &st
         .ok_or_else(|| Error::Env("wallet has no keys".into()))?;
     let xid: Xuid = wk.id.parse().map_err(|e| Error::Env(format!("bad walletkey id: {e}")))?;
     let uuid = xid.uuid().as_bytes().to_vec();
-    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid, &wk.key)?;
+    let unlock_key = resolve_unlock_key(&wk.kind, secret, &uuid, &wk.key, &wk.data)?;
     let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
     let (seed, curve) = mnemonic_share_seed(&payload)?;
     let key = mnemonic_key_at(&seed, &curve, path)?;
@@ -2036,7 +2052,7 @@ fn open_committee_share(wk: &WalletKey, uuid_bytes: &[u8], password: &str) -> Re
     if wk.kind == "Plain" {
         keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))
     } else {
-        let unlock_key = resolve_unlock_key(&wk.kind, password, uuid_bytes, &wk.key)?;
+        let unlock_key = resolve_unlock_key(&wk.kind, password, uuid_bytes, &wk.key, &wk.data)?;
         keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))
     }
 }
@@ -2167,7 +2183,7 @@ pub fn frost_committee(
         let json = if wk.kind == "Plain" {
             keystore::open(&wk.data, []).map_err(|e| Error::Env(e.to_string()))?
         } else {
-            let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid_bytes, &wk.key)?;
+            let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid_bytes, &wk.key, &wk.data)?;
             keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?
         };
         let key = Key::from_json(std::str::from_utf8(&json).map_err(|e| Error::Env(e.to_string()))?)
@@ -2241,7 +2257,7 @@ pub fn dkls_sign_digest_at(
             .ok_or_else(|| Error::Env(format!("wallet has no key {wk_id}")))?;
         let xid: Xuid = wk_id.parse().map_err(|e| Error::Env(format!("bad walletkey id {wk_id}: {e}")))?;
         let uuid = xid.uuid().as_bytes().to_vec();
-        let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid, &wk.key)?;
+        let unlock_key = resolve_unlock_key(&wk.kind, password, &uuid, &wk.key, &wk.data)?;
         let payload = keystore::open(&wk.data, [unlock_key]).map_err(|e| Error::Env(e.to_string()))?;
         let key = if wk.schema == "mnemonic" {
             let (seed, curve) = mnemonic_share_seed(&payload)?;
