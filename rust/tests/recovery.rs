@@ -190,6 +190,66 @@ fn mnemonic_derives_every_wallet_layout() {
 }
 
 #[test]
+fn layouts_cover_non_standard_wallets() {
+    let h = new_env();
+    let opened = ok(h, "Recovery:open", json!({ "Type": "mnemonic", "Mnemonic": MNEMONIC }));
+    let s = opened["Session"].as_str().unwrap();
+    let layouts = opened["Layouts"].as_array().unwrap();
+    let standard: Vec<&str> = layouts.iter().filter(|l| l["Standard"] == true).map(|l| l["Id"].as_str().unwrap()).collect();
+    assert_eq!(standard, ["bip84", "bip49", "bip44", "ledger-live", "ledger-legacy", "phantom", "trust", "sollet"]);
+
+    // The standard set includes Ledger's legacy Ethereum path and Ledger Live
+    // on Tron, but not the non-standard Bitcoin layouts.
+    let std = addresses(h, s, json!({ "Count": 2 }));
+    assert_eq!(find(&std, "ethereum:evm:m/44'/60'/0'/1")["Layout"], "ledger-legacy");
+    assert_eq!(find(&std, "tron:tron:m/44'/195'/1'/0/0")["Layout"], "ledger-live");
+    assert_eq!(find(&std, "bitcoin:p2wpkh:m/84'/0'/0'/0/0")["Layout"], "bip84");
+    assert!(std.iter().all(|a| a["Id"] != "bitcoin:p2wpkh:m/44'/0'/0'/0/0"));
+
+    let all = addresses(h, s, json!({ "Chains": ["bitcoin", "litecoin"], "Count": 2, "Layouts": "all" }));
+    for (id, layout) in [
+        ("bitcoin:p2wpkh:m/44'/0'/0'/0/0", "mixed-scripts"),      // the BIP-44 path as native SegWit
+        ("bitcoin:p2sh:p2wpkh:m/44'/0'/0'/1/1", "mixed-scripts"), // … and as wrapped SegWit
+        ("bitcoin:p2pkh:m/84'/0'/0'/0/0", "mixed-scripts"),
+        ("bitcoin:p2pkh:m/44'/0'/0'/1", "blockchain-info"),
+        ("bitcoin:p2sh:p2wpkh:m/0'/0'/1'", "bitcoin-core"),
+        ("bitcoin:p2wpkh:m/0'/1'/0'", "bitcoin-core"),
+        ("litecoin:p2wpkh:m/0'/0'/0'", "bitcoin-core"),
+        ("bitcoin:p2pkh:m/0'/0/1", "multibit"),
+        ("bitcoin:p2wpkh:m/84'/0'/2147483646'/0/0", "samourai"),
+        ("litecoin:p2wpkh:m/44'/2'/0'/0/0", "mixed-scripts"),
+    ] {
+        assert_eq!(find(&all, id)["Layout"], layout, "{id}");
+    }
+    // MultiBit and Samourai were Bitcoin-only.
+    assert!(all.iter().all(|a| a["Chain"] == "bitcoin" || (a["Layout"] != "multibit" && a["Layout"] != "samourai")));
+
+    // A mixed-script address is the same key as the standard one on that path.
+    let legacy = ok(h, "Recovery:export", json!({ "Session": s, "Address": "bitcoin:p2pkh:m/44'/0'/0'/0/0" }));
+    let segwit = ok(h, "Recovery:export", json!({ "Session": s, "Address": "bitcoin:p2wpkh:m/44'/0'/0'/0/0" }));
+    assert_eq!(legacy["PrivateKey"], segwit["PrivateKey"]);
+    assert_ne!(legacy["Address"], segwit["Address"]);
+    assert!(segwit["Address"].as_str().unwrap().starts_with("bc1q"));
+
+    // One layout by name, and more accounts.
+    let bci = addresses(h, s, json!({ "Chains": ["bitcoin"], "Layouts": ["blockchain-info"], "Count": 3, "Accounts": 2 }));
+    assert_eq!(bci.len(), 6);
+    assert!(bci.iter().all(|a| a["Layout"] == "blockchain-info" && a["Path"].as_str().unwrap().matches('/').count() == 4), "{bci:?}");
+    find(&bci, "bitcoin:p2pkh:m/44'/0'/1'/2");
+    let accounts = addresses(h, s, json!({ "Chains": ["bitcoin"], "Count": 1, "Accounts": 3 }));
+    find(&accounts, "bitcoin:p2wpkh:m/84'/0'/2'/1/0");
+    assert_eq!(accounts.len(), 3 * 2 * 3, "3 layouts × receive/change × 3 accounts");
+
+    assert!(err(h, "Recovery:addresses", json!({ "Session": s, "Layouts": ["electrum"] })).contains("unknown layout"));
+    assert!(err(h, "Recovery:addresses", json!({ "Session": s, "Accounts": 0 })).contains("Accounts"));
+    assert!(err(h, "Recovery:addresses", json!({ "Session": s, "Accounts": 21 })).contains("Accounts"));
+    // A private key has no layouts to choose.
+    let k = ok(h, "Recovery:open", json!({ "Type": "privateKey", "Key": "0000000000000000000000000000000000000000000000000000000000000001" }));
+    assert!(k.get("Layouts").is_none());
+    LibwalletDestroy(h);
+}
+
+#[test]
 fn a_mistyped_phrase_is_refused() {
     let h = new_env();
     let bad = MNEMONIC.replace("about", "abandon");
@@ -381,6 +441,10 @@ fn bitcoin_sweeps_sign_every_script_type() {
         ("bitcoin:p2wpkh:m/84'/0'/0'/0/0", "p2wpkh", 68),
         ("bitcoin:p2sh:p2wpkh:m/49'/0'/0'/1/3", "p2sh:p2wpkh", 91),
         ("bitcoin:p2pkh:m/44'/0'/0'/0/0", "p2pkh", 148),
+        // Non-standard layouts sign the same way.
+        ("bitcoin:p2wpkh:m/44'/0'/0'/0/0", "p2wpkh", 68),
+        ("bitcoin:p2pkh:m/44'/0'/0'/7", "p2pkh", 148),
+        ("bitcoin:p2sh:p2wpkh:m/0'/0'/2'", "p2sh:p2wpkh", 91),
     ] {
         let p = ok(h, "Recovery:prepareSweep", json!({ "Session": s, "Address": id, "To": to, "RPC": url }));
         let (amount, fee): (u64, u64) = (p["Amount"].as_str().unwrap().parse().unwrap(), p["Fee"].as_str().unwrap().parse().unwrap());

@@ -14,6 +14,14 @@
   receive and change), Ethereum with ERC-20 (MetaMask and Ledger Live
   layouts), Solana with SPL (Phantom, Trust Wallet, Sollet) and Tron (TRX,
   USDT), plus Monero keys for Bitfi. See `docs/wallet-recovery.md`.
+- **Recovery covers non-standard derivations.** A recovery phrase's addresses
+  come in layouts (`session.layouts`, `RecoveredAddress.layout`). The
+  standard set, scanned by default, now also has Ledger's legacy Ethereum
+  path (`m/44'/60'/0'/i`) and Ledger Live on Tron. `layouts: ['all']` (or
+  ids) adds BIP-44/49/84 paths used with another script type (e.g. the
+  standard Bitcoin path used for SegWit), Blockchain.info's legacy layout
+  without a change level, Bitcoin Core, MultiBit HD and Samourai Whirlpool.
+  `accounts:` covers more Bitcoin-family accounts.
 
 ## 0.5.12
 

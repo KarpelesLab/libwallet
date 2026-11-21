@@ -44,7 +44,9 @@ fn chains_json(session: &recovery::Session) -> Value {
 /// - `privateKey` {Key}: 64 hex characters, a WIF, or a Solana keypair
 /// - `keystore` {Keystore (the JSON file's text), Password}
 ///
-/// Returns `{Session, Type, Chains: [{Chain, Symbol, Decimals}]}`.
+/// Returns `{Session, Type, Chains: [{Chain, Symbol, Decimals}]}`, and for a
+/// mnemonic `Layouts: [{Id, Label, Standard}]`, the derivation layouts
+/// `addresses` and `scan` can be asked for.
 pub fn open(params: &Value) -> ApiResult {
     let kind = text(params, "Type")?;
     let session = match kind {
@@ -58,16 +60,24 @@ pub fn open(params: &Value) -> ApiResult {
     let chains = chains_json(&session);
     let kind = session.kind;
     let id = recovery::insert(session).map_err(ApiError::internal)?;
-    Ok(json!({ "Session": id, "Type": kind, "Chains": chains }))
+    let mut out = json!({ "Session": id, "Type": kind, "Chains": chains });
+    if kind == "mnemonic" {
+        out["Layouts"] = json!(recovery::LAYOUTS.iter().map(|l| json!({ "Id": l.id, "Label": l.label, "Standard": l.standard })).collect::<Vec<_>>());
+    }
+    Ok(out)
 }
 
-/// `{Chains?, Start?, Count?}` from a request.
-fn range(params: &Value) -> Result<(Vec<String>, u32, u32), ApiError> {
-    let chains = match params.get("Chains") {
-        None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(a)) => a.iter().map(|c| c.as_str().map(str::to_owned).ok_or_else(|| ApiError::new(400, "Chains must be strings"))).collect::<Result<_, _>>()?,
-        Some(_) => return Err(ApiError::new(400, "Chains must be a list")),
-    };
+fn strings(params: &Value, name: &str) -> Result<Vec<String>, ApiError> {
+    match params.get(name) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::String(one)) => Ok(vec![one.clone()]),
+        Some(Value::Array(a)) => a.iter().map(|c| c.as_str().map(str::to_owned).ok_or_else(|| ApiError::new(400, format!("{name} must be strings")))).collect(),
+        Some(_) => Err(ApiError::new(400, format!("{name} must be a list"))),
+    }
+}
+
+/// `{Chains?, Start?, Count?, Accounts?, Layouts?}` from a request.
+fn range(params: &Value) -> Result<(Vec<String>, recovery::Scope), ApiError> {
     let num = |name: &str, default: u32| -> Result<u32, ApiError> {
         match params.get(name) {
             None | Some(Value::Null) => Ok(default),
@@ -78,18 +88,22 @@ fn range(params: &Value) -> Result<(Vec<String>, u32, u32), ApiError> {
     if count > recovery::MAX_COUNT {
         return Err(ApiError::new(400, format!("Count is at most {}", recovery::MAX_COUNT)));
     }
-    Ok((chains, num("Start", 0)?, count))
+    let scope = recovery::Scope::new(num("Start", 0)?, count, num("Accounts", 1)?, &strings(params, "Layouts")?).map_err(|e| ApiError::new(400, e))?;
+    Ok((strings(params, "Chains")?, scope))
 }
 
 fn slots(params: &Value) -> Result<Vec<recovery::Slot>, ApiError> {
-    let (chains, start, count) = range(params)?;
-    with_session(params, |s| recovery::slots(s, &chains, start, count).map_err(|e| ApiError::new(400, e)))
+    let (chains, scope) = range(params)?;
+    with_session(params, |s| recovery::slots(s, &chains, &scope).map_err(|e| ApiError::new(400, e)))
 }
 
-/// `Recovery:addresses` {Session, Chains?, Start?, Count?} — every address the
-/// source may have used, for indexes `Start..Start+Count` (default 0..5), with
-/// no network access. Returns `{Addresses: [{Id, Chain, Symbol, Kind, Address,
-/// Label, Index, Path?}]}`.
+/// `Recovery:addresses` {Session, Chains?, Start?, Count?, Accounts?,
+/// Layouts?} — every address the source may have used, for indexes
+/// `Start..Start+Count` (default 0..5) and, on account-level Bitcoin paths,
+/// accounts `0..Accounts` (default 1), with no network access. `Layouts`
+/// (recovery phrases): `"standard"` (default), `"all"`, or layout ids (see
+/// `Recovery:open`'s `Layouts`). Returns `{Addresses: [{Id, Chain, Symbol,
+/// Kind, Address, Layout, Label, Index, Path?}]}`.
 pub fn addresses(params: &Value) -> ApiResult {
     let found = slots(params)?;
     Ok(json!({ "Addresses": found.iter().map(recovery::Slot::to_json).collect::<Vec<_>>() }))

@@ -69,17 +69,54 @@ A source can have used many addresses: one per chain, script type, derivation
 layout and index. `session.addresses()` lists them without any network access,
 and `session.scan()` also says what each one holds. Both cover indexes
 `start` to `start + count - 1` (default 0 to 4, at most 100 per call), and
-`chains:` limits them to some chains.
+`chains:` limits them to some chains. Each address says which `layout` it
+belongs to (`bitfi` or `key` for those sources) and has a `label` for display.
 
-| Chain | Recovery phrase | Private key / keystore | Bitfi |
+| Chain | Private key / keystore | Bitfi |
+|---|---|---|
+| Bitcoin, Litecoin | Native SegWit, P2SH SegWit, legacy (compressed and uncompressed key) | Legacy (uncompressed key), SegWit |
+| Monacoin | Native SegWit, legacy | Legacy, SegWit |
+| Dogecoin, Bitcoin Cash | Legacy | Legacy |
+| Ethereum + ERC-20 | The key | The key at each position |
+| Solana + SPL | Hex keys (as a seed) and Solana keypairs | — |
+| Tron (TRX, USDT) | The key | — |
+| Monero | — | Keys only (see below) |
+
+### Recovery phrases: derivation layouts
+
+A recovery phrase doesn't say which paths its wallet derived, and wallets
+disagree. libwallet covers them as **layouts**. The standard ones are scanned
+by default; the others are what older or non-standard wallets did, and are
+scanned on request, because each one multiplies the addresses to check.
+
+| Layout | Paths (`a` account, `c` change, `i` index) | Chains | Default |
 |---|---|---|---|
-| Bitcoin, Litecoin | BIP-84 native SegWit, BIP-49 SegWit, BIP-44 legacy, receive and change | Native SegWit, P2SH SegWit, legacy (compressed and uncompressed key) | Legacy (uncompressed key), SegWit |
-| Monacoin | BIP-84, BIP-44 | Native SegWit, legacy | Legacy, SegWit |
-| Dogecoin, Bitcoin Cash | BIP-44 | Legacy | Legacy |
-| Ethereum + ERC-20 | MetaMask / standard (`m/44'/60'/0'/0/i`), Ledger Live (`m/44'/60'/i'/0/0`) | The key | The key at each position |
-| Solana + SPL | Phantom / Solflare (`m/44'/501'/i'/0'`), Trust Wallet / older Solflare (`m/44'/501'/i'`), Sollet (the seed itself) | Hex keys (as a seed) and Solana keypairs | — |
-| Tron (TRX, USDT) | `m/44'/195'/0'/0/i` | The key | — |
-| Monero | — | — | Keys only (see below) |
+| `bip84` | `m/84'/coin'/a'/c/i`, native SegWit | BTC, LTC, MONA | ✅ |
+| `bip49` | `m/49'/coin'/a'/c/i`, P2SH SegWit | BTC, LTC | ✅ |
+| `bip44` | `m/44'/coin'/a'/c/i`, legacy; Ethereum `m/44'/60'/0'/0/i` (MetaMask, Trezor, most wallets); Tron `m/44'/195'/0'/0/i` | all but Solana | ✅ |
+| `ledger-live` | `m/44'/60'/i'/0/0`, `m/44'/195'/i'/0/0` | ETH, TRX | ✅ |
+| `ledger-legacy` | `m/44'/60'/0'/i`: Ledger's old Chrome app, MyEtherWallet's "Ledger (ETH)" | ETH | ✅ |
+| `phantom` | `m/44'/501'/i'/0'` (Phantom, Solflare) | SOL | ✅ |
+| `trust` | `m/44'/501'/i'` (Trust Wallet, older Solflare) | SOL | ✅ |
+| `sollet` | the seed itself, no derivation | SOL | ✅ |
+| `mixed-scripts` | the BIP-44/49/84 paths with the *other* script types: e.g. the standard BIP-44 path used for native or P2SH SegWit, or a BIP-84 path used for legacy addresses | BTC, LTC, MONA (and legacy on each) | |
+| `blockchain-info` | `m/44'/coin'/a'/i`: Blockchain.info's legacy HD wallets, which had no change level | Bitcoin family | |
+| `bitcoin-core` | `m/0'/0'/i'` (receive) and `m/0'/1'/i'` (change), every script type | BTC, LTC | |
+| `multibit` | `m/0'/0/i` and `m/0'/1/i`, legacy (MultiBit HD) | BTC | |
+| `samourai` | `m/84'/0'/2147483646'`, `…45'`, `…44'` (Whirlpool postmix, premix, bad bank) | BTC | |
+
+Pass `layouts:` to `addresses()` / `scan()`: null for the standard set,
+`['all']` for every layout, or ids (`['blockchain-info', 'bitcoin-core']`).
+`session.layouts` lists them with a label and whether each is standard, for a
+"search more thoroughly" option. `accounts:` (default 1, at most 20) covers
+Bitcoin-family accounts `0` to `accounts - 1` on the account-level layouts
+(`bip84`, `bip49`, `bip44`, `mixed-scripts`, `blockchain-info`); Ethereum,
+Tron and Solana accounts are the index itself.
+
+**When the standard scan finds nothing** but the user is sure the phrase held
+funds, scan again with `layouts: ['all']` and a few `accounts`. Then try a
+larger `count`, and check the passphrase: a different passphrase is a
+different wallet, and an empty one is a passphrase too.
 
 A WIF key says whether its addresses use the compressed or uncompressed public
 key, so only the matching script types are listed. A 64-character hex key could
@@ -91,9 +128,9 @@ too: `session.scan(start: 5)`.
 
 Every address has a stable `id` such as `bitcoin:p2wpkh:m/84'/0'/0'/0/3`,
 `ethereum:evm:key` or `litecoin:p2pukh:bitfi:2`. It names the address in
-`prepareSweep` and `export`. An id for a path that isn't in the list is
-accepted too, so a user who knows their old wallet used an unusual account can
-still get at it.
+`prepareSweep` and `export`. An id for a path no layout lists is accepted too
+(`chain:scheme:path`, with any BIP-32 path), so a user who knows their old
+wallet used an unusual path can still get at it.
 
 ## Balances
 
@@ -194,8 +231,8 @@ amount is a string of base units.
 
 | Request | Params | Returns |
 |---|---|---|
-| `Recovery:open` | `{Type: "mnemonic", Mnemonic, Passphrase?}` · `{Type: "privateKey", Key}` · `{Type: "keystore", Keystore, Password}` · `{Type: "bitfi", Salt, Secret}` | `{Session, Type, Chains: [{Chain, Symbol, Decimals}]}` |
-| `Recovery:addresses` | `{Session, Chains?, Start?, Count?}` | `{Addresses: [{Id, Chain, Symbol, Kind, Address, Label, Index, Path?}]}` |
+| `Recovery:open` | `{Type: "mnemonic", Mnemonic, Passphrase?}` · `{Type: "privateKey", Key}` · `{Type: "keystore", Keystore, Password}` · `{Type: "bitfi", Salt, Secret}` | `{Session, Type, Chains: [{Chain, Symbol, Decimals}], Layouts?: [{Id, Label, Standard}]}` (`Layouts` for a mnemonic) |
+| `Recovery:addresses` | `{Session, Chains?, Start?, Count?, Accounts?, Layouts? ("standard", "all" or ids)}` | `{Addresses: [{Id, Chain, Symbol, Kind, Address, Layout, Label, Index, Path?}]}` |
 | `Recovery:scan` | as `addresses` | the same, with `Assets: [{Asset, Symbol, Decimals, Balance}]` or `Error` on each |
 | `Recovery:prepareSweep` | `{Session, Address (an Id), To \| ToAccount, Asset?, Amount? ("max"), FeeRate?}` | `{Address, Chain, From, To, Asset, Symbol, Decimals, Amount, Fee, Raw, Change?, FeeRate?, FeeLimit?, Txid?}` |
 | `Recovery:broadcast` | `{Chain, Raw}` | `{Txid}` |

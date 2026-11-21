@@ -228,6 +228,196 @@ fn decode_wif(input: &str) -> Option<(Zeroizing<[u8; 32]>, bool)> {
     Some((key, compressed))
 }
 
+// --- derivation layouts ---------------------------------------------------
+
+/// A set of derivation paths and script types some wallet used for a
+/// recovery phrase. `standard` layouts are scanned by default; the others are
+/// what non-standard or older wallets did, scanned on request (`Layouts:
+/// "all"` or by name) because each one multiplies the addresses to check.
+pub struct Layout {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub standard: bool,
+}
+
+pub const LAYOUTS: &[Layout] = &[
+    Layout { id: "bip84", label: "BIP-84 native SegWit: most current Bitcoin wallets", standard: true },
+    Layout { id: "bip49", label: "BIP-49 SegWit (P2SH)", standard: true },
+    Layout { id: "bip44", label: "BIP-44: legacy Bitcoin addresses, MetaMask and most Ethereum and Tron wallets", standard: true },
+    Layout { id: "ledger-live", label: "Ledger Live (Ethereum, Tron): one account per hardened index", standard: true },
+    Layout { id: "ledger-legacy", label: "Ledger's legacy Ethereum path (the Chrome app, MyEtherWallet's \"Ledger (ETH)\")", standard: true },
+    Layout { id: "phantom", label: "Phantom / Solflare (Solana)", standard: true },
+    Layout { id: "trust", label: "Trust Wallet / older Solflare (Solana)", standard: true },
+    Layout { id: "sollet", label: "Sollet (Solana, the seed itself)", standard: true },
+    Layout { id: "mixed-scripts", label: "BIP-44/49/84 paths with another script type, e.g. the BIP-44 path used for SegWit", standard: false },
+    Layout { id: "blockchain-info", label: "Blockchain.info legacy HD wallets (no change level)", standard: false },
+    Layout { id: "bitcoin-core", label: "Bitcoin Core HD (hardened m/0'/0'/i')", standard: false },
+    Layout { id: "multibit", label: "MultiBit HD (m/0'/0/i)", standard: false },
+    Layout { id: "samourai", label: "Samourai Whirlpool accounts (premix, postmix, bad bank)", standard: false },
+];
+
+/// What a request asks to derive.
+pub struct Scope {
+    pub start: u32,
+    pub end: u32,
+    /// Accounts `0..accounts` on account-level paths.
+    pub accounts: u32,
+    pub layouts: Vec<&'static str>,
+}
+
+/// The most accounts one request may ask about.
+pub const MAX_ACCOUNTS: u32 = 20;
+
+impl Scope {
+    /// `layouts`: empty or `["standard"]` for the standard layouts, `["all"]`
+    /// for every one, or layout ids.
+    pub fn new(start: u32, count: u32, accounts: u32, layouts: &[String]) -> Result<Scope, String> {
+        let end = start.checked_add(count.min(MAX_COUNT)).filter(|e| *e <= 0x8000_0000).ok_or("index out of range")?;
+        if accounts == 0 || accounts > MAX_ACCOUNTS {
+            return Err(format!("Accounts must be between 1 and {MAX_ACCOUNTS}"));
+        }
+        let mut ids: Vec<&'static str> = Vec::new();
+        for name in layouts {
+            match name.as_str() {
+                "standard" => ids.extend(LAYOUTS.iter().filter(|l| l.standard).map(|l| l.id)),
+                "all" => ids.extend(LAYOUTS.iter().map(|l| l.id)),
+                other => ids.push(LAYOUTS.iter().find(|l| l.id == other).map(|l| l.id).ok_or_else(|| format!("unknown layout {other:?}"))?),
+            }
+        }
+        if layouts.is_empty() {
+            ids.extend(LAYOUTS.iter().filter(|l| l.standard).map(|l| l.id));
+        }
+        ids.dedup();
+        Ok(Scope { start, end, accounts, layouts: ids })
+    }
+
+    fn has(&self, layout: &str) -> bool {
+        self.layouts.contains(&layout)
+    }
+}
+
+/// A derived slot before its address: `(scheme, key, layout, label, index)`.
+type SlotRef = (&'static str, KeyRef, &'static str, String, u32);
+
+/// The slots of a recovery phrase on chain `c`.
+fn seed_refs(c: &Chain, scope: &Scope) -> Vec<SlotRef> {
+    let mut refs: Vec<SlotRef> = Vec::new();
+    let range = scope.start..scope.end;
+    let which = |change: u32| if change == 0 { "receive" } else { "change" };
+    match c.family {
+        Family::Bitcoin { coin_type: ct, schemes, .. } => {
+            let has_scheme = |s: &str| s == "p2pkh" || schemes.iter().any(|(x, _, _)| *x == s);
+            let standard_of = |purpose: u32| match purpose {
+                84 => "p2wpkh",
+                49 => "p2sh:p2wpkh",
+                _ => "p2pkh",
+            };
+            for (purpose, layout) in [(84u32, "bip84"), (49, "bip49"), (44, "bip44")] {
+                let std_scheme = standard_of(purpose);
+                // The standard script type, then (mixed-scripts) the others.
+                let mut paths: Vec<(&'static str, &'static str)> = Vec::new();
+                if scope.has(layout) && has_scheme(std_scheme) {
+                    paths.push((std_scheme, layout));
+                }
+                if scope.has("mixed-scripts") {
+                    for other in ["p2wpkh", "p2sh:p2wpkh", "p2pkh"] {
+                        if other != std_scheme && has_scheme(other) {
+                            paths.push((other, "mixed-scripts"));
+                        }
+                    }
+                }
+                for (scheme, layout) in paths {
+                    for a in 0..scope.accounts {
+                        for change in [0u32, 1] {
+                            for i in range.clone() {
+                                let path = format!("m/{purpose}'/{ct}'/{a}'/{change}/{i}");
+                                let label = if layout == "mixed-scripts" {
+                                    format!("BIP-{purpose} path used for {}, account {a}, {} {i}", scheme_label(scheme), which(change))
+                                } else {
+                                    format!("BIP-{purpose} {}, account {a}, {} {i}", scheme_label(scheme), which(change))
+                                };
+                                refs.push((scheme, KeyRef::Path(path), layout, label, i));
+                            }
+                        }
+                    }
+                }
+            }
+            if scope.has("blockchain-info") {
+                for a in 0..scope.accounts {
+                    for i in range.clone() {
+                        refs.push(("p2pkh", KeyRef::Path(format!("m/44'/{ct}'/{a}'/{i}")), "blockchain-info", format!("Blockchain.info legacy, account {a}, address {i}"), i));
+                    }
+                }
+            }
+            if scope.has("bitcoin-core") && matches!(c.name, "bitcoin" | "litecoin") {
+                for scheme in ["p2wpkh", "p2sh:p2wpkh", "p2pkh"] {
+                    for change in [0u32, 1] {
+                        for i in range.clone() {
+                            let path = format!("m/0'/{change}'/{i}'");
+                            refs.push((scheme, KeyRef::Path(path), "bitcoin-core", format!("Bitcoin Core HD, {}, {} {i}", scheme_label(scheme), which(change)), i));
+                        }
+                    }
+                }
+            }
+            if scope.has("multibit") && c.name == "bitcoin" {
+                for change in [0u32, 1] {
+                    for i in range.clone() {
+                        refs.push(("p2pkh", KeyRef::Path(format!("m/0'/{change}/{i}")), "multibit", format!("MultiBit HD, {} {i}", which(change)), i));
+                    }
+                }
+            }
+            if scope.has("samourai") && c.name == "bitcoin" {
+                for (account, name) in [(2147483646u32, "postmix"), (2147483645, "premix"), (2147483644, "bad bank")] {
+                    for change in [0u32, 1] {
+                        for i in range.clone() {
+                            let path = format!("m/84'/0'/{account}'/{change}/{i}");
+                            refs.push(("p2wpkh", KeyRef::Path(path), "samourai", format!("Samourai Whirlpool {name}, {} {i}", which(change)), i));
+                        }
+                    }
+                }
+            }
+        }
+        Family::Ethereum => {
+            for i in range.clone() {
+                if scope.has("bip44") {
+                    refs.push(("evm", KeyRef::Path(format!("m/44'/60'/0'/0/{i}")), "bip44", format!("MetaMask / standard, address {i}"), i));
+                }
+                if scope.has("ledger-live") {
+                    refs.push(("evm", KeyRef::Path(format!("m/44'/60'/{i}'/0/0")), "ledger-live", format!("Ledger Live, account {i}"), i));
+                }
+                if scope.has("ledger-legacy") {
+                    refs.push(("evm", KeyRef::Path(format!("m/44'/60'/0'/{i}")), "ledger-legacy", format!("Ledger legacy (MEW \"Ledger (ETH)\"), address {i}"), i));
+                }
+            }
+        }
+        Family::Tron => {
+            for i in range.clone() {
+                if scope.has("bip44") {
+                    refs.push(("tron", KeyRef::Path(format!("m/44'/195'/0'/0/{i}")), "bip44", format!("Standard, address {i}"), i));
+                }
+                if scope.has("ledger-live") {
+                    refs.push(("tron", KeyRef::Path(format!("m/44'/195'/{i}'/0/0")), "ledger-live", format!("Ledger Live, account {i}"), i));
+                }
+            }
+        }
+        Family::Solana => {
+            if scope.has("sollet") && scope.start == 0 && scope.end > 0 {
+                refs.push(("solana", KeyRef::Seed32, "sollet", "Sollet (seed, no derivation)".into(), 0));
+            }
+            for i in range {
+                if scope.has("phantom") {
+                    refs.push(("solana", KeyRef::Path(format!("m/44'/501'/{i}'/0'")), "phantom", format!("Phantom / Solflare, account {i}"), i));
+                }
+                if scope.has("trust") {
+                    refs.push(("solana", KeyRef::Path(format!("m/44'/501'/{i}'")), "trust", format!("Trust Wallet / older Solflare, account {i}"), i));
+                }
+            }
+        }
+        Family::Monero => {}
+    }
+    refs
+}
+
 // --- slots ------------------------------------------------------------------
 
 /// How a slot's key is derived from the session's secret.
@@ -273,6 +463,9 @@ pub struct Slot {
     pub scheme: &'static str,
     pub key: KeyRef,
     pub address: String,
+    /// The derivation layout (recovery phrases; see [`LAYOUTS`]), `bitfi`, or
+    /// `key` for a single key.
+    pub layout: &'static str,
     /// What wallets use this slot, for display.
     pub label: String,
     /// The address index or Bitfi position.
@@ -287,7 +480,7 @@ impl Slot {
     pub fn to_json(&self) -> Value {
         let mut v = json!({
             "Id": self.id(), "Chain": self.chain.name, "Symbol": self.chain.symbol, "Kind": self.scheme,
-            "Address": self.address, "Label": self.label, "Index": self.index,
+            "Address": self.address, "Layout": self.layout, "Label": self.label, "Index": self.index,
         });
         if let KeyRef::Path(p) = &self.key {
             v["Path"] = json!(p);
@@ -318,12 +511,11 @@ fn scheme_label(scheme: &str) -> &'static str {
     }
 }
 
-/// Every slot of `session` on `chains` (all the source's chains when empty),
-/// for indexes `start..start + count`. Duplicates (the same address reached by
-/// two paths, as index 0 of Ethereum's two layouts is) are listed once.
-pub fn slots(session: &Session, chains: &[String], start: u32, count: u32) -> Result<Vec<Slot>, String> {
-    let count = count.min(MAX_COUNT);
-    let end = start.checked_add(count).filter(|e| *e <= 0x8000_0000).ok_or("index out of range")?;
+/// Every slot of `session` on `chains` (all the source's chains when empty)
+/// that `scope` asks for. Duplicates (the same address reached by two paths,
+/// as index 0 of Ethereum's BIP-44 and Ledger Live layouts is) are listed once.
+pub fn slots(session: &Session, chains: &[String], scope: &Scope) -> Result<Vec<Slot>, String> {
+    let (start, end) = (scope.start, scope.end);
     let mut wanted: Vec<&'static Chain> = Vec::new();
     let available = session.chains();
     if chains.is_empty() {
@@ -342,58 +534,28 @@ pub fn slots(session: &Session, chains: &[String], start: u32, count: u32) -> Re
 
     let mut out: Vec<Slot> = Vec::new();
     for c in wanted {
-        let mut refs: Vec<(&'static str, KeyRef, String, u32)> = Vec::new();
+        let mut refs: Vec<SlotRef> = Vec::new();
         match (&session.secret, c.family) {
             (Secret::Bitfi(_), family) => {
                 for i in start..end {
                     match family {
                         Family::Bitcoin { schemes, .. } => {
-                            refs.push(("p2pukh", KeyRef::Bitfi(i), format!("Bitfi position {i}, legacy"), i));
+                            refs.push(("p2pukh", KeyRef::Bitfi(i), "bitfi", format!("Bitfi position {i}, legacy"), i));
                             if schemes.iter().any(|(s, _, _)| *s == "p2wpkh") {
-                                refs.push(("p2wpkh", KeyRef::Bitfi(i), format!("Bitfi position {i}, SegWit"), i));
+                                refs.push(("p2wpkh", KeyRef::Bitfi(i), "bitfi", format!("Bitfi position {i}, SegWit"), i));
                             }
                         }
-                        Family::Ethereum => refs.push(("evm", KeyRef::Bitfi(i), format!("Bitfi position {i}"), i)),
-                        Family::Monero => refs.push(("monero", KeyRef::Bitfi(i), format!("Bitfi position {i}"), i)),
+                        Family::Ethereum => refs.push(("evm", KeyRef::Bitfi(i), "bitfi", format!("Bitfi position {i}"), i)),
+                        Family::Monero => refs.push(("monero", KeyRef::Bitfi(i), "bitfi", format!("Bitfi position {i}"), i)),
                         _ => {}
                     }
                 }
             }
-            (Secret::Seed(_), Family::Bitcoin { coin_type, schemes, .. }) => {
-                for (scheme, purpose, label) in schemes {
-                    for change in [0u32, 1] {
-                        for i in start..end {
-                            let path = format!("m/{purpose}'/{coin_type}'/0'/{change}/{i}");
-                            let which = if change == 0 { "receive" } else { "change" };
-                            refs.push((scheme, KeyRef::Path(path), format!("{label}, {which} {i}"), i));
-                        }
-                    }
-                }
-            }
-            (Secret::Seed(_), Family::Ethereum) => {
-                for i in start..end {
-                    refs.push(("evm", KeyRef::Path(format!("m/44'/60'/0'/0/{i}")), format!("MetaMask / standard, account {i}"), i));
-                    refs.push(("evm", KeyRef::Path(format!("m/44'/60'/{i}'/0/0")), format!("Ledger Live, account {i}"), i));
-                }
-            }
-            (Secret::Seed(_), Family::Tron) => {
-                for i in start..end {
-                    refs.push(("tron", KeyRef::Path(format!("m/44'/195'/0'/0/{i}")), format!("Standard, account {i}"), i));
-                }
-            }
-            (Secret::Seed(_), Family::Solana) => {
-                if start == 0 && end > 0 {
-                    refs.push(("solana", KeyRef::Seed32, "Sollet (seed, no derivation)".into(), 0));
-                }
-                for i in start..end {
-                    refs.push(("solana", KeyRef::Path(format!("m/44'/501'/{i}'/0'")), format!("Phantom / Solflare, account {i}"), i));
-                    refs.push(("solana", KeyRef::Path(format!("m/44'/501'/{i}'")), format!("Trust Wallet / older Solflare, account {i}"), i));
-                }
-            }
+            (Secret::Seed(_), _) => refs = seed_refs(c, scope),
             (Secret::Key { compressed, .. }, Family::Bitcoin { schemes, .. }) => {
                 if start == 0 && end > 0 {
                     for scheme in key_schemes(schemes, *compressed) {
-                        refs.push((scheme, KeyRef::Key, scheme_label(scheme).into(), 0));
+                        refs.push((scheme, KeyRef::Key, "key", scheme_label(scheme).into(), 0));
                     }
                 }
             }
@@ -404,19 +566,19 @@ pub fn slots(session: &Session, chains: &[String], start: u32, count: u32) -> Re
                     Family::Solana => "solana",
                     _ => continue,
                 };
-                refs.push((scheme, KeyRef::Key, "Private key".into(), 0));
+                refs.push((scheme, KeyRef::Key, "key", "Private key".into(), 0));
             }
             _ => {}
         }
-        for (scheme, key, label, index) in refs {
+        for (scheme, key, layout, label, index) in refs {
             if out.len() >= MAX_SLOTS {
-                return Err(format!("that's more than {MAX_SLOTS} addresses: ask for fewer chains or indexes"));
+                return Err(format!("that's more than {MAX_SLOTS} addresses: ask for fewer chains, layouts, accounts or indexes"));
             }
             let address = address_for(session, c, scheme, &key)?;
             if out.iter().any(|s| s.chain.name == c.name && s.address == address) {
                 continue;
             }
-            out.push(Slot { chain: c, scheme, key, address, label, index });
+            out.push(Slot { chain: c, scheme, key, address, layout, label, index });
         }
     }
     Ok(out)
@@ -466,7 +628,12 @@ pub fn slot(session: &Session, id: &str) -> Result<Slot, String> {
         KeyRef::Path(p) => crate::hdderive::parse_bip32_path(p).ok().and_then(|v| v.last().copied()).unwrap_or(0) & 0x7fff_ffff,
         _ => 0,
     };
-    Ok(Slot { chain: c, scheme, key, address, label: String::new(), index })
+    let layout = match &key {
+        KeyRef::Bitfi(_) => "bitfi",
+        KeyRef::Key => "key",
+        _ => "",
+    };
+    Ok(Slot { chain: c, scheme, key, address, layout, label: String::new(), index })
 }
 
 /// A slot's signing key.

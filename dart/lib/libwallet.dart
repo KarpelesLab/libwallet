@@ -185,6 +185,7 @@ export 'src/api/recovery_api.dart'
         RecoverySource,
         RecoverySession,
         RecoveryChain,
+        RecoveryLayout,
         RecoveredAddress,
         RecoveredAsset,
         RecoverySweep,

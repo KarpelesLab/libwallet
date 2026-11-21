@@ -54,6 +54,9 @@ class RecoveryApi {
       (data['Chains'] as List)
           .map((c) => RecoveryChain.fromJson(Map<String, dynamic>.from(c as Map)))
           .toList(),
+      ((data['Layouts'] as List?) ?? const [])
+          .map((l) => RecoveryLayout.fromJson(Map<String, dynamic>.from(l as Map)))
+          .toList(),
     );
   }
 }
@@ -112,6 +115,27 @@ class RecoveryChain {
       );
 }
 
+/// A set of derivation paths and script types some wallet used for a
+/// recovery phrase (see [RecoverySession.layouts]).
+class RecoveryLayout {
+  /// `bip84`, `bip49`, `bip44`, `ledger-live`, `ledger-legacy`, `phantom`,
+  /// `trust`, `sollet` (the standard ones), or `mixed-scripts`,
+  /// `blockchain-info`, `bitcoin-core`, `multibit`, `samourai`.
+  final String id;
+  final String label;
+
+  /// Scanned unless [RecoverySession.scan] is told otherwise.
+  final bool standard;
+
+  const RecoveryLayout({required this.id, required this.label, required this.standard});
+
+  factory RecoveryLayout.fromJson(Map<String, dynamic> json) => RecoveryLayout(
+        id: json['Id'] as String,
+        label: json['Label'] as String? ?? '',
+        standard: json['Standard'] as bool? ?? false,
+      );
+}
+
 /// An open recovery source. Close it when done ([close]): that wipes its
 /// secret from memory.
 class RecoverySession {
@@ -124,18 +148,26 @@ class RecoverySession {
   /// The chains this source can hold funds on.
   final List<RecoveryChain> chains;
 
+  /// For a recovery phrase, the derivation layouts [addresses] and [scan]
+  /// can cover; empty for other sources.
+  final List<RecoveryLayout> layouts;
+
   bool _closed = false;
 
-  RecoverySession._(this._conn, this._id, this.type, this.chains);
+  RecoverySession._(this._conn, this._id, this.type, this.chains, this.layouts);
 
   /// Whether [close] was called.
   bool get isClosed => _closed;
 
-  Map<String, dynamic> _range(List<String>? chains, int start, int count) => {
+  Map<String, dynamic> _range(List<String>? chains, int start, int count,
+          List<String>? layouts, int accounts) =>
+      {
         'Session': _id,
         if (chains != null) 'Chains': chains,
         'Start': start,
         'Count': count,
+        'Accounts': accounts,
+        if (layouts != null) 'Layouts': layouts,
       };
 
   List<RecoveredAddress> _rows(dynamic data) =>
@@ -146,13 +178,25 @@ class RecoverySession {
   /// Every address the source may have used, without touching the network:
   /// each chain's script types and the derivation layouts of the wallets
   /// that used it, for indexes `start` to `start + count - 1` (at most 100
-  /// at once). A mnemonic covers BIP-44/49/84 receive and change addresses,
-  /// MetaMask and Ledger Live Ethereum accounts, Phantom, Trust Wallet and
-  /// Sollet Solana accounts, and Tron. Limit it with [chains].
+  /// at once). Limit it with [chains].
+  ///
+  /// For a recovery phrase, [layouts] picks the derivation layouts: null for
+  /// the standard ones (BIP-84/49/44 receive and change, MetaMask, Ledger Live
+  /// and Ledger's legacy Ethereum path, Phantom, Trust Wallet and Sollet on
+  /// Solana, Tron), `['all']` to add the non-standard ones ([layouts] lists
+  /// them: BIP-44/49/84 paths with another script type, Blockchain.info's
+  /// legacy layout, Bitcoin Core, MultiBit, Samourai), or layout ids.
+  /// [accounts] covers Bitcoin-family accounts `0` to `accounts - 1` (at most
+  /// 20). Each extra layout or account multiplies the addresses a [scan]
+  /// checks.
   Future<List<RecoveredAddress>> addresses(
-          {List<String>? chains, int start = 0, int count = 5}) async =>
-      _rows(await _conn.request(
-          'Recovery:addresses', 'POST', _range(chains, start, count)));
+          {List<String>? chains,
+          int start = 0,
+          int count = 5,
+          List<String>? layouts,
+          int accounts = 1}) async =>
+      _rows(await _conn.request('Recovery:addresses', 'POST',
+          _range(chains, start, count, layouts, accounts)));
 
   /// [addresses] with what each one holds ([RecoveredAddress.assets]). An
   /// address that couldn't be checked has [RecoveredAddress.error] instead,
@@ -160,10 +204,18 @@ class RecoverySession {
   ///
   /// Wallets use addresses in order, so if anything turns up near the end of
   /// the range, scan the next one (`start: count`).
+  ///
+  /// If the standard layouts find nothing but the user is sure the phrase
+  /// held funds, scan again with `layouts: ['all']` and more [accounts]: the
+  /// old wallet may have used a non-standard derivation.
   Future<List<RecoveredAddress>> scan(
-          {List<String>? chains, int start = 0, int count = 5}) async =>
-      _rows(await _conn.request(
-          'Recovery:scan', 'POST', _range(chains, start, count)));
+          {List<String>? chains,
+          int start = 0,
+          int count = 5,
+          List<String>? layouts,
+          int accounts = 1}) async =>
+      _rows(await _conn.request('Recovery:scan', 'POST',
+          _range(chains, start, count, layouts, accounts)));
 
   /// Build and sign, **without broadcasting**, a transfer of [asset] from a
   /// recovered [address] (a [RecoveredAddress], or its [RecoveredAddress.id]),
@@ -250,6 +302,10 @@ class RecoveredAddress {
   /// The derivation path, for a mnemonic.
   final String? path;
 
+  /// The [RecoveryLayout.id] it belongs to, for a mnemonic; `bitfi` or `key`
+  /// for other sources.
+  final String layout;
+
   /// What the address holds, after [RecoverySession.scan]; null when it
   /// wasn't scanned or couldn't be checked.
   final List<RecoveredAsset>? assets;
@@ -265,6 +321,7 @@ class RecoveredAddress {
     required this.address,
     required this.label,
     required this.index,
+    this.layout = '',
     this.path,
     this.assets,
     this.error,
@@ -289,6 +346,7 @@ class RecoveredAddress {
         label: json['Label'] as String? ?? '',
         index: (json['Index'] as num?)?.toInt() ?? 0,
         path: json['Path'] as String?,
+        layout: json['Layout'] as String? ?? '',
         assets: (json['Assets'] as List?)
             ?.map((a) => RecoveredAsset.fromJson(Map<String, dynamic>.from(a as Map)))
             .toList(),

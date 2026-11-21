@@ -1400,9 +1400,21 @@ void main() {
           'bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu');
       expect(byId["ethereum:evm:m/44'/60'/0'/0/0"]!.address.toLowerCase(),
           '0x9858effd232b4033e47d90003d41ec34ecaeda94');
-      expect(byId["bitcoin:p2pkh:m/44'/0'/0'/0/0"]!.label, contains('BIP44'));
+      expect(byId["bitcoin:p2pkh:m/44'/0'/0'/0/0"]!.label, 'BIP-44 Legacy, account 0, receive 0');
       expect(list.every((a) => a.assets == null && !a.hasFunds), isTrue,
           reason: 'addresses() does not scan');
+      expect(byId["ethereum:evm:m/44'/60'/0'/0"]!.layout, 'ledger-legacy');
+
+      // Non-standard layouts on request.
+      expect(session.layouts.where((l) => !l.standard).map((l) => l.id),
+          containsAll(['mixed-scripts', 'blockchain-info', 'bitcoin-core']));
+      final all = await session.addresses(
+          chains: ['bitcoin'], count: 1, layouts: ['all'], accounts: 2);
+      final segwitOn44 = all.firstWhere((a) => a.id == "bitcoin:p2wpkh:m/44'/0'/0'/0/0");
+      expect(segwitOn44.layout, 'mixed-scripts');
+      expect(segwitOn44.label, startsWith('BIP-44 path used for Native SegWit'));
+      expect(all.any((a) => a.id == "bitcoin:p2pkh:m/44'/0'/1'/0"), isTrue,
+          reason: 'blockchain.info, account 1');
 
       final keys = await session.export(byId["bitcoin:p2wpkh:m/84'/0'/0'/0/0"]!);
       expect(keys.wif, startsWith('K'));
