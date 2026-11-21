@@ -26,7 +26,7 @@ A wallet is a threshold (MPC) committee of **3 shares with `Threshold: 1`**.
 | # | Share | Wallet key `Type` | Where it lives | How it's protected | In a backup? |
 |---|---|---|---|---|---|
 | 1 | **Device share** | `StoreKey` | This device | Sealed to a `storekey` vault entry on the `secure` backend: Secure Enclave, Keychain or Android Keystore, behind Face ID / fingerprint / passcode | The blob is, but it can't be opened anywhere else. **Not recoverable.** |
-| 2 | **Password share** | `Password` | This device | Sealed to a key derived from the user's password (PBKDF2-SHA256, salted with the wallet key id). The password can be remembered in the vault if the user agrees (see below). | **Yes.** Opens anywhere with the password. |
+| 2 | **Password share** | `Password` | This device | Sealed to a key derived from the user's password (Argon2id, salted with the wallet key id; see [Password KDF](#password-kdf)). At least 8 characters. The password can be remembered in the vault if the user agrees (see below). | **Yes.** Opens anywhere with the password. |
 | 3 | **Remote share** | `RemoteKey` | Tibane's WalletSign servers (the wdrone fleet) | Encrypted to the fleet's keys, which are held in physical TPMs. Released for a ceremony only after 2FA (SMS / email code, or a passkey). | The wallet keeps a fleet-encrypted copy, used only by `Wallet:repairRemoteKey`. |
 
 What each pair of shares means:
@@ -118,6 +118,39 @@ Rules:
 - When the password changes (`walletKeys.recrypt`), re-import it into the
   vault and delete the old entry.
 
+## Password KDF
+
+Since libwallet 0.5.11, new Password shares are sealed to a key derived with
+**Argon2id** (64 MiB, 3 passes), the same cost as the vault's password
+backend: about 0.1 s natively and up to a second in a browser, per
+derivation. Every place a Password share is *created* uses it: wallet
+creation, reshare, promote, import and the target side of `recrypt`. Sealing
+refuses passwords shorter than **8 characters**.
+
+Shares sealed earlier used PBKDF2-SHA256 with 4,096 iterations, which is cheap
+to brute-force offline. They keep working: libwallet tries the legacy
+derivation first and uses it when it matches the share's recorded public key,
+so an old share opens (and an old backup restores) with the same password,
+even one shorter than 8 characters.
+
+To move an old share to Argon2id, re-seal it to the same password:
+
+```dart
+final c = await client.walletKeys.verify(key.id, key: KeyDescription.password(pw));
+if (c.valid && c.needsKdfUpgrade) {
+  await client.walletKeys.recrypt(key.id, oldPassword: pw, newPassword: pw);
+}
+```
+
+A password shorter than 8 characters can't be re-sealed: ask the user for a
+new one (`newPassword`). A good moment for this is the next time the user types
+the password. After the upgrade, take a new backup (see below): the previous
+backup still holds the PBKDF2-sealed copy.
+
+**Compatibility:** libwallet older than 0.5.11 can't open Argon2id shares. A
+backup made by an up-to-date app won't restore its Password share in an app
+still on an older libwallet.
+
 ## Backup
 
 `Wallet:backup` (`client.wallets.backup(id)`) returns, per wallet, the public
@@ -137,16 +170,21 @@ Password + Remote is 2 shares, enough to reshare, so a backup is always enough
 to recover the wallet as long as the user knows the password and can pass 2FA.
 
 The other side of this: someone who has the backup, the password and the
-user's 2FA (their phone or mailbox) has the wallet. The Password share's KDF is
-PBKDF2-SHA256 with 4,096 iterations, which is cheap to brute-force offline. So
-require a real password (libwallet's floor is 6 characters, far too low), and
-store backups where only the user can read them.
+user's 2FA (their phone or mailbox) has the wallet. A backup lets an attacker
+guess passwords offline, which Argon2id slows down but can't stop for a weak
+password. So encourage a real password (8 characters is only libwallet's
+floor), and store backups where only the user can read them.
 
-**Back up again after any change to the key material.** A reshare, a
-`recrypt` (password change) or a `repairRemoteKey` changes the shares, and an
-older backup holds shares that no longer match the server's or each other's.
-Replace the stored backup after each of these, and tell the user that old
-backup files are now useless.
+**Back up again after any change to the key material.**
+
+- A **reshare** replaces every share. Backups made before it can't restore the
+  wallet any more: replace them, and tell the user old backup files are
+  useless.
+- A **`recrypt`** (password change, KDF upgrade) re-seals the same share. An
+  old backup still restores, *with the old password*, and keeps the old
+  KDF. Replace it so an old or leaked password stops working.
+- A **`repairRemoteKey`** changes the server's copy, not the local shares, but
+  back up anyway so the stored backup matches what the server holds.
 
 Don't add the device share's secret to the backup. If a user really wants a
 backup that skips the reshare, that's the opt-in manual transfer described in
@@ -162,19 +200,29 @@ the reshare: funds don't move.
 
 ### 1. Check the local shares
 
-For each restored wallet, look at its keys (`wallet.keys`). A wallet key's
-`key` field is the public key its share is sealed to (base64url PKIX), so the
-checks need no secret and no prompt:
+For each restored wallet, check its local keys (`wallet.keys`) with
+`walletKeys.verify` (`Wallet/Key/<id>:verify`). It changes nothing.
 
-| Share | Usable when |
-|---|---|
-| `StoreKey` | Some vault entry on this device has `publicKey == walletKey.key` (`client.vault.list()`). On a new device, or after a reinstall, there won't be one. Legacy apps that kept StoreKeys themselves: their keystore holds the matching private key. |
-| `Password` | The user enters the password and `storeKeys.derivePassword(password: p, walletKeyId: walletKey.id)` equals `walletKey.key`. If the password is remembered in the vault, the entry must exist on this device too. |
-| `RemoteKey` | Not checked up front: it costs the user a 2FA code. It's used in step 2. |
+| Share | Check | Usable when |
+|---|---|---|
+| `StoreKey` | `verify(key.id)`, no key | `valid`: a vault entry on this device holds the share's key (`entryId` names it). Nothing is unsealed and there's no prompt. On a new device, or after a reinstall, it's `false`. |
+| `Password` | `verify(key.id, key: KeyDescription.password(p))`, or `KeyDescription.vault(pwEntry.id)` if the password is remembered in the vault | `valid`: the share opened with that password. `kdf == 'pbkdf2'` means it should be [upgraded](#password-kdf). |
+| `RemoteKey` | Not checked up front: it costs the user a 2FA code. It's used in step 2. | |
 
-A vault entry that exists can still fail to unseal, for example on Android
-after the screen lock was removed. When unsure, `vault.unlock(entry.id)`
-proves it, at the cost of a prompt.
+```dart
+final device = wallet.keys.firstWhere((k) => k.type == 'StoreKey');
+final pass = wallet.keys.firstWhere((k) => k.type == 'Password');
+final deviceOk = (await client.walletKeys.verify(device.id)).valid;
+final passCheck = await client.walletKeys.verify(pass.id,
+    key: KeyDescription.password(userPassword));
+```
+
+The no-key StoreKey check proves the vault entry exists, not that the OS key
+behind it still works (Android destroys it when the screen lock is removed).
+To be certain, verify with the entry, `key: KeyDescription.vault(entryId)`,
+which decrypts the share at the cost of a prompt. A wrong key gives
+`valid: false`; a cancelled prompt throws. Apps that still keep StoreKeys
+themselves pass `KeyDescription.storeKey(private)`.
 
 If both local shares are usable (a restore on the same device and install), the
 wallet is ready.
@@ -190,7 +238,8 @@ final remote = wallet.keys.firstWhere((k) => k.type == 'RemoteKey');
 final pass   = wallet.keys.firstWhere((k) => k.type == 'Password');
 
 // a. A fresh RemoteKey session. The one stored on the wallet is `done` and
-//    can't be reused. Do this for each wallet you reshare.
+//    can't be reused. Get one per wallet, and reshare wallets one at a time
+//    (see below).
 final s = await client.remoteKeys.reshare(key: remote.key);
 final v = await client.remoteKeys.validate(session: s.session, code: code);
 
@@ -226,13 +275,20 @@ The same shape covers the other single-share losses:
 For a password reset, prove the user's identity through the 2FA step. It is
 the only thing standing in for the forgotten password.
 
+**Several wallets** (the secp256k1 + ed25519 pair from `Wallet:multiCreate`
+share one RemoteKey): reshare them **one after the other, each with its own
+fresh `remoteKeys.reshare` + `validate` session**, so the user enters one 2FA
+code per wallet. Don't reuse a session across wallets or run two reshares at
+once: the signing fleet keeps one ceremony per session, and a session used for
+one reshare is expected to be `done` by the next.
+
 ### 3. Verify, then back up
 
 After the reshare completes:
 
-1. Run the step 1 checks again on the **new** wallet keys: the device share's
-   key matches the new vault entry, and the password derives to the new
-   Password key. Don't offer signing until both pass.
+1. Run the step 1 checks again on the **new** wallet keys: `verify` the new
+   device share with the new vault entry and the new Password share with the
+   password. Don't offer signing until both are `valid`.
 2. Delete the vault entries the wallet no longer uses (the old device entry,
    if this device had one).
 3. Take a new backup and replace the old one. Backups made before the reshare
@@ -256,9 +312,12 @@ the `repairRemoteKey` doc comment in `dart/lib/src/api/wallet_api.dart`).
       only by **importing** the password they chose.
 - [ ] Backup right after creation, and again after every reshare, recrypt or
       RemoteKey repair.
-- [ ] On restore: check both local shares; if either is unusable, reshare
-      with two working shares onto three fresh ones, verify the new local
-      shares, back up again. No signing UI until then.
+- [ ] On restore: `walletKeys.verify` both local shares; if either is
+      unusable, reshare with two working shares onto three fresh ones (one
+      fresh RemoteKey session per wallet, one wallet at a time), verify the
+      new local shares, back up again. No signing UI until then.
+- [ ] Password shares with `kdf: 'pbkdf2'`: re-seal them (`recrypt` to the
+      same password, or a new one if it's under 8 characters), then back up.
 - [ ] Never put a device share secret in a default backup.
 - [ ] Tell the user plainly that losing both the device and the password
       loses the wallet.

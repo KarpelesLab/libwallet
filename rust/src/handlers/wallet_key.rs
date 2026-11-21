@@ -1,6 +1,7 @@
 //! `Wallet/Key` object endpoints (port of wltwallet/wkapi.go). The Dart client
 //! addresses these object-scoped: `Wallet/Key/<id>` (fetch), `Wallet/Key`
-//! (list), and `Wallet/Key/<id>:recrypt` (change the wrapping key).
+//! (list), `Wallet/Key/<id>:recrypt` (change the wrapping key) and
+//! `Wallet/Key/<id>:verify` (check that a local share opens).
 
 use serde_json::Value;
 
@@ -18,6 +19,7 @@ pub fn route(env: &Env, verb: &str, id: &str, action: &str, params: &Value) -> A
             other => Err(ApiError::new(405, format!("unsupported verb {other} for Wallet/Key"))),
         },
         "recrypt" => recrypt(env, id, params),
+        "verify" => verify(env, id, params),
         other => Err(ApiError::new(404, format!("unknown Wallet/Key action: {other}"))),
     }
 }
@@ -57,4 +59,23 @@ pub fn recrypt(env: &Env, id: &str, params: &Value) -> ApiResult {
     let wk = crate::models::wallet::recrypt_key(env, id, &old, &new)
         .map_err(|e| ApiError::new(400, e.to_string()))?;
     Ok(serde_json::to_value(wk).unwrap())
+}
+
+/// `Wallet/Key/<id>:verify` {Key?} — check that a local share opens, changing
+/// nothing (see [`crate::models::wallet::verify_key`]). Returns
+/// `{Id, Valid, Checked, Kdf?, Entry?}`.
+pub fn verify(env: &Env, id: &str, params: &Value) -> ApiResult {
+    let key: Option<KeyDescription> = match params.get("Key") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| ApiError::new(400, format!("bad Key: {e}")))?),
+    };
+    let check = crate::models::wallet::verify_key(env, id, key.as_ref()).map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("not found") {
+            ApiError::new(404, msg)
+        } else {
+            ApiError::new(400, msg)
+        }
+    })?;
+    Ok(serde_json::to_value(check).unwrap())
 }

@@ -44,9 +44,9 @@ Future<void> main(List<String> args) async {
     await for (final event in client.wallets.create(
       name: 'Example Wallet',
       keys: [
-        KeyDescription.password('pass-1'),
-        KeyDescription.password('pass-2'),
-        KeyDescription.password('pass-3'),
+        KeyDescription.password('password-1'),
+        KeyDescription.password('password-2'),
+        KeyDescription.password('password-3'),
       ],
     )) {
       switch (event) {

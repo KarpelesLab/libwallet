@@ -273,9 +273,9 @@ void main() {
       await for (final event in client.wallets.create(
         name: 'Test Wallet',
         keys: [
-          KeyDescription.password('pass-1'),
-          KeyDescription.password('pass-2'),
-          KeyDescription.password('pass-3'),
+          KeyDescription.password('password-1'),
+          KeyDescription.password('password-2'),
+          KeyDescription.password('password-3'),
         ],
       )) {
         switch (event) {
@@ -344,7 +344,7 @@ void main() {
       final passwordKey = wallet.keys.firstWhere((k) => k.isPassword);
       final result = await client.walletKeys.recrypt(
         passwordKey.id,
-        oldPassword: 'pass-1',
+        oldPassword: 'password-1',
         newPassword: 'new-pass-1',
       );
       expect(result, isNotNull);
@@ -1287,7 +1287,7 @@ void main() {
       await for (final e in client.wallets.create(name: 'Vault wallet', keys: [
         KeyDescription.vault(sk.id),
         KeyDescription.vault(pw.id, password: vaultPw),
-        KeyDescription.password('pass-3'),
+        KeyDescription.password('password-3'),
       ])) {
         if (e case Complete(:final value)) w = value;
       }
@@ -1304,7 +1304,7 @@ void main() {
       await expectLater(
           sign([
             KeyDescription.vault(sk.id, walletKeyId: w.keys[0].id),
-            KeyDescription.password('pass-3').withId(w.keys[2].id),
+            KeyDescription.password('password-3').withId(w.keys[2].id),
           ]),
           throwsA(anything));
       await client.vault.unlock(sk.id, password: vaultPw);
@@ -1364,6 +1364,21 @@ void main() {
           from: KeyDescription.password('old-pass-1'), entryId: imported.id);
       expect(moved.type, 'StoreKey');
       expect(moved.key, pair.publicKey);
+
+      // Wallet/Key:verify — the no-prompt device-share check finds the vault
+      // entry, and a Password share opens only with its own password.
+      final dev = await client.walletKeys.verify(w.keys[0].id);
+      expect(dev.valid, isTrue);
+      expect(dev.checked, 'public');
+      expect(dev.entryId, imported.id);
+      final p2 = await client.walletKeys.verify(w.keys[1].id,
+          key: KeyDescription.password('old-pass-2'));
+      expect(p2.valid, isTrue);
+      expect(p2.kdf, 'argon2id');
+      expect(p2.needsKdfUpgrade, isFalse);
+      final wrong = await client.walletKeys.verify(w.keys[1].id,
+          key: KeyDescription.password('old-pass-3'));
+      expect(wrong.valid, isFalse);
     });
   });
 }

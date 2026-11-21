@@ -325,9 +325,12 @@ Implementation notes for hosts that want to offer this:
 - The device share private key is owned by your app — libwallet
   doesn't store it. Read it from your platform keystore at backup
   time.
-- Wrap it with a password-derived KDF (the user's wallet password
-  is the obvious choice — pbkdf2 against `WalletKey.Id.UUID` as
-  the salt mirrors `StoreKey:derivePassword`'s shape).
+- Wrap it with a slow password KDF such as Argon2id (the user's
+  wallet password is the obvious choice). Simplest: import it into
+  a `password`-backend vault entry (`vault.import(kind: 'storekey',
+  backend: 'password', …)`) and ship that entry's blob, which is
+  Argon2id-sealed. Don't use a fast KDF like PBKDF2 with few
+  iterations: the file can be attacked offline.
 - Bundle the wrapped device share alongside the `Wallet:backup`
   output in a single user-facing file. On restore, decrypt with
   the password and write to the platform keystore **before**

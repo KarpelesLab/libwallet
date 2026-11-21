@@ -102,25 +102,114 @@ pub fn store_key_bytes_to_ed25519(k: &[u8]) -> Result<PrivateKey, KeystoreError>
     Ok(ed25519_from_seed(*seed))
 }
 
-/// Derive an Ed25519 key from a password + salt via PBKDF2-HMAC-SHA256, 4096
-/// iterations, 32-byte output — matching Go wltwallet `passwordToEd25519`
-/// (salt is the WalletKey UUID bytes).
+/// Shortest password a NEW Password share may be sealed to. Shares sealed
+/// before 0.5.11 accepted 6 characters and still open with them.
+pub const MIN_SEAL_PASSWORD_LEN: usize = 8;
+/// Shortest password the legacy (PBKDF2) derivation accepts.
+const MIN_LEGACY_PASSWORD_LEN: usize = 6;
+
+/// Argon2id cost for Password shares: the same as the vault's password backend
+/// (64 MiB, 3 passes, 1 lane), about a second in a browser.
+const PW_SHARE_M_KIB: u32 = 64 * 1024;
+const PW_SHARE_T: u32 = 3;
+/// Domain separation for the share KDF (Argon2 associated data).
+const PW_SHARE_AD: &[u8] = b"libwallet:password-share:v2";
+
+/// Which KDF a Password share's key was derived with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PasswordKdf {
+    /// PBKDF2-HMAC-SHA256, 4096 iterations: every share sealed before 0.5.11
+    /// (and by Go wltwallet).
+    Pbkdf2,
+    /// Argon2id, 64 MiB × 3: every share sealed since 0.5.11.
+    Argon2id,
+}
+
+impl PasswordKdf {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PasswordKdf::Pbkdf2 => "pbkdf2",
+            PasswordKdf::Argon2id => "argon2id",
+        }
+    }
+}
+
+/// The key a NEW Password share is sealed to: Argon2id over the password, salt
+/// = the WalletKey UUID bytes. Refuses passwords shorter than
+/// [`MIN_SEAL_PASSWORD_LEN`].
 ///
 /// `password` may also be a vault reference to a password entry.
 pub fn password_to_ed25519(password: &str, salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
-    if let Some(secret) = crate::vault::session::secret_for_token(password) {
-        let secret = secret.map_err(|e| KeystoreError::Vault(e.to_string()))?;
-        return password_bytes_to_ed25519(&secret, salt);
-    }
-    password_bytes_to_ed25519(password.as_bytes(), salt)
-}
-
-fn password_bytes_to_ed25519(password: &[u8], salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
-    if password.len() < 6 {
+    let bytes = password_bytes(password)?;
+    if bytes.len() < MIN_SEAL_PASSWORD_LEN {
         return Err(KeystoreError::PasswordTooShort);
     }
+    password_argon2_to_ed25519(&bytes, salt)
+}
+
+/// The key that opens an existing Password share sealed to `sealed_to` (the
+/// share's base64url PKIX public key, `WalletKey.Key`). The legacy PBKDF2 key
+/// is derived first (it is cheap) and used when its public key matches;
+/// otherwise the Argon2id key is returned. A wrong password yields a key that
+/// simply fails to open the share. An empty `sealed_to` (no recorded
+/// recipient) means the legacy derivation, as before.
+///
+/// A vault reference is unsealed once, whichever derivation is used.
+pub fn password_unlock_key(password: &str, salt: &[u8], sealed_to: &str) -> Result<(PrivateKey, PasswordKdf), KeystoreError> {
+    let bytes = password_bytes(password)?;
+    if bytes.len() < MIN_LEGACY_PASSWORD_LEN {
+        return Err(KeystoreError::PasswordTooShort);
+    }
+    let legacy = password_pbkdf2_to_ed25519(&bytes, salt);
+    if sealed_to.is_empty() || public_key_to_pkix_b64(&legacy.public()).ok().as_deref() == Some(sealed_to) {
+        return Ok((legacy, PasswordKdf::Pbkdf2));
+    }
+    if bytes.len() < MIN_SEAL_PASSWORD_LEN {
+        // No Argon2id share was ever sealed to a password this short: it's
+        // the wrong password, and the legacy key will fail to open the share.
+        return Ok((legacy, PasswordKdf::Pbkdf2));
+    }
+    Ok((password_argon2_to_ed25519(&bytes, salt)?, PasswordKdf::Argon2id))
+}
+
+/// The legacy (pre-0.5.11, Go wltwallet) Password-share key. Only for opening
+/// and testing old shares: never seal a new share to it.
+pub fn password_to_ed25519_legacy(password: &str, salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
+    let bytes = password_bytes(password)?;
+    if bytes.len() < MIN_LEGACY_PASSWORD_LEN {
+        return Err(KeystoreError::PasswordTooShort);
+    }
+    Ok(password_pbkdf2_to_ed25519(&bytes, salt))
+}
+
+/// The password's bytes, unsealing a vault reference.
+fn password_bytes(password: &str) -> Result<Zeroizing<Vec<u8>>, KeystoreError> {
+    if let Some(secret) = crate::vault::session::secret_for_token(password) {
+        let secret = secret.map_err(|e| KeystoreError::Vault(e.to_string()))?;
+        return Ok(secret);
+    }
+    Ok(Zeroizing::new(password.as_bytes().to_vec()))
+}
+
+/// Legacy derivation: PBKDF2-HMAC-SHA256, 4096 iterations, 32-byte output —
+/// matching Go wltwallet `passwordToEd25519` (salt is the WalletKey UUID bytes).
+fn password_pbkdf2_to_ed25519(password: &[u8], salt: &[u8]) -> PrivateKey {
     let mut seed = Zeroizing::new([0u8; 32]);
     purecrypto::kdf::pbkdf2::<purecrypto::hash::Sha256>(password, salt, 4096, &mut *seed);
+    ed25519_from_seed(*seed)
+}
+
+fn password_argon2_to_ed25519(password: &[u8], salt: &[u8]) -> Result<PrivateKey, KeystoreError> {
+    use purecrypto::kdf::argon2::{argon2, Argon2Params, Argon2Type};
+    let params = Argon2Params {
+        t_cost: PW_SHARE_T,
+        m_cost_kib: PW_SHARE_M_KIB,
+        parallelism: 1,
+        variant: Argon2Type::Argon2id,
+        version: 0x13,
+    };
+    let mut seed = Zeroizing::new([0u8; 32]);
+    argon2(&params, password, salt, &[], PW_SHARE_AD, &mut *seed).map_err(|e| KeystoreError::Decode(format!("argon2: {e:?}")))?;
     Ok(ed25519_from_seed(*seed))
 }
 

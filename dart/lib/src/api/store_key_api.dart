@@ -23,6 +23,11 @@ class StoreKeyApi {
 
   /// Derive a public key from a password and wallet key ID.
   ///
+  /// For a wallet key on this device the derivation follows the share's KDF
+  /// (PBKDF2 for shares sealed before 0.5.11, Argon2id otherwise), so the
+  /// result equals the share's `key` exactly when the password is right.
+  /// [WalletKeyApi.verify] answers the same question by opening the share.
+  ///
   /// The backend answers `{"Public_Key": ...}` (base64url PKIX). Throws if the
   /// key is missing rather than returning '', which would silently fail every
   /// recipient comparison and reject correct passwords.

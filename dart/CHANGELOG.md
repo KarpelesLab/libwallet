@@ -1,5 +1,22 @@
 ## Unreleased
 
+- **Password shares are sealed with Argon2id.** New Password shares (wallet
+  creation, reshare, promote, import, `recrypt`) derive their key with Argon2id
+  (64 MiB × 3) instead of PBKDF2-SHA256 × 4096, which was cheap to brute-force
+  from a backup. Sealing now needs a password of at least 8 characters (it was
+  6). Existing shares keep opening with their password, whatever its length:
+  libwallet picks the KDF that matches the share. Re-seal one with
+  `walletKeys.recrypt` (the same password on both sides is fine) to move it to
+  Argon2id. **libwallet older than this release can't open the new shares**, so
+  a backup made now won't restore its Password share in an older app.
+  `StoreKey:derivePassword` returns the key matching the share's KDF, plus
+  `Kdf`.
+- **`walletKeys.verify` checks that a local share opens** without changing
+  anything (`Wallet/Key/<id>:verify`). With a key (password, vault entry or
+  StoreKey) it decrypts the share; with none, it tells whether a vault entry
+  on this device holds a StoreKey share's key, without a prompt. The result
+  (`WalletKeyCheck`) also gives a Password share's KDF. This is the check to
+  run after `wallets.restore`; see `docs/key-handling.md`.
 - **Signer imports check every key's address.** `Ledger:import`,
   `CatCard:import` and `Airgap:importKeys` refuse a key whose `address` is not
   the one its public key derives (bitcoin: the account's first receive

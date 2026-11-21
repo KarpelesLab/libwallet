@@ -51,7 +51,7 @@ fn promote_swaps_the_committee_and_leaves_other_wallets_alone() {
         assert_eq!(p.keys[i].kind, "Password");
         let key = wallet::fetch_key(&env, &p.keys[i].id).unwrap().unwrap();
         let xid: xuid::Xuid = key.id.parse().unwrap();
-        let sk = wallet::resolve_unlock_key("Password", &kd.key, xid.uuid().as_bytes()).unwrap();
+        let sk = wallet::resolve_unlock_key("Password", &kd.key, xid.uuid().as_bytes(), &key.key).unwrap();
         libwallet::keystore::open(&key.data, [sk]).expect("share i opens with descriptor i");
     }
     let ul = vec![(p.keys[0].id.clone(), new[0].key.clone()), (p.keys[1].id.clone(), new[1].key.clone())];
