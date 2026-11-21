@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.12
 
 - **Password shares record their KDF.** Every new Password share carries a
   cleartext `kdf` header with its exact parameters (e.g.
