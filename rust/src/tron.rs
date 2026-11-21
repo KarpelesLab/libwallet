@@ -351,6 +351,26 @@ pub fn sign_transfer(
     with_transfer_tx(&account.address, transfer, block, |tx| sign_tx(env, account, unlock, tx))
 }
 
+/// Build and sign `transfer` from `owner` with a raw secp256k1 key (wallet
+/// recovery: the key isn't a libwallet account), anchored on `block`. Refuses
+/// a key that isn't `owner`'s. Returns `(txid, signed Transaction bytes)`.
+pub fn sign_transfer_with_key(
+    owner: &str,
+    key: &outscript::crypto::secp256k1::SecpPrivateKey,
+    transfer: &Transfer,
+    block: &RefBlock,
+) -> Result<([u8; 32], Vec<u8>)> {
+    let owner_addr = parse_address(owner)?;
+    with_transfer_tx(owner, transfer, block, |tx| {
+        let sig = tx.sign(key);
+        match tx.signer(&sig) {
+            Ok(signer) if signer == owner_addr => {}
+            _ => return Err(Error::Env("tron signature does not recover to the sending address".into())),
+        }
+        Ok((tx.txid(), tx.encode_signed(&[sig])))
+    })
+}
+
 // --- signing on an external device ------------------------------------------
 
 /// The `raw_data` an external signer (hardware wallet) is asked to sign for

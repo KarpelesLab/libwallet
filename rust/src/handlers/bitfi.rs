@@ -127,20 +127,7 @@ fn parse_assets(coin: &Coin, raw: &Value) -> Result<Vec<Value>, ApiError> {
         }
         return Ok(assets);
     }
-    let entries = raw.get("assets").and_then(Value::as_array).ok_or_else(|| ApiError::new(502, "modchain_assets: no assets array"))?;
-    let mut assets = Vec::new();
-    for entry in entries {
-        let hex = entry.get("balance").and_then(Value::as_str).unwrap_or("0x0");
-        let balance = BigInt::parse_bytes(hex.trim_start_matches("0x").as_bytes(), 16)
-            .ok_or_else(|| ApiError::new(502, format!("bad balance {hex:?}")))?;
-        if balance == BigInt::from(0) {
-            continue;
-        }
-        let asset = entry.get("asset").and_then(Value::as_str).unwrap_or_default();
-        let symbol = entry.get("symbol").and_then(Value::as_str).unwrap_or(if asset == "NATIVE" { "ETH" } else { "" });
-        assets.push(json!({ "Asset": asset, "Symbol": symbol, "Decimals": entry.get("decimals"), "Balance": balance.to_string() }));
-    }
-    Ok(assets)
+    crate::recovery::scan::ethereum_assets(raw).map_err(|e| ApiError::new(502, e))
 }
 
 /// `Bitfi:balances` {Session, Coin, Positions} — what each address holds. An
@@ -189,19 +176,12 @@ fn wei_param(params: &Value) -> Result<Option<BigInt>, ApiError> {
     }
 }
 
-/// The network's fee rate in satoshi per virtual byte. Bitcoin Cash nodes only
-/// have the older `estimatefee`, which takes no target.
+/// The fee rate to send at: `FeeRate` when given, else the node's estimate.
 async fn fee_rate(url: &str, params: &Value) -> Result<u64, ApiError> {
     if let Some(rate) = params.get("FeeRate") {
         return rate.as_u64().filter(|r| *r > 0).ok_or_else(|| ApiError::new(400, "FeeRate must be a positive whole number"));
     }
-    let per_kb = match crate::rpc::call_async(url, "estimatesmartfee", json!([6])).await {
-        Ok(reply) => reply.get("feerate").cloned().unwrap_or(Value::Null),
-        Err(_) => crate::rpc::call_async(url, "estimatefee", json!([])).await.map_err(ApiError::internal)?,
-    };
-    let per_kb = crate::bitcoin::parse_btc_amount(&per_kb).ok().filter(|r| *r > 0);
-    let per_kb = per_kb.ok_or_else(|| ApiError::new(502, "the node has no fee estimate; pass FeeRate"))?;
-    Ok(bitfi::fee_rate_from_per_kb(per_kb))
+    crate::recovery::sweep::fee_rate(url).await
 }
 
 /// `Bitfi:prepareSend` {Session, Coin, Position, Kind?, To, Amount, Token?,
@@ -237,92 +217,11 @@ pub async fn prepare_send(params: &Value) -> ApiResult {
 }
 
 async fn prepare_ethereum(coin: &Coin, key: &PrivateKey, url: &str, to: &str, amount: Option<BigInt>, params: &Value) -> ApiResult {
-    let to = to.trim();
-    outscript::decode_evm_address(to).map_err(|_| ApiError::new(400, "That isn't an Ethereum address. Sending to another network's address would lose the funds."))?;
     let from = bitfi::addresses(coin, key).map_err(ApiError::internal)?.remove(0).address;
     let token = params.get("Token").and_then(Value::as_str);
-    if let Some(token) = token {
-        outscript::decode_evm_address(token).map_err(|_| ApiError::new(400, format!("{token} is not a token contract")))?;
-    }
-    let assets = crate::rpc::call_async(url, "modchain_assets", json!([from])).await.map_err(ApiError::internal)?;
-    let assets = parse_assets(coin, &assets)?;
-    let held = |asset: &str| -> BigInt {
-        assets
-            .iter()
-            .find(|a| a["Asset"].as_str().is_some_and(|name| name.eq_ignore_ascii_case(asset)))
-            .and_then(|a| a["Balance"].as_str())
-            .and_then(|b| BigInt::parse_bytes(b.as_bytes(), 10))
-            .unwrap_or_default()
-    };
-    let native = held("NATIVE");
-    let requested = |available: &BigInt| amount.clone().unwrap_or_else(|| available.clone());
-
-    // A token moves through its contract: the transaction pays it no ETH.
-    let (call_to, value, data, sent) = match token {
-        Some(token) => {
-            let sent = requested(&held(token));
-            if sent == BigInt::from(0) || sent > held(token) {
-                let decimals = assets
-                    .iter()
-                    .find(|a| a["Asset"].as_str().is_some_and(|name| name.eq_ignore_ascii_case(token)))
-                    .and_then(|a| a["Decimals"].as_u64())
-                    .unwrap_or(18) as usize;
-                return Err(ApiError::new(400, format!("This address holds {} of that token.", bitfi::format_units(&held(token).to_string(), decimals))));
-            }
-            (token.to_owned(), BigInt::from(0), erc20_transfer(to, &sent), sent)
-        }
-        None => (to.to_owned(), BigInt::from(0), String::new(), BigInt::from(0)),
-    };
-
-    // Gas for a token transfer is estimated with its call data, plus a margin.
-    let mut tx = json!({ "to": call_to, "value": value.to_string(), "chainId": 1 });
-    if !data.is_empty() {
-        tx["data"] = json!(data);
-        let call = json!([{ "from": from, "to": call_to, "data": data }]);
-        let estimate = crate::rpc::call_async(url, "eth_estimateGas", call).await.map_err(ApiError::internal)?;
-        let gas = u64::from_str_radix(estimate.as_str().unwrap_or("0").trim_start_matches("0x"), 16).unwrap_or(0);
-        if gas == 0 {
-            return Err(ApiError::new(502, "the node gave no gas estimate"));
-        }
-        tx["gas"] = json!(gas + gas / 5);
-    } else {
-        tx["gas"] = json!(21000);
-    }
-    let mut filled = super::account::evm_fill(&from, url, &json!({ "Transaction": tx })).await?;
-    let fields = &filled["Transaction"];
-    let price = fields.get("maxFeePerGas").or_else(|| fields.get("gasPrice")).and_then(Value::as_str).unwrap_or("0");
-    let price = BigInt::parse_bytes(price.as_bytes(), 10).unwrap_or_default();
-    let fee = price * fields["gas"].as_u64().unwrap_or(0);
-
-    // The native amount needs the worst-case fee known, so it's filled in last.
-    let sent = if token.is_some() {
-        if native < fee {
-            return Err(ApiError::new(400, format!("Moving a token needs up to {} ETH for the network fee, and this address holds {} ETH.", eth(&fee), eth(&native))));
-        }
-        sent
-    } else {
-        let sent = amount.clone().unwrap_or_else(|| &native - &fee);
-        if sent <= BigInt::from(0) || &sent + &fee > native {
-            return Err(ApiError::new(400, format!("This address holds {} ETH, and the network fee can be up to {} ETH.", eth(&native), eth(&fee))));
-        }
-        filled["Transaction"]["value"] = json!(sent.to_string());
-        sent
-    };
-    let request = super::account::evm_request_from_tx(&filled["Transaction"])?;
-    let raw = bitfi::sign_ethereum(key, &request).map_err(ApiError::internal)?;
-    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-    Ok(json!({
-        "From": from, "To": to, "Token": token, "Amount": sent.to_string(), "Fee": fee.to_string(), "Raw": format!("0x{hex}"),
-    }))
-}
-
-fn eth(wei: &BigInt) -> String {
-    bitfi::format_units(&wei.to_string(), 18)
-}
-
-/// ABI-encoded `transfer(to, amount)`.
-fn erc20_transfer(to: &str, amount: &BigInt) -> String {
-    format!("0xa9059cbb{:0>64}{:0>64}", to.trim_start_matches("0x").to_lowercase(), amount.to_str_radix(16))
+    let mut out = crate::recovery::sweep::prepare_ethereum(key, &from, url, to, amount, token).await?;
+    out["From"] = json!(from);
+    Ok(out)
 }
 
 /// `Bitfi:broadcast` {Coin, Raw} — send a transaction from `Bitfi:prepareSend`.

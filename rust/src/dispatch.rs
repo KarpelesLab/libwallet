@@ -126,6 +126,9 @@ async fn handle_parsed_async(handle: &Handle, req: &mut Request) -> String {
         // resolving endpoints via the Network model — the JS never names a URL.
         ("Account:balance", _) => crate::handlers::account::balance_impl(&handle.env, &req.params).await,
         ("Account:signAndSendTransaction", _) => crate::handlers::account::sign_and_send_impl(&handle.env, &req.params).await,
+        ("Recovery:scan", _) => crate::handlers::recovery::scan(&req.params).await,
+        ("Recovery:prepareSweep", _) => crate::handlers::recovery::prepare_sweep(&handle.env, &req.params).await,
+        ("Recovery:broadcast", _) => crate::handlers::recovery::broadcast(&req.params).await,
         ("Bitfi:balances", _) => crate::handlers::bitfi::balances(&req.params).await,
         ("Bitfi:prepareSend", _) => crate::handlers::bitfi::prepare_send(&req.params).await,
         ("Bitfi:broadcast", _) => crate::handlers::bitfi::broadcast(&req.params).await,

@@ -41,6 +41,7 @@ mod quote;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) mod remotekey;
 pub(crate) mod bitfi;
+pub(crate) mod recovery;
 mod storekey;
 mod vault;
 #[cfg(not(target_arch = "wasm32"))]
@@ -279,6 +280,16 @@ pub fn route(handle: &Handle, path: &str, verb: &str, params: &Value) -> ApiResu
         "Contact" => contact::route(&handle.env, verb, params),
         "Crash" => crash::route(&handle.env, verb, params),
         "Wallet" => wallet::route(&handle.env, verb, params),
+        "Recovery:open" => recovery::open(params),
+        "Recovery:addresses" => recovery::addresses(params),
+        "Recovery:export" => recovery::export(params),
+        "Recovery:close" => recovery::close(params),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Recovery:scan" => crate::rt::block_on(recovery::scan(params)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Recovery:prepareSweep" => crate::rt::block_on(recovery::prepare_sweep(&handle.env, params)),
+        #[cfg(not(target_arch = "wasm32"))]
+        "Recovery:broadcast" => crate::rt::block_on(recovery::broadcast(params)),
         "Bitfi:open" => bitfi::open(params),
         "Bitfi:addresses" => bitfi::addresses(params),
         "Bitfi:export" => bitfi::export(params),

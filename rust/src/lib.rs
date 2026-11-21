@@ -68,6 +68,8 @@ pub mod solana_spl;
 pub mod bitcoin;
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub mod bitfi;
+/// Wallet recovery: open another wallet's secret, scan and sweep it.
+pub mod recovery;
 // Tron (TRX / TRC-20) over java-tron's HTTP API; the round trips have async
 // twins, so the module builds on wasm too.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

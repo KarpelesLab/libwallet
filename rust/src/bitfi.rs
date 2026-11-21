@@ -126,7 +126,7 @@ impl Drop for PrivateKey {
 }
 
 impl PrivateKey {
-    fn compressed_pub(&self) -> Result<[u8; 33], String> {
+    pub(crate) fn compressed_pub(&self) -> Result<[u8; 33], String> {
         let d = Scalar::from_bytes_be(&self.0).map_err(|_| "key out of range".to_string())?;
         let point = ProjectivePoint::mul_generator(&d).to_affine().ok_or("key is zero")?;
         Ok(point.to_sec1_compressed())
@@ -275,16 +275,22 @@ pub fn format_units(value: &str, decimals: usize) -> String {
     if fraction.is_empty() { whole.to_owned() } else { format!("{whole}.{fraction}") }
 }
 
-/// The smallest output a coin's nodes relay.
-fn dust(coin: &Coin) -> u64 {
-    if coin.symbol == "doge" { 1_000_000 } else { 546 }
+/// The smallest output a chain's nodes relay.
+fn dust(chain: &str) -> u64 {
+    if chain == "dogecoin" { 1_000_000 } else { 546 }
 }
 
-/// An upper estimate of a transaction's virtual size. An uncompressed key makes
-/// a legacy input far larger than the 148 bytes usually assumed, and outputs are
-/// sized for the largest address type the recipient could have.
-fn estimate_vsize(kind: &str, inputs: u64, outputs: u64) -> u64 {
-    let (overhead, input) = if kind == "segwit" { (11, 68) } else { (10, 180) };
+/// An upper estimate of a transaction's virtual size spending `inputs` outputs
+/// of one `scheme`. An uncompressed key (`p2pukh`) makes a legacy input far
+/// larger than the 148 bytes of a compressed one, and outputs are sized for the
+/// largest address type the recipient could have.
+fn estimate_vsize(scheme: &str, inputs: u64, outputs: u64) -> u64 {
+    let (overhead, input) = match scheme {
+        "p2wpkh" => (11, 68),
+        "p2sh:p2wpkh" => (11, 91),
+        "p2pkh" => (10, 148),
+        _ => (10, 180),
+    };
     overhead + inputs * input + outputs * 43
 }
 
@@ -303,18 +309,43 @@ pub fn spend_bitcoin(
     let Family::Bitcoin { network, segwit, .. } = coin.family else {
         return Err(format!("{} is not a Bitcoin-family coin", coin.symbol));
     };
-    let (scheme, sighash) = match kind {
-        "legacy" => ("p2pukh", if coin.symbol == "bch" { 0x41 } else { 0 }),
-        "segwit" if segwit => ("p2wpkh", 0),
+    let scheme = match kind {
+        "legacy" => "p2pukh",
+        "segwit" if segwit => "p2wpkh",
         _ => return Err(format!("{} has no {kind} address", coin.symbol)),
     };
+    spend_utxos(coin.chain, network, &coin.symbol.to_uppercase(), key, scheme, utxos, to, amount, fee_rate)
+}
+
+/// Build and sign, without broadcasting, a transaction on Bitcoin-family
+/// `chain` (outscript network tag `network`) sending the given outputs of
+/// `key`'s `scheme` address (`p2pkh`, `p2pukh`, `p2wpkh`, `p2sh:p2wpkh`) to
+/// `to`. Any change goes back to that same address. `to` must be an address on
+/// `chain` itself. `symbol` only labels error messages.
+#[allow(clippy::too_many_arguments)]
+pub fn spend_utxos(
+    chain: &str,
+    network: &str,
+    symbol: &str,
+    key: &PrivateKey,
+    scheme: &str,
+    utxos: &[crate::bitcoin::DiscoveredUtxo],
+    to: &str,
+    amount: Amount,
+    fee_rate: u64,
+) -> Result<Spend, String> {
+    if !matches!(scheme, "p2pkh" | "p2pukh" | "p2wpkh" | "p2sh:p2wpkh") {
+        return Err(format!("unsupported script type {scheme}"));
+    }
+    // Bitcoin Cash signs with SIGHASH_FORKID.
+    let sighash = if chain == "bitcoin-cash" { 0x41 } else { 0 };
     if utxos.is_empty() {
         return Err("This address has nothing to spend.".into());
     }
     let total = utxos.iter().try_fold(0u64, |sum, u| sum.checked_add(u.amount_sats)).ok_or("amount overflow")?;
     let count = utxos.len() as u64;
-    let fee_for = |outputs: u64| estimate_vsize(kind, count, outputs).saturating_mul(fee_rate);
-    let show = |sats: u64| format!("{} {}", format_units(&sats.to_string(), 8), coin.symbol.to_uppercase());
+    let fee_for = |outputs: u64| estimate_vsize(scheme, count, outputs).saturating_mul(fee_rate);
+    let show = |sats: u64| format!("{} {symbol}", format_units(&sats.to_string(), 8));
 
     let (sent, change) = match amount {
         Amount::Max => {
@@ -328,10 +359,10 @@ pub fn spend_bitcoin(
                 .and_then(|needed| total.checked_sub(needed))
                 .ok_or(format!("This address holds {}, which doesn't cover {} plus a network fee of {}.", show(total), show(sent), show(fee)))?;
             // Change too small to relay goes to the miners instead.
-            (sent, if spare > dust(coin) { spare } else { 0 })
+            (sent, if spare > dust(chain) { spare } else { 0 })
         }
     };
-    if sent <= dust(coin) {
+    if sent <= dust(chain) {
         return Err(format!("{} is too small to send: the network won't relay it.", show(sent)));
     }
 
@@ -342,10 +373,10 @@ pub fn spend_bitcoin(
         let (txid, vout) = crate::bitcoin::parse_txo_ref(&u.txo).map_err(|e| e.to_string())?;
         tx.inputs.push(BtcTxInput { txid, vout, script: Vec::new(), sequence: 0xffff_ffff, witnesses: Vec::new() });
     }
-    tx.add_net_output(coin.chain, to.trim(), sent).map_err(|_| format!("That isn't a {} address. Sending to another network's address would lose the funds.", coin.symbol.to_uppercase()))?;
+    tx.add_net_output(chain, to.trim(), sent).map_err(|_| format!("That isn't a {symbol} address. Sending to another network's address would lose the funds."))?;
     if change > 0 {
         let back = bitcoin_address(&public, scheme, network)?;
-        tx.add_net_output(coin.chain, &back, change).map_err(|e| e.to_string())?;
+        tx.add_net_output(chain, &back, change).map_err(|e| e.to_string())?;
     }
     let previous = outscript::script::Script::new(signer.public_key()).out(scheme).map_err(|e| e.to_string())?.bytes().to_vec();
     let signs: Vec<BtcTxSign> = utxos

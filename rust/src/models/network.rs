@@ -32,7 +32,7 @@ pub(crate) fn modchain_rpc(chain: &str) -> String {
 /// modchain's proxy of java-tron's native HTTP API — the base a Tron network's
 /// RPC names, to which [`crate::tron`] appends `/wallet/<method>`. (modchain's
 /// `/tron/rpc` is the eth-compatible listener, which cannot broadcast.)
-fn modchain_tron_rest() -> String {
+pub fn modchain_tron_rest() -> String {
     format!("https://rpc.modchain.net/api/{MODCHAIN_API_KEY}/tron/rest")
 }
 
