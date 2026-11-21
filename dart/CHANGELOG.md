@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.13
 
 - **Wallet recovery: `client.recovery`.** Bring funds over from another
   wallet. `open` a `RecoverySource` (a recovery phrase with its passphrase, a
@@ -238,7 +238,7 @@
   address and keys, without balances or sending. The web wallet adds a
   no-login page for this at `recover/bitfi.html`. (These are request-API
   endpoints with no Dart wrapper; from Dart, use `client.recovery` with
-  `RecoverySource.bitfi`, added after 0.5.12.)
+  `RecoverySource.bitfi`, since 0.5.13.)
 - **Docs:** `docs/solana-signing.md` covers the request and response
   format, with a working browser example in `web/examples/`.
 
