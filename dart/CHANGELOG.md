@@ -1,4 +1,4 @@
-## Unreleased
+## 0.5.11
 
 - **Password shares are sealed with Argon2id.** New Password shares (wallet
   creation, reshare, promote, import, `recrypt`) derive their key with Argon2id
